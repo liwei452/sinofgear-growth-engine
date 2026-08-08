@@ -4,8 +4,9 @@ import pytest
 
 from apps.knowledge.models import KnowledgeConcept, KnowledgeEvidence, KnowledgeRelation
 from apps.knowledge.services import OntologyContextService, OntologyDepthError
+from apps.knowledge.guards import _test_fixture_writes
 
-from .conftest import make_concept
+from .conftest import create_test_knowledge, make_concept
 
 
 @pytest.fixture
@@ -15,13 +16,15 @@ def ontology_chain(organizations):
     second = make_concept(code="PACKAGING_LINE", concept_type="APPLICATION")
     third = make_concept(code="PACKAGING_INTENT", concept_type="PURCHASE_INTENT")
     hidden = make_concept(code="HIDDEN", concept_type="PARAMETER", status=KnowledgeConcept.Status.SUGGESTED)
-    r1 = KnowledgeRelation.objects.create(
+    r1 = create_test_knowledge(
+        KnowledgeRelation,
         subject_concept=first,
         predicate="APPLIES_TO",
         object_concept=second,
         status=KnowledgeRelation.Status.APPROVED,
     )
-    r2 = KnowledgeRelation.objects.create(
+    r2 = create_test_knowledge(
+        KnowledgeRelation,
         subject_concept=second,
         predicate="INDICATES_PURCHASE_INTENT",
         object_concept=third,
@@ -33,7 +36,8 @@ def ontology_chain(organizations):
         object_concept=hidden,
         status=KnowledgeRelation.Status.SUGGESTED,
     )
-    evidence = KnowledgeEvidence.objects.create(
+    evidence = create_test_knowledge(
+        KnowledgeEvidence,
         evidence_type=KnowledgeEvidence.EvidenceType.PUBLIC_SOURCE,
         source_url="https://example.test/gears",
         excerpt="Frozen source excerpt",
@@ -99,7 +103,8 @@ def test_snapshot_is_immutable_and_keeps_captured_versions(ontology_chain) -> No
     snapshot = OntologyContextService(own).build_snapshot(concept_ids=[first.id], max_depth=1)
     first.version = 7
     first.status = KnowledgeConcept.Status.DEPRECATED
-    first.save()
+    with _test_fixture_writes():
+        first.save()
 
     assert snapshot.concept_versions[0].version == 1
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -112,11 +117,13 @@ def test_expansion_never_traverses_other_organization_relations(organizations) -
     system = make_concept(code="SYSTEM")
     own_target = make_concept(code="OWN_TARGET", concept_type="APPLICATION", organization=own)
     foreign_target = make_concept(code="FOREIGN_TARGET", concept_type="APPLICATION", organization=other)
-    KnowledgeRelation.objects.create(
+    create_test_knowledge(
+        KnowledgeRelation,
         organization=own, subject_concept=system, predicate="APPLIES_TO", object_concept=own_target,
         status=KnowledgeRelation.Status.APPROVED,
     )
-    KnowledgeRelation.objects.create(
+    create_test_knowledge(
+        KnowledgeRelation,
         organization=other, subject_concept=system, predicate="APPLIES_TO", object_concept=foreign_target,
         status=KnowledgeRelation.Status.APPROVED,
     )
@@ -124,3 +131,41 @@ def test_expansion_never_traverses_other_organization_relations(organizations) -
     snapshot = OntologyContextService(own).build_snapshot(concept_ids=[system.id], max_depth=1)
 
     assert [item.code for item in snapshot.concept_versions] == ["OWN_TARGET", "SYSTEM"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("excluded_status", ["REJECTED", "DEPRECATED"])
+def test_snapshot_independently_excludes_nonapproved_concepts_relations_and_evidence(
+    organizations, excluded_status
+) -> None:
+    own, _ = organizations
+    root = make_concept(code=f"ROOT_{excluded_status}")
+    excluded = make_concept(code=f"CONCEPT_{excluded_status}", concept_type="APPLICATION", status=excluded_status)
+    approved_target = make_concept(code=f"APPROVED_{excluded_status}", concept_type="APPLICATION")
+    create_test_knowledge(
+        KnowledgeRelation,
+        subject_concept=root,
+        predicate="APPLIES_TO",
+        object_concept=excluded,
+        status="APPROVED",
+    )
+    create_test_knowledge(
+        KnowledgeRelation,
+        subject_concept=root,
+        predicate="APPLIES_TO",
+        object_concept=approved_target,
+        status=excluded_status,
+    )
+    evidence = create_test_knowledge(
+        KnowledgeEvidence,
+        evidence_type="HUMAN_ENTRY",
+        excerpt=excluded_status,
+        status=excluded_status,
+    )
+    root.evidence.add(evidence)
+
+    snapshot = OntologyContextService(own).build_snapshot(concept_ids=[root.id, excluded.id], max_depth=1)
+
+    assert excluded.id not in {item.concept_id for item in snapshot.concept_versions}
+    assert excluded_status not in {item.status for item in snapshot.relation_versions}
+    assert evidence.id not in {item.evidence_id for item in snapshot.evidence_references}

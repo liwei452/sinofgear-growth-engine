@@ -14,6 +14,7 @@ from apps.audit.services import record_review_transition
 from apps.identity.models import Organization
 
 from .models import KnowledgeAlias, KnowledgeConcept, KnowledgeEvidence, KnowledgeRelation, KnowledgeStatus
+from .guards import _audited_review_writes
 from .normalization import normalize_alias
 from .relation_rules import RelationCycleError, validate_predicate_types
 
@@ -131,7 +132,8 @@ class KnowledgeReviewService:
         if action in {ReviewAction.APPROVE, ReviewAction.REJECT, ReviewAction.DEPRECATE}:
             locked.reviewed_by = actor
             locked.reviewed_at = timezone.now()
-        locked.save(update_fields=["status", "version", "reviewed_by", "reviewed_at", "updated_at"])
+        with _audited_review_writes():
+            locked.save(update_fields=["status", "version", "reviewed_by", "reviewed_at", "updated_at"])
         after = self._metadata(locked)
         record_review_transition(
             organization=self.organization,
@@ -190,6 +192,7 @@ class KnowledgeRelationService:
         else:
             relation_organization = None if subject.organization_id is None and object.organization_id is None else self.organization
         if predicate == KnowledgeRelation.Predicate.IS_A:
+            self._lock_graph_concepts(subject=subject, object=object)
             self._reject_cycle(subject=subject, object=object, relation_organization=relation_organization)
         relation = KnowledgeRelation(
             organization=relation_organization,
@@ -209,6 +212,27 @@ class KnowledgeRelationService:
         if concept.organization_id not in {None, self.organization.id}:
             raise ValidationError("Concept is not visible to this organization.")
 
+    @staticmethod
+    def graph_lock_concept_ids(
+        *, subject: KnowledgeConcept, object: KnowledgeConcept
+    ) -> tuple[UUID, ...]:
+        return tuple(sorted({subject.id, object.id}, key=str))
+
+    def _lock_graph_concepts(self, *, subject: KnowledgeConcept, object: KnowledgeConcept) -> None:
+        """Serialize reciprocal endpoint writes on databases that support row locks.
+
+        PostgreSQL blocks a competing transaction on the same deterministically ordered
+        concept rows. SQLite accepts ``select_for_update`` as a no-op, so its tests prove
+        the stable lock set and validation behavior, not live lock contention.
+        """
+        lock_ids = self.graph_lock_concept_ids(subject=subject, object=object)
+        list(
+            KnowledgeConcept.objects.select_for_update()
+            .filter(id__in=lock_ids)
+            .order_by("id")
+            .values_list("id", flat=True)
+        )
+
     def _reject_cycle(
         self,
         *,
@@ -217,9 +241,40 @@ class KnowledgeRelationService:
         relation_organization: Organization | None,
     ) -> None:
         if subject.id == object.id:
-            raise RelationCycleError([subject.code, subject.code])
+            raise RelationCycleError(
+                [subject.code, subject.code],
+                organization_id=relation_organization.id if relation_organization else None,
+            )
+        if relation_organization is None:
+            overlay_ids = list(
+                KnowledgeRelation.objects.filter(predicate=KnowledgeRelation.Predicate.IS_A)
+                .exclude(organization_id__isnull=True)
+                .values_list("organization_id", flat=True)
+                .distinct()
+                .order_by("organization_id")
+            )
+            overlays = [None, *overlay_ids]
+        else:
+            overlays = [relation_organization.id]
+        for overlay_id in overlays:
+            self._reject_cycle_in_overlay(
+                subject=subject,
+                object=object,
+                organization_id=overlay_id,
+            )
+
+    @staticmethod
+    def _reject_cycle_in_overlay(
+        *,
+        subject: KnowledgeConcept,
+        object: KnowledgeConcept,
+        organization_id: UUID | None,
+    ) -> None:
+        visibility = Q(organization_id__isnull=True)
+        if organization_id is not None:
+            visibility |= Q(organization_id=organization_id)
         relations = KnowledgeRelation.objects.filter(
-            _visible_filter(self.organization),
+            visibility,
             predicate=KnowledgeRelation.Predicate.IS_A,
         ).exclude(status__in=[KnowledgeStatus.REJECTED, KnowledgeStatus.DEPRECATED])
         adjacency: dict[UUID, list[tuple[UUID, str]]] = {}
@@ -234,7 +289,9 @@ class KnowledgeRelationService:
         while queue:
             current, path = queue.pop(0)
             if current == subject.id:
-                raise RelationCycleError([subject.code, *path])
+                raise RelationCycleError(
+                    [subject.code, *path], organization_id=organization_id
+                )
             if current in visited:
                 continue
             visited.add(current)

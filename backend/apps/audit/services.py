@@ -20,6 +20,8 @@ def record_review_transition(
     before_metadata: dict[str, object] | None = None,
     after_metadata: dict[str, object] | None = None,
 ) -> tuple[ApprovalRecord, AuditLog]:
+    if action == "REJECT" and not comment.strip():
+        raise ValueError("Reject comment must not be empty.")
     before = before_metadata or {}
     after = after_metadata or {}
     approval = ApprovalRecord.objects.create(

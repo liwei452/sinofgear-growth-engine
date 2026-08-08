@@ -65,9 +65,11 @@ class RelationRuleError(ValueError):
 
 
 class RelationCycleError(RelationRuleError):
-    def __init__(self, path: list[str]) -> None:
+    def __init__(self, path: list[str], *, organization_id=None) -> None:
         self.path = path
-        super().__init__(f"IS_A cycle rejected: {' -> '.join(path)}")
+        self.organization_id = organization_id
+        overlay = f" in organization overlay {organization_id}" if organization_id else " in the SYSTEM graph"
+        super().__init__(f"IS_A cycle rejected{overlay}: {' -> '.join(path)}")
 
 
 def validate_predicate_types(*, subject: KnowledgeConcept, predicate: str, object: KnowledgeConcept) -> None:

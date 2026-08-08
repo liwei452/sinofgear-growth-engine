@@ -4,6 +4,7 @@ from rest_framework.test import APIClient
 
 from apps.identity.models import Membership, Organization, Role
 from apps.knowledge.models import KnowledgeConcept
+from apps.knowledge.guards import _test_fixture_writes
 
 
 @pytest.fixture
@@ -44,13 +45,22 @@ def make_concept(
     created_by=None,
 ) -> KnowledgeConcept:
     scope = KnowledgeConcept.Scope.ORGANIZATION if organization else KnowledgeConcept.Scope.SYSTEM
-    return KnowledgeConcept.objects.create(
-        scope=scope,
-        organization=organization,
-        concept_type=concept_type,
-        code=code,
-        label_zh=code,
-        label_en=code.replace("_", " ").title(),
-        status=status,
-        created_by=created_by,
-    )
+    values = {
+        "scope": scope,
+        "organization": organization,
+        "concept_type": concept_type,
+        "code": code,
+        "label_zh": code,
+        "label_en": code.replace("_", " ").title(),
+        "status": status,
+        "created_by": created_by,
+    }
+    if status == KnowledgeConcept.Status.SUGGESTED:
+        return KnowledgeConcept.objects.create(**values)
+    with _test_fixture_writes():
+        return KnowledgeConcept.objects.create(**values)
+
+
+def create_test_knowledge(model, **values):
+    with _test_fixture_writes():
+        return model.objects.create(**values)

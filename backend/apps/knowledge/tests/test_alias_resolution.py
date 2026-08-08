@@ -4,7 +4,7 @@ from apps.knowledge.models import KnowledgeAlias, KnowledgeConcept
 from apps.knowledge.normalization import normalize_alias
 from apps.knowledge.services import OntologyContextService
 
-from .conftest import make_concept
+from .conftest import create_test_knowledge, make_concept
 
 
 @pytest.mark.parametrize(
@@ -18,7 +18,8 @@ def test_alias_normalization_is_deterministic(value, language, expected) -> None
 @pytest.mark.django_db
 def test_resolve_alias_matches_language_case_and_whitespace(organizations) -> None:
     concept = make_concept(code="HELICAL_GEAR")
-    KnowledgeAlias.objects.create(
+    create_test_knowledge(
+        KnowledgeAlias,
         concept=concept,
         language="en",
         alias="Helical Gears",
@@ -39,7 +40,8 @@ def test_ambiguous_alias_returns_ordered_candidates_without_choosing(organizatio
     system = make_concept(code="SYSTEM_GEAR")
     custom = make_concept(code="CUSTOM_GEAR", organization=own)
     for concept in (system, custom):
-        KnowledgeAlias.objects.create(
+        create_test_knowledge(
+            KnowledgeAlias,
             concept=concept,
             organization=concept.organization,
             language="en",
@@ -62,7 +64,8 @@ def test_unapproved_and_other_organization_aliases_never_resolve(organizations) 
     suggested = make_concept(code="SUGGESTED", organization=own, status=KnowledgeConcept.Status.SUGGESTED)
     foreign = make_concept(code="FOREIGN", organization=other)
     for concept in (suggested, foreign):
-        KnowledgeAlias.objects.create(
+        create_test_knowledge(
+            KnowledgeAlias,
             concept=concept,
             organization=concept.organization,
             language="en",

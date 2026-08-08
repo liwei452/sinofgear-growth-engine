@@ -5,7 +5,7 @@ from django.db import IntegrityError, transaction
 from apps.knowledge.models import KnowledgeConcept, KnowledgeEvidence
 from apps.knowledge.services import OntologyContextService
 
-from .conftest import make_concept
+from .conftest import create_test_knowledge, make_concept
 
 
 @pytest.mark.django_db
@@ -58,13 +58,15 @@ def test_malformed_scope_combinations_are_rejected(organizations, scope, has_org
 @pytest.mark.django_db
 def test_other_organization_evidence_is_not_visible(organizations) -> None:
     own, other = organizations
-    own_evidence = KnowledgeEvidence.objects.create(
+    own_evidence = create_test_knowledge(
+        KnowledgeEvidence,
         organization=own,
         evidence_type=KnowledgeEvidence.EvidenceType.HUMAN_ENTRY,
         excerpt="own",
         status=KnowledgeEvidence.Status.APPROVED,
     )
-    KnowledgeEvidence.objects.create(
+    create_test_knowledge(
+        KnowledgeEvidence,
         organization=other,
         evidence_type=KnowledgeEvidence.EvidenceType.HUMAN_ENTRY,
         excerpt="other",
@@ -91,7 +93,8 @@ def test_deprecate_is_the_durable_replacement_for_deleting_referenced_knowledge(
 
 @pytest.mark.django_db
 def test_evidence_source_snapshot_cannot_be_overwritten(organizations) -> None:
-    evidence = KnowledgeEvidence.objects.create(
+    evidence = create_test_knowledge(
+        KnowledgeEvidence,
         organization=organizations[0],
         evidence_type=KnowledgeEvidence.EvidenceType.PUBLIC_SOURCE,
         source_url="https://example.test/original",

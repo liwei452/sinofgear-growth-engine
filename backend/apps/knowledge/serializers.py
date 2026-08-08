@@ -239,3 +239,9 @@ class RejectActionRequestSerializer(serializers.Serializer):
 
 class KnowledgeErrorSerializer(serializers.Serializer):
     detail = serializers.CharField()
+
+
+class KnowledgeValidationErrorSerializer(serializers.Serializer):
+    errors = serializers.DictField(
+        child=serializers.ListField(child=serializers.CharField())
+    )

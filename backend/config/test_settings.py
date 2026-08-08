@@ -10,3 +10,5 @@ DATABASES = {
         "NAME": ":memory:",
     }
 }
+
+KNOWLEDGE_TEST_FIXTURE_WRITES = True

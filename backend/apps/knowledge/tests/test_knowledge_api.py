@@ -5,9 +5,9 @@ from rest_framework.test import APIClient
 
 from apps.audit.models import ApprovalRecord, AuditLog
 from apps.identity.models import Role
-from apps.knowledge.models import KnowledgeEvidence, KnowledgeRelation
+from apps.knowledge.models import KnowledgeAlias, KnowledgeEvidence, KnowledgeRelation
 
-from .conftest import create_member_client, make_concept
+from .conftest import create_member_client, create_test_knowledge, make_concept
 
 
 @pytest.mark.django_db
@@ -148,10 +148,12 @@ def test_other_organization_concept_relation_and_evidence_are_invisible(organiza
     own, other = organizations
     subject = make_concept(code="FOREIGN_GEAR", organization=other)
     target = make_concept(code="FOREIGN_APP", concept_type="APPLICATION", organization=other)
-    relation = KnowledgeRelation.objects.create(
+    relation = create_test_knowledge(
+        KnowledgeRelation,
         organization=other, subject_concept=subject, predicate="APPLIES_TO", object_concept=target, status="APPROVED"
     )
-    evidence = KnowledgeEvidence.objects.create(
+    evidence = create_test_knowledge(
+        KnowledgeEvidence,
         organization=other, evidence_type="HUMAN_ENTRY", excerpt="secret", status="APPROVED"
     )
     _membership, client = create_member_client(organization=own, role=roles[Role.Code.ADMINISTRATOR], username="admin-own")
@@ -164,10 +166,12 @@ def test_other_organization_concept_relation_and_evidence_are_invisible(organiza
 @pytest.mark.django_db
 def test_concept_evidence_links_accept_visible_and_reject_foreign_evidence(organizations, roles) -> None:
     own, other = organizations
-    own_evidence = KnowledgeEvidence.objects.create(
+    own_evidence = create_test_knowledge(
+        KnowledgeEvidence,
         organization=own, evidence_type="HUMAN_ENTRY", excerpt="own", status="APPROVED"
     )
-    foreign_evidence = KnowledgeEvidence.objects.create(
+    foreign_evidence = create_test_knowledge(
+        KnowledgeEvidence,
         organization=other, evidence_type="HUMAN_ENTRY", excerpt="foreign", status="APPROVED"
     )
     _membership, client = create_member_client(organization=own, role=roles[Role.Code.OPERATOR], username="operator-evidence")
@@ -185,7 +189,7 @@ def test_concept_evidence_links_accept_visible_and_reject_foreign_evidence(organ
     assert accepted.status_code == 201
     assert accepted.json()["evidence"] == [str(own_evidence.id)]
     assert rejected.status_code == 400
-    assert "evidence" in rejected.json()
+    assert "evidence" in rejected.json()["errors"]
 
 
 @pytest.mark.django_db
@@ -217,7 +221,10 @@ def test_resolve_api_returns_disambiguation_contract(organizations, roles) -> No
 
 @pytest.mark.django_db
 def test_builtin_role_upsert_adds_knowledge_permissions_to_existing_installations() -> None:
-    stale = Role.objects.create(code=Role.Code.OPERATOR, name="Operator", permissions=["memberships.read"])
+    stale, _ = Role.objects.update_or_create(
+        code=Role.Code.OPERATOR,
+        defaults={"name": "Operator", "permissions": ["memberships.read"]},
+    )
 
     updated = Role.objects.create_operator()
 
@@ -248,3 +255,85 @@ def test_openapi_documents_task_five_paths_envelopes_and_action_statuses() -> No
     assert {"200", "400", "403", "404"} <= set(reject_responses)
     relation_approve = schema["paths"]["/api/v1/knowledge/relations/{relation_id}/approve"]["post"]
     assert relation_approve["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("KnowledgeRelation")
+
+
+@pytest.mark.django_db
+def test_alias_approval_conflict_is_client_error_without_version_or_audit(organizations, roles) -> None:
+    own, _ = organizations
+    first_concept = make_concept(code="ALIAS_FIRST", organization=own)
+    second_concept = make_concept(code="ALIAS_SECOND", organization=own)
+    first = KnowledgeAlias.objects.create(
+        organization=own, concept=first_concept, language="en", alias="same term", status="SUGGESTED"
+    )
+    second = KnowledgeAlias.objects.create(
+        organization=own, concept=second_concept, language="en", alias="  SAME   TERM ", status="SUGGESTED"
+    )
+    _membership, client = create_member_client(
+        organization=own, role=roles[Role.Code.REVIEWER], username="reviewer-alias-conflict"
+    )
+    assert client.post(f"/api/v1/knowledge/aliases/{first.id}/approve", {}, format="json").status_code == 200
+
+    client.raise_request_exception = False
+    response = client.post(f"/api/v1/knowledge/aliases/{second.id}/approve", {}, format="json")
+
+    second.refresh_from_db()
+    assert response.status_code == 400
+    assert response.json() == {
+        "errors": {"alias": ["An approved alias with this scope, language, and normalized value already exists."]}
+    }
+    assert second.status == "SUGGESTED"
+    assert second.version == 1
+    assert not ApprovalRecord.objects.filter(object_id=second.id).exists()
+    assert not AuditLog.objects.filter(object_id=second.id).exists()
+
+
+@pytest.mark.django_db
+def test_runtime_validation_error_matches_documented_schema(organizations, roles) -> None:
+    own, _ = organizations
+    _membership, client = create_member_client(
+        organization=own, role=roles[Role.Code.OPERATOR], username="operator-error-contract"
+    )
+
+    response = client.post(
+        "/api/v1/knowledge/concepts",
+        {"concept_type": "NOT_A_TYPE", "code": "BAD", "label_zh": "坏", "label_en": "Bad"},
+        format="json",
+    )
+    schema = APIClient().get("/api/v1/schema").json()
+
+    assert response.status_code == 400
+    assert set(response.json()) == {"errors"}
+    assert isinstance(response.json()["errors"]["concept_type"], list)
+    documented = schema["paths"]["/api/v1/knowledge/concepts"]["post"]["responses"]["400"]
+    assert documented["content"]["application/json"]["schema"]["$ref"].endswith("KnowledgeValidationError")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("resource", ["concepts", "relations"])
+def test_knowledge_lists_prefetch_evidence_with_bounded_queries(
+    organizations, roles, django_assert_num_queries, resource
+) -> None:
+    own, _ = organizations
+    evidence = create_test_knowledge(
+        KnowledgeEvidence, organization=own, evidence_type="HUMAN_ENTRY", excerpt="shared", status="APPROVED"
+    )
+    products = [make_concept(code=f"QUERY_{index}", organization=own) for index in range(4)]
+    for product in products:
+        product.evidence.add(evidence)
+    if resource == "relations":
+        application = make_concept(code="QUERY_APP", concept_type="APPLICATION", organization=own)
+        for product in products:
+            relation = create_test_knowledge(
+                KnowledgeRelation, organization=own, subject_concept=product, predicate="APPLIES_TO",
+                object_concept=application, status="APPROVED",
+            )
+            relation.evidence.add(evidence)
+    _membership, client = create_member_client(
+        organization=own, role=roles[Role.Code.ADMINISTRATOR], username=f"query-{resource}"
+    )
+
+    with django_assert_num_queries(5):
+        response = client.get(f"/api/v1/knowledge/{resource}")
+
+    assert response.status_code == 200
+    assert len(response.json()["results"]) >= 4

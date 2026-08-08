@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
+from .guards import GuardedKnowledgeModel
 from .normalization import normalize_alias
 
 
@@ -15,7 +16,7 @@ class KnowledgeStatus(models.TextChoices):
     DEPRECATED = "DEPRECATED", "Deprecated"
 
 
-class KnowledgeConcept(models.Model):
+class KnowledgeConcept(GuardedKnowledgeModel):
     class Scope(models.TextChoices):
         SYSTEM = "SYSTEM", "System"
         ORGANIZATION = "ORGANIZATION", "Organization"
@@ -86,8 +87,16 @@ class KnowledgeConcept(models.Model):
         if self.scope == self.Scope.ORGANIZATION and self.organization_id is None:
             raise ValidationError({"organization": "ORGANIZATION concepts require an organization."})
 
+    def _knowledge_reference_objects(self) -> list[object]:
+        return [
+            *self.aliases.all(),
+            *self.outgoing_relations.all(),
+            *self.incoming_relations.all(),
+            *self.evidence.all(),
+        ]
 
-class KnowledgeEvidence(models.Model):
+
+class KnowledgeEvidence(GuardedKnowledgeModel):
     class EvidenceType(models.TextChoices):
         PRODUCT_DOCUMENT = "PRODUCT_DOCUMENT", "Product document"
         PUBLIC_SOURCE = "PUBLIC_SOURCE", "Public source"
@@ -122,25 +131,24 @@ class KnowledgeEvidence(models.Model):
     class Meta:
         ordering = ["created_at", "id"]
 
-    def save(self, *args: object, **kwargs: object) -> None:
-        if self.pk and type(self).objects.filter(pk=self.pk).exists():
-            original = type(self).objects.get(pk=self.pk)
-            immutable_fields = (
-                "organization_id",
-                "evidence_type",
-                "source_object_type",
-                "source_object_id",
-                "source_url",
-                "excerpt",
-                "captured_at",
-                "created_by_id",
-            )
-            if any(getattr(self, field) != getattr(original, field) for field in immutable_fields):
-                raise ValidationError("Knowledge evidence source snapshots are immutable.")
-        super().save(*args, **kwargs)
+    immutable_fields = frozenset(
+        {
+            "organization_id",
+            "evidence_type",
+            "source_object_type",
+            "source_object_id",
+            "source_url",
+            "excerpt",
+            "captured_at",
+            "created_by_id",
+        }
+    )
+
+    def _knowledge_reference_objects(self) -> list[object]:
+        return [*self.concepts.all(), *self.relations.all()]
 
 
-class KnowledgeAlias(models.Model):
+class KnowledgeAlias(GuardedKnowledgeModel):
     class AliasType(models.TextChoices):
         SYNONYM = "SYNONYM", "Synonym"
         ABBREVIATION = "ABBREVIATION", "Abbreviation"
@@ -194,13 +202,12 @@ class KnowledgeAlias(models.Model):
         if self.organization_id is not None and self.concept.organization_id not in {None, self.organization_id}:
             raise ValidationError({"organization": "Alias concept must be visible to the organization."})
 
-    def save(self, *args: object, **kwargs: object) -> None:
+    def _prepare_knowledge_write(self) -> None:
         self.language = self.language.strip().lower()
         self.normalized_alias = normalize_alias(self.alias, language=self.language)
-        super().save(*args, **kwargs)
 
 
-class KnowledgeRelation(models.Model):
+class KnowledgeRelation(GuardedKnowledgeModel):
     class Predicate(models.TextChoices):
         IS_A = "IS_A", "Is a"
         APPLIES_TO = "APPLIES_TO", "Applies to"
@@ -271,5 +278,6 @@ class KnowledgeRelation(models.Model):
             for concept in concepts:
                 if concept.organization_id not in {None, self.organization_id}:
                     raise ValidationError({"organization": "Relation concepts must be visible to the organization."})
-        if self._state.adding and self.suggested_by_ai_run_id and self.status != KnowledgeStatus.SUGGESTED:
-            raise ValidationError({"status": "AI-originated relations must start as SUGGESTED."})
+
+    def _knowledge_reference_objects(self) -> list[object]:
+        return list(self.evidence.all())

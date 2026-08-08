@@ -2,6 +2,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from apps.knowledge.models import KnowledgeAlias, KnowledgeConcept, KnowledgeRelation
+from apps.knowledge.guards import _system_seed_writes
 
 
 CONCEPTS = (
@@ -63,6 +64,10 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options) -> None:
+        with _system_seed_writes():
+            self._seed()
+
+    def _seed(self) -> None:
         concepts: dict[str, KnowledgeConcept] = {}
         for concept_type, code, label_zh, label_en in CONCEPTS:
             concept, _ = KnowledgeConcept.objects.update_or_create(

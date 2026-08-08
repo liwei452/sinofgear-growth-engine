@@ -1,4 +1,5 @@
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
+from django.db import IntegrityError
 from django.http import Http404
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import serializers, status
@@ -25,6 +26,7 @@ from .serializers import (
     KnowledgeConceptListSerializer,
     KnowledgeConceptSerializer,
     KnowledgeErrorSerializer,
+    KnowledgeValidationErrorSerializer,
     KnowledgeEvidenceListSerializer,
     KnowledgeEvidenceSerializer,
     KnowledgeRelationListSerializer,
@@ -36,7 +38,36 @@ from .serializers import (
 from .services import KnowledgeReviewService, KnowledgeStateError, OntologyContextService
 
 
-ERROR_RESPONSES = {400: KnowledgeErrorSerializer, 403: KnowledgeErrorSerializer, 404: KnowledgeErrorSerializer}
+ERROR_RESPONSES = {
+    400: KnowledgeValidationErrorSerializer,
+    403: KnowledgeErrorSerializer,
+    404: KnowledgeErrorSerializer,
+}
+
+
+def _raise_validation_error(errors) -> None:
+    normalized = {}
+    for field, messages in errors.items():
+        if isinstance(messages, (list, tuple)):
+            normalized[field] = [str(message) for message in messages]
+        else:
+            normalized[field] = [str(messages)]
+    raise serializers.ValidationError({"errors": normalized})
+
+
+def _validate(serializer) -> None:
+    if not serializer.is_valid():
+        _raise_validation_error(serializer.errors)
+
+
+def _save(serializer):
+    try:
+        return serializer.save()
+    except serializers.ValidationError as error:
+        details = error.detail
+        if isinstance(details, dict) and set(details) == {"errors"}:
+            raise
+        _raise_validation_error(details if isinstance(details, dict) else {"detail": details})
 
 
 def _can_manage_system(request: Request) -> bool:
@@ -61,7 +92,10 @@ class KnowledgeConceptListView(APIView):
 
     @extend_schema(operation_id="knowledge_concepts_list", responses={200: KnowledgeConceptListSerializer, 403: KnowledgeErrorSerializer})
     def get(self, request: Request) -> Response:
-        queryset = _filter_review_visibility(request, OntologyContextService(request.organization).visible_concepts())
+        queryset = _filter_review_visibility(
+            request,
+            OntologyContextService(request.organization).visible_concepts().prefetch_related("evidence"),
+        )
         return Response({"results": KnowledgeConceptSerializer(queryset, many=True).data})
 
     @extend_schema(
@@ -80,8 +114,8 @@ class KnowledgeConceptListView(APIView):
                 "service": service,
             },
         )
-        serializer.is_valid(raise_exception=True)
-        concept = serializer.save()
+        _validate(serializer)
+        concept = _save(serializer)
         return Response(KnowledgeConceptSerializer(concept).data, status=status.HTTP_201_CREATED)
 
 
@@ -104,7 +138,10 @@ class KnowledgeRelationListView(APIView):
 
     @extend_schema(responses={200: KnowledgeRelationListSerializer, 403: KnowledgeErrorSerializer})
     def get(self, request: Request) -> Response:
-        queryset = _filter_review_visibility(request, OntologyContextService(request.organization).visible_relations())
+        queryset = _filter_review_visibility(
+            request,
+            OntologyContextService(request.organization).visible_relations().prefetch_related("evidence"),
+        )
         return Response({"results": KnowledgeRelationSerializer(queryset, many=True).data})
 
     @extend_schema(request=KnowledgeRelationSerializer, responses={201: KnowledgeRelationSerializer, **ERROR_RESPONSES})
@@ -119,8 +156,8 @@ class KnowledgeRelationListView(APIView):
                 "allow_system": _can_manage_system(request),
             },
         )
-        serializer.is_valid(raise_exception=True)
-        relation = serializer.save()
+        _validate(serializer)
+        relation = _save(serializer)
         return Response(KnowledgeRelationSerializer(relation).data, status=status.HTTP_201_CREATED)
 
 
@@ -146,8 +183,8 @@ class KnowledgeAliasListView(APIView):
                 "system_requested": request.data.get("scope") == KnowledgeConcept.Scope.SYSTEM,
             },
         )
-        serializer.is_valid(raise_exception=True)
-        alias = serializer.save()
+        _validate(serializer)
+        alias = _save(serializer)
         return Response(KnowledgeAliasSerializer(alias).data, status=status.HTTP_201_CREATED)
 
 
@@ -170,8 +207,8 @@ class KnowledgeEvidenceListView(APIView):
                 "allow_system": _can_manage_system(request),
             },
         )
-        serializer.is_valid(raise_exception=True)
-        evidence = serializer.save()
+        _validate(serializer)
+        evidence = _save(serializer)
         return Response(KnowledgeEvidenceSerializer(evidence).data, status=status.HTTP_201_CREATED)
 
 
@@ -180,11 +217,15 @@ class ResolveAliasView(APIView):
 
     @extend_schema(
         request=ResolveAliasRequestSerializer,
-        responses={200: AliasResolutionSerializer, 400: KnowledgeErrorSerializer, 403: KnowledgeErrorSerializer},
+        responses={
+            200: AliasResolutionSerializer,
+            400: KnowledgeValidationErrorSerializer,
+            403: KnowledgeErrorSerializer,
+        },
     )
     def post(self, request: Request) -> Response:
         serializer = ResolveAliasRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        _validate(serializer)
         result = OntologyContextService(request.organization).resolve_alias(**serializer.validated_data)
         return Response(AliasResolutionSerializer(result).data)
 
@@ -214,7 +255,7 @@ class KnowledgeReviewActionView(APIView):
         object_id = object_id or next(value for key, value in kwargs.items() if key.endswith("_id"))
         request_serializer_class = RejectActionRequestSerializer if self.action == ReviewAction.REJECT else ReviewActionRequestSerializer
         request_serializer = request_serializer_class(data=request.data)
-        request_serializer.is_valid(raise_exception=True)
+        _validate(request_serializer)
         service = OntologyContextService(request.organization)
         visible_map = {
             KnowledgeConcept: service.visible_concepts,
@@ -238,8 +279,18 @@ class KnowledgeReviewActionView(APIView):
                 actor=request.user,
                 comment=request_serializer.validated_data.get("comment", ""),
             )
+        except IntegrityError:
+            if self.model is KnowledgeAlias and self.action == ReviewAction.APPROVE:
+                _raise_validation_error(
+                    {
+                        "alias": [
+                            "An approved alias with this scope, language, and normalized value already exists."
+                        ]
+                    }
+                )
+            raise
         except (ValueError, KnowledgeStateError) as error:
-            raise serializers.ValidationError({"detail": str(error)}) from error
+            _raise_validation_error({"detail": [str(error)]})
         return Response(SERIALIZER_BY_MODEL[self.model](updated).data)
 
 

@@ -101,3 +101,39 @@ def test_ai_originated_relation_cannot_be_created_as_approved(organizations) -> 
             status="APPROVED",
             suggested_by_ai_run_id=uuid.uuid4(),
         )
+
+
+@pytest.mark.django_db
+def test_system_is_a_checks_every_organization_overlay(organizations) -> None:
+    own, other = organizations
+    parent = make_concept(code="PARENT")
+    child = make_concept(code="CHILD")
+    KnowledgeRelationService(other).create(
+        subject=child,
+        predicate="IS_A",
+        object=parent,
+        scope="ORGANIZATION",
+    )
+
+    with pytest.raises(RelationCycleError) as error:
+        KnowledgeRelationService(own).create(
+            subject=parent,
+            predicate="IS_A",
+            object=child,
+            scope="SYSTEM",
+        )
+
+    assert error.value.path == ["PARENT", "CHILD", "PARENT"]
+    assert error.value.organization_id == other.id
+
+
+@pytest.mark.django_db
+def test_competing_graph_writes_use_the_same_deterministic_concept_lock_set(organizations) -> None:
+    first = make_concept(code="LOCK_A")
+    second = make_concept(code="LOCK_B")
+    service = KnowledgeRelationService(organizations[0])
+
+    forward = service.graph_lock_concept_ids(subject=first, object=second)
+    reverse = service.graph_lock_concept_ids(subject=second, object=first)
+
+    assert forward == reverse == tuple(sorted((first.id, second.id), key=str))

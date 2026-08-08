@@ -1,7 +1,10 @@
+import uuid
+
 import pytest
 from django.db import transaction
 
 from apps.audit.models import ApprovalRecord, AuditLog
+from apps.audit.services import record_review_transition
 from apps.knowledge.models import KnowledgeConcept
 from apps.knowledge.services import OntologyContextService
 
@@ -67,3 +70,26 @@ def test_state_and_both_audit_records_are_committed_together(organizations, role
     concept.refresh_from_db()
     assert concept.status == "SUGGESTED"
     assert not ApprovalRecord.objects.exists()
+
+
+@pytest.mark.django_db
+def test_generic_audit_primitive_rejects_blank_rejection_before_writes(organizations, roles) -> None:
+    own, _ = organizations
+    membership, _ = create_member_client(
+        organization=own, role=roles["ADMINISTRATOR"], username="audit-direct-reject"
+    )
+
+    with pytest.raises(ValueError, match="comment"):
+        record_review_transition(
+            organization=own,
+            object_type="future.Content",
+            object_id=uuid.uuid4(),
+            action="REJECT",
+            status="REJECTED",
+            object_version=1,
+            actor=membership.user,
+            comment="  ",
+        )
+
+    assert not ApprovalRecord.objects.exists()
+    assert not AuditLog.objects.exists()

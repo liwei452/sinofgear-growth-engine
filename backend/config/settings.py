@@ -3,7 +3,7 @@ from urllib.parse import unquote, urlparse
 
 
 def database_from_url(database_url: str) -> dict[str, object]:
-    """Return Django database settings from a PostgreSQL or SQLite URL."""
+    """Return Django database settings from a PostgreSQL URL."""
     parsed = urlparse(database_url)
 
     if parsed.scheme in {"postgres", "postgresql"}:
@@ -15,13 +15,7 @@ def database_from_url(database_url: str) -> dict[str, object]:
             "HOST": parsed.hostname or "",
             "PORT": str(parsed.port or 5432),
         }
-    if parsed.scheme == "sqlite":
-        return {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": parsed.path.lstrip("/") or ":memory:",
-        }
-
-    raise ValueError("DATABASE_URL must use postgresql:// or sqlite://")
+    raise ValueError("DATABASE_URL must use a PostgreSQL URL (postgresql://)")
 
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "development-only-django-secret-key")

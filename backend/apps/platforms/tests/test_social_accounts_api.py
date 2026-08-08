@@ -191,6 +191,22 @@ def test_capability_codes_and_credential_scopes_are_validated(platform: Platform
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("malformed_scope", [{"code": "PUBLISH"}, ["PUBLISH"]])
+def test_credential_scope_members_must_be_strings(
+    platform: Platform, organizations: tuple[Organization, Organization], malformed_scope: object
+) -> None:
+    credential = ConnectorCredential(
+        organization=organizations[0],
+        platform=platform,
+        secret_reference="vault://linkedin/acme",
+        granted_scopes=[malformed_scope],
+    )
+
+    with pytest.raises(ValidationError):
+        credential.full_clean()
+
+
+@pytest.mark.django_db
 def test_seed_platforms_is_idempotent_and_does_not_register_connectors() -> None:
     call_command("seed_platforms")
     call_command("seed_platforms")

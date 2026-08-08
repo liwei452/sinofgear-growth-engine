@@ -15,6 +15,8 @@ class AccountCapability(StrEnum):
 def validate_capability_list(value: object) -> None:
     if not isinstance(value, list):
         raise ValidationError("Capability scopes must be a list.")
+    if any(not isinstance(code, str) for code in value):
+        raise ValidationError("Capability scopes must contain only strings.")
     invalid_codes = [code for code in value if code not in AccountCapability._value2member_map_]
     if invalid_codes:
         raise ValidationError(f"Unknown capability codes: {invalid_codes}")

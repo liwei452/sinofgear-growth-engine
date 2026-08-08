@@ -53,10 +53,18 @@ class Role(models.Model):
         ),
         Code.OPERATOR: (
             "Operator",
-            (PermissionCode.MEMBERSHIPS_READ, PermissionCode.MEMBERSHIPS_MANAGE),
+            (
+                PermissionCode.MEMBERSHIPS_READ,
+                PermissionCode.MEMBERSHIPS_MANAGE,
+                PermissionCode.KNOWLEDGE_READ,
+                PermissionCode.KNOWLEDGE_CREATE,
+            ),
         ),
-        Code.REVIEWER: ("Reviewer", (PermissionCode.MEMBERSHIPS_READ,)),
-        Code.READ_ONLY: ("Read only", (PermissionCode.MEMBERSHIPS_READ,)),
+        Code.REVIEWER: (
+            "Reviewer",
+            (PermissionCode.MEMBERSHIPS_READ, PermissionCode.KNOWLEDGE_READ, PermissionCode.KNOWLEDGE_REVIEW_ORGANIZATION),
+        ),
+        Code.READ_ONLY: ("Read only", (PermissionCode.MEMBERSHIPS_READ, PermissionCode.KNOWLEDGE_READ)),
     }
 
     code = models.CharField(max_length=32, choices=Code.choices, unique=True)

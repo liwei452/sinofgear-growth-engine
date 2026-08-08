@@ -34,6 +34,8 @@ INSTALLED_APPS = [
     "apps.common.apps.CommonConfig",
     "apps.identity.apps.IdentityConfig",
     "apps.platforms.apps.PlatformsConfig",
+    "apps.audit.apps.AuditConfig",
+    "apps.knowledge.apps.KnowledgeConfig",
 ]
 
 MIDDLEWARE = [

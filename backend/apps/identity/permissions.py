@@ -7,6 +7,11 @@ class PermissionCode(StrEnum):
     MEMBERSHIPS_READ = "memberships.read"
     MEMBERSHIPS_MANAGE = "memberships.manage"
     CREDENTIALS_MANAGE = "credentials.manage"
+    KNOWLEDGE_READ = "knowledge.read"
+    KNOWLEDGE_CREATE = "knowledge.create"
+    KNOWLEDGE_REVIEW_ORGANIZATION = "knowledge.review_organization"
+    KNOWLEDGE_MANAGE_SYSTEM = "knowledge.manage_system"
+    KNOWLEDGE_DEPRECATE = "knowledge.deprecate"
 
 
 class HasOrganizationPermission(BasePermission):
@@ -38,3 +43,19 @@ class CanManageMemberships(HasOrganizationPermission):
 
 class CanManageCredentials(HasOrganizationPermission):
     permission_code = PermissionCode.CREDENTIALS_MANAGE
+
+
+class CanReadKnowledge(HasOrganizationPermission):
+    permission_code = PermissionCode.KNOWLEDGE_READ
+
+
+class CanCreateKnowledge(HasOrganizationPermission):
+    permission_code = PermissionCode.KNOWLEDGE_CREATE
+
+
+class CanReviewOrganizationKnowledge(HasOrganizationPermission):
+    permission_code = PermissionCode.KNOWLEDGE_REVIEW_ORGANIZATION
+
+
+class CanDeprecateKnowledge(HasOrganizationPermission):
+    permission_code = PermissionCode.KNOWLEDGE_DEPRECATE

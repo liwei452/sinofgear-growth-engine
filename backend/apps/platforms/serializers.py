@@ -11,7 +11,11 @@ class PlatformSerializer(serializers.ModelSerializer):
         fields = ["code", "name", "capabilities"]
 
     def get_capabilities(self, platform: Platform) -> list[str]:
-        return list(platform.capability_definitions.values_list("code", flat=True))
+        return [capability.code for capability in platform.capability_definitions.all()]
+
+
+class PlatformListSerializer(serializers.Serializer):
+    results = PlatformSerializer(many=True)
 
 
 class SocialAccountSerializer(serializers.ModelSerializer):
@@ -33,6 +37,16 @@ class SocialAccountSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Credential must belong to your organization.")
         return credential
 
+    def validate(self, attrs: dict[str, object]) -> dict[str, object]:
+        credential = attrs.get("credential")
+        platform = attrs.get("platform")
+        if credential is not None and platform is not None and credential.platform_id != platform.id:
+            raise serializers.ValidationError({"credential": "Credential must belong to the selected platform."})
+        return attrs
+
     def create(self, validated_data: dict[str, object]) -> SocialAccount:
         return SocialAccount.objects.create(organization=self.context["organization"], **validated_data)
 
+
+class SocialAccountListSerializer(serializers.Serializer):
+    results = SocialAccountSerializer(many=True)

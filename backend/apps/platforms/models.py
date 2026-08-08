@@ -5,6 +5,8 @@ from django.db import models
 
 from apps.common.models import OrganizationScopedModel
 
+from .codes import AccountCapability, validate_capability_list
+
 
 class Platform(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -17,7 +19,7 @@ class Platform(models.Model):
 
 class PlatformCapability(models.Model):
     platform = models.ForeignKey(Platform, on_delete=models.CASCADE, related_name="capability_definitions")
-    code = models.CharField(max_length=32)
+    code = models.CharField(max_length=32, choices=[(code.value, code.value) for code in AccountCapability])
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["platform", "code"], name="platforms_unique_capability")]
@@ -27,8 +29,7 @@ class PlatformCapability(models.Model):
 class ConnectorCredential(OrganizationScopedModel):
     platform = models.ForeignKey(Platform, on_delete=models.PROTECT, related_name="connector_credentials")
     secret_reference = models.CharField(max_length=512)
-    granted_scopes = models.JSONField(default=list)
-    implementation_capabilities = models.JSONField(default=list)
+    granted_scopes = models.JSONField(default=list, validators=[validate_capability_list])
     expires_at = models.DateTimeField(null=True, blank=True)
 
 

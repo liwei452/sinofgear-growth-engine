@@ -1,16 +1,9 @@
-from enum import StrEnum
 from uuid import UUID
 
+from .codes import AccountCapability
 from .models import SocialAccount
 
-
-class AccountCapability(StrEnum):
-    PUBLISH = "PUBLISH"
-    METRICS_READ = "METRICS_READ"
-    COMMENT_READ = "COMMENT_READ"
-    PUBLIC_SEARCH = "PUBLIC_SEARCH"
-    MEDIA_UPLOAD = "MEDIA_UPLOAD"
-    WEBHOOK = "WEBHOOK"
+CONNECTOR_CAPABILITIES: dict[str, frozenset[AccountCapability]] = {}
 
 
 def resolve_account_capabilities(account_id: UUID) -> set[AccountCapability]:
@@ -21,10 +14,6 @@ def resolve_account_capabilities(account_id: UUID) -> set[AccountCapability]:
     platform_capabilities = set(
         account.platform.capability_definitions.values_list("code", flat=True)
     )
-    effective_codes = (
-        platform_capabilities
-        & set(account.credential.implementation_capabilities)
-        & set(account.credential.granted_scopes)
-    )
+    connector_capabilities = CONNECTOR_CAPABILITIES.get(account.platform.code, frozenset())
+    effective_codes = platform_capabilities & set(connector_capabilities) & set(account.credential.granted_scopes)
     return {AccountCapability(code) for code in effective_codes if code in AccountCapability._value2member_map_}
-

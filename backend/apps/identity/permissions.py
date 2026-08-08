@@ -34,3 +34,7 @@ class CanReadMemberships(HasOrganizationPermission):
 
 class CanManageMemberships(HasOrganizationPermission):
     permission_code = PermissionCode.MEMBERSHIPS_MANAGE
+
+
+class CanManageCredentials(HasOrganizationPermission):
+    permission_code = PermissionCode.CREDENTIALS_MANAGE

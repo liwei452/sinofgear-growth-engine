@@ -8,3 +8,4 @@ urlpatterns = [
     path("api/v1/schema", SpectacularJSONAPIView.as_view(), name="openapi-schema"),
 ]
 urlpatterns += [path("api/v1/", include("apps.identity.urls"))]
+urlpatterns += [path("api/v1/", include("apps.platforms.urls"))]

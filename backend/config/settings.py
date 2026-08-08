@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "apps.common.apps.CommonConfig",
     "apps.identity.apps.IdentityConfig",
+    "apps.platforms.apps.PlatformsConfig",
 ]
 
 MIDDLEWARE = [

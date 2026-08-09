@@ -35,6 +35,7 @@ MIME_ASSET_TYPES = {
 }
 MIME_ALIASES = {"image/jpg": "image/jpeg"}
 STRUCTURE_SCAN_BYTES = 64 * 1024
+JPEG_READ_WINDOW_BYTES = 64 * 1024
 
 
 def _detect_mime(header: bytes) -> str | None:
@@ -56,50 +57,118 @@ def _read_at(stream, offset: int, size: int) -> bytes:
     return stream.read(size)
 
 
-def _validate_jpeg(stream, size: int) -> None:
-    if size < 20 or _read_at(stream, 0, 2) != b"\xff\xd8":
-        raise AssetUploadError("JPEG is truncated or has an invalid structure.")
-    offset = 2
-    while offset + 4 <= size:
-        marker_prefix = _read_at(stream, offset, 2)
-        if marker_prefix[0] != 0xFF:
-            raise AssetUploadError("JPEG is truncated or has an invalid structure.")
-        marker = marker_prefix[1]
-        offset += 2
-        if marker == 0xD9:
-            raise AssetUploadError("JPEG is truncated before image scan data.")
-        if marker in range(0xD0, 0xD8) or marker == 0x01:
+class _JPEGStreamReader:
+    def __init__(self, stream, size: int) -> None:
+        self.stream = stream
+        self.size = size
+        self.position = 0
+        self.buffer = b""
+        self.buffer_offset = 0
+        stream.seek(0)
+
+    def _fill(self) -> bool:
+        if self.position >= self.size:
+            return False
+        self.buffer = self.stream.read(
+            min(JPEG_READ_WINDOW_BYTES, self.size - self.position)
+        )
+        self.buffer_offset = 0
+        return bool(self.buffer)
+
+    def read_byte(self) -> int | None:
+        if self.buffer_offset >= len(self.buffer) and not self._fill():
+            return None
+        value = self.buffer[self.buffer_offset]
+        self.buffer_offset += 1
+        self.position += 1
+        return value
+
+    def read_exact(self, count: int) -> bytes:
+        result = bytearray()
+        while len(result) < count:
+            value = self.read_byte()
+            if value is None:
+                break
+            result.append(value)
+        return bytes(result)
+
+    def skip(self, count: int) -> bool:
+        if count < 0 or self.position + count > self.size:
+            return False
+        buffered = len(self.buffer) - self.buffer_offset
+        if count <= buffered:
+            self.buffer_offset += count
+            self.position += count
+            return True
+        target = self.position + count
+        self.stream.seek(target)
+        self.position = target
+        self.buffer = b""
+        self.buffer_offset = 0
+        return True
+
+    def skip_to_marker_prefix(self) -> bool:
+        while True:
+            if self.buffer_offset >= len(self.buffer) and not self._fill():
+                return False
+            marker_offset = self.buffer.find(b"\xff", self.buffer_offset)
+            if marker_offset >= 0:
+                consumed = marker_offset - self.buffer_offset + 1
+                self.buffer_offset = marker_offset + 1
+                self.position += consumed
+                return True
+            consumed = len(self.buffer) - self.buffer_offset
+            self.buffer_offset = len(self.buffer)
+            self.position += consumed
+
+
+def _next_jpeg_marker(reader: _JPEGStreamReader, *, entropy: bool) -> int | None:
+    while True:
+        if entropy:
+            if not reader.skip_to_marker_prefix():
+                return None
+        elif reader.read_byte() != 0xFF:
+            return None
+        marker = reader.read_byte()
+        while marker == 0xFF:
+            marker = reader.read_byte()
+        if marker is None:
+            return None
+        if entropy and (marker == 0x00 or marker in range(0xD0, 0xD8)):
             continue
-        segment_length_raw = _read_at(stream, offset, 2)
+        return marker
+
+
+def _validate_jpeg(stream, size: int) -> None:
+    reader = _JPEGStreamReader(stream, size)
+    if size < 20 or reader.read_exact(2) != b"\xff\xd8":
+        raise AssetUploadError("JPEG is truncated or has an invalid structure.")
+    saw_scan = False
+    pending_marker = None
+    while reader.position < size or pending_marker is not None:
+        marker = pending_marker
+        pending_marker = None
+        if marker is None:
+            marker = _next_jpeg_marker(reader, entropy=False)
+        if marker is None or marker in {0x00, 0xD8}:
+            break
+        if marker == 0xD9:
+            if saw_scan and reader.position == size:
+                return
+            break
+        if marker == 0x01 or marker in range(0xD0, 0xD8):
+            break
+        segment_length_raw = reader.read_exact(2)
         if len(segment_length_raw) != 2:
             break
         segment_length = int.from_bytes(segment_length_raw, "big")
-        if segment_length < 2 or offset + segment_length > size:
+        if segment_length < 2 or not reader.skip(segment_length - 2):
             break
         if marker == 0xDA:
-            scan_start = offset + segment_length
-            if scan_start >= size - 2:
+            saw_scan = True
+            pending_marker = _next_jpeg_marker(reader, entropy=True)
+            if pending_marker is None:
                 break
-            scan = _read_at(stream, scan_start, size - scan_start)
-            scan_offset = 0
-            while scan_offset + 1 < len(scan):
-                if scan[scan_offset] != 0xFF:
-                    scan_offset += 1
-                    continue
-                marker_offset = scan_offset + 1
-                while marker_offset < len(scan) and scan[marker_offset] == 0xFF:
-                    marker_offset += 1
-                if marker_offset >= len(scan):
-                    break
-                scan_marker = scan[marker_offset]
-                if scan_marker == 0x00 or scan_marker in range(0xD0, 0xD8):
-                    scan_offset = marker_offset + 1
-                    continue
-                if scan_marker == 0xD9 and marker_offset + 1 == len(scan):
-                    return
-                break
-            break
-        offset += segment_length
     raise AssetUploadError("JPEG is truncated or has an invalid structure.")
 
 

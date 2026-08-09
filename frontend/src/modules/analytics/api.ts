@@ -9,6 +9,7 @@ export type ShortLink={id:string;tracking_link_id:string;code:string;status:stri
 export const analyticsKeys={all:(org:string)=>["analytics",org] as const,summary:(org:string,filters:Record<string,string>)=>[...analyticsKeys.all(org),"summary",filters] as const,tracking:(org:string)=>[...analyticsKeys.all(org),"tracking"] as const,short:(org:string)=>[...analyticsKeys.all(org),"short"] as const}
 const query=(path:string,input:Record<string,string|undefined>)=>{const p=new URLSearchParams();Object.entries(input).forEach(([k,v])=>{if(v)p.set(k,v)});return `${path}?${p}`}
 export const getChannelSummary=async(filters:Record<string,string|undefined>):Promise<Summary>=>required(await apiRequest(query("/api/v1/analytics/channel-summary",filters)))
+export const getChannelSummaryPage=(url:string):Promise<Summary>=>getCursorPage<SummaryRow>(url,"/api/v1/analytics/channel-summary") as Promise<Summary>
 export const listTrackingLinks=async():Promise<CursorPage<TrackingLink>>=>required(await apiRequest("/api/v1/tracking-links"))
 export const getTrackingPage=(url:string)=>getCursorPage<TrackingLink>(url,"/api/v1/tracking-links")
 export const createTrackingLink=async(input:Record<string,string>,key:string):Promise<TrackingLink>=>required(await apiRequest("/api/v1/tracking-links",{method:"POST",headers:{"Idempotency-Key":key},body:input}))

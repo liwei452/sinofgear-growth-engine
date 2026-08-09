@@ -1,4 +1,6 @@
 from rest_framework import serializers
+from django.db import IntegrityError, transaction
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 from .capabilities import resolve_account_capabilities
 from .codes import AccountCapability
@@ -121,6 +123,48 @@ class SocialAccountUpdateSerializer(StrictMixin, serializers.ModelSerializer):
 
 class SocialAccountListSerializer(serializers.Serializer):
     results = SocialAccountReadSerializer(many=True)
+
+
+class SocialAccountConnectionSerializer(StrictMixin, serializers.Serializer):
+    platform = serializers.PrimaryKeyRelatedField(queryset=Platform.objects.all())
+    external_id = serializers.CharField(max_length=255)
+    display_name = serializers.CharField(max_length=255)
+    publish_mode = serializers.ChoiceField(choices=[
+        SocialAccount.PublishMode.MANUAL,
+        SocialAccount.PublishMode.EXPORT_PACKAGE,
+        SocialAccount.PublishMode.API_AUTO,
+    ])
+    status = serializers.ChoiceField(choices=SocialAccount.Status.choices, default=SocialAccount.Status.ACTIVE)
+    secret_reference = serializers.CharField(max_length=512, write_only=True, required=False, trim_whitespace=True)
+
+    def validate(self, attrs):
+        automatic = attrs["publish_mode"] == SocialAccount.PublishMode.API_AUTO
+        if automatic and not attrs.get("secret_reference"):
+            raise serializers.ValidationError({"secret_reference": "A credential reference is required."})
+        if not automatic and "secret_reference" in attrs:
+            raise serializers.ValidationError({"secret_reference": "Credentials are only accepted for API automatic publishing."})
+        if automatic and not attrs["platform"].capability_definitions.filter(code=AccountCapability.PUBLISH).exists():
+            raise serializers.ValidationError({"publish_mode": "The selected platform does not support API publishing."})
+        return attrs
+
+    def create(self, validated_data):
+        secret = validated_data.pop("secret_reference", None)
+        organization = self.context["organization"]
+        try:
+            with transaction.atomic():
+                credential = None
+                if secret is not None:
+                    credential = ConnectorCredential(
+                        organization=organization, platform=validated_data["platform"],
+                        secret_reference=secret, granted_scopes=[AccountCapability.PUBLISH],
+                    )
+                    credential.full_clean(exclude=["granted_scopes"])
+                    credential.save()
+                return SocialAccount.objects.create(
+                    organization=organization, credential=credential, **validated_data
+                )
+        except (IntegrityError, DjangoValidationError) as error:
+            raise serializers.ValidationError({"external_id": "This platform account is already connected."}) from error
 
 
 class ConnectorCredentialReadSerializer(serializers.ModelSerializer):

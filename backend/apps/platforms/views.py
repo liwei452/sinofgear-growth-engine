@@ -12,7 +12,7 @@ from .serializers import (
     ConnectorCredentialCreateSerializer, ConnectorCredentialListSerializer,
     ConnectorCredentialReadSerializer, ConnectorCredentialUpdateSerializer,
     PlatformListSerializer, PlatformSerializer, SocialAccountCreateSerializer,
-    SocialAccountListSerializer, SocialAccountReadSerializer,
+    SocialAccountConnectionSerializer, SocialAccountListSerializer, SocialAccountReadSerializer,
     SocialAccountUpdateSerializer,
 )
 
@@ -88,6 +88,21 @@ class SocialAccountDetailView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         return Response(SocialAccountReadSerializer(serializer.save()).data)
+
+
+class SocialAccountConnectionView(APIView):
+    permission_classes = [CanManageCredentials]
+
+    @extend_schema(request=SocialAccountConnectionSerializer, responses={201: SocialAccountReadSerializer})
+    def post(self, request: Request) -> Response:
+        serializer = SocialAccountConnectionSerializer(
+            data=request.data, context={"organization": request.organization}
+        )
+        serializer.is_valid(raise_exception=True)
+        return Response(
+            SocialAccountReadSerializer(serializer.save()).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class ConnectorCredentialListView(APIView):

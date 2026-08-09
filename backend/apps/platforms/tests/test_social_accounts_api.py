@@ -257,6 +257,56 @@ def test_connector_credentials_are_managed_write_only_and_scope_checked(
 
 
 @pytest.mark.django_db
+def test_atomic_account_connection_supports_modes_and_rolls_back_credentials(
+    platform: Platform, organizations: tuple[Organization, Organization], roles: dict[str, Role],
+) -> None:
+    own, _other = organizations
+    PlatformCapability.objects.create(platform=platform, code="PUBLISH")
+    client = create_member(organization=own, role=roles[Role.Code.ADMINISTRATOR], username="atomic-admin")
+    base = {
+        "platform": str(platform.id), "display_name": "Channel", "status": "ACTIVE",
+    }
+
+    manual = client.post(
+        "/api/v1/social-accounts/connect",
+        {**base, "external_id": "manual", "publish_mode": "MANUAL"}, format="json",
+    )
+    export = client.post(
+        "/api/v1/social-accounts/connect",
+        {**base, "external_id": "export", "publish_mode": "EXPORT_PACKAGE"}, format="json",
+    )
+    automatic = client.post(
+        "/api/v1/social-accounts/connect",
+        {
+            **base, "external_id": "automatic", "publish_mode": "API_AUTO",
+            "secret_reference": "vault://atomic/private",
+        }, format="json",
+    )
+
+    assert manual.status_code == export.status_code == automatic.status_code == 201
+    assert ConnectorCredential.objects.filter(organization=own).count() == 1
+    assert automatic.json()["credential_configured"] is True
+    assert "private" not in automatic.content.decode()
+
+    before = ConnectorCredential.objects.count()
+    missing_secret = client.post(
+        "/api/v1/social-accounts/connect",
+        {**base, "external_id": "missing", "publish_mode": "API_AUTO"}, format="json",
+    )
+    duplicate_account = client.post(
+        "/api/v1/social-accounts/connect",
+        {
+            **base, "external_id": "automatic", "publish_mode": "API_AUTO",
+            "secret_reference": "vault://must-rollback",
+        }, format="json",
+    )
+
+    assert missing_secret.status_code == duplicate_account.status_code == 400
+    assert ConnectorCredential.objects.count() == before
+    assert "must-rollback" not in duplicate_account.content.decode()
+
+
+@pytest.mark.django_db
 def test_social_accounts_are_organization_isolated_and_reject_foreign_credential(
     platform: Platform, organizations: tuple[Organization, Organization], roles: dict[str, Role]
 ) -> None:

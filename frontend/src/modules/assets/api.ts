@@ -9,6 +9,25 @@ const query = (filters:AssetFilters) => { const params=new URLSearchParams(); Ob
 export const assetKeys={all:(organizationId:string)=>["assets",organizationId] as const,list:(organizationId:string,filters:AssetFilters)=>[...assetKeys.all(organizationId),"list",filters] as const}
 export const listAssets=async(filters:AssetFilters={}):Promise<CursorPage<Asset>>=>required(await apiRequest<CursorPage<Asset>>(query(filters)))
 export const getAssetPage=(url:string)=>getCursorPage<Asset>(url,path)
-export const uploadAsset=async(input:{file:File;asset_type:string;language:string;tags:string[]}):Promise<Asset>=>{const body=new FormData();body.append("file",input.file);body.append("asset_type",input.asset_type);body.append("language",input.language);body.append("tags",JSON.stringify([...new Set(input.tags.map(tag=>tag.trim()).filter(Boolean))]));body.append("metadata_json","{}");return required(await apiRequest<Asset>(path,{method:"POST",body}))}
+const casefold = (value:string) => value.normalize("NFKC").trim().toLocaleLowerCase().replaceAll("ß","ss").replaceAll("ς","σ")
+export const normalizeAssetTags = (tags:string[]) => [...new Set(tags.map(casefold).filter(Boolean))]
+export const uploadAsset=async(input:{file:File;asset_type:string;language:string;tags:string[]}):Promise<Asset>=>{const body=new FormData();body.append("file",input.file);body.append("asset_type",input.asset_type);body.append("language",input.language);body.append("tags",JSON.stringify(normalizeAssetTags(input.tags)));body.append("metadata_json","{}");return required(await apiRequest<Asset>(path,{method:"POST",body}))}
 export const linkAssetProduct=async(assetId:string,productId:string):Promise<Asset>=>required(await apiRequest<Asset>(`${path}/${assetId}/link-product`,{method:"POST",body:{product_id:productId}}))
 export const getAssetDownload=async(assetId:string):Promise<{url:string;expires_in:number}>=>required(await apiRequest(`${path}/${assetId}/download-url`,{method:"POST",body:{}}))
+
+export function resolveAssetDownloadUrl(
+  result:{url:string;expires_in:number},
+  allowedOrigins:string[],
+):URL {
+  if (!Number.isFinite(result.expires_in) || result.expires_in <= 0 || result.url.startsWith("//")) {
+    throw new ApiError(0,"下载地址已失效。")
+  }
+  let target:URL
+  try { target=new URL(result.url) } catch { throw new ApiError(0,"下载地址无效。") }
+  const allowed=new Set(allowedOrigins.map(origin=>new URL(origin).origin))
+  if (!["http:","https:"].includes(target.protocol)
+    || target.username || target.password || !allowed.has(target.origin)) {
+    throw new ApiError(0,"下载地址不在允许的来源中。")
+  }
+  return target
+}

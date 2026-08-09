@@ -3,7 +3,7 @@ import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import models, transaction
 
 from .guards import GuardedKnowledgeModel
 from .normalization import normalize_alias
@@ -14,6 +14,18 @@ class KnowledgeStatus(models.TextChoices):
     APPROVED = "APPROVED", "Approved"
     REJECTED = "REJECTED", "Rejected"
     DEPRECATED = "DEPRECATED", "Deprecated"
+
+
+class KnowledgeGraphLock(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    name = models.CharField(max_length=32, unique=True, default="is_a_graph")
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(id=1), name="knowledge_single_is_a_graph_lock"
+            )
+        ]
 
 
 class KnowledgeConcept(GuardedKnowledgeModel):
@@ -79,6 +91,11 @@ class KnowledgeConcept(GuardedKnowledgeModel):
                 name="knowledge_unique_org_concept_code",
             ),
         ]
+
+    identity_fields = frozenset({"scope", "organization_id"})
+    system_seed_update_fields = GuardedKnowledgeModel.system_seed_update_fields | frozenset(
+        {"label_zh", "label_en", "description"}
+    )
 
     def clean(self) -> None:
         super().clean()
@@ -193,6 +210,38 @@ class KnowledgeAlias(GuardedKnowledgeModel):
             ),
         ]
 
+    identity_fields = frozenset({"organization_id", "concept_id"})
+    system_seed_update_fields = GuardedKnowledgeModel.system_seed_update_fields | frozenset(
+        {"alias", "alias_type", "normalized_alias"}
+    )
+
+    @classmethod
+    def _validate_queryset_update_fields(cls, fields: set[str]) -> None:
+        super()._validate_queryset_update_fields(fields)
+        if "normalized_alias" in fields:
+            raise ValidationError("normalized_alias is derived and cannot be updated directly.")
+        if {field.removesuffix("_id") for field in fields} & {"alias", "language"}:
+            raise ValidationError("Unsafe alias or language queryset update; use model save or bulk_update.")
+
+    @classmethod
+    def _validate_system_seed_queryset_fields(cls, fields: set[str]) -> None:
+        super()._validate_system_seed_queryset_fields(fields)
+        if "normalized_alias" in fields:
+            raise ValidationError("normalized_alias is derived and cannot be updated directly.")
+        if {field.removesuffix("_id") for field in fields} & {"alias", "language"}:
+            raise ValidationError("Unsafe alias or language queryset update; use model save or bulk_update.")
+
+    @classmethod
+    def _augment_bulk_update_fields(cls, fields: set[str]) -> list[str]:
+        if fields & {"alias", "language"}:
+            fields = fields | {"normalized_alias"}
+        return super()._augment_bulk_update_fields(fields)
+
+    def _augment_save_update_fields(self, fields: set[str]) -> set[str]:
+        if fields & {"alias", "language"}:
+            fields = fields | {"normalized_alias"}
+        return super()._augment_save_update_fields(fields)
+
     def clean(self) -> None:
         super().clean()
         if not self.concept_id:
@@ -266,6 +315,41 @@ class KnowledgeRelation(GuardedKnowledgeModel):
                 name="knowledge_relation_not_self",
             ),
         ]
+
+    identity_fields = frozenset(
+        {"organization_id", "subject_concept_id", "object_concept_id", "predicate"}
+    )
+    system_seed_update_fields = GuardedKnowledgeModel.system_seed_update_fields | frozenset(
+        {"confidence"}
+    )
+
+    def _validate_bulk_create(self) -> None:
+        if self.predicate == self.Predicate.IS_A:
+            raise ValidationError("IS_A bulk creation is unsafe; create relations individually.")
+
+    def _validate_domain_invariants(self) -> None:
+        super()._validate_domain_invariants()
+        from .relation_rules import validate_predicate_types
+
+        validate_predicate_types(
+            subject=self.subject_concept,
+            predicate=self.predicate,
+            object=self.object_concept,
+        )
+        if self.predicate == self.Predicate.IS_A:
+            from .graph import acquire_is_a_graph_lock, reject_is_a_cycle
+
+            acquire_is_a_graph_lock()
+            reject_is_a_cycle(
+                subject=self.subject_concept,
+                object=self.object_concept,
+                relation_organization_id=self.organization_id,
+                exclude_relation_id=None if self._state.adding else self.id,
+            )
+
+    @transaction.atomic
+    def save(self, *args, **kwargs) -> None:
+        super().save(*args, **kwargs)
 
     def clean(self) -> None:
         super().clean()

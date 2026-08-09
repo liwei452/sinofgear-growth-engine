@@ -39,7 +39,7 @@ def test_alias_queryset_update_cannot_repoint_to_a_foreign_concept(organizations
         organization=own, concept=local, language="en", alias="local", status="SUGGESTED"
     )
 
-    with pytest.raises(ValidationError, match="visible"):
+    with pytest.raises(ValidationError, match="visible|identity"):
         KnowledgeAlias.objects.filter(id=alias.id).update(concept=foreign)
 
     alias.refresh_from_db()
@@ -75,7 +75,7 @@ def test_relation_save_and_bulk_update_enforce_concept_visibility(organizations)
     )
     relation.object_concept = foreign_app
 
-    with pytest.raises(ValidationError, match="visible"):
+    with pytest.raises(ValidationError, match="visible|identity"):
         KnowledgeRelation.objects.bulk_update([relation], ["object_concept"])
 
     relation.refresh_from_db()

@@ -1,7 +1,12 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from apps.knowledge.models import KnowledgeAlias, KnowledgeConcept, KnowledgeRelation
+from apps.knowledge.models import (
+    KnowledgeAlias,
+    KnowledgeConcept,
+    KnowledgeGraphLock,
+    KnowledgeRelation,
+)
 from apps.knowledge.guards import _system_seed_writes
 
 
@@ -64,55 +69,87 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options) -> None:
+        KnowledgeGraphLock.objects.update_or_create(
+            id=1, defaults={"name": "is_a_graph"}
+        )
         with _system_seed_writes():
             self._seed()
 
     def _seed(self) -> None:
         concepts: dict[str, KnowledgeConcept] = {}
         for concept_type, code, label_zh, label_en in CONCEPTS:
-            concept, _ = KnowledgeConcept.objects.update_or_create(
+            defaults = {
+                "organization": None,
+                "label_zh": label_zh,
+                "label_en": label_en,
+                "description": "",
+                "status": KnowledgeConcept.Status.APPROVED,
+                "version": 1,
+                "suggested_by_ai_run_id": None,
+            }
+            concept, created = KnowledgeConcept.objects.get_or_create(
                 scope=KnowledgeConcept.Scope.SYSTEM,
                 concept_type=concept_type,
                 code=code,
-                defaults={
-                    "organization": None,
-                    "label_zh": label_zh,
-                    "label_en": label_en,
-                    "description": "",
-                    "status": KnowledgeConcept.Status.APPROVED,
-                    "version": 1,
-                    "suggested_by_ai_run_id": None,
-                },
+                defaults=defaults,
             )
+            if not created:
+                for field, value in defaults.items():
+                    if field != "organization":
+                        setattr(concept, field, value)
+                concept.save(
+                    update_fields=[
+                        "label_zh", "label_en", "description", "status", "version",
+                        "suggested_by_ai_run_id", "updated_at",
+                    ]
+                )
             concepts[code] = concept
         for code, language, alias, alias_type in ALIASES:
             concept = concepts[code]
-            KnowledgeAlias.objects.update_or_create(
+            defaults = {
+                "alias": alias,
+                "alias_type": alias_type,
+                "status": KnowledgeAlias.Status.APPROVED,
+                "version": 1,
+                "suggested_by_ai_run_id": None,
+            }
+            knowledge_alias, created = KnowledgeAlias.objects.get_or_create(
                 organization=None,
                 language=language,
                 normalized_alias=alias.casefold(),
-                defaults={
-                    "concept": concept,
-                    "alias": alias,
-                    "alias_type": alias_type,
-                    "status": KnowledgeAlias.Status.APPROVED,
-                    "version": 1,
-                    "suggested_by_ai_run_id": None,
-                },
+                defaults={"concept": concept, **defaults},
             )
+            if not created:
+                for field, value in defaults.items():
+                    setattr(knowledge_alias, field, value)
+                knowledge_alias.save(
+                    update_fields=[
+                        "alias", "alias_type", "status", "version",
+                        "suggested_by_ai_run_id", "updated_at",
+                    ]
+                )
         for subject_code, predicate, object_code in RELATIONS:
-            KnowledgeRelation.objects.update_or_create(
+            defaults = {
+                "status": KnowledgeRelation.Status.APPROVED,
+                "confidence": 1,
+                "version": 1,
+                "suggested_by_ai_run_id": None,
+            }
+            relation, created = KnowledgeRelation.objects.get_or_create(
                 organization=None,
                 subject_concept=concepts[subject_code],
                 predicate=predicate,
                 object_concept=concepts[object_code],
-                defaults={
-                    "status": KnowledgeRelation.Status.APPROVED,
-                    "confidence": 1,
-                    "version": 1,
-                    "suggested_by_ai_run_id": None,
-                },
+                defaults=defaults,
             )
+            if not created:
+                for field, value in defaults.items():
+                    setattr(relation, field, value)
+                relation.save(
+                    update_fields=[
+                        "status", "confidence", "version", "suggested_by_ai_run_id", "updated_at",
+                    ]
+                )
         self.stdout.write(
             self.style.SUCCESS(
                 f"Gear ontology seed present: {len(CONCEPTS)} concepts, {len(ALIASES)} aliases, {len(RELATIONS)} relations."

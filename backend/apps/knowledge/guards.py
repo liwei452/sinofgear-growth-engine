@@ -56,7 +56,21 @@ class KnowledgeQuerySet(models.QuerySet):
         if mode == _WriteMode.SYSTEM_SEED:
             if self.filter(organization_id__isnull=False).exists():
                 raise ValidationError("SYSTEM seed writes cannot mutate organization knowledge.")
-            return super().update(**kwargs)
+            self.model._validate_system_seed_queryset_fields(set(kwargs))
+            objects = list(self)
+            for instance in objects:
+                for field, value in kwargs.items():
+                    if isinstance(value, BaseExpression):
+                        raise ValidationError(
+                            f"Expression updates are not supported for guarded field '{field}'."
+                        )
+                    setattr(instance, field, value)
+                instance._prepare_knowledge_write()
+                instance._validate_knowledge_write(
+                    creating=False, write_fields=set(kwargs)
+                )
+            with _write_mode_context(_WriteMode.VALIDATED_BULK):
+                return super().update(**kwargs)
         if mode in {_WriteMode.AUDITED_REVIEW, _WriteMode.TEST_FIXTURE, _WriteMode.VALIDATED_BULK}:
             return super().update(**kwargs)
         self.model._validate_queryset_update_fields(set(kwargs))
@@ -67,7 +81,7 @@ class KnowledgeQuerySet(models.QuerySet):
                     raise ValidationError(f"Expression updates are not supported for guarded field '{field}'.")
                 setattr(instance, field, value)
             instance._prepare_knowledge_write()
-            instance._validate_knowledge_write(creating=False)
+            instance._validate_knowledge_write(creating=False, write_fields=set(kwargs))
         with _write_mode_context(_WriteMode.VALIDATED_BULK):
             return super().update(**kwargs)
 
@@ -75,21 +89,26 @@ class KnowledgeQuerySet(models.QuerySet):
         objects = list(objs)
         mode = _write_mode.get()
         for instance in objects:
+            instance._validate_bulk_create()
             instance._prepare_knowledge_write()
             instance._validate_knowledge_write(creating=True)
             if mode == _WriteMode.SYSTEM_SEED and instance.organization_id is not None:
                 raise ValidationError("SYSTEM seed writes cannot create organization knowledge.")
         return super().bulk_create(objects, **kwargs)
 
+    @transaction.atomic
     def bulk_update(self, objs, fields, **kwargs):
         objects = list(objs)
         mode = _write_mode.get()
         field_names = {field.name if hasattr(field, "name") else str(field) for field in fields}
         if mode == _WriteMode.NORMAL:
-            self.model._validate_queryset_update_fields(field_names)
+            self.model._validate_bulk_update_fields(field_names)
+        elif mode == _WriteMode.SYSTEM_SEED:
+            self.model._validate_system_seed_fields(field_names)
         for instance in objects:
             instance._prepare_knowledge_write()
-            instance._validate_knowledge_write(creating=False)
+            instance._validate_knowledge_write(creating=False, write_fields=field_names)
+        fields = self.model._augment_bulk_update_fields(field_names)
         with _write_mode_context(_WriteMode.VALIDATED_BULK):
             return super().bulk_update(objects, fields, **kwargs)
 
@@ -109,7 +128,10 @@ class GuardedKnowledgeModel(models.Model):
     objects = KnowledgeManager()
 
     immutable_fields: frozenset[str] = frozenset()
-    guarded_relation_fields: frozenset[str] = frozenset()
+    identity_fields: frozenset[str] = frozenset({"organization_id"})
+    system_seed_update_fields: frozenset[str] = frozenset(
+        {"status", "version", "suggested_by_ai_run_id", "updated_at"}
+    )
 
     class Meta:
         abstract = True
@@ -117,24 +139,74 @@ class GuardedKnowledgeModel(models.Model):
     def _prepare_knowledge_write(self) -> None:
         pass
 
+    def _validate_bulk_create(self) -> None:
+        pass
+
+    @classmethod
+    def _augment_bulk_update_fields(cls, fields: set[str]) -> list[str]:
+        return list(fields)
+
+    def _augment_save_update_fields(self, fields: set[str]) -> set[str]:
+        return fields
+
     def _validate_domain_invariants(self) -> None:
         self.clean()
 
     @classmethod
-    def _validate_queryset_update_fields(cls, fields: set[str]) -> None:
+    def _validate_guarded_update_fields(cls, fields: set[str]) -> None:
         normalized = {field.removesuffix("_id") for field in fields}
         if normalized & LIFECYCLE_FIELDS:
             raise ValidationError("Knowledge status, version, and AI origin may change only through the audited review service.")
+        identity = {field.removesuffix("_id") for field in cls.identity_fields}
+        if normalized & identity:
+            raise ValidationError("Knowledge ownership and identity fields are immutable after creation.")
         immutable = {field.removesuffix("_id") for field in cls.immutable_fields}
         if normalized & immutable:
             raise ValidationError("Knowledge evidence source snapshots are immutable.")
 
-    def _validate_knowledge_write(self, *, creating: bool) -> None:
+    @classmethod
+    def _validate_queryset_update_fields(cls, fields: set[str]) -> None:
+        cls._validate_guarded_update_fields(fields)
+
+    @classmethod
+    def _validate_bulk_update_fields(cls, fields: set[str]) -> None:
+        cls._validate_guarded_update_fields(fields)
+
+    @classmethod
+    def _validate_system_seed_fields(cls, fields: set[str]) -> None:
+        normalized = {field.removesuffix("_id") for field in fields}
+        allowed = {field.removesuffix("_id") for field in cls.system_seed_update_fields}
+        if normalized - allowed:
+            raise ValidationError("SYSTEM seed may update only declared seed-safe content and lifecycle fields.")
+
+    @classmethod
+    def _validate_system_seed_queryset_fields(cls, fields: set[str]) -> None:
+        cls._validate_system_seed_fields(fields)
+
+    def _validate_knowledge_write(
+        self, *, creating: bool, write_fields: set[str] | None = None
+    ) -> None:
         mode = _write_mode.get()
+        original = None
+        changed_fields: set[str] = set()
+        if not creating:
+            original = type(self).objects.get(pk=self.pk)
+            changed_fields = {
+                field.name
+                for field in self._meta.concrete_fields
+                if getattr(self, field.attname) != getattr(original, field.attname)
+            }
+            if any(getattr(self, field) != getattr(original, field) for field in self.identity_fields):
+                raise ValidationError("Knowledge ownership and identity fields are immutable after creation.")
+            if any(getattr(self, field) != getattr(original, field) for field in self.immutable_fields):
+                raise ValidationError("Knowledge evidence source snapshots are immutable.")
         self._validate_domain_invariants()
         if mode == _WriteMode.SYSTEM_SEED:
             if self.organization_id is not None:
                 raise ValidationError("SYSTEM seed writes cannot mutate organization knowledge.")
+            self._validate_system_seed_fields(
+                changed_fields if write_fields is None else write_fields
+            )
             return
         if mode in {_WriteMode.AUDITED_REVIEW, _WriteMode.TEST_FIXTURE, _WriteMode.VALIDATED_BULK}:
             return
@@ -144,20 +216,21 @@ class GuardedKnowledgeModel(models.Model):
             if self.status != "SUGGESTED" or self.version != 1:
                 raise ValidationError("Ordinary knowledge creation must start SUGGESTED at version 1.")
             return
-        original = type(self).objects.get(pk=self.pk)
         if (
             self.status != original.status
             or self.version != original.version
             or self.suggested_by_ai_run_id != original.suggested_by_ai_run_id
         ):
             raise ValidationError("Knowledge lifecycle changes must use the audited review service.")
-        if any(getattr(self, field) != getattr(original, field) for field in self.immutable_fields):
-            raise ValidationError("Knowledge evidence source snapshots are immutable.")
 
     def save(self, *args, **kwargs) -> None:
         creating = self._state.adding
         self._prepare_knowledge_write()
-        self._validate_knowledge_write(creating=creating)
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            update_fields = self._augment_save_update_fields(set(update_fields))
+            kwargs["update_fields"] = update_fields
+        self._validate_knowledge_write(creating=creating, write_fields=update_fields)
         super().save(*args, **kwargs)
 
     def _knowledge_reference_objects(self) -> list[object]:

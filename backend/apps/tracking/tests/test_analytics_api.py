@@ -3,6 +3,8 @@ import uuid
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -186,6 +188,8 @@ def test_channel_summary_rejects_unknown_repeated_and_oversized_ranges(tracking_
         "task_claim", "task_error", "task_retry", "task_cancel",
         "task_attempt_number", "task_content_version", "account_organization",
         "content_provenance", "master_content_provenance",
+        "connector_code", "requested_timezone", "idempotency_key",
+        "content_payload", "earlier_attempt",
     ],
 )
 def test_channel_summary_excludes_corrupt_attribution_provenance(
@@ -220,8 +224,6 @@ def test_channel_summary_excludes_corrupt_attribution_provenance(
             organization=tracking_context["organization"], tracking_link=tracking,
             idempotency_key="replacement-short-identity",
         )
-        from django.db import connection
-
         with connection.cursor() as cursor:
             cursor.execute(
                 "UPDATE tracking_clickevent SET short_link_id = %s WHERE short_link_id = %s",
@@ -262,16 +264,46 @@ def test_channel_summary_excludes_corrupt_attribution_provenance(
         SocialAccount.objects.filter(pk=tracking_context["account"].pk).update(
             organization=other
         )
+    elif corruption in {"connector_code", "requested_timezone", "idempotency_key"}:
+        changes = {
+            "connector_code": {"connector_code": "unregistered"},
+            "requested_timezone": {"requested_timezone": "Mars/Olympus"},
+            "idempotency_key": {"idempotency_key": " invalid"},
+        }[corruption]
+        with publishing_writes():
+            PublishTask.objects.filter(
+                pk=tracking_context["published_post"].task_id
+            ).update(**changes)
+    elif corruption == "earlier_attempt":
+        post = tracking_context["published_post"]
+        task = PublishTask.objects.get(pk=post.task_id)
+        latest = PublishAttempt.objects.get(pk=post.attempt_id)
+        with publishing_writes():
+            PublishAttempt.objects.filter(pk=latest.pk).update(number=2)
+            PublishTask.objects.filter(pk=task.pk).update(attempt_number=2)
+            PublishAttempt.objects.create(
+                organization=tracking_context["organization"], task=task, number=1,
+                claim_token=uuid.uuid4(), status=PublishAttempt.Status.FAILED,
+                request_fingerprint=task.request_fingerprint, outcome="CORRUPT",
+                error={"code": "CORRUPT"}, external_id="",
+                started_at=latest.started_at - timedelta(minutes=2),
+                finished_at=latest.started_at - timedelta(minutes=1),
+            )
     elif corruption == "content_provenance":
         with content_writes():
             PlatformContent.objects.filter(pk=tracking_context["content"].pk).update(
                 provenance={"corrupt": True}
             )
-    else:
+    elif corruption == "master_content_provenance":
         with content_writes():
             MasterContent.objects.filter(
                 pk=tracking_context["content"].master_content_id
             ).update(provenance={"corrupt": True})
+    else:
+        with content_writes():
+            PlatformContent.objects.filter(pk=tracking_context["content"].pk).update(
+                payload={"corrupt": True}
+            )
     client = _client(
         tracking_context["organization"], Role.Code.READ_ONLY, suffix=f"corrupt-{corruption}"
     )
@@ -289,6 +321,72 @@ def test_channel_summary_excludes_corrupt_attribution_provenance(
         "/api/v1/analytics/channel-summary",
         {"start": "2026-01-01", "end": "2026-01-02", "raw": "true"},
     ).status_code == 400
+
+
+@pytest.mark.django_db
+def test_channel_summary_consistency_queries_do_not_scale_with_click_rows(
+    tracking_context,
+):
+    tracking = create_tracking_link(
+        organization=tracking_context["organization"],
+        destination="https://example.com/query-bound",
+        utm_source="linkedin", utm_medium="social", utm_campaign="launch",
+        campaign=tracking_context["campaign"], platform=tracking_context["platform"],
+        product=tracking_context["product"],
+        published_post=tracking_context["published_post"],
+        idempotency_key="analytics-query-bound",
+    )
+    short = create_short_link(
+        organization=tracking_context["organization"], tracking_link=tracking,
+        idempotency_key="analytics-query-bound-short",
+    )
+    now = timezone.now()
+    record_click_event(short_link=short, occurred_at=now, meta={"REMOTE_ADDR": "198.51.100.8"})
+    client = _client(
+        tracking_context["organization"], Role.Code.READ_ONLY, suffix="query-bound"
+    )
+    params = {"start": now.date().isoformat(), "end": now.date().isoformat()}
+    with CaptureQueriesContext(connection) as single:
+        assert client.get("/api/v1/analytics/channel-summary", params).status_code == 200
+    for index in range(20):
+        record_click_event(
+            short_link=short, occurred_at=now + timedelta(microseconds=index + 1),
+            meta={"REMOTE_ADDR": "198.51.100.8"},
+        )
+    with CaptureQueriesContext(connection) as many:
+        response = client.get("/api/v1/analytics/channel-summary", params)
+    assert response.status_code == 200
+    assert response.json()["results"][0]["clicks"] == 21
+    assert len(many) == len(single)
+
+
+@pytest.mark.django_db
+def test_channel_summary_rejects_more_than_the_bounded_task_candidates(
+    tracking_context, monkeypatch
+):
+    tracking = create_tracking_link(
+        organization=tracking_context["organization"], destination="https://example.com/bound",
+        utm_source="linkedin", utm_medium="social", utm_campaign="launch",
+        campaign=tracking_context["campaign"], platform=tracking_context["platform"],
+        product=tracking_context["product"],
+        published_post=tracking_context["published_post"], idempotency_key="analytics-bound",
+    )
+    short = create_short_link(
+        organization=tracking_context["organization"], tracking_link=tracking,
+        idempotency_key="analytics-bound-short",
+    )
+    now = timezone.now()
+    record_click_event(short_link=short, occurred_at=now, meta={"REMOTE_ADDR": "198.51.100.8"})
+    monkeypatch.setattr("apps.tracking.views.MAX_ANALYTICS_PUBLISH_TASKS", 0, raising=False)
+    client = _client(tracking_context["organization"], Role.Code.READ_ONLY, suffix="bounded")
+
+    response = client.get(
+        "/api/v1/analytics/channel-summary",
+        {"start": now.date().isoformat(), "end": now.date().isoformat()},
+    )
+
+    assert response.status_code == 400
+    assert set(response.json()["errors"]) == {"date_range"}
 
 
 @pytest.mark.django_db

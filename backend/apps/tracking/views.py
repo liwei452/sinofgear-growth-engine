@@ -14,6 +14,7 @@ from apps.catalog.models import Product
 from apps.identity.permissions import CanManageTracking, CanReadTracking
 from apps.platforms.models import Platform
 from apps.publishing.models import PublishedPost
+from apps.publishing.services import consistent_publish_task_ids
 
 from .models import ClickEvent, ShortLink, TrackingLink
 from .privacy import PrivacyError
@@ -28,6 +29,9 @@ from .services import (
     create_tracking_link, record_click_event, resolve_active_short_link,
     validate_idempotency_key,
 )
+
+
+MAX_ANALYTICS_PUBLISH_TASKS = 200
 
 
 def _validation(errors):
@@ -249,7 +253,8 @@ class ChannelSummaryView(APIView):
         responses={200: ChannelSummaryEnvelopeSerializer},
         description=(
             "Aggregate-only click counts grouped deterministically by date, campaign, platform, "
-            "country and product. Date ranges contain at most 366 calendar days; no raw events or hashes are returned."
+            "country and product. Date ranges contain at most 366 calendar days and reference at "
+            "most 200 publishing tasks; no raw events or hashes are returned."
         ),
     )
     def get(self, request):
@@ -260,6 +265,30 @@ class ChannelSummaryView(APIView):
         queryset = ClickEvent.objects.filter(
             organization=request.organization,
             occurred_date__range=(values.pop("start"), values.pop("end")),
+        )
+        mapping = {
+            "campaign": "campaign_id", "platform": "platform_id",
+            "product": "product_id", "country": "country",
+        }
+        for name, field in mapping.items():
+            if values.get(name):
+                queryset = queryset.filter(**{field: values[name]})
+        task_ids = list(
+            queryset.order_by().values_list(
+                "tracking_link__published_post__task_id", flat=True
+            ).distinct()[: MAX_ANALYTICS_PUBLISH_TASKS + 1]
+        )
+        if len(task_ids) > MAX_ANALYTICS_PUBLISH_TASKS:
+            return _validation({
+                "date_range": [
+                    "The selected range references too many publishing tasks; narrow the filters."
+                ]
+            })
+        consistent_task_ids = consistent_publish_task_ids(
+            organization=request.organization, task_ids=task_ids
+        )
+        queryset = queryset.filter(
+            tracking_link__published_post__task_id__in=consistent_task_ids,
             tracking_link__organization=request.organization,
             short_link__organization=request.organization,
             campaign__organization=request.organization,
@@ -347,10 +376,6 @@ class ChannelSummaryView(APIView):
                 "tracking_link__published_post__published_at"
             )
         )
-        mapping = {"campaign": "campaign_id", "platform": "platform_id", "product": "product_id", "country": "country"}
-        for name, field in mapping.items():
-            if values.get(name):
-                queryset = queryset.filter(**{field: values[name]})
         groups = queryset.values(
             "occurred_date", "campaign_id", "platform_id", "country", "product_id"
         ).annotate(clicks=Count("id")).order_by(

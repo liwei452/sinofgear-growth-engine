@@ -6,12 +6,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Prefetch, Q
 from django.utils import timezone
 
 from apps.content.models import PlatformContent
 from apps.content.services import content_is_consistent
 from apps.content.services import transition_content
+from apps.campaigns.models import ContentBriefPlatform
 from apps.platforms.capabilities import resolve_account_capabilities
 from apps.platforms.codes import AccountCapability
 from apps.platforms.models import ConnectorCredential, PlatformCapability, SocialAccount
@@ -283,6 +284,46 @@ def publish_task_is_consistent(task):
         )
     except (AttributeError, KeyError, TypeError, ValueError, ZoneInfoNotFoundError):
         return False
+
+
+def publish_task_consistency_queryset(organization):
+    """Load every relation used by publish_task_is_consistent in fixed queries."""
+    return (
+        PublishTask.objects.filter(organization=organization)
+        .select_related(
+            "platform_content__platform",
+            "platform_content__master_content__brief",
+            "platform_content__master_content__generation_job",
+            "platform_content__master_content__ai_run",
+            "platform_content__master_content__previous_version",
+            "platform_content__previous_version",
+            "social_account__platform", "social_account__credential", "platform",
+            "published_post__attempt",
+        )
+        .prefetch_related(
+            Prefetch(
+                "attempts",
+                queryset=PublishAttempt.objects.order_by("-number")[
+                    :MAX_PUBLISH_ATTEMPTS + 1
+                ],
+                to_attr="_safe_attempts",
+            )
+        )
+        .annotate(
+            _selected_platform=Exists(
+                ContentBriefPlatform.objects.filter(
+                    brief_id=OuterRef("platform_content__master_content__brief_id"),
+                    platform_id=OuterRef("platform_id"),
+                )
+            )
+        )
+    )
+
+
+def consistent_publish_task_ids(*, organization, task_ids):
+    """Return IDs whose fully loaded tasks pass the canonical Task11 validator."""
+    tasks = publish_task_consistency_queryset(organization).filter(pk__in=tuple(task_ids))
+    return frozenset(task.id for task in tasks if publish_task_is_consistent(task))
 
 
 def _canonical_timezone(name):

@@ -1,7 +1,6 @@
 from collections import defaultdict
 from zoneinfo import ZoneInfo
 
-from django.db.models import Exists, OuterRef, Prefetch
 from django.http import Http404
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
 from rest_framework import status
@@ -9,12 +8,11 @@ from rest_framework.pagination import CursorPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.campaigns.models import ContentBriefPlatform
 from apps.content.models import PlatformContent
 from apps.identity.permissions import CanManagePublishing, CanReadPublishing
 from apps.platforms.models import SocialAccount
 
-from .models import PublishAttempt, PublishTask
+from .models import PublishTask
 from .serializers import (
     CalendarFilterSerializer, EmptyActionSerializer, PublishCreateSerializer,
     PublishCalendarEnvelopeSerializer, PublishFilterSerializer,
@@ -22,9 +20,9 @@ from .serializers import (
     PublishTaskSerializer,
 )
 from .services import (
-    MAX_PUBLISH_ATTEMPTS, PublishingConflict, cancel_publish_task,
-    create_publish_task, publish_task_is_consistent, retry_publish_task,
-    validate_idempotency_key,
+    PublishingConflict, cancel_publish_task, create_publish_task,
+    publish_task_consistency_queryset, publish_task_is_consistent,
+    retry_publish_task, validate_idempotency_key,
 )
 
 
@@ -39,36 +37,7 @@ class PublishPagination(CursorPagination):
 
 
 def _safe_queryset(organization):
-    return (
-        PublishTask.objects.filter(organization=organization)
-        .select_related(
-            "platform_content__platform",
-            "platform_content__master_content__brief",
-            "platform_content__master_content__generation_job",
-            "platform_content__master_content__ai_run",
-            "platform_content__master_content__previous_version",
-            "platform_content__previous_version",
-            "social_account__platform", "social_account__credential", "platform",
-            "published_post__attempt",
-        )
-        .prefetch_related(
-            Prefetch(
-                "attempts",
-                queryset=PublishAttempt.objects.order_by("-number")[
-                    :MAX_PUBLISH_ATTEMPTS + 1
-                ],
-                to_attr="_safe_attempts",
-            )
-        )
-        .annotate(
-            _selected_platform=Exists(
-                ContentBriefPlatform.objects.filter(
-                    brief_id=OuterRef("platform_content__master_content__brief_id"),
-                    platform_id=OuterRef("platform_id"),
-                )
-            )
-        )
-    )
+    return publish_task_consistency_queryset(organization)
 
 
 def _task(organization, task_id):

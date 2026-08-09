@@ -8,3 +8,6 @@ __pycache__/
 node_modules/
 dist/
 coverage/
+frontend/test-results/
+frontend/playwright-report/
+frontend/.playwright/

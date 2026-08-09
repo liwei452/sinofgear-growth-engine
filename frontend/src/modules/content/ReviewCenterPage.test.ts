@@ -48,7 +48,10 @@ function common(path: string) {
     prompt: { purpose: "CONTENT_GENERATE", code: "content-default", version: 3, provider: "openai", model: "gpt-safe" },
     provider: "openai", model: "gpt-safe", confidence: "0.9200", human_correction: null, reviewer: null,
     created_at: "", started_at: "2026-08-09T00:00:00Z", finished_at: "2026-08-09T00:00:03Z", reviewed_at: null,
-    input_snapshot: { Authorization: "never-render" }, output_json: { title: "safe" }, error: null, provider_metadata: {},
+    input_snapshot: {
+      Authorization: "never-render",
+      ontology_snapshot: { concept_versions: [{ code: "DIN" }, { code: "PACKAGING_MACHINERY" }] },
+    }, output_json: { title: "safe" }, error: null, provider_metadata: {},
   }
   return page([])
 }
@@ -76,6 +79,9 @@ it("shows plain content fields and a safe, collapsed AI audit summary", async ()
   expect(screen.queryByText(/never-render/)).not.toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "查看AI生成记录" }))
   expect(await screen.findByText("gpt-safe")).toBeInTheDocument()
+  expect(screen.getByText("SUCCEEDED")).toBeInTheDocument()
+  expect(screen.getByText("DIN")).toBeInTheDocument()
+  expect(screen.getByText("PACKAGING_MACHINERY")).toBeInTheDocument()
   expect(screen.getByText("content-default · v3")).toBeInTheDocument()
   expect(screen.queryByText(/Authorization|never-render/)).not.toBeInTheDocument()
 })

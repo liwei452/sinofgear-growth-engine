@@ -1,25 +1,21 @@
 import os
-from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
 
-from .test_settings import *  # noqa: F403
+from .e2e_paths import validate_e2e_paths
 
 
-MARKER = "sinofgear-phase-a-e2e-"
 run_root_text = os.environ.get("SINO_PHASE_A_E2E_ROOT", "")
 database_text = os.environ.get("SINO_PHASE_A_E2E_DB", "")
 storage_text = os.environ.get("SINO_PHASE_A_E2E_STORAGE", "")
 if not run_root_text or not database_text or not storage_text:
     raise ImproperlyConfigured("Isolated Phase A E2E paths are required.")
 
-run_root = Path(run_root_text).resolve()
-database_path = Path(database_text).resolve()
-storage_root = Path(storage_text).resolve()
-if not run_root.name.startswith(MARKER):
-    raise ImproperlyConfigured("Phase A E2E root is missing its safety marker.")
-if database_path.parent != run_root or run_root not in storage_root.parents:
-    raise ImproperlyConfigured("Phase A E2E database and storage must stay inside the run root.")
+run_root, database_path, storage_root = validate_e2e_paths(
+    run_root_text, database_text, storage_text
+)
+
+from .test_settings import *  # noqa: E402,F403
 
 DATABASES = {
     "default": {

@@ -7,6 +7,7 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   reporter: [["list"]],
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR,
   timeout: 60_000,
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL,
@@ -17,5 +18,6 @@ export default defineConfig({
     headless: true,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
+    video: "off",
   },
 })

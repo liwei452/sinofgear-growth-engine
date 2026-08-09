@@ -1,10 +1,4 @@
-from threading import Lock
-
 from .base import PublishRequest, PublishResult
-
-
-_FAILED_ONCE_TASKS = set()
-_FAILED_ONCE_LOCK = Lock()
 
 
 class MockPlatformConnector:
@@ -12,13 +6,7 @@ class MockPlatformConnector:
         self.outcome = outcome
 
     def publish(self, request: PublishRequest) -> PublishResult:
-        should_fail_once = False
-        if self.outcome == "fail_once":
-            with _FAILED_ONCE_LOCK:
-                if request.task_id not in _FAILED_ONCE_TASKS:
-                    _FAILED_ONCE_TASKS.add(request.task_id)
-                    should_fail_once = True
-        if should_fail_once:
+        if self.outcome == "fail_once" and request.attempt_number == 1:
             return PublishResult(
                 succeeded=False,
                 error_code="PROVIDER_ERROR",

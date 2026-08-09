@@ -30,6 +30,12 @@ function baseResponse(path: string, activeBriefs: unknown[] = []) {
   if (path === "/api/v1/assets") return { next: null, previous: null, results: [] }
   if (path === "/api/v1/jobs") return { next: null, previous: null, results: [] }
   if (path === "/api/v1/master-contents") return { next: null, previous: null, results: [] }
+  if (path === "/api/v1/knowledge/concepts?status=APPROVED&page_size=50") return {
+    next: null, previous: null, results: [
+      { id: "concept-din", code: "DIN", concept_type: "STANDARD", label_zh: "DIN", label_en: "DIN", status: "APPROVED" },
+      { id: "concept-packaging", code: "PACKAGING_MACHINERY", concept_type: "INDUSTRY", label_zh: "鍖呰鏈烘", label_en: "Packaging Machinery", status: "APPROVED" },
+    ],
+  }
   return { results: [] }
 }
 
@@ -60,7 +66,7 @@ it("guides a beginner through campaign creation and sends the exact brief payloa
   })
   vi.stubGlobal("fetch", fetchMock)
   const user = userEvent.setup()
-  renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read", "jobs.read"])
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read", "jobs.read", "knowledge.read"])
   await screen.findByRole("heading", { name: "AI 内容工厂" })
   await user.click(screen.getByRole("button", { name: "创建内容任务" }))
 
@@ -70,6 +76,8 @@ it("guides a beginner through campaign creation and sends the exact brief payloa
   await user.click(screen.getByRole("button", { name: "下一步" }))
   await user.click(await screen.findByLabelText("精密齿轮"))
   await user.click(screen.getByLabelText("LinkedIn"))
+  await user.click(screen.getByLabelText("DIN (STANDARD)"))
+  await user.click(screen.getByLabelText("Packaging Machinery (INDUSTRY)"))
   await user.click(screen.getByRole("button", { name: "下一步" }))
   await user.type(screen.getByLabelText("目标国家（必填）"), "德国")
   await user.type(screen.getByLabelText("客户类型（必填）"), "工业采购")
@@ -92,7 +100,10 @@ it("guides a beginner through campaign creation and sends the exact brief payloa
       content_objective: "获取询盘", cta: "立即询价", landing_page_url: "https://example.com/de",
       language: "de", prohibited_claims: ["永不磨损"], selling_points: ["精密磨齿"],
       advantages: ["交期稳定"], keywords: ["精密齿轮"], product_ids: ["product-1"],
-      asset_ids: [], platform_ids: ["platform-1"], concept_links: [],
+      asset_ids: [], platform_ids: ["platform-1"], concept_links: [
+        { role: "STANDARD", concept_id: "concept-din" },
+        { role: "TARGET_INDUSTRY", concept_id: "concept-packaging" },
+      ],
     } },
   ])
 })

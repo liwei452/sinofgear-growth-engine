@@ -6,7 +6,7 @@ from uuid import UUID
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management import BaseCommand, CommandError, call_command
-from django.db import transaction
+from django.db import models, transaction
 
 from apps.ai.models import PromptVersion, ai_audit_writes
 from apps.assets.models import AssetProductLink, MaterialAsset
@@ -23,9 +23,14 @@ from apps.campaigns.models import (
 from apps.campaigns.services import mark_content_brief_ready
 from apps.catalog.models import Product, ProductConceptLink
 from apps.identity.models import Membership, Organization, Role
-from apps.knowledge.models import KnowledgeConcept
+from apps.knowledge.management.commands.seed_gear_ontology import ALIASES, CONCEPTS, RELATIONS
+from apps.knowledge.models import (
+    KnowledgeAlias, KnowledgeConcept, KnowledgeGraphLock, KnowledgeRelation,
+)
 from apps.platforms.codes import AccountCapability
-from apps.platforms.models import ConnectorCredential, Platform, SocialAccount
+from apps.platforms.models import (
+    ConnectorCredential, Platform, PlatformCapability, SocialAccount,
+)
 
 
 ORGANIZATION_ID = UUID("10000000-0000-4000-8000-000000000001")
@@ -86,6 +91,8 @@ class Command(BaseCommand):
                 "seed_phase_a is E2E-only; use the isolated E2E settings and launcher."
             )
         with transaction.atomic():
+            self._preflight()
+            self._ensure_asset_blob()
             call_command("seed_gear_ontology", verbosity=0)
             organization = self._organization()
             users = self._users(organization)
@@ -109,6 +116,250 @@ class Command(BaseCommand):
                 "Phase A E2E seed present (organization phase-a-e2e-only; credentials are test-only)."
             )
         )
+
+    @staticmethod
+    def _collision(label):
+        raise CommandError(f"Phase A E2E seed ownership collision: {label}.")
+
+    @classmethod
+    def _preflight(cls):
+        user_model = get_user_model()
+        organization = Organization.objects.filter(pk=ORGANIZATION_ID).first()
+        slug_owner = Organization.objects.filter(slug="phase-a-e2e-only").first()
+        if (organization is None) != (slug_owner is None) or (
+            organization is not None and slug_owner.pk != organization.pk
+        ):
+            cls._collision("organization id or slug")
+
+        owned = False
+        if organization is not None:
+            admin = user_model.objects.filter(username=USERS[0][0]).first()
+            membership = Membership.objects.filter(pk=stable_id(11)).select_related(
+                "role", "user"
+            ).first()
+            owned = bool(
+                organization.slug == "phase-a-e2e-only"
+                and admin is not None
+                and admin.email == "phasea_e2e_admin@example.invalid"
+                and membership is not None
+                and membership.user_id == admin.id
+                and membership.organization_id == organization.id
+                and membership.role.code == Role.Code.ADMINISTRATOR
+            )
+            if not owned:
+                cls._collision("organization ownership sentinel")
+
+        for index, (username, role_code) in enumerate(USERS, start=1):
+            user = user_model.objects.filter(username=username).first()
+            membership = Membership.objects.filter(pk=stable_id(10 + index)).select_related(
+                "role"
+            ).first()
+            if user is None and membership is None:
+                continue
+            if not owned or user is None or membership is None or any((
+                user.email != f"{username}@example.invalid",
+                membership.user_id != user.id,
+                membership.organization_id != ORGANIZATION_ID,
+                membership.role.code != role_code,
+            )):
+                cls._collision(f"user or membership {username}")
+
+        for code, (name, permissions) in Role.BUILTIN_ROLES.items():
+            role = Role.objects.filter(code=code).first()
+            if role is not None and (
+                role.name != name or role.permissions != list(permissions)
+            ):
+                cls._collision(f"built-in role {code}")
+
+        phase_objects = (
+            (Product, PRODUCT_ID, {"organization_id": ORGANIZATION_ID}),
+            (MaterialAsset, ASSET_ID, {"organization_id": ORGANIZATION_ID}),
+            (AssetProductLink, ASSET_LINK_ID, {
+                "organization_id": ORGANIZATION_ID, "asset_id": ASSET_ID,
+                "product_id": PRODUCT_ID,
+            }),
+            (Campaign, CAMPAIGN_ID, {"organization_id": ORGANIZATION_ID}),
+            (CampaignProduct, CAMPAIGN_PRODUCT_ID, {
+                "organization_id": ORGANIZATION_ID, "campaign_id": CAMPAIGN_ID,
+                "product_id": PRODUCT_ID,
+            }),
+            (ContentBrief, BRIEF_ID, {
+                "organization_id": ORGANIZATION_ID, "campaign_id": CAMPAIGN_ID,
+            }),
+        )
+        for model, object_id, identity in phase_objects:
+            row = model.objects.filter(pk=object_id).first()
+            if row is not None and (
+                not owned or any(getattr(row, field) != value for field, value in identity.items())
+            ):
+                cls._collision(f"{model.__name__} {object_id}")
+
+        for index, (role, concept_code) in enumerate(CONCEPT_LINKS.items(), start=1):
+            link = ProductConceptLink.objects.filter(pk=stable_id(110 + index)).select_related(
+                "concept"
+            ).first()
+            if link is not None and (
+                not owned
+                or link.organization_id != ORGANIZATION_ID
+                or link.product_id != PRODUCT_ID
+                or link.role != role
+                or link.concept.code != concept_code
+                or link.retired_at is not None
+            ):
+                cls._collision(f"product concept link {role}")
+
+        for index, code in enumerate(PLATFORM_CODES, start=1):
+            platform_id = stable_id(600 + index)
+            by_id = Platform.objects.filter(pk=platform_id).first()
+            by_code = Platform.objects.filter(code=code).first()
+            if by_id is not None or by_code is not None:
+                if (
+                    not owned or by_id is None or by_code is None or by_id.pk != by_code.pk
+                    or by_id.code != code or by_id.name != PLATFORM_NAMES[code]
+                ):
+                    cls._collision(f"platform {code}")
+            capability = PlatformCapability.objects.filter(
+                platform_id=platform_id, code=AccountCapability.PUBLISH
+            ).first()
+            if capability is not None and by_id is None:
+                cls._collision(f"platform capability {code}")
+            credential_id = stable_id(700 + index)
+            credential = ConnectorCredential.objects.filter(pk=credential_id).first()
+            if credential is not None and (
+                not owned or credential.organization_id != ORGANIZATION_ID
+                or credential.platform_id != platform_id
+            ):
+                cls._collision(f"credential {code}")
+            account_id = stable_id(800 + index)
+            account = SocialAccount.objects.filter(pk=account_id).first()
+            natural_account = SocialAccount.objects.filter(
+                organization_id=ORGANIZATION_ID,
+                platform_id=platform_id,
+                external_id=f"phase-a-e2e-{code.lower()}",
+            ).first()
+            if account is not None or natural_account is not None:
+                if (
+                    not owned or account is None or natural_account is None
+                    or account.pk != natural_account.pk
+                    or account.organization_id != ORGANIZATION_ID
+                    or account.platform_id != platform_id
+                    or account.credential_id != credential_id
+                ):
+                    cls._collision(f"social account {code}")
+
+        prompt = PromptVersion.objects.filter(pk=PROMPT_ID).first()
+        natural_prompt = PromptVersion.objects.filter(
+            purpose="CONTENT_GENERATE", version=1
+        ).first()
+        if prompt is not None or natural_prompt is not None:
+            if (
+                not owned or prompt is None or natural_prompt is None
+                or prompt.pk != natural_prompt.pk or prompt.code != "phase-a-e2e-content-v1"
+            ):
+                cls._collision("prompt version")
+
+        graph_lock = KnowledgeGraphLock.objects.filter(pk=1).first()
+        if graph_lock is not None and graph_lock.name != "is_a_graph":
+            cls._collision("knowledge graph lock")
+        expected_concepts = {code: concept_type for concept_type, code, _zh, _en in CONCEPTS}
+        for concept in KnowledgeConcept.objects.filter(
+            scope=KnowledgeConcept.Scope.SYSTEM, code__in=expected_concepts
+        ):
+            if concept.organization_id is not None or concept.concept_type != expected_concepts[concept.code]:
+                cls._collision(f"ontology concept {concept.code}")
+        concept_by_code = {
+            row.code: row for row in KnowledgeConcept.objects.filter(
+                scope=KnowledgeConcept.Scope.SYSTEM, code__in=expected_concepts
+            )
+        }
+        for code, language, alias, _alias_type in ALIASES:
+            existing = KnowledgeAlias.objects.filter(
+                organization=None, language=language, normalized_alias=alias.casefold()
+            ).select_related("concept").first()
+            if existing is not None and existing.concept.code != code:
+                cls._collision(f"ontology alias {language}:{alias}")
+        for subject, predicate, object_code in RELATIONS:
+            subject_row = concept_by_code.get(subject)
+            object_row = concept_by_code.get(object_code)
+            if subject_row is None or object_row is None:
+                continue
+            relation = KnowledgeRelation.objects.filter(
+                organization=None, subject_concept=subject_row,
+                predicate=predicate, object_concept=object_row,
+            ).first()
+            if relation is not None and relation.organization_id is not None:
+                cls._collision(f"ontology relation {subject}:{predicate}:{object_code}")
+
+        cls._preflight_relationships(owned)
+
+    @classmethod
+    def _preflight_relationships(cls, owned):
+        expected = (
+            (ContentBriefProduct, stable_id(410), {
+                "organization_id": ORGANIZATION_ID, "brief_id": BRIEF_ID,
+                "product_id": PRODUCT_ID,
+            }),
+            (ContentBriefAsset, stable_id(411), {
+                "organization_id": ORGANIZATION_ID, "brief_id": BRIEF_ID,
+                "asset_id": ASSET_ID,
+            }),
+        )
+        for model, row_id, identity in expected:
+            row = model.objects.filter(pk=row_id).first()
+            if row is not None and (
+                not owned or any(getattr(row, field) != value for field, value in identity.items())
+            ):
+                cls._collision(f"{model.__name__} {row_id}")
+        for index, code in enumerate(PLATFORM_CODES, start=1):
+            row_id = stable_id(420 + index)
+            row = ContentBriefPlatform.objects.filter(pk=row_id).first()
+            if row is not None and (
+                not owned or row.organization_id != ORGANIZATION_ID
+                or row.brief_id != BRIEF_ID or row.platform_id != stable_id(600 + index)
+            ):
+                cls._collision(f"brief platform {code}")
+        for index, (role, code) in enumerate((
+            (ContentBriefConceptLink.Role.TARGET_INDUSTRY, "PACKAGING_MACHINERY"),
+            (ContentBriefConceptLink.Role.STANDARD, "DIN"),
+        ), start=1):
+            row = ContentBriefConceptLink.objects.filter(pk=stable_id(430 + index)).select_related(
+                "concept"
+            ).first()
+            if row is not None and (
+                not owned or row.organization_id != ORGANIZATION_ID
+                or row.brief_id != BRIEF_ID or row.role != role or row.concept.code != code
+            ):
+                cls._collision(f"brief concept {code}")
+
+        relationship_ids = {
+            CampaignProduct: {CAMPAIGN_PRODUCT_ID},
+            ContentBriefProduct: {stable_id(410)},
+            ContentBriefAsset: {stable_id(411)},
+            ContentBriefPlatform: {stable_id(421 + index) for index in range(5)},
+            ContentBriefConceptLink: {stable_id(431), stable_id(432)},
+        }
+        for model, allowed_ids in relationship_ids.items():
+            queryset = model.objects.filter(organization_id=ORGANIZATION_ID)
+            if model is CampaignProduct:
+                queryset = queryset.filter(campaign_id=CAMPAIGN_ID)
+            else:
+                queryset = queryset.filter(brief_id=BRIEF_ID)
+            if queryset.exclude(pk__in=allowed_ids).exists():
+                raise CommandError(
+                    f"Phase A E2E unexpected seed relationship in {model.__name__}."
+                )
+
+    @staticmethod
+    def _ensure_asset_blob():
+        checksum = hashlib.sha256(VIDEO_BYTES).hexdigest()
+        storage_key = f"organizations/{ORGANIZATION_ID}/assets/{ASSET_ID}/original"
+        storage = get_object_storage()
+        if storage.put(BytesIO(VIDEO_BYTES), storage_key):
+            return
+        with storage.open(storage_key) as existing:
+            payload = existing.read()
+        if len(payload) != len(VIDEO_BYTES) or hashlib.sha256(payload).hexdigest() != checksum:
+            raise CommandError("Phase A E2E stored object collision has different bytes.")
 
     @staticmethod
     def _organization():
@@ -244,8 +495,6 @@ class Command(BaseCommand):
     def _asset(organization, creator, product):
         checksum = hashlib.sha256(VIDEO_BYTES).hexdigest()
         storage_key = f"organizations/{organization.id}/assets/{ASSET_ID}/original"
-        storage = get_object_storage()
-        storage.put(BytesIO(VIDEO_BYTES), storage_key)
         asset = MaterialAsset.objects.filter(pk=ASSET_ID).first()
         immutable = {
             "organization": organization,
@@ -373,6 +622,59 @@ class Command(BaseCommand):
             or brief.status != ContentBrief.Status.READY
         ):
             raise CommandError("Immutable READY Phase A brief drift was detected.")
+        Command._repair_brief_relationships(
+            organization=organization,
+            brief=brief,
+            product=product,
+            asset=asset,
+            concepts=concepts,
+            platforms=platforms,
+        )
+
+    @staticmethod
+    def _repair_brief_relationships(*, organization, brief, product, asset, concepts, platforms):
+        expected = [
+            (ContentBriefProduct, stable_id(410), {
+                "organization": organization, "brief": brief, "product": product,
+            }),
+            (ContentBriefAsset, stable_id(411), {
+                "organization": organization, "brief": brief, "asset": asset,
+            }),
+        ]
+        expected.extend(
+            (
+                ContentBriefPlatform,
+                stable_id(420 + index),
+                {"organization": organization, "brief": brief, "platform": platforms[code]},
+            )
+            for index, code in enumerate(PLATFORM_CODES, start=1)
+        )
+        expected.extend((
+            (
+                ContentBriefConceptLink,
+                stable_id(431),
+                {
+                    "organization": organization,
+                    "brief": brief,
+                    "concept": concepts["PACKAGING_MACHINERY"],
+                    "role": ContentBriefConceptLink.Role.TARGET_INDUSTRY,
+                },
+            ),
+            (
+                ContentBriefConceptLink,
+                stable_id(432),
+                {
+                    "organization": organization,
+                    "brief": brief,
+                    "concept": concepts["DIN"],
+                    "role": ContentBriefConceptLink.Role.STANDARD,
+                },
+            ),
+        ))
+        for model, row_id, fields in expected:
+            if not model.objects.filter(pk=row_id).exists():
+                row = model(id=row_id, **fields)
+                models.Model.save(row, force_insert=True)
 
     @staticmethod
     def _accounts(organization, platforms):

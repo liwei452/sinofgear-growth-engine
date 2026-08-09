@@ -3,12 +3,14 @@ from uuid import UUID
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
+from django.db import models
 from django.test import override_settings
 
 from apps.ai.models import PromptVersion
 from apps.assets.models import AssetProductLink, MaterialAsset
+from apps.assets.storage import reset_object_storage
 from apps.campaigns.models import (
-    Campaign,
+    Campaign, CampaignProduct,
     ContentBrief,
     ContentBriefAsset,
     ContentBriefConceptLink,
@@ -18,7 +20,7 @@ from apps.campaigns.models import (
 from apps.catalog.models import Product, ProductConceptLink
 from apps.identity.models import Membership, Organization, Role
 from apps.knowledge.models import KnowledgeConcept
-from apps.platforms.models import ConnectorCredential, SocialAccount
+from apps.platforms.models import ConnectorCredential, Platform, SocialAccount
 
 
 SEED_ORGANIZATION_ID = UUID("10000000-0000-4000-8000-000000000001")
@@ -192,3 +194,136 @@ def test_seed_phase_a_never_mutates_a_non_seed_organization():
     other.refresh_from_db()
     assert (other.id, other.name, other.slug, other.updated_at) == before
     assert Organization.objects.filter(pk=SEED_ORGANIZATION_ID).exists()
+
+
+@pytest.mark.django_db
+@override_settings(PHASE_A_E2E_SEED_ALLOWED=True)
+def test_seed_phase_a_refuses_username_collision_before_any_seed_mutation():
+    user_model = get_user_model()
+    intruder = user_model.objects.create_user(
+        username="phasea_e2e_admin",
+        email="owner@example.com",
+        password="keep-this-password",
+    )
+    original = (intruder.email, intruder.password, intruder.is_staff)
+
+    with pytest.raises(CommandError, match="collision"):
+        call_command("seed_phase_a")
+
+    intruder.refresh_from_db()
+    assert (intruder.email, intruder.password, intruder.is_staff) == original
+    assert intruder.check_password("keep-this-password")
+    assert not Organization.objects.filter(pk=SEED_ORGANIZATION_ID).exists()
+    assert not KnowledgeConcept.objects.filter(scope=KnowledgeConcept.Scope.SYSTEM).exists()
+
+
+@pytest.mark.django_db
+@override_settings(PHASE_A_E2E_SEED_ALLOWED=True)
+def test_seed_phase_a_refuses_fixed_and_global_identity_collisions_without_reassignment():
+    other = Organization.objects.create(name="Customer", slug="customer")
+    product = Product.objects.create(
+        id=SEED_PRODUCT_ID,
+        organization=other,
+        name_zh="Customer product",
+        name_en="Customer Product",
+        module_min="1.0000",
+        module_max="2.0000",
+        tooth_count_min=12,
+        tooth_count_max=24,
+        pressure_angle="20.000",
+        manufacturing_capabilities=["hobbing"],
+        inspection_capabilities=["CMM"],
+        moq=1,
+    )
+    platform = Platform.objects.create(code="FACEBOOK", name="Customer Facebook")
+    before = (product.organization_id, product.name_en, platform.id, platform.name)
+
+    with pytest.raises(CommandError, match="collision"):
+        call_command("seed_phase_a")
+
+    product.refresh_from_db()
+    platform.refresh_from_db()
+    assert (product.organization_id, product.name_en, platform.id, platform.name) == before
+    assert not Organization.objects.filter(pk=SEED_ORGANIZATION_ID).exists()
+    assert not KnowledgeConcept.objects.filter(scope=KnowledgeConcept.Scope.SYSTEM).exists()
+
+
+@pytest.mark.django_db
+@override_settings(PHASE_A_E2E_SEED_ALLOWED=True)
+def test_seed_phase_a_repairs_exact_ready_brief_relationship_drift():
+    call_command("seed_phase_a")
+    campaign = Campaign.objects.get(pk=SEED_CAMPAIGN_ID)
+    brief = ContentBrief.objects.get(pk=SEED_BRIEF_ID)
+    product = Product.objects.get(pk=SEED_PRODUCT_ID)
+    expected_platform_ids = set(
+        Platform.objects.filter(code__in=[
+            "FACEBOOK", "INSTAGRAM", "LINKEDIN", "TIKTOK", "YOUTUBE",
+        ]).values_list("id", flat=True)
+    )
+
+    missing_ids = [
+        (CampaignProduct, "10000000-0000-4000-8000-000000000302"),
+        (ContentBriefProduct, "10000000-0000-4000-8000-000000000410"),
+        (ContentBriefAsset, "10000000-0000-4000-8000-000000000411"),
+        (ContentBriefPlatform, "10000000-0000-4000-8000-000000000425"),
+        (ContentBriefConceptLink, "10000000-0000-4000-8000-000000000432"),
+    ]
+    for model, row_id in missing_ids:
+        queryset = model.objects.filter(pk=UUID(row_id))
+        queryset._raw_delete(queryset.db)
+    call_command("seed_phase_a")
+
+    assert set(CampaignProduct.objects.filter(campaign=campaign).values_list(
+        "product_id", flat=True
+    )) == {product.id}
+    assert set(ContentBriefProduct.objects.filter(brief=brief).values_list(
+        "product_id", flat=True
+    )) == {product.id}
+    assert ContentBriefAsset.objects.filter(brief=brief).count() == 1
+    assert set(ContentBriefPlatform.objects.filter(brief=brief).values_list(
+        "platform_id", flat=True
+    )) == expected_platform_ids
+    assert set(ContentBriefConceptLink.objects.filter(brief=brief).values_list(
+        "role", "concept__code"
+    )) == {("TARGET_INDUSTRY", "PACKAGING_MACHINERY"), ("STANDARD", "DIN")}
+    brief.refresh_from_db()
+    assert (brief.status, brief.version) == (ContentBrief.Status.READY, 2)
+
+
+@pytest.mark.django_db
+@override_settings(PHASE_A_E2E_SEED_ALLOWED=True)
+def test_seed_phase_a_fails_closed_on_unexpected_ready_brief_relationship():
+    call_command("seed_phase_a")
+    organization = Organization.objects.get(pk=SEED_ORGANIZATION_ID)
+    brief = ContentBrief.objects.get(pk=SEED_BRIEF_ID)
+    unexpected = Platform.objects.create(code="E2E_UNEXPECTED", name="Unexpected")
+    extra = ContentBriefPlatform(
+        organization=organization, brief=brief, platform=unexpected
+    )
+    models.Model.save(extra, force_insert=True)
+
+    with pytest.raises(CommandError, match="unexpected seed relationship"):
+        call_command("seed_phase_a")
+
+    assert ContentBriefPlatform.objects.filter(pk=extra.pk).exists()
+
+
+@pytest.mark.django_db
+@override_settings(PHASE_A_E2E_SEED_ALLOWED=True, OBJECT_STORAGE_BACKEND="filesystem")
+def test_seed_phase_a_rejects_mismatched_existing_object_before_asset_metadata(tmp_path):
+    storage_root = tmp_path / "storage"
+    key = f"organizations/{SEED_ORGANIZATION_ID}/assets/{SEED_ASSET_ID}/original"
+    object_path = storage_root.joinpath(*key.split("/"))
+    object_path.parent.mkdir(parents=True)
+    object_path.write_bytes(b"malicious-existing-bytes")
+
+    with override_settings(OBJECT_STORAGE_FILESYSTEM_ROOT=storage_root):
+        reset_object_storage()
+        try:
+            with pytest.raises(CommandError, match="stored object collision"):
+                call_command("seed_phase_a")
+        finally:
+            reset_object_storage()
+
+    assert not MaterialAsset.objects.filter(pk=SEED_ASSET_ID).exists()
+    assert object_path.read_bytes() == b"malicious-existing-bytes"

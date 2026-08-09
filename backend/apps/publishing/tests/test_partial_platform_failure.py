@@ -103,6 +103,10 @@ def test_mock_fail_once_supports_visible_failure_then_successful_retry(publishin
         "message": "Provider rejected the publish request.",
     }
 
+    # A retry may execute in a fresh worker with no process-local connector memory.
+    import importlib
+    from integrations.platforms import mock
+    importlib.reload(mock)
     retry_publish_task(task, actor=context["actor"])
     post = execute_publish_task(task.id)
     task.refresh_from_db()

@@ -672,6 +672,7 @@ def execute_publish_task(task_id):
     ).get(pk=task.pk)
     request = PublishRequest(
         task_id=task.id,
+        attempt_number=attempt.number,
         platform_code=task.platform.code,
         account_external_id=task.social_account.external_id,
         content_payload=task.platform_content.payload,

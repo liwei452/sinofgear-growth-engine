@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process"
+import { existsSync, realpathSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
@@ -11,8 +12,11 @@ const repositoryDir = resolve(frontendDir, "..")
 const backendDir = join(repositoryDir, "backend")
 
 export function assertOwnedRunRoot(candidate, temporaryDirectory = tmpdir()) {
-  const root = resolve(candidate)
-  const temporaryRoot = resolve(temporaryDirectory)
+  if (!isAbsolute(candidate) || !existsSync(candidate)) {
+    throw new Error("Refusing to clean a directory that is not an owned Phase A E2E run root.")
+  }
+  const root = realpathSync(candidate)
+  const temporaryRoot = realpathSync(temporaryDirectory)
   const fromTemporaryRoot = relative(temporaryRoot, root)
   if (
     !isAbsolute(root)
@@ -27,8 +31,26 @@ export function assertOwnedRunRoot(candidate, temporaryDirectory = tmpdir()) {
 }
 
 export async function removeOwnedRunRoot(candidate, temporaryDirectory = tmpdir()) {
+  if (!existsSync(candidate)) return
   const root = assertOwnedRunRoot(candidate, temporaryDirectory)
   await rm(root, { recursive: true, force: true })
+}
+
+export function buildE2EEnvironment(runRoot, { apiOrigin, webOrigin, browser }) {
+  const root = assertOwnedRunRoot(runRoot)
+  return {
+    ...process.env,
+    DJANGO_SETTINGS_MODULE: "config.e2e_settings",
+    SINO_PHASE_A_E2E_ROOT: root,
+    SINO_PHASE_A_E2E_DB: join(root, "phase-a.sqlite3"),
+    SINO_PHASE_A_E2E_STORAGE: join(root, "storage"),
+    SINO_PHASE_A_E2E_WEB_ORIGIN: webOrigin,
+    VITE_API_PROXY_TARGET: apiOrigin,
+    PLAYWRIGHT_BASE_URL: webOrigin,
+    PLAYWRIGHT_EXECUTABLE_PATH: browser,
+    PLAYWRIGHT_OUTPUT_DIR: join(root, "playwright", "test-results"),
+    PLAYWRIGHT_REPORT_DIR: join(root, "playwright", "report"),
+  }
 }
 
 async function reservePort() {
@@ -71,16 +93,24 @@ function pnpmInvocation(args) {
   return { command: process.execPath, args: [cli, ...args] }
 }
 
+export function spawnOwnedChild(command, args, options = {}) {
+  return spawn(command, args, {
+    cwd: options.cwd,
+    env: options.env,
+    stdio: options.stdio ?? "inherit",
+    windowsHide: true,
+    detached: process.platform !== "win32",
+  })
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolveRun, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: options.stdio ?? "inherit",
-      windowsHide: true,
-    })
+    const child = spawnOwnedChild(command, args, options)
+    options.children?.push(child)
     child.once("error", reject)
     child.once("exit", (code, signal) => {
+      const index = options.children?.indexOf(child) ?? -1
+      if (index >= 0) options.children.splice(index, 1)
       if (code === 0) resolveRun()
       else reject(new Error(`${command} exited with ${code ?? signal}`))
     })
@@ -102,16 +132,67 @@ async function waitFor(url, child, label) {
   throw new Error(`${label} did not become ready within 45 seconds.`)
 }
 
-function stopChild(child) {
-  if (!child || child.exitCode !== null || !child.pid) return
-  if (process.platform === "win32") {
-    spawnSync("taskkill.exe", ["/pid", String(child.pid), "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-    })
-  } else {
-    child.kill("SIGTERM")
+function processGroupAlive(pid) {
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (error) {
+    if (error?.code === "ESRCH") return false
+    throw error
   }
+}
+
+function waitForExit(child, timeoutMs) {
+  if (!child || child.exitCode !== null) return Promise.resolve(true)
+  return new Promise((resolveWait) => {
+    const timeout = setTimeout(() => resolveWait(false), timeoutMs)
+    child.once("exit", () => {
+      clearTimeout(timeout)
+      resolveWait(true)
+    })
+  })
+}
+
+async function waitForGroupExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!processGroupAlive(pid)) return true
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25))
+  }
+  return !processGroupAlive(pid)
+}
+
+export async function stopOwnedChildTree(child) {
+  if (!child || !child.pid) return
+  if (process.platform === "win32") {
+    if (child.exitCode === null) {
+      spawnSync("taskkill.exe", ["/pid", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      })
+    }
+    if (!(await waitForExit(child, 2_000))) {
+      throw new Error(`Owned child tree ${child.pid} did not exit after taskkill.`)
+    }
+  } else {
+    if (!processGroupAlive(child.pid)) return
+    process.kill(-child.pid, "SIGTERM")
+    if (!(await waitForGroupExit(child.pid, 1_000))) {
+      process.kill(-child.pid, "SIGKILL")
+      if (!(await waitForGroupExit(child.pid, 2_000))) {
+        throw new Error(`Owned process group ${child.pid} survived SIGKILL.`)
+      }
+    }
+    await waitForExit(child, 250)
+  }
+}
+
+export async function cleanupOwnedRun({ children, runRoot }) {
+  if (!existsSync(runRoot)) return
+  assertOwnedRunRoot(runRoot)
+  for (const child of [...children].reverse()) await stopOwnedChildTree(child)
+  children.splice(0)
+  await removeOwnedRunRoot(runRoot)
 }
 
 async function main() {
@@ -124,29 +205,24 @@ async function main() {
   const webPort = await reservePort()
   const apiOrigin = `http://127.0.0.1:${apiPort}`
   const webOrigin = `http://127.0.0.1:${webPort}`
-  const environment = {
-    ...process.env,
-    DJANGO_SETTINGS_MODULE: "config.e2e_settings",
-    SINO_PHASE_A_E2E_ROOT: runRoot,
-    SINO_PHASE_A_E2E_DB: join(runRoot, "phase-a.sqlite3"),
-    SINO_PHASE_A_E2E_STORAGE: join(runRoot, "storage"),
-    SINO_PHASE_A_E2E_WEB_ORIGIN: webOrigin,
-    VITE_API_PROXY_TARGET: apiOrigin,
-    PLAYWRIGHT_BASE_URL: webOrigin,
-    PLAYWRIGHT_EXECUTABLE_PATH: browser,
-  }
+  const environment = buildE2EEnvironment(runRoot, { apiOrigin, webOrigin, browser })
   const children = []
-  const cleanup = async () => {
-    for (const child of children.reverse()) stopChild(child)
-    await removeOwnedRunRoot(runRoot)
+  let cleanupPromise
+  const cleanup = () => {
+    cleanupPromise ??= cleanupOwnedRun({ children, runRoot })
+    return cleanupPromise
   }
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.once(signal, () => { void cleanup().finally(() => process.exit(130)) })
   }
   try {
-    await run(pythonExecutable(), ["manage.py", "migrate", "--noinput"], { cwd: backendDir, env: environment })
-    await run(pythonExecutable(), ["manage.py", "seed_phase_a"], { cwd: backendDir, env: environment })
-    const backend = spawn(
+    await run(pythonExecutable(), ["manage.py", "migrate", "--noinput"], {
+      cwd: backendDir, env: environment, children,
+    })
+    await run(pythonExecutable(), ["manage.py", "seed_phase_a"], {
+      cwd: backendDir, env: environment, children,
+    })
+    const backend = spawnOwnedChild(
       pythonExecutable(),
       ["manage.py", "runserver", `127.0.0.1:${apiPort}`, "--noreload"],
       { cwd: backendDir, env: environment, stdio: "inherit", windowsHide: true },
@@ -155,7 +231,7 @@ async function main() {
     const vite = pnpmInvocation([
       "exec", "vite", "--host", "127.0.0.1", "--port", String(webPort), "--strictPort",
     ])
-    const frontend = spawn(vite.command, vite.args, {
+    const frontend = spawnOwnedChild(vite.command, vite.args, {
       cwd: frontendDir, env: environment, stdio: "inherit", windowsHide: true,
     })
     children.push(frontend)
@@ -166,7 +242,9 @@ async function main() {
     const playwright = pnpmInvocation([
       "exec", "playwright", "test", ...process.argv.slice(2),
     ])
-    await run(playwright.command, playwright.args, { cwd: frontendDir, env: environment })
+    await run(playwright.command, playwright.args, {
+      cwd: frontendDir, env: environment, children,
+    })
   } finally {
     await cleanup()
   }

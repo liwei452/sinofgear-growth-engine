@@ -59,6 +59,15 @@ def _acquire_snapshot_write_lock(model: type[models.Model]) -> None:
 
 class KnowledgeQuerySet(models.QuerySet):
     @transaction.atomic
+    def update_or_create(self, defaults=None, create_defaults=None, **kwargs):
+        _acquire_snapshot_write_lock(self.model)
+        return super().update_or_create(
+            defaults=defaults,
+            create_defaults=create_defaults,
+            **kwargs,
+        )
+
+    @transaction.atomic
     def update(self, **kwargs):
         _acquire_snapshot_write_lock(self.model)
         mode = _write_mode.get()
@@ -143,6 +152,15 @@ class GraphAssociationQuerySet(models.QuerySet):
         from .graph import acquire_knowledge_graph_lock
 
         acquire_knowledge_graph_lock()
+
+    @transaction.atomic
+    def update_or_create(self, defaults=None, create_defaults=None, **kwargs):
+        self._acquire_lock()
+        return super().update_or_create(
+            defaults=defaults,
+            create_defaults=create_defaults,
+            **kwargs,
+        )
 
     @transaction.atomic
     def update(self, **kwargs):

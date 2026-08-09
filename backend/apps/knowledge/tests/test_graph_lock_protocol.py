@@ -1,8 +1,12 @@
 from decimal import Decimal
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.audit.models import ReviewAction
@@ -272,3 +276,153 @@ def test_evidence_through_direct_writes_acquire_canonical_graph_lock(
             manager.filter(**values).delete()
 
     assert acquire.called
+
+
+def _entity_update_or_create_case(kind, organization, suffix, existing):
+    if existing:
+        instance = _make_snapshot_record(kind, organization, suffix)
+        if kind == "concept":
+            defaults = {"description": "updated through update_or_create"}
+        elif kind == "evidence":
+            defaults = {"reviewed_at": timezone.now()}
+        else:
+            defaults = {"confidence": Decimal("0.6250")}
+        return type(instance), {"pk": instance.pk}, defaults, defaults
+
+    object_id = uuid4()
+    if kind == "concept":
+        model = KnowledgeConcept
+        create_defaults = {
+            "scope": KnowledgeConcept.Scope.ORGANIZATION,
+            "organization": organization,
+            "concept_type": KnowledgeConcept.ConceptType.PRODUCT_TYPE,
+            "code": f"LOCK_UOC_{suffix}",
+            "label_zh": f"锁 {suffix}",
+            "label_en": f"Lock {suffix}",
+        }
+    elif kind == "evidence":
+        model = KnowledgeEvidence
+        create_defaults = {
+            "organization": organization,
+            "evidence_type": KnowledgeEvidence.EvidenceType.HUMAN_ENTRY,
+            "excerpt": f"update-or-create {suffix}",
+        }
+    else:
+        model = KnowledgeRelation
+        subject = make_concept(
+            code=f"LOCK_UOC_SUBJECT_{suffix}",
+            organization=organization,
+            status="SUGGESTED",
+        )
+        target = make_concept(
+            code=f"LOCK_UOC_TARGET_{suffix}",
+            concept_type="APPLICATION",
+            organization=organization,
+            status="SUGGESTED",
+        )
+        create_defaults = {
+            "organization": organization,
+            "subject_concept": subject,
+            "predicate": KnowledgeRelation.Predicate.APPLIES_TO,
+            "object_concept": target,
+        }
+    return model, {"pk": object_id}, {}, create_defaults
+
+
+def _assert_graph_query_precedes_target(queries, target_table):
+    statements = [query["sql"].lower() for query in queries]
+    graph_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if "knowledge_knowledgegraphlock" in statement
+    )
+    target_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if target_table.lower() in statement
+    )
+    assert graph_index < target_index, statements
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", ["concept", "relation", "evidence"])
+@pytest.mark.parametrize("use_base_manager", [False, True])
+@pytest.mark.parametrize("existing", [False, True])
+def test_entity_update_or_create_acquires_graph_before_target_row(
+    organizations, kind, use_base_manager, existing
+):
+    model, lookup, defaults, create_defaults = _entity_update_or_create_case(
+        kind,
+        organizations[0],
+        f"{kind}_{use_base_manager}_{existing}",
+        existing,
+    )
+    manager = model._base_manager if use_base_manager else model.objects
+
+    with CaptureQueriesContext(connection) as queries:
+        instance, created = manager.update_or_create(
+            defaults=defaults,
+            create_defaults=create_defaults,
+            **lookup,
+        )
+
+    assert created is not existing
+    assert instance.pk == lookup["pk"]
+    _assert_graph_query_precedes_target(queries, model._meta.db_table)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", ["concept", "relation"])
+@pytest.mark.parametrize("use_base_manager", [False, True])
+@pytest.mark.parametrize("existing", [False, True])
+def test_through_update_or_create_acquires_graph_before_target_row(
+    organizations, kind, use_base_manager, existing
+):
+    suffix = f"THROUGH_UOC_{kind}_{use_base_manager}_{existing}"
+    owner = _association_owner(kind, organizations[0], suffix)
+    evidence = _make_snapshot_record("evidence", organizations[0], suffix)
+    through = owner.evidence.through
+    source_field = "knowledgeconcept" if kind == "concept" else "knowledgerelation"
+    lookup = {source_field: owner, "knowledgeevidence": evidence}
+    if existing:
+        through.objects.create(**lookup)
+    manager = through._base_manager if use_base_manager else through.objects
+
+    with CaptureQueriesContext(connection) as queries:
+        association, created = manager.update_or_create(**lookup)
+
+    assert created is not existing
+    assert association.pk is not None
+    _assert_graph_query_precedes_target(queries, through._meta.db_table)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", ["concept", "relation", "evidence"])
+@pytest.mark.parametrize("use_base_manager", [False, True])
+@pytest.mark.parametrize("existing", [False, True])
+def test_entity_update_or_create_preserves_guarded_lifecycle_validation(
+    organizations, kind, use_base_manager, existing
+):
+    model, lookup, _defaults, create_defaults = _entity_update_or_create_case(
+        kind,
+        organizations[0],
+        f"VALIDATION_{kind}_{use_base_manager}_{existing}",
+        existing,
+    )
+    manager = model._base_manager if use_base_manager else model.objects
+    invalid_defaults = {"status": model.Status.APPROVED}
+    if not existing:
+        create_defaults = {**create_defaults, **invalid_defaults}
+
+    with pytest.raises(ValidationError):
+        manager.update_or_create(
+            defaults=invalid_defaults,
+            create_defaults=create_defaults,
+            **lookup,
+        )
+
+    instance = model.objects.filter(**lookup).first()
+    if existing:
+        assert instance.status == model.Status.SUGGESTED
+    else:
+        assert instance is None

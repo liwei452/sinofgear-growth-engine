@@ -44,7 +44,9 @@ def test_authenticated_member_can_list_platform_definitions(platform: Platform, 
     response = client.get("/api/v1/platforms")
 
     assert response.status_code == 200
-    assert response.json()["results"] == [{"code": "LINKEDIN", "name": "LinkedIn", "capabilities": []}]
+    assert response.json()["results"] == [{
+        "id": str(platform.id), "code": "LINKEDIN", "name": "LinkedIn", "capabilities": [],
+    }]
 
 
 @pytest.mark.django_db

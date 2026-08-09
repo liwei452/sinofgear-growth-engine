@@ -13,6 +13,8 @@ export type AppRouteComponents = {
   Dashboard: Component
   Products: Component
   Knowledge: Component
+  ContentFactory: Component
+  Reviews: Component
   Placeholder: Component
 }
 
@@ -23,8 +25,6 @@ type RouterOptions = {
 
 const placeholderRoutes: Array<{ path: string; name: string; title: string }> = [
   { path: "assets", name: "assets", title: "素材库" },
-  { path: "content-factory", name: "content-factory", title: "AI 内容工厂" },
-  { path: "reviews", name: "reviews", title: "审核中心" },
   { path: "publishing-calendar", name: "publishing-calendar", title: "发布日历" },
   { path: "platform-accounts", name: "platform-accounts", title: "平台账号" },
   { path: "analytics", name: "analytics", title: "数据看板" },
@@ -69,6 +69,18 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
       name: "knowledge",
       component: options.components.Knowledge,
       meta: { title: "知识库" },
+    },
+    {
+      path: "content-factory",
+      name: "content-factory",
+      component: options.components.ContentFactory,
+      meta: { title: "AI 内容工厂" },
+    },
+    {
+      path: "reviews",
+      name: "reviews",
+      component: options.components.Reviews,
+      meta: { title: "审核中心" },
     },
     ...placeholderRoutes.map((route) => ({
       ...route,

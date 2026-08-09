@@ -8,7 +8,7 @@ class PlatformSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Platform
-        fields = ["code", "name", "capabilities"]
+        fields = ["id", "code", "name", "capabilities"]
 
     def get_capabilities(self, platform: Platform) -> list[str]:
         return [capability.code for capability in platform.capability_definitions.all()]

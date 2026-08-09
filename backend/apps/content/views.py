@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.models import Exists, OuterRef
 from django.http import Http404
 from drf_spectacular.utils import (
     OpenApiParameter, OpenApiTypes, extend_schema, extend_schema_view,
@@ -9,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.ai.models import PromptVersion
-from apps.campaigns.models import ContentBrief
+from apps.campaigns.models import ContentBrief, ContentBriefPlatform
 from apps.campaigns.services import build_content_generation_input
 from apps.identity.permissions import CanManageContent, CanReadContent, CanReviewContent
 from apps.jobs.models import Job
@@ -38,11 +39,25 @@ class ContentPagination(CursorPagination):
 
 def _object(model, organization, pk):
     try:
-        content = model.objects.select_related(
+        queryset = model.objects.select_related(
             *("brief", "generation_job", "ai_run", "previous_version")
             if model is MasterContent
-            else ("master_content__brief", "platform", "previous_version")
-        ).get(pk=pk, organization=organization)
+            else (
+                "master_content__brief", "master_content__generation_job",
+                "master_content__ai_run", "master_content__previous_version",
+                "platform", "previous_version",
+            )
+        )
+        if model is PlatformContent:
+            queryset = queryset.annotate(
+                _selected_platform=Exists(
+                    ContentBriefPlatform.objects.filter(
+                        brief_id=OuterRef("master_content__brief_id"),
+                        platform_id=OuterRef("platform_id"),
+                    )
+                )
+            )
+        content = queryset.get(pk=pk, organization=organization)
         if not content_is_consistent(content):
             raise Http404
         return content
@@ -66,6 +81,23 @@ class ContentListView(APIView):
     @extend_schema(parameters=[OpenApiParameter("status", OpenApiTypes.STR)])
     def get(self, request):
         queryset = self.model.objects.filter(organization=request.organization)
+        if self.model is MasterContent:
+            queryset = queryset.select_related(
+                "brief", "generation_job", "ai_run", "previous_version"
+            )
+        else:
+            queryset = queryset.select_related(
+                "master_content__brief", "master_content__generation_job",
+                "master_content__ai_run", "master_content__previous_version",
+                "platform", "previous_version",
+            ).annotate(
+                _selected_platform=Exists(
+                    ContentBriefPlatform.objects.filter(
+                        brief_id=OuterRef("master_content__brief_id"),
+                        platform_id=OuterRef("platform_id"),
+                    )
+                )
+            )
         repeated = {
             name: ["Provide this filter at most once."]
             for name in request.query_params

@@ -1,8 +1,14 @@
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 
-from apps.content.services import create_generated_master
+from apps.content.models import content_writes
+from apps.content.services import (
+    approve_content, create_generated_master, create_platform_content,
+    create_platform_revision,
+)
 from apps.identity.models import Membership, Organization, Role
 
 
@@ -48,7 +54,8 @@ def test_content_role_permissions(content_provenance, role_code, can_manage, can
 
     assert detail.status_code == 200
     assert revision.status_code == (201 if can_manage else 403)
-    assert approve.status_code == (200 if can_review else 403)
+    expected_approve = 409 if can_manage and can_review else (200 if can_review else 403)
+    assert approve.status_code == expected_approve
 
 
 def test_content_cross_organization_is_non_leaking_404(content_provenance):
@@ -72,3 +79,57 @@ def test_content_openapi_documents_generation_and_review_actions(content_provena
     assert "post" in schema["paths"]["/api/v1/master-contents/{content_id}/approve"]
     assert "post" in schema["paths"]["/api/v1/master-contents/{content_id}/generate-platform-content"]
     assert "get" in schema["paths"]["/api/v1/platform-contents"]
+
+
+def test_corrupt_provenance_is_omitted_and_detail_is_404(content_provenance):
+    organization, actor, brief, job, run = content_provenance
+    content = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)
+    with content_writes():
+        type(content).objects.filter(pk=content.pk).update(
+            provenance={**content.provenance, "brief_version": content.brief_version + 1}
+        )
+    client = _client(organization, Role.Code.READ_ONLY)
+
+    assert client.get(f"/api/v1/master-contents/{content.id}").status_code == 404
+    assert all(
+        row["id"] != str(content.id)
+        for row in client.get("/api/v1/master-contents").json()["results"]
+    )
+
+
+def test_invalid_revision_payload_returns_controlled_400(content_provenance):
+    organization, actor, brief, job, run = content_provenance
+    content = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)
+    client = _client(organization, Role.Code.OPERATOR)
+
+    response = client.post(
+        f"/api/v1/master-contents/{content.id}/revisions",
+        {"payload": {**content.payload, "concept_codes": ["DUP", " DUP "]}},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert set(response.json()) == {"errors"}
+
+
+def test_platform_list_consistency_query_count_is_page_size_independent(
+    content_provenance,
+):
+    organization, actor, brief, job, run = content_provenance
+    master = approve_content(
+        create_generated_master(brief=brief, job=job, ai_run=run, actor=actor), actor=actor
+    )
+    selected = brief.platform_links.get().platform
+    head = create_platform_content(master, platform=selected, actor=actor)
+    client = _client(organization, Role.Code.READ_ONLY)
+    with CaptureQueriesContext(connection) as single:
+        response = client.get("/api/v1/platform-contents?page_size=50")
+    assert response.status_code == 200
+    for index in range(5):
+        head = create_platform_revision(
+            head, actor=actor, payload={**head.payload, "title": f"revision {index}"}
+        )
+    with CaptureQueriesContext(connection) as many:
+        response = client.get("/api/v1/platform-contents?page_size=50")
+    assert response.status_code == 200
+    assert len(many) == len(single)

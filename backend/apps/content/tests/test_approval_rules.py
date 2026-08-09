@@ -11,6 +11,7 @@ from apps.content.services import (
     reject_content,
     create_platform_content,
     create_platform_revision,
+    transition_content,
 )
 from apps.platforms.models import Platform
 
@@ -149,3 +150,53 @@ def test_platform_human_revision_is_linear_draft(content_provenance):
     assert revision.version == 2
     with pytest.raises(ContentStateError):
         create_platform_revision(source, actor=actor, payload=revision.payload)
+
+
+@pytest.mark.parametrize("action", ["APPROVE", "REJECT"])
+def test_superseded_master_cannot_be_reviewed(content_provenance, action):
+    _, actor, brief, job, run = content_provenance
+    source = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)
+    create_master_revision(
+        source, actor=actor, payload={**source.payload, "title": "new head"}
+    )
+
+    with pytest.raises(ContentStateError, match="current head"):
+        transition_content(source, action=action, actor=actor, comment="reason")
+
+
+@pytest.mark.parametrize("action", ["APPROVE", "REJECT"])
+def test_superseded_platform_cannot_be_reviewed(content_provenance, action):
+    _, actor, brief, job, run = content_provenance
+    platform = brief.platform_links.get().platform
+    master = approve_content(
+        create_generated_master(brief=brief, job=job, ai_run=run, actor=actor), actor=actor
+    )
+    source = create_platform_content(master, platform=platform, actor=actor)
+    create_platform_revision(
+        source, actor=actor, payload={**source.payload, "title": "new head"}
+    )
+
+    with pytest.raises(ContentStateError, match="current head"):
+        transition_content(source, action=action, actor=actor, comment="reason")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"title": "T", "body": "B", "cta": "C", "concept_codes": ["X"] * 101},
+        {"title": "T", "body": "B", "cta": "C", "concept_codes": ["X", " X "]},
+        {"title": "T", "body": "B", "cta": "C", "concept_codes": ["X" * 257]},
+        {
+            "title": "T" * 500,
+            "body": "B" * 50_000,
+            "cta": "C" * 2_000,
+            "concept_codes": [f"{index:03d}" + "X" * 253 for index in range(100)],
+        },
+    ],
+)
+def test_revision_payload_has_shared_bounded_exact_schema(content_provenance, payload):
+    _, actor, brief, job, run = content_provenance
+    source = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)
+
+    with pytest.raises(ContentStateError):
+        create_master_revision(source, actor=actor, payload=payload)

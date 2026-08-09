@@ -70,9 +70,16 @@ def content_provenance(db):
             started_at=timezone.now(),
             finished_at=timezone.now(),
         )
+    from apps.content.services import create_generated_master
+
+    master = create_generated_master(
+        brief=brief, job=claimed, ai_run=run, actor=actor
+    )
     JobService.succeed(
         job.id, claim_token=claimed.claim_token,
-        result_reference={"ai_run_id": str(run.id)},
+        result_reference={
+            "type": "master_content", "id": str(master.id), "version": 1,
+        },
     )
     job.refresh_from_db()
     return organization, actor, brief, job, run

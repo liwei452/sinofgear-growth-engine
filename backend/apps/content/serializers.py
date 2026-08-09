@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import MasterContent, PlatformContent
+from .payloads import validate_content_payload
 
 
 class StrictMixin:
@@ -35,6 +36,13 @@ class PlatformContentSerializer(serializers.ModelSerializer):
 
 class RevisionSerializer(StrictMixin, serializers.Serializer):
     payload = serializers.JSONField()
+
+    def validate_payload(self, value):
+        try:
+            platform_code = value.get("platform_code") if isinstance(value, dict) else None
+            return validate_content_payload(value, platform_code=platform_code)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class ReviewSerializer(StrictMixin, serializers.Serializer):

@@ -29,6 +29,7 @@ class SocialAccountSerializer(serializers.ModelSerializer):
             "external_id",
             "display_name",
             "publish_mode",
+            "status",
         ]
         read_only_fields = ["id", "organization"]
 

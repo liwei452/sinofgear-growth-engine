@@ -24,6 +24,8 @@ class PermissionCode(StrEnum):
     CONTENT_READ = "content.read"
     CONTENT_MANAGE = "content.manage"
     CONTENT_REVIEW = "content.review"
+    PUBLISHING_READ = "publishing.read"
+    PUBLISHING_MANAGE = "publishing.manage"
 
 
 class HasOrganizationPermission(BasePermission):
@@ -119,3 +121,11 @@ class CanManageContent(HasOrganizationPermission):
 
 class CanReviewContent(HasOrganizationPermission):
     permission_code = PermissionCode.CONTENT_REVIEW
+
+
+class CanReadPublishing(HasOrganizationPermission):
+    permission_code = PermissionCode.PUBLISHING_READ
+
+
+class CanManagePublishing(HasOrganizationPermission):
+    permission_code = PermissionCode.PUBLISHING_MANAGE

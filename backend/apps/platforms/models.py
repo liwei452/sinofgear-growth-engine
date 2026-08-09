@@ -34,6 +34,10 @@ class ConnectorCredential(OrganizationScopedModel):
 
 
 class SocialAccount(OrganizationScopedModel):
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        INACTIVE = "INACTIVE", "Inactive"
+
     class PublishMode(models.TextChoices):
         API_AUTO = "API_AUTO", "API automatic"
         API_CONFIRM = "API_CONFIRM", "API confirmation"
@@ -47,6 +51,8 @@ class SocialAccount(OrganizationScopedModel):
     external_id = models.CharField(max_length=255)
     display_name = models.CharField(max_length=255)
     publish_mode = models.CharField(max_length=32, choices=PublishMode.choices, default=PublishMode.MANUAL)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    connector_metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
         constraints = [

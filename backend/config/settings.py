@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     "apps.jobs.apps.JobsConfig",
     "apps.ai.apps.AIConfig",
     "apps.content.apps.ContentConfig",
+    "apps.publishing.apps.PublishingConfig",
 ]
 
 MIDDLEWARE = [
@@ -94,6 +95,14 @@ SPECTACULAR_SETTINGS = {
             ("DRAFT", "Draft"),
             ("ACTIVE", "Active"),
             ("ARCHIVED", "Archived"),
+        ],
+        "PublishTaskStatusEnum": [
+            ("SCHEDULED", "Scheduled"),
+            ("QUEUED", "Queued"),
+            ("RUNNING", "Running"),
+            ("SUCCEEDED", "Succeeded"),
+            ("FAILED", "Failed"),
+            ("CANCELED", "Canceled"),
         ],
     },
 }

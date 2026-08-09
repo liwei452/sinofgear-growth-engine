@@ -1,0 +1,551 @@
+import hashlib
+import json
+import uuid
+from datetime import timedelta, timezone as dt_timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from django.core.exceptions import ObjectDoesNotExist
+from django.db import IntegrityError, transaction
+from django.db.models import Q
+from django.utils import timezone
+
+from apps.content.models import PlatformContent
+from apps.content.services import content_is_consistent
+from apps.content.services import transition_content
+from apps.platforms.capabilities import resolve_account_capabilities
+from apps.platforms.codes import AccountCapability
+from apps.platforms.models import SocialAccount
+
+from integrations.platforms.base import PublishRequest, PublishResult
+from integrations.platforms.registry import get_connector
+from integrations.platforms.registry import CONNECTOR_FACTORIES
+
+from .models import PublishAttempt, PublishedPost, PublishTask, publishing_writes
+
+
+MAX_SCHEDULE_AHEAD = timedelta(days=366)
+
+
+class PublishingConflict(ValueError):
+    pass
+
+
+def _attempt_history_is_consistent(task, post):
+    attempts = getattr(task, "_safe_attempts", None)
+    if attempts is None:
+        attempts = list(task.attempts.order_by("number"))
+    if [attempt.number for attempt in attempts] != list(range(1, task.attempt_number + 1)):
+        return False
+    allowed_errors = {
+        "RATE_LIMITED", "TOKEN_EXPIRED", "PROVIDER_ERROR", "PUBLISH_FINALIZE_ERROR",
+    }
+    for attempt in attempts:
+        if (
+            attempt.organization_id != task.organization_id
+            or attempt.task_id != task.id
+            or attempt.status not in PublishAttempt.Status.values
+            or attempt.request_fingerprint != task.request_fingerprint
+        ):
+            return False
+        if attempt.status == PublishAttempt.Status.RUNNING and any(
+            (attempt.outcome, attempt.error, attempt.finished_at, attempt.external_id)
+        ):
+            return False
+        if attempt.status == PublishAttempt.Status.SUCCEEDED and not (
+            attempt.outcome == "SUCCEEDED"
+            and attempt.error is None
+            and attempt.retry_at is None
+            and attempt.external_id
+            and attempt.finished_at is not None
+        ):
+            return False
+        if attempt.status == PublishAttempt.Status.FAILED and not (
+            isinstance(attempt.error, dict)
+            and attempt.error.get("code") in allowed_errors
+            and attempt.outcome == attempt.error["code"]
+            and not attempt.external_id
+            and attempt.finished_at is not None
+        ):
+            return False
+        if attempt.status == PublishAttempt.Status.CANCELED and not (
+            attempt.outcome == "CANCELED"
+            and attempt.error is None
+            and not attempt.external_id
+            and attempt.finished_at is not None
+        ):
+            return False
+        if attempt.status == PublishAttempt.Status.STALE and attempt.finished_at is None:
+            return False
+    if post is not None and (
+        not attempts or post.attempt_id != attempts[-1].id
+        or attempts[-1].status != PublishAttempt.Status.SUCCEEDED
+    ):
+        return False
+    return True
+
+
+def publish_task_is_consistent(task):
+    try:
+        content = task.platform_content
+        selected = getattr(task, "_selected_platform", None)
+        if selected is not None:
+            content._selected_platform = selected
+        scheduled_at = (
+            task.scheduled_at.astimezone(dt_timezone.utc) if task.scheduled_at else None
+        )
+        fingerprint = _fingerprint(
+            content=content,
+            account=task.social_account,
+            scheduled_at=scheduled_at,
+            timezone_name=_canonical_timezone(task.requested_timezone),
+            connector_code=task.connector_code,
+        )
+        try:
+            post = task.published_post
+        except ObjectDoesNotExist:
+            post = None
+        base = (
+            task.status in PublishTask.Status.values
+            and task.organization_id == content.organization_id
+            and task.organization_id == task.social_account.organization_id
+            and task.platform_id == content.platform_id == task.social_account.platform_id
+            and task.content_version == content.version
+            and task.connector_code in CONNECTOR_FACTORIES
+            and task.request_fingerprint == fingerprint
+            and validate_idempotency_key(task.idempotency_key) == task.idempotency_key
+            and content_is_consistent(content)
+            and _attempt_history_is_consistent(task, post)
+        )
+        if not base:
+            return False
+        if task.status == PublishTask.Status.SCHEDULED:
+            return task.scheduled_at is not None and task.claim_token is None and post is None
+        if task.status == PublishTask.Status.RUNNING:
+            return (
+                task.claim_token is not None and task.attempt_number > 0
+                and task.started_at is not None and task.finished_at is None and post is None
+            )
+        if task.status == PublishTask.Status.SUCCEEDED:
+            return (
+                task.claim_token is None and task.finished_at is not None and post is not None
+                and post.organization_id == task.organization_id
+                and post.platform_content_id == task.platform_content_id
+                and post.social_account_id == task.social_account_id
+                and post.attempt.task_id == task.id
+                and post.external_id
+            )
+        if task.status == PublishTask.Status.FAILED:
+            return (
+                task.claim_token is None and task.finished_at is not None
+                and isinstance(task.last_error, dict)
+                and task.last_error.get("code") in {
+                    "RATE_LIMITED", "TOKEN_EXPIRED", "PROVIDER_ERROR",
+                    "PUBLISH_FINALIZE_ERROR",
+                }
+                and post is None
+            )
+        if task.status == PublishTask.Status.CANCELED:
+            return (
+                task.claim_token is None and task.canceled_at is not None
+                and task.finished_at is not None and post is None
+            )
+        return task.status == PublishTask.Status.QUEUED and task.claim_token is None and post is None
+    except (AttributeError, KeyError, TypeError, ValueError, ZoneInfoNotFoundError):
+        return False
+
+
+def _canonical_timezone(name):
+    if not isinstance(name, str) or not name.strip() or len(name) > 64:
+        raise PublishingConflict("A valid IANA timezone is required.")
+    try:
+        return ZoneInfo(name.strip()).key
+    except ZoneInfoNotFoundError as exc:
+        raise PublishingConflict("A valid IANA timezone is required.") from exc
+
+
+def _canonical_schedule(value):
+    if value is None:
+        return None
+    if not timezone.is_aware(value):
+        raise PublishingConflict("Scheduled time must be timezone-aware.")
+    value = value.astimezone(dt_timezone.utc)
+    now = timezone.now()
+    if value <= now or value > now + MAX_SCHEDULE_AHEAD:
+        raise PublishingConflict("Scheduled time must be in the future within 366 days.")
+    return value
+
+
+def _fingerprint(*, content, account, scheduled_at, timezone_name, connector_code):
+    request = {
+        "account_id": str(account.id),
+        "connector_code": connector_code,
+        "content_id": str(content.id),
+        "content_version": content.version,
+        "platform_id": str(content.platform_id),
+        "scheduled_at": scheduled_at.isoformat().replace("+00:00", "Z")
+        if scheduled_at else None,
+        "timezone": timezone_name,
+    }
+    raw = json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def validate_idempotency_key(value):
+    if (
+        not isinstance(value, str)
+        or not (value := value.strip())
+        or len(value) > 128
+        or any(ord(character) < 33 or ord(character) > 126 for character in value)
+    ):
+        raise PublishingConflict("Idempotency-Key must be 1-128 visible ASCII characters.")
+    return value
+
+
+@transaction.atomic
+def create_publish_task(
+    *, content, account, idempotency_key, actor=None, scheduled_at=None,
+    timezone_name="UTC", connector_code="mock",
+):
+    key = validate_idempotency_key(idempotency_key)
+    timezone_name = _canonical_timezone(timezone_name)
+    scheduled_at = _canonical_schedule(scheduled_at)
+    fingerprint = _fingerprint(
+        content=content, account=account, scheduled_at=scheduled_at,
+        timezone_name=timezone_name, connector_code=connector_code,
+    )
+    existing = PublishTask.objects.filter(
+        organization_id=content.organization_id, idempotency_key=key
+    ).first()
+    if existing:
+        if not publish_task_is_consistent(existing):
+            raise PublishingConflict("Existing publish task is inconsistent.")
+        if existing.request_fingerprint != fingerprint:
+            raise PublishingConflict("Idempotency-Key already has a different request.")
+        return existing
+
+    locked_content = PlatformContent.objects.select_for_update().select_related(
+        "platform", "master_content__brief", "master_content__generation_job",
+        "master_content__ai_run", "master_content__previous_version", "previous_version",
+    ).get(pk=content.pk)
+    locked_account = SocialAccount.objects.select_for_update().select_related(
+        "platform", "credential"
+    ).get(pk=account.pk)
+    if not content_is_consistent(locked_content):
+        raise PublishingConflict("Platform content provenance is inconsistent.")
+    if locked_content.status != PlatformContent.Status.APPROVED:
+        raise PublishingConflict("Platform content must be APPROVED.")
+    if PlatformContent.objects.filter(previous_version=locked_content).exists():
+        raise PublishingConflict("Platform content must be the current lineage head.")
+    if locked_account.status != SocialAccount.Status.ACTIVE:
+        raise PublishingConflict("Social account must be ACTIVE.")
+    if locked_account.organization_id != locked_content.organization_id:
+        raise PublishingConflict("Content and account organization must match.")
+    if locked_account.platform_id != locked_content.platform_id:
+        raise PublishingConflict("Content and account platform must match.")
+    if locked_account.publish_mode != SocialAccount.PublishMode.API_AUTO:
+        raise PublishingConflict("Account publish mode does not support automatic publishing.")
+    if (
+        locked_account.credential
+        and locked_account.credential.expires_at
+        and locked_account.credential.expires_at <= timezone.now()
+    ):
+        raise PublishingConflict("Account connector credential has expired.")
+    if AccountCapability.PUBLISH not in resolve_account_capabilities(locked_account.id):
+        raise PublishingConflict("Account connector does not have publishing capability.")
+    status = PublishTask.Status.SCHEDULED if scheduled_at else PublishTask.Status.QUEUED
+    try:
+        with transaction.atomic():
+            with publishing_writes():
+                task = PublishTask.objects.create(
+                    organization=locked_content.organization,
+                    platform_content=locked_content,
+                    content_version=locked_content.version,
+                    social_account=locked_account,
+                    platform=locked_content.platform,
+                    connector_code=connector_code,
+                    idempotency_key=key,
+                    request_fingerprint=fingerprint,
+                    status=status,
+                    scheduled_at=scheduled_at,
+                    requested_timezone=timezone_name,
+                    created_by=actor,
+                )
+    except IntegrityError:
+        existing = PublishTask.objects.get(
+            organization=locked_content.organization, idempotency_key=key
+        )
+        if not publish_task_is_consistent(existing):
+            raise PublishingConflict("Existing publish task is inconsistent.") from None
+        if existing.request_fingerprint != fingerprint:
+            raise PublishingConflict(
+                "Idempotency-Key already has a different request."
+            ) from None
+        return existing
+    if status == PublishTask.Status.QUEUED:
+        from .tasks import run_publish_task
+
+        transaction.on_commit(lambda: run_publish_task.delay(str(task.id)))
+    return task
+
+
+@transaction.atomic
+def claim_publish_task(task_id=None):
+    queryset = PublishTask.objects.select_for_update(skip_locked=True).filter(
+        status=PublishTask.Status.QUEUED
+    ).filter(Q(retry_not_before__isnull=True) | Q(retry_not_before__lte=timezone.now()))
+    if task_id is not None:
+        queryset = queryset.filter(pk=task_id)
+    task = queryset.order_by("created_at", "id").first()
+    if task is None:
+        return None
+    token = uuid.uuid4()
+    now = timezone.now()
+    task.status = PublishTask.Status.RUNNING
+    task.claim_token = token
+    task.attempt_number += 1
+    task.started_at = now
+    task.finished_at = None
+    task.last_error = None
+    with publishing_writes():
+        task.save(update_fields=[
+            "status", "claim_token", "attempt_number", "started_at",
+            "finished_at", "last_error", "updated_at",
+        ])
+        attempt = PublishAttempt.objects.create(
+            organization=task.organization,
+            task=task,
+            number=task.attempt_number,
+            claim_token=token,
+            status=PublishAttempt.Status.RUNNING,
+            request_fingerprint=task.request_fingerprint,
+            started_at=now,
+        )
+    return task, attempt
+
+
+def _safe_error(result):
+    allowed = {"RATE_LIMITED", "TOKEN_EXPIRED", "PROVIDER_ERROR", "PUBLISH_FINALIZE_ERROR"}
+    code = result.error_code if result.error_code in allowed else "PROVIDER_ERROR"
+    messages = {
+        "RATE_LIMITED": "Provider rate limit reached.",
+        "TOKEN_EXPIRED": "Account authorization has expired.",
+        "PROVIDER_ERROR": "Provider rejected the publish request.",
+        "PUBLISH_FINALIZE_ERROR": "Publishing result could not be finalized.",
+    }
+    return {"code": code, "message": messages[code]}
+
+
+@transaction.atomic
+def complete_publish_failure(task_id, claim_token, result):
+    task = PublishTask.objects.select_for_update().get(pk=task_id)
+    attempt = PublishAttempt.objects.select_for_update().get(
+        task=task, claim_token=claim_token
+    )
+    if task.status != PublishTask.Status.RUNNING or task.claim_token != claim_token:
+        if attempt.status == PublishAttempt.Status.RUNNING:
+            attempt.status = PublishAttempt.Status.STALE
+            attempt.finished_at = timezone.now()
+            with publishing_writes():
+                attempt.save(update_fields=["status", "finished_at", "updated_at"])
+        return task
+    now = timezone.now()
+    error = _safe_error(result)
+    retry_at = (
+        now + timedelta(seconds=min(max(result.retry_after_seconds or 60, 1), 3600))
+        if error["code"] == "RATE_LIMITED" else None
+    )
+    task.status = PublishTask.Status.FAILED
+    task.claim_token = None
+    task.last_error = error
+    task.retry_not_before = retry_at
+    task.finished_at = now
+    attempt.status = PublishAttempt.Status.FAILED
+    attempt.outcome = error["code"]
+    attempt.error = error
+    attempt.retry_at = retry_at
+    attempt.finished_at = now
+    with publishing_writes():
+        task.save(update_fields=[
+            "status", "claim_token", "last_error", "retry_not_before",
+            "finished_at", "updated_at",
+        ])
+        attempt.save(update_fields=[
+            "status", "outcome", "error", "retry_at", "finished_at", "updated_at",
+        ])
+    return task
+
+
+@transaction.atomic
+def complete_publish_success(task_id, claim_token, result, *, actor=None):
+    task = PublishTask.objects.select_for_update().select_related(
+        "platform_content"
+    ).get(pk=task_id)
+    attempt = PublishAttempt.objects.select_for_update().get(
+        task=task, claim_token=claim_token
+    )
+    if task.status != PublishTask.Status.RUNNING or task.claim_token != claim_token:
+        if attempt.status == PublishAttempt.Status.RUNNING:
+            attempt.status = PublishAttempt.Status.STALE
+            attempt.finished_at = timezone.now()
+            with publishing_writes():
+                attempt.save(update_fields=["status", "finished_at", "updated_at"])
+        return None
+    if not result.succeeded or not result.external_id or len(result.external_id) > 255:
+        raise PublishingConflict("Connector success result is invalid.")
+    now = timezone.now()
+    with publishing_writes():
+        post = PublishedPost.objects.create(
+            organization=task.organization,
+            task=task,
+            attempt=attempt,
+            platform_content=task.platform_content,
+            social_account=task.social_account,
+            external_id=result.external_id,
+            published_at=now,
+        )
+    if task.platform_content.status == PlatformContent.Status.APPROVED:
+        transition_content(
+            task.platform_content, action="PUBLISH",
+            actor=actor or task.created_by, comment="Mock platform publish succeeded.",
+        )
+    elif task.platform_content.status != PlatformContent.Status.PUBLISHED:
+        raise PublishingConflict("Platform content is no longer publishable.")
+    task.status = PublishTask.Status.SUCCEEDED
+    task.claim_token = None
+    task.last_error = None
+    task.retry_not_before = None
+    task.finished_at = now
+    attempt.status = PublishAttempt.Status.SUCCEEDED
+    attempt.outcome = "SUCCEEDED"
+    attempt.external_id = result.external_id
+    attempt.finished_at = now
+    with publishing_writes():
+        task.save(update_fields=[
+            "status", "claim_token", "last_error", "retry_not_before",
+            "finished_at", "updated_at",
+        ])
+        attempt.save(update_fields=[
+            "status", "outcome", "external_id", "finished_at", "updated_at",
+        ])
+    return post
+
+
+def execute_publish_task(task_id):
+    existing = PublishedPost.objects.filter(task_id=task_id).first()
+    if existing:
+        return existing
+    claimed = claim_publish_task(task_id)
+    if claimed is None:
+        return PublishedPost.objects.filter(task_id=task_id).first()
+    task, attempt = claimed
+    task = PublishTask.objects.select_related(
+        "platform", "platform_content", "social_account"
+    ).get(pk=task.pk)
+    request = PublishRequest(
+        task_id=task.id,
+        platform_code=task.platform.code,
+        account_external_id=task.social_account.external_id,
+        content_payload=task.platform_content.payload,
+        scheduled_at=task.scheduled_at,
+    )
+    try:
+        result = get_connector(task.connector_code, task.social_account).publish(request)
+    except Exception:
+        result = PublishResult(
+            succeeded=False, error_code="PROVIDER_ERROR",
+            error_message="Provider rejected the publish request.",
+        )
+    if not result.succeeded:
+        complete_publish_failure(task.id, attempt.claim_token, result)
+        return None
+    try:
+        return complete_publish_success(
+            task.id, attempt.claim_token, result, actor=task.created_by
+        )
+    except Exception:
+        complete_publish_failure(
+            task.id, attempt.claim_token,
+            PublishResult(succeeded=False, error_code="PUBLISH_FINALIZE_ERROR"),
+        )
+        return None
+
+
+@transaction.atomic
+def cancel_publish_task(task, *, actor=None):
+    del actor
+    task = PublishTask.objects.select_for_update().get(pk=task.pk)
+    if task.status == PublishTask.Status.CANCELED:
+        return task
+    if task.status not in {
+        PublishTask.Status.SCHEDULED, PublishTask.Status.QUEUED,
+        PublishTask.Status.RUNNING,
+    }:
+        raise PublishingConflict("Only active publish tasks can be canceled.")
+    now = timezone.now()
+    token = task.claim_token
+    task.status = PublishTask.Status.CANCELED
+    task.claim_token = None
+    task.canceled_at = now
+    task.finished_at = now
+    with publishing_writes():
+        task.save(update_fields=[
+            "status", "claim_token", "canceled_at", "finished_at", "updated_at",
+        ])
+        if token:
+            attempt = PublishAttempt.objects.select_for_update().get(
+                task=task, claim_token=token
+            )
+            attempt.status = PublishAttempt.Status.CANCELED
+            attempt.outcome = "CANCELED"
+            attempt.finished_at = now
+            attempt.save(update_fields=[
+                "status", "outcome", "finished_at", "updated_at",
+            ])
+    return task
+
+
+@transaction.atomic
+def retry_publish_task(task, *, actor=None):
+    del actor
+    task = PublishTask.objects.select_for_update().get(pk=task.pk)
+    if task.status != PublishTask.Status.FAILED:
+        raise PublishingConflict("Only failed publish tasks can be retried.")
+    if (task.last_error or {}).get("code") == "TOKEN_EXPIRED":
+        raise PublishingConflict("Expired account token requires reauthorization before retry.")
+    if task.retry_not_before and task.retry_not_before > timezone.now():
+        raise PublishingConflict("Rate-limited task is not ready to retry.")
+    task.status = PublishTask.Status.QUEUED
+    task.last_error = None
+    task.retry_not_before = None
+    task.finished_at = None
+    with publishing_writes():
+        task.save(update_fields=[
+            "status", "last_error", "retry_not_before", "finished_at", "updated_at",
+        ])
+    from .tasks import run_publish_task
+
+    transaction.on_commit(lambda: run_publish_task.delay(str(task.id)))
+    return task
+
+
+@transaction.atomic
+def enqueue_due_publish_tasks(*, limit=100):
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
+        raise ValueError("Queue limit must be an integer from 1 to 500.")
+    tasks = list(
+        PublishTask.objects.select_for_update(skip_locked=True)
+        .filter(status=PublishTask.Status.SCHEDULED, scheduled_at__lte=timezone.now())
+        .order_by("scheduled_at", "id")[:limit]
+    )
+    if not tasks:
+        return 0
+    from .tasks import run_publish_task
+
+    with publishing_writes():
+        for task in tasks:
+            task.status = PublishTask.Status.QUEUED
+            task.save(update_fields=["status", "updated_at"])
+            transaction.on_commit(
+                lambda task_id=str(task.id): run_publish_task.delay(task_id)
+            )
+    return len(tasks)

@@ -62,7 +62,9 @@ def content_is_consistent(content):
             job = content.generation_job
             run = content.ai_run
             return (
-                content.provenance == _master_provenance(content)
+                content.status in MasterContent.Status.values
+                and payload == content.payload
+                and content.provenance == _master_provenance(content)
                 and content.brief.organization_id == content.organization_id
                 and content.brief_version == content.brief.version
                 and job.organization_id == content.organization_id
@@ -94,7 +96,8 @@ def content_is_consistent(content):
                 platform_id=content.platform_id
             ).exists()
         return (
-            bool(selected)
+            content.status in PlatformContent.Status.values
+            and bool(selected)
             and payload == content.payload
             and content.provenance == _platform_provenance(content)
             and content.master_content.organization_id == content.organization_id

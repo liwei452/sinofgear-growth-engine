@@ -34,12 +34,24 @@ class PlatformContentSerializer(serializers.ModelSerializer):
         ]
 
 
-class RevisionSerializer(StrictMixin, serializers.Serializer):
+class BaseRevisionSerializer(StrictMixin, serializers.Serializer):
     payload = serializers.JSONField()
 
+
+class MasterRevisionSerializer(BaseRevisionSerializer):
+    def validate_payload(self, value):
+        try:
+            return validate_content_payload(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+
+class PlatformRevisionSerializer(BaseRevisionSerializer):
     def validate_payload(self, value):
         try:
             platform_code = value.get("platform_code") if isinstance(value, dict) else None
+            if platform_code is None:
+                raise ValueError("Platform content payload requires platform_code.")
             return validate_content_payload(value, platform_code=platform_code)
         except ValueError as exc:
             raise serializers.ValidationError(str(exc)) from exc

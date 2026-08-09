@@ -133,3 +133,81 @@ def test_platform_list_consistency_query_count_is_page_size_independent(
         response = client.get("/api/v1/platform-contents?page_size=50")
     assert response.status_code == 200
     assert len(many) == len(single)
+
+
+def test_noncanonical_raw_payload_is_hidden_from_all_boundaries(content_provenance):
+    organization, actor, brief, job, run = content_provenance
+    master = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)
+    client = _client(organization, Role.Code.ADMINISTRATOR)
+    with content_writes():
+        type(master).objects.filter(pk=master.pk).update(
+            payload={**master.payload, "title": f" {master.payload['title']} "}
+        )
+
+    assert client.get(f"/api/v1/master-contents/{master.id}").status_code == 404
+    assert client.post(
+        f"/api/v1/master-contents/{master.id}/approve", {"comment": "ok"}, format="json"
+    ).status_code == 404
+    assert all(
+        row["id"] != str(master.id)
+        for row in client.get("/api/v1/master-contents").json()["results"]
+    )
+
+
+def test_illegal_status_is_hidden_for_both_content_types(content_provenance):
+    organization, actor, brief, job, run = content_provenance
+    master = approve_content(
+        create_generated_master(brief=brief, job=job, ai_run=run, actor=actor), actor=actor
+    )
+    platform = create_platform_content(
+        master, platform=brief.platform_links.get().platform, actor=actor
+    )
+    with content_writes():
+        type(master).objects.filter(pk=master.pk).update(status="FORGED")
+        type(platform).objects.filter(pk=platform.pk).update(status="FORGED")
+    client = _client(organization, Role.Code.ADMINISTRATOR)
+
+    for prefix, content in (("master", master), ("platform", platform)):
+        assert client.get(f"/api/v1/{prefix}-contents/{content.id}").status_code == 404
+        assert client.post(
+            f"/api/v1/{prefix}-contents/{content.id}/approve",
+            {"comment": "ok"}, format="json",
+        ).status_code == 404
+        assert all(
+            row["id"] != str(content.id)
+            for row in client.get(f"/api/v1/{prefix}-contents").json()["results"]
+        )
+
+
+def test_master_revision_rejects_platform_payload_at_serializer(content_provenance):
+    organization, actor, brief, job, run = content_provenance
+    master = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)
+    client = _client(organization, Role.Code.OPERATOR)
+
+    response = client.post(
+        f"/api/v1/master-contents/{master.id}/revisions",
+        {"payload": {**master.payload, "platform_code": "SELECTED"}}, format="json",
+    )
+
+    assert response.status_code == 400
+    assert set(response.json()) == {"errors"}
+
+
+def test_platform_revision_requires_platform_payload_at_serializer(content_provenance):
+    organization, actor, brief, job, run = content_provenance
+    master = approve_content(
+        create_generated_master(brief=brief, job=job, ai_run=run, actor=actor), actor=actor
+    )
+    platform = create_platform_content(
+        master, platform=brief.platform_links.get().platform, actor=actor
+    )
+    client = _client(organization, Role.Code.OPERATOR)
+    payload = {key: value for key, value in platform.payload.items() if key != "platform_code"}
+
+    response = client.post(
+        f"/api/v1/platform-contents/{platform.id}/revisions",
+        {"payload": payload}, format="json",
+    )
+
+    assert response.status_code == 400
+    assert set(response.json()) == {"errors"}

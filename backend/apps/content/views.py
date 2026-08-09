@@ -20,8 +20,9 @@ from apps.platforms.models import Platform
 from .models import MasterContent, PlatformContent
 from .serializers import (
     EmptySerializer, JobAcceptedSerializer, MasterContentSerializer,
-    PlatformContentSerializer, PlatformGenerationSerializer, RevisionSerializer,
-    ReviewSerializer, ContentFilterSerializer,
+    MasterRevisionSerializer, PlatformContentSerializer,
+    PlatformGenerationSerializer, PlatformRevisionSerializer, ReviewSerializer,
+    ContentFilterSerializer,
 )
 from .services import (
     ContentStateError, create_master_revision, create_platform_content,
@@ -172,10 +173,11 @@ class PlatformDetailView(ContentDetailView):
 
 class MasterRevisionView(APIView):
     permission_classes = [CanManageContent]
+    serializer_class = MasterRevisionSerializer
 
-    @extend_schema(request=RevisionSerializer, responses={201: MasterContentSerializer})
+    @extend_schema(request=MasterRevisionSerializer, responses={201: MasterContentSerializer})
     def post(self, request, content_id):
-        serializer = RevisionSerializer(data=request.data)
+        serializer = MasterRevisionSerializer(data=request.data)
         if not serializer.is_valid():
             return Response({"errors": serializer.errors}, status=400)
         source = _object(MasterContent, request.organization, content_id)
@@ -190,10 +192,11 @@ class MasterRevisionView(APIView):
 
 class PlatformRevisionView(APIView):
     permission_classes = [CanManageContent]
+    serializer_class = PlatformRevisionSerializer
 
-    @extend_schema(request=RevisionSerializer, responses={201: PlatformContentSerializer})
+    @extend_schema(request=PlatformRevisionSerializer, responses={201: PlatformContentSerializer})
     def post(self, request, content_id):
-        serializer = RevisionSerializer(data=request.data)
+        serializer = PlatformRevisionSerializer(data=request.data)
         if not serializer.is_valid():
             return Response({"errors": serializer.errors}, status=400)
         source = _object(PlatformContent, request.organization, content_id)

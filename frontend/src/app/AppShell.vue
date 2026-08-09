@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
-import { computed, onBeforeUnmount, onMounted, ref } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue"
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router"
 
+import { ApiError } from "../api/client"
 import { currentUserQueryOptions, logout } from "../modules/auth/auth"
 
 const navigation = [
@@ -37,6 +38,10 @@ const router = useRouter()
 const queryClient = useQueryClient()
 const currentUser = useQuery(currentUserQueryOptions())
 const navOpen = ref(false)
+const isNarrowViewport = ref(false)
+const sidebarElement = ref<HTMLElement | null>(null)
+const menuButtonElement = ref<HTMLButtonElement | null>(null)
+const drawerClosed = computed(() => isNarrowViewport.value && !navOpen.value)
 const pageTitle = computed(() => String(route.meta.title ?? "工作台"))
 const logoutMutation = useMutation({
   mutationFn: logout,
@@ -45,28 +50,104 @@ const logoutMutation = useMutation({
     await router.replace("/login")
   },
 })
+const logoutError = computed(() => {
+  const error = logoutMutation.error.value
+  if (!error) return undefined
+  if (error instanceof ApiError) {
+    return {
+      message: error.userMessage,
+      recovery: error.recoveryAction ?? "请检查网络后重试。",
+    }
+  }
+  return {
+    message: "暂时无法退出登录。",
+    recovery: "请检查网络后重试。",
+  }
+})
 
-function closeNavigation() {
+let viewportQuery: MediaQueryList | undefined
+
+function updateViewport(event: MediaQueryList | MediaQueryListEvent) {
+  isNarrowViewport.value = event.matches
+  if (!event.matches) navOpen.value = false
+}
+
+function drawerFocusableElements(): HTMLElement[] {
+  if (!sidebarElement.value) return []
+  return [...sidebarElement.value.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )]
+}
+
+function closeNavigation(restoreFocus = true) {
+  const wasOpen = navOpen.value
   navOpen.value = false
+  if (wasOpen && restoreFocus && isNarrowViewport.value) {
+    void nextTick(() => menuButtonElement.value?.focus())
+  }
+}
+
+async function openNavigation() {
+  navOpen.value = true
+  await nextTick()
+  drawerFocusableElements()[0]?.focus()
+}
+
+function toggleNavigation() {
+  if (navOpen.value) closeNavigation()
+  else void openNavigation()
+}
+
+function startLogout() {
+  logoutMutation.reset()
+  logoutMutation.mutate()
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") closeNavigation()
+  if (!isNarrowViewport.value || !navOpen.value) return
+  if (event.key === "Escape") {
+    event.preventDefault()
+    closeNavigation()
+    return
+  }
+  if (event.key !== "Tab") return
+  const focusable = drawerFocusableElements()
+  const first = focusable[0]
+  const last = focusable.at(-1)
+  if (!first || !last) return
+  if (event.shiftKey && (document.activeElement === first || !sidebarElement.value?.contains(document.activeElement))) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && (document.activeElement === last || !sidebarElement.value?.contains(document.activeElement))) {
+    event.preventDefault()
+    first.focus()
+  }
 }
 
-onMounted(() => window.addEventListener("keydown", onKeydown))
-onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
+onMounted(() => {
+  viewportQuery = window.matchMedia("(max-width: 860px)")
+  updateViewport(viewportQuery)
+  viewportQuery.addEventListener("change", updateViewport)
+  window.addEventListener("keydown", onKeydown)
+})
+onBeforeUnmount(() => {
+  viewportQuery?.removeEventListener("change", updateViewport)
+  window.removeEventListener("keydown", onKeydown)
+})
 </script>
 
 <template>
   <div class="app-shell">
     <aside
       id="primary-sidebar"
+      ref="sidebarElement"
       data-testid="app-sidebar"
       class="app-sidebar"
       :class="{ 'app-sidebar-open': navOpen }"
+      :aria-hidden="drawerClosed ? 'true' : undefined"
+      :inert="drawerClosed ? '' : null"
     >
-      <RouterLink class="brand-lockup" to="/" aria-label="SinofGear 首页" @click="closeNavigation">
+      <RouterLink class="brand-lockup" to="/" aria-label="SinofGear 首页" @click="closeNavigation(false)">
         <span class="brand-mark" aria-hidden="true">SG</span>
         <span><strong>SinofGear</strong><small>增长引擎</small></span>
       </RouterLink>
@@ -79,7 +160,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             :to="item.to"
             class="nav-link"
             exact-active-class="nav-link-active"
-            @click="closeNavigation"
+            @click="closeNavigation(false)"
           >
             <span class="nav-icon" aria-hidden="true">{{ item.icon }}</span>
             <span>{{ item.label }}</span>
@@ -87,18 +168,26 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         </section>
       </nav>
     </aside>
-    <button v-if="navOpen" class="nav-backdrop" type="button" aria-label="关闭导航遮罩" @click="closeNavigation" />
+    <button
+      v-if="navOpen && isNarrowViewport"
+      class="nav-backdrop"
+      type="button"
+      tabindex="-1"
+      aria-label="关闭导航遮罩"
+      @click="closeNavigation()"
+    />
 
     <div class="app-main">
       <header class="topbar">
         <div class="topbar-start">
           <button
+            ref="menuButtonElement"
             class="menu-button"
             type="button"
             :aria-expanded="navOpen"
             aria-controls="primary-sidebar"
             :aria-label="navOpen ? '关闭导航' : '打开导航'"
-            @click="navOpen = !navOpen"
+            @click="toggleNavigation"
           >
             <span aria-hidden="true">☰</span>
           </button>
@@ -107,19 +196,30 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             <strong>{{ pageTitle }}</strong>
           </div>
         </div>
-        <div v-if="currentUser.data.value" class="user-area">
-          <div class="user-copy">
-            <strong>{{ currentUser.data.value.organization.name }}</strong>
-            <span>{{ currentUser.data.value.user.username }}</span>
+        <div v-if="currentUser.data.value" class="user-session">
+          <div class="user-area">
+            <div class="user-copy">
+              <strong>{{ currentUser.data.value.organization.name }}</strong>
+              <span>{{ currentUser.data.value.user.username }}</span>
+            </div>
+            <button
+              class="button button-quiet"
+              type="button"
+              :disabled="logoutMutation.isPending.value"
+              @click="startLogout"
+            >
+              {{ logoutMutation.isPending.value ? "正在退出…" : logoutError ? "重新退出" : "退出登录" }}
+            </button>
           </div>
-          <button
-            class="button button-quiet"
-            type="button"
-            :disabled="logoutMutation.isPending.value"
-            @click="logoutMutation.mutate()"
+          <div
+            v-if="logoutError"
+            class="logout-error"
+            role="alert"
+            aria-live="assertive"
           >
-            {{ logoutMutation.isPending.value ? "正在退出…" : "退出登录" }}
-          </button>
+            <p>{{ logoutError.message }}</p>
+            <p>{{ logoutError.recovery }}</p>
+          </div>
         </div>
       </header>
 

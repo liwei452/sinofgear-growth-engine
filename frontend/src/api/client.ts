@@ -41,6 +41,13 @@ function statusMessage(status: number): string {
 }
 
 async function errorFromResponse(response: Response): Promise<ApiError> {
+  if (response.status >= 500) {
+    return new ApiError(
+      response.status,
+      statusMessage(response.status),
+      "请稍后重试；若问题持续，请联系管理员。",
+    )
+  }
   let payload: ErrorPayload = {}
   if (response.headers.get("Content-Type")?.includes("application/json")) {
     try {

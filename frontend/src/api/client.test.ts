@@ -46,23 +46,41 @@ describe("apiRequest", () => {
     )
   })
 
-  it("maps detail, message, and recovery_action without exposing internals", async () => {
+  it("maps safe client-error detail, message, and recovery_action", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       detail: "请求无法完成",
       message: "内部消息",
       recovery_action: "请刷新后重试",
       stack: "secret stack",
-    }), { status: 500, headers: { "Content-Type": "application/json" } })))
+    }), { status: 400, headers: { "Content-Type": "application/json" } })))
 
     const error = await apiRequest("/api/v1/failure").catch((reason) => reason)
 
     expect(error).toBeInstanceOf(ApiError)
     expect(error).toMatchObject({
-      status: 500,
+      status: 400,
       userMessage: "请求无法完成",
       recoveryAction: "请刷新后重试",
     })
     expect(String(error)).not.toContain("secret stack")
+  })
+
+  it("ignores all server-supplied text for 5xx responses", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: "Traceback: password=secret",
+      message: "Database host is db.internal",
+      recovery_action: "Run DROP TABLE users",
+    }), { status: 503, headers: { "Content-Type": "application/json" } })))
+
+    const error = await apiRequest("/api/v1/failure").catch((reason) => reason)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error).toMatchObject({
+      status: 503,
+      userMessage: "服务暂时不可用，请稍后重试。",
+      recoveryAction: "请稍后重试；若问题持续，请联系管理员。",
+    })
+    expect(JSON.stringify(error)).not.toMatch(/Traceback|password|db\.internal|DROP TABLE/)
   })
 
   it.each([

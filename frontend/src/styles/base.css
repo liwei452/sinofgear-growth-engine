@@ -214,6 +214,29 @@ a {
   gap: 14px;
 }
 
+.user-session {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.logout-error {
+  max-width: 360px;
+  border-radius: var(--sg-radius-sm);
+  background: var(--sg-danger-soft);
+  padding: 9px 12px;
+  color: var(--sg-danger);
+  font-size: 0.82rem;
+}
+
+.logout-error p {
+  margin: 0;
+}
+
+.logout-error p + p {
+  margin-top: 3px;
+}
+
 .topbar-label {
   margin: 0 0 2px;
   color: var(--sg-muted);
@@ -472,12 +495,19 @@ a {
 
 @media (max-width: 860px) {
   .app-sidebar {
+    visibility: hidden;
+    pointer-events: none;
     transform: translateX(-102%);
-    transition: transform 180ms ease;
+    transition:
+      transform 180ms ease,
+      visibility 0s linear 180ms;
   }
 
   .app-sidebar-open {
+    visibility: visible;
+    pointer-events: auto;
     transform: translateX(0);
+    transition-delay: 0s;
   }
 
   .app-main {

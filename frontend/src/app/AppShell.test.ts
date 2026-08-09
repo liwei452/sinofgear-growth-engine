@@ -1,5 +1,5 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
-import { fireEvent, render, screen } from "@testing-library/vue"
+import { fireEvent, render, screen, waitFor } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
 import { defineComponent, h } from "vue"
 import { createMemoryHistory, createRouter, RouterView } from "vue-router"
@@ -18,7 +18,23 @@ const currentUser = {
   membership: { id: "member-1", role: "OPERATOR", status: "ACTIVE" },
 }
 
-async function renderShell(initialPath = "/") {
+function useViewport(narrow: boolean) {
+  const mediaQuery = {
+    matches: narrow,
+    media: "(max-width: 860px)",
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }
+  vi.stubGlobal("matchMedia", vi.fn().mockReturnValue(mediaQuery))
+  return mediaQuery
+}
+
+async function renderShell(initialPath = "/", { narrow = false } = {}) {
+  const mediaQuery = useViewport(narrow)
   const history = createMemoryHistory()
   history.push(initialPath)
   const router = createRouter({
@@ -31,6 +47,7 @@ async function renderShell(initialPath = "/") {
         children: [
           { path: "", component: Page, meta: { title: "首页" } },
           { path: "products", component: PlaceholderPage, meta: { title: "产品库" } },
+          { path: ":pathMatch(.*)*", component: PlaceholderPage, meta: { title: "功能" } },
         ],
       },
     ],
@@ -41,7 +58,7 @@ async function renderShell(initialPath = "/") {
     global: { plugins: [[VueQueryPlugin, { queryClient }], router] },
   })
   await router.isReady()
-  return { ...result, router, queryClient }
+  return { ...result, router, queryClient, mediaQuery }
 }
 
 afterEach(() => {
@@ -68,15 +85,57 @@ it("shows grouped Chinese navigation, organization, user, and active item", asyn
 
 it("opens and closes the narrow-screen navigation with button and Escape", async () => {
   const user = userEvent.setup()
-  await renderShell()
+  const { mediaQuery, unmount } = await renderShell("/", { narrow: true })
   const sidebar = screen.getByTestId("app-sidebar")
+  const menuButton = screen.getByRole("button", { name: "打开导航" })
 
-  expect(screen.getByRole("button", { name: "打开导航" })).toHaveAttribute("aria-expanded", "false")
-  await user.click(screen.getByRole("button", { name: "打开导航" }))
+  expect(sidebar).toHaveAttribute("aria-hidden", "true")
+  expect(sidebar).toHaveAttribute("inert")
+  menuButton.focus()
+  await user.tab()
+  expect(screen.getByRole("button", { name: "退出登录" })).toHaveFocus()
+
+  await user.click(menuButton)
   expect(screen.getByRole("button", { name: "关闭导航" })).toHaveAttribute("aria-expanded", "true")
   expect(sidebar).toHaveClass("app-sidebar-open")
+  expect(sidebar).not.toHaveAttribute("aria-hidden")
+  expect(sidebar).not.toHaveAttribute("inert")
+  expect(screen.getByRole("link", { name: "SinofGear 首页" })).toHaveFocus()
+
+  await user.tab({ shift: true })
+  expect(screen.getByRole("link", { name: "数据看板" })).toHaveFocus()
+  await user.tab()
+  expect(screen.getByRole("link", { name: "SinofGear 首页" })).toHaveFocus()
+
   await fireEvent.keyDown(window, { key: "Escape" })
-  expect(screen.getByRole("button", { name: "打开导航" })).toHaveAttribute("aria-expanded", "false")
+  expect(menuButton).toHaveAttribute("aria-expanded", "false")
+  expect(menuButton).toHaveFocus()
+  expect(sidebar).toHaveAttribute("aria-hidden", "true")
+  expect(sidebar).toHaveAttribute("inert")
+
+  await user.click(menuButton)
+  await user.click(screen.getByRole("button", { name: "关闭导航遮罩" }))
+  expect(menuButton).toHaveFocus()
+  expect(sidebar).toHaveAttribute("inert")
+
+  await user.click(menuButton)
+  await user.click(screen.getByRole("link", { name: "产品库" }))
+  expect(sidebar).toHaveAttribute("inert")
+  expect(menuButton).not.toHaveFocus()
+
+  const viewportListener = mediaQuery.addEventListener.mock.calls[0]?.[1]
+  expect(mediaQuery.addEventListener).toHaveBeenCalledWith("change", expect.any(Function))
+  unmount()
+  expect(mediaQuery.removeEventListener).toHaveBeenCalledWith("change", viewportListener)
+})
+
+it("keeps the desktop navigation exposed when the drawer state is closed", async () => {
+  await renderShell()
+
+  const sidebar = screen.getByTestId("app-sidebar")
+  expect(sidebar).not.toHaveAttribute("aria-hidden")
+  expect(sidebar).not.toHaveAttribute("inert")
+  expect(screen.getByRole("link", { name: "产品库" })).toBeInTheDocument()
 })
 
 it("logs out through the API, clears the session, and returns to login", async () => {
@@ -94,4 +153,34 @@ it("logs out through the API, clears the session, and returns to login", async (
     "/api/v1/auth/logout",
     expect.objectContaining({ method: "POST", credentials: "include" }),
   )
+})
+
+it("shows a safe logout failure with recovery guidance and clears it before retrying", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let finishRetry: ((response: Response) => void) | undefined
+  const retryResponse = new Promise<Response>((resolve) => { finishRetry = resolve })
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({
+      detail: "Traceback: secret database host",
+      recovery_action: "Run DROP TABLE users",
+    }), { status: 503, headers: { "Content-Type": "application/json" } }))
+    .mockReturnValueOnce(retryResponse)
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  await renderShell()
+
+  await user.click(screen.getByRole("button", { name: "退出登录" }))
+
+  const alert = await screen.findByRole("alert")
+  expect(alert).toHaveAttribute("aria-live", "assertive")
+  expect(alert).toHaveTextContent("服务暂时不可用，请稍后重试。")
+  expect(alert).toHaveTextContent("请稍后重试；若问题持续，请联系管理员。")
+  expect(alert).not.toHaveTextContent("Traceback")
+  expect(alert).not.toHaveTextContent("DROP TABLE")
+
+  await user.click(screen.getByRole("button", { name: "重新退出" }))
+  await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument())
+  expect(screen.getByRole("button", { name: "正在退出…" })).toBeDisabled()
+  finishRetry?.(new Response(null, { status: 204 }))
+  expect(await screen.findByText("登录页面")).toBeInTheDocument()
 })

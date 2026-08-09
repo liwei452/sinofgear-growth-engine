@@ -38,6 +38,7 @@ _CONTROLLED_ERROR_MESSAGES = {
     "output_too_large": "Provider output exceeds the size limit.",
     "ai_run_start_failed": "AI audit run could not start.",
     "job_canceled": "Job was canceled.",
+    "content_finalize_failed": "Generated content could not be finalized.",
 }
 
 

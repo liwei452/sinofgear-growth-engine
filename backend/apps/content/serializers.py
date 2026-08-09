@@ -1,0 +1,66 @@
+from rest_framework import serializers
+
+from .models import MasterContent, PlatformContent
+
+
+class StrictMixin:
+    def to_internal_value(self, data):
+        unknown = set(data) - set(self.fields)
+        if unknown:
+            raise serializers.ValidationError(
+                {name: ["Unknown field."] for name in sorted(unknown)}
+            )
+        return super().to_internal_value(data)
+
+
+class MasterContentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MasterContent
+        fields = [
+            "id", "brief_id", "brief_version", "generation_job_id", "ai_run_id",
+            "lineage_id", "previous_version_id", "version", "payload", "provenance",
+            "status", "created_by_id", "created_at", "updated_at",
+        ]
+
+
+class PlatformContentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PlatformContent
+        fields = [
+            "id", "master_content_id", "master_version", "platform_id", "lineage_id",
+            "previous_version_id", "version", "payload", "provenance", "status",
+            "created_by_id", "created_at", "updated_at",
+        ]
+
+
+class RevisionSerializer(StrictMixin, serializers.Serializer):
+    payload = serializers.JSONField()
+
+
+class ReviewSerializer(StrictMixin, serializers.Serializer):
+    comment = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class PlatformGenerationSerializer(StrictMixin, serializers.Serializer):
+    platform_id = serializers.UUIDField()
+
+
+class EmptySerializer(StrictMixin, serializers.Serializer):
+    pass
+
+
+class JobAcceptedSerializer(serializers.Serializer):
+    job_id = serializers.UUIDField()
+    status = serializers.CharField()
+
+
+class ContentFilterSerializer(StrictMixin, serializers.Serializer):
+    status = serializers.CharField(required=False)
+    brief = serializers.UUIDField(required=False)
+    campaign = serializers.UUIDField(required=False)
+    product = serializers.UUIDField(required=False)
+    platform = serializers.UUIDField(required=False)
+    lineage = serializers.UUIDField(required=False)
+    version = serializers.IntegerField(required=False, min_value=1)
+    cursor = serializers.CharField(required=False)
+    page_size = serializers.IntegerField(required=False, min_value=1, max_value=50)

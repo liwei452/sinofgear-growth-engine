@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "apps.campaigns.apps.CampaignsConfig",
     "apps.jobs.apps.JobsConfig",
     "apps.ai.apps.AIConfig",
+    "apps.content.apps.ContentConfig",
 ]
 
 MIDDLEWARE = [

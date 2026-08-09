@@ -66,6 +66,8 @@ class Role(models.Model):
                 PermissionCode.CAMPAIGNS_MANAGE,
                 PermissionCode.JOBS_READ,
                 PermissionCode.JOBS_MANAGE,
+                PermissionCode.CONTENT_READ,
+                PermissionCode.CONTENT_MANAGE,
             ),
         ),
         Code.REVIEWER: (
@@ -79,6 +81,8 @@ class Role(models.Model):
                 PermissionCode.CAMPAIGNS_READ,
                 PermissionCode.CAMPAIGNS_REVIEW,
                 PermissionCode.JOBS_READ,
+                PermissionCode.CONTENT_READ,
+                PermissionCode.CONTENT_REVIEW,
             ),
         ),
         Code.READ_ONLY: (
@@ -90,6 +94,7 @@ class Role(models.Model):
                 PermissionCode.ASSETS_READ,
                 PermissionCode.CAMPAIGNS_READ,
                 PermissionCode.JOBS_READ,
+                PermissionCode.CONTENT_READ,
             ),
         ),
     }

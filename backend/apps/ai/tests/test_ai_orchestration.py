@@ -316,6 +316,46 @@ def test_duplicate_delivery_does_not_create_second_successful_run(
 
 
 @pytest.mark.django_db
+def test_result_writer_commits_before_job_success(organization, frozen_input, prompt):
+    job = JobService.create(
+        organization=organization, job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+    content_id = uuid4()
+
+    run = execute_generation_job(
+        job.id,
+        prompt_version_id=prompt.id,
+        result_writer=lambda run, output: {"type": "master_content", "id": str(content_id)},
+    )
+
+    job.refresh_from_db()
+    assert run.status == AIRun.Status.SUCCEEDED
+    assert job.status == Job.Status.SUCCEEDED
+    assert job.result_reference == {"type": "master_content", "id": str(content_id)}
+
+
+@pytest.mark.django_db
+def test_result_writer_failure_leaves_no_successful_job(organization, frozen_input, prompt):
+    job = JobService.create(
+        organization=organization, job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+
+    def fail_writer(run, output):
+        raise RuntimeError("content write failed")
+
+    run = execute_generation_job(
+        job.id, prompt_version_id=prompt.id, result_writer=fail_writer
+    )
+
+    job.refresh_from_db()
+    assert run.status == AIRun.Status.FAILED
+    assert job.status == Job.Status.FAILED
+    assert job.result_reference is None
+
+
+@pytest.mark.django_db
 def test_prompt_and_provider_preflight_failure_does_not_claim_job(
     organization, frozen_input
 ):

@@ -8,6 +8,8 @@ from apps.assets.models import AssetProductLink, MaterialAsset
 from apps.ai.models import AIRun, PromptVersion
 from apps.ai.orchestration import execute_generation_job
 from apps.ai.services import PromptVersionService
+from apps.content.models import MasterContent
+from apps.content.services import finalize_master_result
 from apps.campaigns.models import Campaign, ContentBriefConceptLink
 from apps.campaigns.services import (
     build_content_generation_input,
@@ -170,14 +172,25 @@ def test_ready_brief_without_assets_builds_valid_input_and_runs_deterministicall
         input_snapshot=snapshot,
     )
 
-    first = execute_generation_job(job.id, prompt_version_id=prompt.id)
-    duplicate = execute_generation_job(job.id, prompt_version_id=prompt.id)
+    first = execute_generation_job(
+        job.id, prompt_version_id=prompt.id, result_writer=finalize_master_result
+    )
+    duplicate = execute_generation_job(
+        job.id, prompt_version_id=prompt.id, result_writer=finalize_master_result
+    )
 
     assert snapshot["assets"] == []
     assert generation_input_errors(snapshot) == []
     assert first.status == AIRun.Status.SUCCEEDED
     assert duplicate.pk == first.pk
     assert duplicate.output_json == first.output_json
+    job.refresh_from_db()
+    master = MasterContent.objects.get(generation_job=job)
+    assert master.status == MasterContent.Status.IN_REVIEW
+    assert master.ai_run == first
+    assert job.result_reference == {
+        "type": "master_content", "id": str(master.id), "version": 1,
+    }
 
 
 @pytest.mark.django_db

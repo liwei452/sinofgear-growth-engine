@@ -21,6 +21,9 @@ class PermissionCode(StrEnum):
     CAMPAIGNS_REVIEW = "campaigns.review"
     JOBS_READ = "jobs.read"
     JOBS_MANAGE = "jobs.manage"
+    CONTENT_READ = "content.read"
+    CONTENT_MANAGE = "content.manage"
+    CONTENT_REVIEW = "content.review"
 
 
 class HasOrganizationPermission(BasePermission):
@@ -104,3 +107,15 @@ class CanReadJobs(HasOrganizationPermission):
 
 class CanManageJobs(HasOrganizationPermission):
     permission_code = PermissionCode.JOBS_MANAGE
+
+
+class CanReadContent(HasOrganizationPermission):
+    permission_code = PermissionCode.CONTENT_READ
+
+
+class CanManageContent(HasOrganizationPermission):
+    permission_code = PermissionCode.CONTENT_MANAGE
+
+
+class CanReviewContent(HasOrganizationPermission):
+    permission_code = PermissionCode.CONTENT_REVIEW

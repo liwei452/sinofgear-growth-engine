@@ -120,7 +120,9 @@ def _create_run(*, job: Job, prompt: PromptVersion, provider: str) -> AIRun:
 
 
 @transaction.atomic
-def _record_success(run_id, *, job_id, claim_token, output: dict) -> AIRun:
+def _record_success(
+    run_id, *, job_id, claim_token, output: dict, result_writer=None
+) -> AIRun:
     job = Job.objects.select_for_update().get(pk=job_id)
     run = AIRun.objects.select_for_update().get(pk=run_id)
     if run.status != AIRun.Status.RUNNING:
@@ -140,10 +142,15 @@ def _record_success(run_id, *, job_id, claim_token, output: dict) -> AIRun:
                 "error", "finished_at",
             ]
         )
+    result_reference = (
+        result_writer(run, output)
+        if result_writer is not None
+        else {"ai_run_id": str(run.id)}
+    )
     JobService.succeed(
         job_id,
         claim_token=claim_token,
-        result_reference={"ai_run_id": str(run.id)},
+        result_reference=result_reference,
     )
     return run
 
@@ -185,7 +192,8 @@ def _record_canceled_run(run: AIRun) -> AIRun:
 
 
 def execute_generation_job(
-    job_id, *, prompt_version_id, provider_code: str | None = None, worker_id="ai-worker"
+    job_id, *, prompt_version_id, provider_code: str | None = None,
+    worker_id="ai-worker", result_writer=None,
 ) -> AIRun:
     job = Job.objects.get(pk=job_id)
     existing = AIRun.objects.filter(job_id=job_id).order_by("-job_attempt").first()
@@ -277,12 +285,19 @@ def execute_generation_job(
     except Exception:
         error = {"code": "provider_error", "message": "AI provider generation failed."}
     else:
-        return _record_success(
-            run.id,
-            job_id=claimed.id,
-            claim_token=token,
-            output=output,
-        )
+        try:
+            return _record_success(
+                run.id,
+                job_id=claimed.id,
+                claim_token=token,
+                output=output,
+                result_writer=result_writer,
+            )
+        except Exception:
+            error = {
+                "code": "content_finalize_failed",
+                "message": "Generated content could not be finalized.",
+            }
     return _record_failure(
         run.id, job_id=claimed.id, claim_token=token, error=error
     )

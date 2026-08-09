@@ -1,9 +1,10 @@
 import { spawn, spawnSync } from "node:child_process"
+import { randomBytes } from "node:crypto"
 import { existsSync, realpathSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 export const RUN_MARKER = "sinofgear-phase-a-e2e-"
@@ -17,12 +18,10 @@ export function assertOwnedRunRoot(candidate, temporaryDirectory = tmpdir()) {
   }
   const root = realpathSync(candidate)
   const temporaryRoot = realpathSync(temporaryDirectory)
-  const fromTemporaryRoot = relative(temporaryRoot, root)
   if (
     !isAbsolute(root)
     || !basename(root).startsWith(RUN_MARKER)
-    || fromTemporaryRoot.startsWith("..")
-    || isAbsolute(fromTemporaryRoot)
+    || dirname(root) !== temporaryRoot
     || root === temporaryRoot
   ) {
     throw new Error("Refusing to clean a directory that is not an owned Phase A E2E run root.")
@@ -36,14 +35,23 @@ export async function removeOwnedRunRoot(candidate, temporaryDirectory = tmpdir(
   await rm(root, { recursive: true, force: true })
 }
 
-export function buildE2EEnvironment(runRoot, { apiOrigin, webOrigin, browser }) {
+export function generateOwnershipSecret() {
+  return randomBytes(32).toString("hex")
+}
+
+export function buildE2EEnvironment(runRoot, { apiOrigin, webOrigin, browser, ownershipSecret }) {
   const root = assertOwnedRunRoot(runRoot)
+  if (!/^[0-9a-f]{64}$/.test(ownershipSecret ?? "")) {
+    throw new Error("A fresh 32-byte Phase A E2E ownership secret is required.")
+  }
   return {
     ...process.env,
     DJANGO_SETTINGS_MODULE: "config.e2e_settings",
     SINO_PHASE_A_E2E_ROOT: root,
     SINO_PHASE_A_E2E_DB: join(root, "phase-a.sqlite3"),
     SINO_PHASE_A_E2E_STORAGE: join(root, "storage"),
+    SINO_PHASE_A_E2E_OWNERSHIP_SECRET: ownershipSecret,
+    SINO_PHASE_A_E2E_RUN_ID: root,
     SINO_PHASE_A_E2E_WEB_ORIGIN: webOrigin,
     VITE_API_PROXY_TARGET: apiOrigin,
     PLAYWRIGHT_BASE_URL: webOrigin,
@@ -188,10 +196,10 @@ export async function stopOwnedChildTree(child) {
 }
 
 export async function cleanupOwnedRun({ children, runRoot }) {
-  if (!existsSync(runRoot)) return
-  assertOwnedRunRoot(runRoot)
   for (const child of [...children].reverse()) await stopOwnedChildTree(child)
   children.splice(0)
+  if (!existsSync(runRoot)) return
+  assertOwnedRunRoot(runRoot)
   await removeOwnedRunRoot(runRoot)
 }
 
@@ -205,7 +213,12 @@ async function main() {
   const webPort = await reservePort()
   const apiOrigin = `http://127.0.0.1:${apiPort}`
   const webOrigin = `http://127.0.0.1:${webPort}`
-  const environment = buildE2EEnvironment(runRoot, { apiOrigin, webOrigin, browser })
+  const environment = buildE2EEnvironment(runRoot, {
+    apiOrigin,
+    webOrigin,
+    browser,
+    ownershipSecret: generateOwnershipSecret(),
+  })
   const children = []
   let cleanupPromise
   const cleanup = () => {

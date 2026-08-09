@@ -23,7 +23,8 @@ export type BriefInput = Pick<ContentBrief,
 export type Platform = { id: string; code: string; name: string; capabilities: string[] }
 export type BriefConcept = {
   id: string; code: string
-  concept_type: "INDUSTRY" | "CUSTOMER_TYPE" | "PURCHASE_INTENT" | "STANDARD" | "APPLICATION"
+  concept_type: "PRODUCT_TYPE" | "PARAMETER" | "MATERIAL" | "PROCESS" | "STANDARD"
+    | "APPLICATION" | "INDUSTRY" | "CUSTOMER_TYPE" | "PURCHASE_INTENT"
   label_zh: string; label_en: string; status: "APPROVED"
 }
 export type Asset = {

@@ -32,8 +32,11 @@ function baseResponse(path: string, activeBriefs: unknown[] = []) {
   if (path === "/api/v1/master-contents") return { next: null, previous: null, results: [] }
   if (path === "/api/v1/knowledge/concepts?status=APPROVED&page_size=50") return {
     next: null, previous: null, results: [
+      { id: "concept-helical", code: "HELICAL_GEAR", concept_type: "PRODUCT_TYPE", label_zh: "斜齿轮", label_en: "Helical Gear", status: "APPROVED" },
+      { id: "concept-grinding", code: "GRINDING", concept_type: "PROCESS", label_zh: "磨齿", label_en: "Grinding", status: "APPROVED" },
       { id: "concept-din", code: "DIN", concept_type: "STANDARD", label_zh: "DIN", label_en: "DIN", status: "APPROVED" },
       { id: "concept-packaging", code: "PACKAGING_MACHINERY", concept_type: "INDUSTRY", label_zh: "鍖呰鏈烘", label_en: "Packaging Machinery", status: "APPROVED" },
+      { id: "concept-material", code: "42CRMO", concept_type: "MATERIAL", label_zh: "42CrMo", label_en: "42CrMo", status: "APPROVED" },
     ],
   }
   return { results: [] }
@@ -76,8 +79,11 @@ it("guides a beginner through campaign creation and sends the exact brief payloa
   await user.click(screen.getByRole("button", { name: "下一步" }))
   await user.click(await screen.findByLabelText("精密齿轮"))
   await user.click(screen.getByLabelText("LinkedIn"))
+  await user.click(screen.getByLabelText("Helical Gear (PRODUCT_TYPE)"))
+  await user.click(screen.getByLabelText("Grinding (PROCESS)"))
   await user.click(screen.getByLabelText("DIN (STANDARD)"))
   await user.click(screen.getByLabelText("Packaging Machinery (INDUSTRY)"))
+  expect(screen.queryByLabelText("42CrMo (MATERIAL)")).not.toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "下一步" }))
   await user.type(screen.getByLabelText("目标国家（必填）"), "德国")
   await user.type(screen.getByLabelText("客户类型（必填）"), "工业采购")
@@ -101,6 +107,8 @@ it("guides a beginner through campaign creation and sends the exact brief payloa
       language: "de", prohibited_claims: ["永不磨损"], selling_points: ["精密磨齿"],
       advantages: ["交期稳定"], keywords: ["精密齿轮"], product_ids: ["product-1"],
       asset_ids: [], platform_ids: ["platform-1"], concept_links: [
+        { role: "PRODUCT_TYPE", concept_id: "concept-helical" },
+        { role: "MANUFACTURING_PROCESS", concept_id: "concept-grinding" },
         { role: "STANDARD", concept_id: "concept-din" },
         { role: "TARGET_INDUSTRY", concept_id: "concept-packaging" },
       ],

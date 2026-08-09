@@ -96,6 +96,7 @@ it("shows loading, then real products with status, specifications, delivery, and
   expect(screen.getByText(/模数 0.5000–8.0000/)).toBeInTheDocument()
   expect(screen.getByText(/MOQ 10/)).toBeInTheDocument()
   expect(screen.getByText("合金钢")).toBeInTheDocument()
+  expect(screen.getByText("STEEL", { exact: true })).toBeInTheDocument()
 })
 
 it("filters by status and approved concept and follows only safe pagination", async () => {

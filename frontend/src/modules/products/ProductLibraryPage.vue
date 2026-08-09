@@ -201,6 +201,7 @@ function conceptRoleLabel(role: ProductConceptRole): string {
             <li v-for="link in product.concept_links" :key="link.id">
               <span class="visually-hidden">{{ conceptRoleLabel(link.role) }}：</span>
               {{ link.concept.label_zh || link.concept.label_en }}
+              <code>{{ link.concept.code }}</code>
             </li>
           </ul>
           <div class="card-actions">

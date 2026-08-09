@@ -1,7 +1,7 @@
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from .models import Campaign, ContentBrief
+from .models import Campaign, ContentBrief, ContentBriefConceptLink
 from .services import create_campaign, create_content_brief, update_content_brief
 
 
@@ -57,9 +57,7 @@ class CampaignPatchSerializer(StrictFieldsMixin, serializers.ModelSerializer):
 
 
 class ConceptLinkInputSerializer(StrictFieldsMixin, serializers.Serializer):
-    role = serializers.ChoiceField(choices=(
-        "TARGET_INDUSTRY", "TARGET_CUSTOMER_TYPE", "PURCHASE_INTENT", "STANDARD", "APPLICATION"
-    ))
+    role = serializers.ChoiceField(choices=ContentBriefConceptLink.Role.choices)
     concept_id = serializers.UUIDField()
 
 

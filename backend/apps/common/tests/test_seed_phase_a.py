@@ -1,6 +1,7 @@
 from uuid import UUID
 
 import pytest
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
 from django.db import models
@@ -29,6 +30,8 @@ SEED_ASSET_ID = UUID("10000000-0000-4000-8000-000000000201")
 SEED_CAMPAIGN_ID = UUID("10000000-0000-4000-8000-000000000301")
 SEED_BRIEF_ID = UUID("10000000-0000-4000-8000-000000000401")
 SEED_PASSWORD = "PhaseA-E2E-Only!"
+E2E_SECRET = "unit-test-secret-with-at-least-32-bytes-of-entropy"
+E2E_RUN_ID = "/canonical/temp/sinofgear-phase-a-e2e-unit"
 
 
 @pytest.mark.django_db
@@ -38,7 +41,11 @@ def test_seed_phase_a_refuses_to_run_without_explicit_e2e_setting():
 
 
 @pytest.mark.django_db
-@override_settings(PHASE_A_E2E_SEED_ALLOWED=True)
+@override_settings(
+    PHASE_A_E2E_SEED_ALLOWED=True,
+    PHASE_A_E2E_OWNERSHIP_SECRET=E2E_SECRET,
+    PHASE_A_E2E_RUN_ID=E2E_RUN_ID,
+)
 def test_seed_phase_a_is_stable_idempotent_and_repairs_owned_drift():
     call_command("seed_phase_a")
 
@@ -183,7 +190,11 @@ def test_seed_phase_a_is_stable_idempotent_and_repairs_owned_drift():
 
 
 @pytest.mark.django_db
-@override_settings(PHASE_A_E2E_SEED_ALLOWED=True)
+@override_settings(
+    PHASE_A_E2E_SEED_ALLOWED=True,
+    PHASE_A_E2E_OWNERSHIP_SECRET=E2E_SECRET,
+    PHASE_A_E2E_RUN_ID=E2E_RUN_ID,
+)
 def test_seed_phase_a_never_mutates_a_non_seed_organization():
     other = Organization.objects.create(name="Customer Organization", slug="customer-org")
     before = (other.id, other.name, other.slug, other.updated_at)
@@ -197,7 +208,11 @@ def test_seed_phase_a_never_mutates_a_non_seed_organization():
 
 
 @pytest.mark.django_db
-@override_settings(PHASE_A_E2E_SEED_ALLOWED=True)
+@override_settings(
+    PHASE_A_E2E_SEED_ALLOWED=True,
+    PHASE_A_E2E_OWNERSHIP_SECRET=E2E_SECRET,
+    PHASE_A_E2E_RUN_ID=E2E_RUN_ID,
+)
 def test_seed_phase_a_refuses_username_collision_before_any_seed_mutation():
     user_model = get_user_model()
     intruder = user_model.objects.create_user(
@@ -218,7 +233,11 @@ def test_seed_phase_a_refuses_username_collision_before_any_seed_mutation():
 
 
 @pytest.mark.django_db
-@override_settings(PHASE_A_E2E_SEED_ALLOWED=True)
+@override_settings(
+    PHASE_A_E2E_SEED_ALLOWED=True,
+    PHASE_A_E2E_OWNERSHIP_SECRET=E2E_SECRET,
+    PHASE_A_E2E_RUN_ID=E2E_RUN_ID,
+)
 def test_seed_phase_a_refuses_fixed_and_global_identity_collisions_without_reassignment():
     other = Organization.objects.create(name="Customer", slug="customer")
     product = Product.objects.create(
@@ -249,7 +268,11 @@ def test_seed_phase_a_refuses_fixed_and_global_identity_collisions_without_reass
 
 
 @pytest.mark.django_db
-@override_settings(PHASE_A_E2E_SEED_ALLOWED=True)
+@override_settings(
+    PHASE_A_E2E_SEED_ALLOWED=True,
+    PHASE_A_E2E_OWNERSHIP_SECRET=E2E_SECRET,
+    PHASE_A_E2E_RUN_ID=E2E_RUN_ID,
+)
 def test_seed_phase_a_repairs_exact_ready_brief_relationship_drift():
     call_command("seed_phase_a")
     campaign = Campaign.objects.get(pk=SEED_CAMPAIGN_ID)
@@ -291,7 +314,11 @@ def test_seed_phase_a_repairs_exact_ready_brief_relationship_drift():
 
 
 @pytest.mark.django_db
-@override_settings(PHASE_A_E2E_SEED_ALLOWED=True)
+@override_settings(
+    PHASE_A_E2E_SEED_ALLOWED=True,
+    PHASE_A_E2E_OWNERSHIP_SECRET=E2E_SECRET,
+    PHASE_A_E2E_RUN_ID=E2E_RUN_ID,
+)
 def test_seed_phase_a_fails_closed_on_unexpected_ready_brief_relationship():
     call_command("seed_phase_a")
     organization = Organization.objects.get(pk=SEED_ORGANIZATION_ID)
@@ -309,7 +336,12 @@ def test_seed_phase_a_fails_closed_on_unexpected_ready_brief_relationship():
 
 
 @pytest.mark.django_db
-@override_settings(PHASE_A_E2E_SEED_ALLOWED=True, OBJECT_STORAGE_BACKEND="filesystem")
+@override_settings(
+    PHASE_A_E2E_SEED_ALLOWED=True,
+    PHASE_A_E2E_OWNERSHIP_SECRET=E2E_SECRET,
+    PHASE_A_E2E_RUN_ID=E2E_RUN_ID,
+    OBJECT_STORAGE_BACKEND="filesystem",
+)
 def test_seed_phase_a_rejects_mismatched_existing_object_before_asset_metadata(tmp_path):
     storage_root = tmp_path / "storage"
     key = f"organizations/{SEED_ORGANIZATION_ID}/assets/{SEED_ASSET_ID}/original"
@@ -327,3 +359,87 @@ def test_seed_phase_a_rejects_mismatched_existing_object_before_asset_metadata(t
 
     assert not MaterialAsset.objects.filter(pk=SEED_ASSET_ID).exists()
     assert object_path.read_bytes() == b"malicious-existing-bytes"
+
+
+@pytest.mark.django_db
+@override_settings(
+    PHASE_A_E2E_SEED_ALLOWED=True,
+    PHASE_A_E2E_OWNERSHIP_SECRET=E2E_SECRET,
+    PHASE_A_E2E_RUN_ID=E2E_RUN_ID,
+)
+def test_seed_phase_a_rejects_public_fixture_without_private_ownership_before_mutation():
+    call_command("seed_phase_a")
+    ownership_model = apps.get_model("identity", "PhaseAE2EOwnership")
+    ownership_model.objects.all().delete()
+    admin = get_user_model().objects.get(username="phasea_e2e_admin")
+    old_password = admin.password
+
+    with pytest.raises(CommandError, match="ownership proof"):
+        call_command("seed_phase_a")
+
+    admin.refresh_from_db()
+    assert admin.password == old_password
+
+
+@pytest.mark.django_db
+@override_settings(
+    PHASE_A_E2E_SEED_ALLOWED=True,
+    PHASE_A_E2E_OWNERSHIP_SECRET=E2E_SECRET,
+    PHASE_A_E2E_RUN_ID=E2E_RUN_ID,
+)
+def test_seed_phase_a_rejects_bad_or_copied_signature_before_mutation():
+    call_command("seed_phase_a")
+    ownership_model = apps.get_model("identity", "PhaseAE2EOwnership")
+    marker = ownership_model.objects.get(organization_id=SEED_ORGANIZATION_ID)
+    marker.signature = "0" * 64
+    marker.save(update_fields=["signature"])
+    organization = Organization.objects.get(pk=SEED_ORGANIZATION_ID)
+    old_name = organization.name
+
+    with pytest.raises(CommandError, match="ownership proof"):
+        call_command("seed_phase_a")
+
+    organization.refresh_from_db()
+    assert organization.name == old_name
+
+
+@pytest.mark.django_db
+@override_settings(
+    PHASE_A_E2E_SEED_ALLOWED=True,
+    PHASE_A_E2E_OWNERSHIP_SECRET=E2E_SECRET,
+    PHASE_A_E2E_RUN_ID=E2E_RUN_ID,
+)
+def test_seed_phase_a_rejects_marker_copied_to_a_different_run_identity():
+    call_command("seed_phase_a")
+
+    with override_settings(PHASE_A_E2E_RUN_ID=f"{E2E_RUN_ID}-other"):
+        with pytest.raises(CommandError, match="ownership proof"):
+            call_command("seed_phase_a")
+
+
+@pytest.mark.django_db
+@override_settings(
+    PHASE_A_E2E_SEED_ALLOWED=True,
+    PHASE_A_E2E_OWNERSHIP_SECRET=E2E_SECRET,
+    PHASE_A_E2E_RUN_ID=E2E_RUN_ID,
+)
+def test_seed_phase_a_ownership_claim_rolls_back_with_failed_first_seed(monkeypatch):
+    from apps.common.management.commands.seed_phase_a import Command
+
+    def fail_after_claim(*_args, **_kwargs):
+        raise RuntimeError("stop after ownership claim")
+
+    monkeypatch.setattr(Command, "_users", fail_after_claim)
+    with pytest.raises(RuntimeError, match="stop after ownership claim"):
+        call_command("seed_phase_a")
+
+    assert not Organization.objects.filter(pk=SEED_ORGANIZATION_ID).exists()
+    ownership_model = apps.get_model("identity", "PhaseAE2EOwnership")
+    assert not ownership_model.objects.exists()
+
+
+@pytest.mark.django_db
+@override_settings(PHASE_A_E2E_SEED_ALLOWED=True)
+def test_seed_phase_a_requires_private_ownership_settings():
+    with pytest.raises(CommandError, match="ownership secret"):
+        call_command("seed_phase_a")

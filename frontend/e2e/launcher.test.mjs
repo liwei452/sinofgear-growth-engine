@@ -8,9 +8,11 @@ import {
   assertOwnedRunRoot,
   buildE2EEnvironment,
   cleanupOwnedRun,
+  generateOwnershipSecret,
   removeOwnedRunRoot,
   RUN_MARKER,
   spawnOwnedChild,
+  stopOwnedChildTree,
 } from "./launcher.mjs"
 
 test("cleanup accepts only marked child-owned temporary roots", async () => {
@@ -21,6 +23,10 @@ test("cleanup accepts only marked child-owned temporary roots", async () => {
   assert.throws(() => assertOwnedRunRoot(temporaryRoot, temporaryRoot), /Refusing/)
   assert.throws(() => assertOwnedRunRoot(join(temporaryRoot, "unmarked"), temporaryRoot), /Refusing/)
   assert.throws(() => assertOwnedRunRoot(join(temporaryRoot, "..", `${RUN_MARKER}outside`), temporaryRoot), /Refusing/)
+  const nestedParent = join(temporaryRoot, "nested")
+  const nestedMarked = join(nestedParent, `${RUN_MARKER}grandchild`)
+  await mkdir(nestedMarked, { recursive: true })
+  assert.throws(() => assertOwnedRunRoot(nestedMarked, temporaryRoot), /Refusing/)
   await removeOwnedRunRoot(owned, temporaryRoot)
   await assert.rejects(stat(owned), { code: "ENOENT" })
 })
@@ -32,11 +38,34 @@ test("Playwright artifacts are confined to the owned run root", async () => {
       apiOrigin: "http://127.0.0.1:40101",
       webOrigin: "http://127.0.0.1:40102",
       browser: "browser",
+      ownershipSecret: "a".repeat(64),
     })
     assert.equal(environment.PLAYWRIGHT_OUTPUT_DIR, join(runRoot, "playwright", "test-results"))
     assert.equal(environment.PLAYWRIGHT_REPORT_DIR, join(runRoot, "playwright", "report"))
+    assert.equal(environment.SINO_PHASE_A_E2E_OWNERSHIP_SECRET, "a".repeat(64))
+    assert.equal(environment.SINO_PHASE_A_E2E_RUN_ID, runRoot)
   } finally {
     await removeOwnedRunRoot(runRoot)
+  }
+})
+
+test("ownership secrets are high-entropy per-run values", () => {
+  const first = generateOwnershipSecret()
+  const second = generateOwnershipSecret()
+  assert.match(first, /^[0-9a-f]{64}$/)
+  assert.notEqual(first, second)
+})
+
+test("cleanup stops children even when the marked run root is already missing", async () => {
+  const missingRoot = join(tmpdir(), `${RUN_MARKER}missing-${process.pid}-${Date.now()}`)
+  const child = spawnOwnedChild(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+    stdio: "ignore",
+  })
+  try {
+    await cleanupOwnedRun({ children: [child], runRoot: missingRoot })
+    assert.throws(() => process.kill(child.pid, 0), { code: "ESRCH" })
+  } finally {
+    await stopOwnedChildTree(child)
   }
 })
 

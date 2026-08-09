@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, reactive, ref } from "vue"
+import { computed, nextTick, reactive, ref } from "vue"
 
 import { ApiError } from "../../api/client"
 import { useModalFocus } from "../../shared/composables/useModalFocus"
@@ -17,7 +17,7 @@ const props = withDefaults(defineProps<{
   brief?: ContentBrief | null
   more: Record<"campaigns" | "products" | "platforms" | "assets", boolean>
   pageErrors: Record<"campaigns" | "products" | "platforms" | "assets", string>
-}>(), { concepts: () => [] })
+}>(), { concepts: () => [], brief: null })
 const emit = defineEmits<{
   close: []
   saved: [brief: ContentBrief]
@@ -35,13 +35,18 @@ const productIds = ref<string[]>([...(props.brief?.product_ids ?? [])])
 const platformIds = ref<string[]>([...(props.brief?.platform_ids ?? [])])
 const assetIds = ref<string[]>([...(props.brief?.asset_ids ?? [])])
 const conceptIds = ref<string[]>(props.brief?.concept_links.map((link) => link.concept_id) ?? [])
-const conceptRoles: Record<BriefConcept["concept_type"], string> = {
+const conceptRoles: Partial<Record<BriefConcept["concept_type"], string>> = {
+  PRODUCT_TYPE: "PRODUCT_TYPE",
+  PROCESS: "MANUFACTURING_PROCESS",
   INDUSTRY: "TARGET_INDUSTRY",
   CUSTOMER_TYPE: "TARGET_CUSTOMER_TYPE",
   PURCHASE_INTENT: "PURCHASE_INTENT",
   STANDARD: "STANDARD",
   APPLICATION: "APPLICATION",
 }
+const supportedConcepts = computed(() => props.concepts.filter(
+  (concept) => Boolean(conceptRoles[concept.concept_type]),
+))
 const existingConceptRoles = new Map(
   props.brief?.concept_links.map((link) => [link.concept_id, link.role]) ?? [],
 )
@@ -196,6 +201,20 @@ async function submit(): Promise<void> {
   busy.value = true
   clearErrors()
   try {
+    const conceptLinks = conceptIds.value.map((conceptId) => {
+      const concept = props.concepts.find((item) => item.id === conceptId)
+      const role = concept
+        ? conceptRoles[concept.concept_type]
+        : existingConceptRoles.get(conceptId)
+      return role ? { role, concept_id: conceptId } : null
+    })
+    if (conceptLinks.some((link) => link === null)) {
+      step.value = 2
+      alert.value = "所选知识类型不支持内容需求，请取消选择后重试。"
+      await focusFirstError("concepts")
+      return
+    }
+    const validConceptLinks = conceptLinks.filter((link): link is { role: string; concept_id: string } => link !== null)
     const input = {
       target_country: form.target_country.trim(), customer_type: form.customer_type.trim(),
       content_objective: form.content_objective.trim(), cta: form.cta.trim(),
@@ -203,13 +222,7 @@ async function submit(): Promise<void> {
       prohibited_claims: list(form.prohibited_claims), selling_points: list(form.selling_points),
       advantages: list(form.advantages), keywords: list(form.keywords),
       product_ids: productIds.value, asset_ids: assetIds.value, platform_ids: platformIds.value,
-      concept_links: conceptIds.value.map((conceptId) => {
-        const concept = props.concepts.find((item) => item.id === conceptId)
-        return {
-          role: concept ? conceptRoles[concept.concept_type] : existingConceptRoles.get(conceptId) ?? "",
-          concept_id: conceptId,
-        }
-      }).filter((link) => link.role),
+      concept_links: validConceptLinks,
     }
     const brief = props.brief
       ? await patchBrief(props.brief.id, input)
@@ -253,7 +266,7 @@ async function submit(): Promise<void> {
           <fieldset data-field="products"><legend>产品（至少一个）</legend><span v-if="fieldErrors.products" class="field-error">{{ fieldErrors.products }}</span><label v-for="item in products" :key="item.id"><input v-model="productIds" type="checkbox" :value="item.id" :aria-label="item.name_zh || item.name_en"> {{ item.name_zh || item.name_en }}</label><button v-if="more.products" type="button" @click="emit('loadMore', 'products')">加载更多产品</button><span v-if="pageErrors.products" role="alert">{{ pageErrors.products }} <button type="button" @click="emit('loadMore', 'products')">重试</button></span></fieldset>
           <fieldset data-field="platforms"><legend>平台（至少一个）</legend><span v-if="fieldErrors.platforms" class="field-error">{{ fieldErrors.platforms }}</span><label v-for="item in platforms" :key="item.id"><input v-model="platformIds" type="checkbox" :value="item.id" :aria-label="item.name"> {{ item.name }} <small>{{ item.capabilities.join('、') || '基础内容' }}</small></label><button v-if="more.platforms" type="button" @click="emit('loadMore', 'platforms')">加载更多平台</button><span v-if="pageErrors.platforms" role="alert">{{ pageErrors.platforms }} <button type="button" @click="emit('loadMore', 'platforms')">重试</button></span></fieldset>
           <fieldset v-if="assets.length || more.assets || fieldErrors.assets" data-field="assets"><legend>可选素材</legend><span v-if="fieldErrors.assets" class="field-error">{{ fieldErrors.assets }}</span><label v-for="item in assets" :key="item.id"><input v-model="assetIds" type="checkbox" :value="item.id"> {{ item.original_filename }}</label><button v-if="more.assets" type="button" @click="emit('loadMore', 'assets')">加载更多素材</button><span v-if="pageErrors.assets" role="alert">{{ pageErrors.assets }} <button type="button" @click="emit('loadMore', 'assets')">重试</button></span></fieldset>
-          <fieldset v-if="concepts.length" data-field="concepts"><legend>已批准知识（可选）</legend><label v-for="item in concepts" :key="item.id"><input v-model="conceptIds" type="checkbox" :value="item.id" :aria-label="`${item.label_en || item.label_zh} (${item.concept_type})`"> {{ item.label_zh || item.label_en }} <small>{{ item.code }}</small></label></fieldset>
+          <fieldset v-if="supportedConcepts.length" data-field="concepts"><legend>已批准知识（可选）</legend><label v-for="item in supportedConcepts" :key="item.id"><input v-model="conceptIds" type="checkbox" :value="item.id" :aria-label="`${item.label_en || item.label_zh} (${item.concept_type})`"> {{ item.label_zh || item.label_en }} <small>{{ item.code }}</small></label></fieldset>
         </section>
 
         <section v-else-if="step === 3" aria-labelledby="details-step">

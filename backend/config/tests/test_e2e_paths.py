@@ -51,6 +51,16 @@ def test_e2e_paths_require_absolute_marked_root_inside_canonical_temp(tmp_path):
         with pytest.raises(ImproperlyConfigured):
             validate_e2e_paths(root, database, storage, temporary_root=temporary_root)
 
+    nested_root = temporary_root / "nested" / "sinofgear-phase-a-e2e-grandchild"
+    nested_root.mkdir(parents=True)
+    with pytest.raises(ImproperlyConfigured):
+        validate_e2e_paths(
+            nested_root,
+            nested_root / "phase-a.sqlite3",
+            nested_root / "storage",
+            temporary_root=temporary_root,
+        )
+
 
 def test_e2e_paths_reject_canonical_symlink_escape(tmp_path):
     temporary_root = tmp_path / "temp"

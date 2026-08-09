@@ -486,6 +486,8 @@ class ContentBriefPlatform(ImmutableLink):
 
 
 BRIEF_ROLE_CONCEPT_TYPES = {
+    "PRODUCT_TYPE": KnowledgeConcept.ConceptType.PRODUCT_TYPE,
+    "MANUFACTURING_PROCESS": KnowledgeConcept.ConceptType.PROCESS,
     "TARGET_INDUSTRY": KnowledgeConcept.ConceptType.INDUSTRY,
     "TARGET_CUSTOMER_TYPE": KnowledgeConcept.ConceptType.CUSTOMER_TYPE,
     "PURCHASE_INTENT": KnowledgeConcept.ConceptType.PURCHASE_INTENT,
@@ -496,6 +498,8 @@ BRIEF_ROLE_CONCEPT_TYPES = {
 
 class ContentBriefConceptLink(ImmutableLink):
     class Role(models.TextChoices):
+        PRODUCT_TYPE = "PRODUCT_TYPE", "Product type"
+        MANUFACTURING_PROCESS = "MANUFACTURING_PROCESS", "Manufacturing process"
         TARGET_INDUSTRY = "TARGET_INDUSTRY", "Target industry"
         TARGET_CUSTOMER_TYPE = "TARGET_CUSTOMER_TYPE", "Target customer type"
         PURCHASE_INTENT = "PURCHASE_INTENT", "Purchase intent"

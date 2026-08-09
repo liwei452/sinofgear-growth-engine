@@ -17,6 +17,20 @@ class Organization(models.Model):
         return self.name
 
 
+class PhaseAE2EOwnership(models.Model):
+    """Private proof that a Phase A fixture belongs to one isolated E2E run."""
+
+    organization = models.OneToOneField(
+        Organization,
+        on_delete=models.CASCADE,
+        primary_key=True,
+        related_name="phase_a_e2e_ownership",
+    )
+    nonce = models.CharField(max_length=64)
+    signature = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
 class RoleManager(models.Manager["Role"]):
     def create_administrator(self) -> "Role":
         return self._create_builtin(Role.Code.ADMINISTRATOR)

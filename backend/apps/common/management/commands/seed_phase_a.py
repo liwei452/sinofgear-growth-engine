@@ -1,4 +1,6 @@
 import hashlib
+import hmac
+import secrets
 from decimal import Decimal
 from io import BytesIO
 from uuid import UUID
@@ -22,7 +24,7 @@ from apps.campaigns.models import (
 )
 from apps.campaigns.services import mark_content_brief_ready
 from apps.catalog.models import Product, ProductConceptLink
-from apps.identity.models import Membership, Organization, Role
+from apps.identity.models import Membership, Organization, PhaseAE2EOwnership, Role
 from apps.knowledge.management.commands.seed_gear_ontology import ALIASES, CONCEPTS, RELATIONS
 from apps.knowledge.models import (
     KnowledgeAlias, KnowledgeConcept, KnowledgeGraphLock, KnowledgeRelation,
@@ -91,6 +93,7 @@ class Command(BaseCommand):
                 "seed_phase_a is E2E-only; use the isolated E2E settings and launcher."
             )
         with transaction.atomic():
+            self._claim_or_verify_ownership()
             self._preflight()
             self._ensure_asset_blob()
             call_command("seed_gear_ontology", verbosity=0)
@@ -121,6 +124,65 @@ class Command(BaseCommand):
     def _collision(label):
         raise CommandError(f"Phase A E2E seed ownership collision: {label}.")
 
+    @staticmethod
+    def _ownership_config():
+        secret = getattr(settings, "PHASE_A_E2E_OWNERSHIP_SECRET", "")
+        run_id = getattr(settings, "PHASE_A_E2E_RUN_ID", "")
+        if not isinstance(secret, str) or len(secret.encode("utf-8")) < 32:
+            raise CommandError("Phase A E2E ownership secret must be at least 32 bytes.")
+        if not isinstance(run_id, str) or not run_id:
+            raise CommandError("Phase A E2E run identity is required.")
+        return secret, run_id
+
+    @classmethod
+    def _ownership_signature(cls, nonce):
+        secret, run_id = cls._ownership_config()
+        message = f"phase-a-e2e-ownership:v1\0{run_id}\0{ORGANIZATION_ID}\0{nonce}"
+        return hmac.new(
+            secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+
+    @classmethod
+    def _valid_ownership(cls, organization):
+        marker = PhaseAE2EOwnership.objects.filter(
+            organization=organization
+        ).first()
+        if marker is None:
+            return False
+        expected = cls._ownership_signature(marker.nonce)
+        return hmac.compare_digest(marker.signature, expected)
+
+    @classmethod
+    def _claim_or_verify_ownership(cls):
+        cls._ownership_config()
+        organization = Organization.objects.select_for_update().filter(
+            pk=ORGANIZATION_ID
+        ).first()
+        slug_owner = Organization.objects.select_for_update().filter(
+            slug="phase-a-e2e-only"
+        ).first()
+        if organization is not None or slug_owner is not None:
+            if (
+                organization is None
+                or slug_owner is None
+                or organization.pk != slug_owner.pk
+                or not cls._valid_ownership(organization)
+            ):
+                cls._collision("organization ownership proof")
+            return
+
+        organization = Organization.objects.create(
+            id=ORGANIZATION_ID,
+            name="Phase A E2E Only",
+            slug="phase-a-e2e-only",
+        )
+        nonce = secrets.token_hex(32)
+        PhaseAE2EOwnership.objects.create(
+            organization=organization,
+            nonce=nonce,
+            signature=cls._ownership_signature(nonce),
+        )
+
     @classmethod
     def _preflight(cls):
         user_model = get_user_model()
@@ -131,23 +193,9 @@ class Command(BaseCommand):
         ):
             cls._collision("organization id or slug")
 
-        owned = False
-        if organization is not None:
-            admin = user_model.objects.filter(username=USERS[0][0]).first()
-            membership = Membership.objects.filter(pk=stable_id(11)).select_related(
-                "role", "user"
-            ).first()
-            owned = bool(
-                organization.slug == "phase-a-e2e-only"
-                and admin is not None
-                and admin.email == "phasea_e2e_admin@example.invalid"
-                and membership is not None
-                and membership.user_id == admin.id
-                and membership.organization_id == organization.id
-                and membership.role.code == Role.Code.ADMINISTRATOR
-            )
-            if not owned:
-                cls._collision("organization ownership sentinel")
+        owned = organization is not None and cls._valid_ownership(organization)
+        if not owned:
+            cls._collision("organization ownership proof")
 
         for index, (username, role_code) in enumerate(USERS, start=1):
             user = user_model.objects.filter(username=username).first()

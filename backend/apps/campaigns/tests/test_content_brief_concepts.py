@@ -2,14 +2,27 @@ import pytest
 from django.core.exceptions import ValidationError
 
 from apps.campaigns.models import Campaign, ContentBrief, ContentBriefConceptLink
+from apps.campaigns.serializers import ConceptLinkInputSerializer
 
 from .conftest import make_concept
+
+
+@pytest.mark.parametrize("role", ["PRODUCT_TYPE", "MANUFACTURING_PROCESS"])
+def test_brief_concept_input_accepts_supported_product_and_process_roles(role):
+    serializer = ConceptLinkInputSerializer(data={
+        "role": role,
+        "concept_id": "10000000-0000-4000-8000-000000000001",
+    })
+
+    assert serializer.is_valid(), serializer.errors
 
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     ("role", "concept_type"),
     [
+        ("PRODUCT_TYPE", "PRODUCT_TYPE"),
+        ("MANUFACTURING_PROCESS", "PROCESS"),
         ("TARGET_INDUSTRY", "INDUSTRY"),
         ("TARGET_CUSTOMER_TYPE", "CUSTOMER_TYPE"),
         ("PURCHASE_INTENT", "PURCHASE_INTENT"),

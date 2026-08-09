@@ -272,10 +272,12 @@ def test_provider_exception_is_normalized_without_secret_details(
         job.id, prompt_version_id=prompt.id, provider_code="raising-test"
     )
 
+    job.refresh_from_db()
     assert run.error == {
         "code": "provider_error",
         "message": "AI provider generation failed.",
     }
+    assert job.error == run.error
     assert "do-not-persist" not in str(run.error)
 
 
@@ -353,6 +355,35 @@ def test_unknown_provider_is_rejected_before_claim(organization, frozen_input, p
     assert AIRun.objects.filter(job=job).count() == 0
 
 
+@pytest.mark.django_db
+def test_published_prompt_with_wrong_purpose_is_rejected_before_claim(
+    organization, frozen_input
+):
+    wrong_prompt = PromptVersionService.create(
+        purpose="KEYWORD_CLUSTER",
+        code="wrong-purpose",
+        provider="fake",
+        model="fake-v1",
+        template="{product_name}|{target_country}|{target_platform}|{cta}|{concept_codes}",
+        output_schema=OUTPUT_SCHEMA,
+        status=PromptVersion.Status.PUBLISHED,
+    )
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+
+    with pytest.raises(GenerationPreflightError) as error:
+        execute_generation_job(job.id, prompt_version_id=wrong_prompt.id)
+
+    job.refresh_from_db()
+    assert error.value.code == "prompt_purpose_mismatch"
+    assert job.status == Job.Status.QUEUED
+    assert job.attempts.count() == 0
+    assert AIRun.objects.filter(job=job).count() == 0
+
+
 class CancelingProvider:
     def __init__(self, job_id, *, raises=False):
         self.job_id = job_id
@@ -402,7 +433,7 @@ def test_late_provider_completion_converges_airun_to_canceled(
         lambda value: value["products"][0].pop("product_version"),
         lambda value: value["ontology_snapshot"].pop("generated_at"),
         lambda value: value["ontology_snapshot"]["relation_versions"][0].pop("relation_id"),
-        lambda value: value["assets"].clear(),
+        lambda value: value["target_platforms"].clear(),
         lambda value: value.update({"unknown_provenance": "forged"}),
     ],
 )

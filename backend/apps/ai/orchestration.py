@@ -8,7 +8,7 @@ from jsonschema import ValidationError as JSONSchemaValidationError
 from jsonschema.validators import validator_for
 
 from apps.campaigns.generation_schema import generation_input_errors
-from apps.common.security import scrub_secrets
+from apps.common.security import normalize_persisted_error, scrub_secrets
 from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService
 from integrations.ai.providers import provider_registry
@@ -18,6 +18,7 @@ from .models import AIRun, PromptVersion, ai_audit_writes
 
 MAX_PROMPT_CHARS = 50_000
 MAX_OUTPUT_BYTES = 1_000_000
+JOB_PROMPT_PURPOSES = {Job.Type.CONTENT_GENERATE: "CONTENT_GENERATE"}
 
 
 class GenerationError(ValueError):
@@ -157,11 +158,12 @@ def _record_failure(run_id, *, job_id, claim_token, error: dict) -> AIRun:
         return _record_canceled_run(run)
     run.status = AIRun.Status.FAILED
     run.output_json = None
-    run.error = scrub_secrets(error)
+    normalized_error = normalize_persisted_error(error)
+    run.error = normalized_error
     run.finished_at = timezone.now()
     with ai_audit_writes():
         run.save(update_fields=["status", "output_json", "error", "finished_at"])
-    JobService.fail(job_id, claim_token=claim_token, error=error)
+    JobService.fail(job_id, claim_token=claim_token, error=normalized_error)
     return run
 
 
@@ -170,7 +172,7 @@ def _record_canceled_run(run: AIRun) -> AIRun:
     run.output_json = None
     run.confidence = None
     run.provider_metadata = {}
-    run.error = {"code": "job_canceled", "message": "Job was canceled."}
+    run.error = normalize_persisted_error({"code": "job_canceled"})
     run.finished_at = timezone.now()
     with ai_audit_writes():
         run.save(
@@ -205,6 +207,12 @@ def execute_generation_job(
         raise GenerationPreflightError(
             "prompt_not_available", "Published prompt version is not available."
         ) from exc
+    expected_purpose = JOB_PROMPT_PURPOSES.get(job.type)
+    if expected_purpose is None or prompt.purpose != expected_purpose:
+        raise GenerationPreflightError(
+            "prompt_purpose_mismatch",
+            "Prompt purpose is not compatible with the job type.",
+        )
     provider_name = provider_code or prompt.provider
     try:
         provider = provider_registry.get(provider_name)

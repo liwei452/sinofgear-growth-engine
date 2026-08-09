@@ -31,6 +31,15 @@ _SAFE_KEYS = frozenset(
     }
 )
 
+_CONTROLLED_ERROR_MESSAGES = {
+    "job_error": "Job execution failed.",
+    "provider_error": "AI provider generation failed.",
+    "invalid_provider_output": "Provider output did not match the required schema.",
+    "output_too_large": "Provider output exceeds the size limit.",
+    "ai_run_start_failed": "AI audit run could not start.",
+    "job_canceled": "Job was canceled.",
+}
+
 
 def is_sensitive_key(key) -> bool:
     raw_key = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(key))
@@ -59,3 +68,11 @@ def scrub_secrets(value):
     if isinstance(value, tuple):
         return [scrub_secrets(item) for item in value]
     return deepcopy(value)
+
+
+def normalize_persisted_error(value) -> dict[str, str]:
+    """Return the strict, controlled error shape allowed in audit records."""
+    code = value.get("code") if isinstance(value, dict) else None
+    if not isinstance(code, str) or code not in _CONTROLLED_ERROR_MESSAGES:
+        code = "job_error"
+    return {"code": code, "message": _CONTROLLED_ERROR_MESSAGES[code]}

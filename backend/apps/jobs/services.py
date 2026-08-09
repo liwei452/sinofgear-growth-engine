@@ -1,6 +1,5 @@
 import hashlib
 import json
-import re
 from copy import deepcopy
 from uuid import UUID, uuid4
 
@@ -8,7 +7,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from apps.common.security import scrub_secrets
+from apps.common.security import normalize_persisted_error, scrub_secrets
 
 from .models import Job, JobAttempt, job_service_writes
 
@@ -50,17 +49,7 @@ def _input_digest(value) -> str:
 
 
 def _normalized_error(error) -> dict[str, object]:
-    if isinstance(error, dict):
-        normalized = _json_copy(scrub_secrets(error))
-        message = normalized.get("message")
-        if isinstance(message, str) and re.search(
-            r"authorization|bearer|api[\s_-]*key|token|password|secret|cookie|private[\s_-]*key",
-            message,
-            flags=re.IGNORECASE,
-        ):
-            normalized["message"] = "Job execution failed."
-        return normalized
-    return {"code": "job_error", "message": "Job execution failed."}
+    return normalize_persisted_error(error)
 
 
 class JobService:

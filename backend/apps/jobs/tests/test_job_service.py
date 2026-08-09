@@ -142,7 +142,10 @@ def test_worker_error_and_result_references_are_secret_scrubbed(job):
         claim_token=claimed.claim_token,
         error={"code": "provider", "api-key": "hidden", "details": {"token": "x"}},
     )
-    assert failed.error == {"code": "provider", "details": {}}
+    assert failed.error == {
+        "code": "job_error",
+        "message": "Job execution failed.",
+    }
     retried = JobService.retry(job.id)
     claimed = JobService.claim(worker_id="worker-b")
     succeeded = JobService.succeed(
@@ -180,9 +183,51 @@ def test_structured_worker_error_message_never_persists_secret_text(job):
 
     assert failed.error == {
         "code": "provider_error",
-        "message": "Job execution failed.",
+        "message": "AI provider generation failed.",
     }
     assert "top-secret-value" not in str(failed.error)
+
+
+@pytest.mark.django_db
+def test_structured_worker_error_persists_only_controlled_allowlisted_fields(job):
+    claimed = JobService.claim(worker_id="worker-a")
+    failed = JobService.fail(
+        job.id,
+        claim_token=claimed.claim_token,
+        error={
+            "code": "provider_error",
+            "message": "attacker-controlled safe-looking text",
+            "metadata": {
+                "headers": {"x-request-id": "safe", "authorization": "Bearer hidden"},
+                "provider_body": "raw upstream response with private details",
+                "trace": ["frame one", "frame two"],
+            },
+            "arbitrary": {"nested": "must not persist"},
+        },
+    )
+
+    assert failed.error == {
+        "code": "provider_error",
+        "message": "AI provider generation failed.",
+    }
+    assert failed.attempts.get(number=1).error == failed.error
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("malformed_code", [["provider_error"], {"nested": "value"}, 7])
+def test_malformed_structured_error_code_falls_back_safely(job, malformed_code):
+    claimed = JobService.claim(worker_id="worker-a")
+
+    failed = JobService.fail(
+        job.id,
+        claim_token=claimed.claim_token,
+        error={"code": malformed_code, "message": "untrusted"},
+    )
+
+    assert failed.error == {
+        "code": "job_error",
+        "message": "Job execution failed.",
+    }
 
 
 @pytest.mark.django_db

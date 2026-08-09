@@ -5,6 +5,9 @@ import pytest
 from django.core.exceptions import ValidationError
 
 from apps.assets.models import AssetProductLink, MaterialAsset
+from apps.ai.models import AIRun, PromptVersion
+from apps.ai.orchestration import execute_generation_job
+from apps.ai.services import PromptVersionService
 from apps.campaigns.models import Campaign, ContentBriefConceptLink
 from apps.campaigns.services import (
     build_content_generation_input,
@@ -21,6 +24,8 @@ from apps.knowledge.models import (
     KnowledgeRelation,
 )
 from apps.knowledge.guards import _test_fixture_writes
+from apps.jobs.models import Job
+from apps.jobs.services import JobService
 from apps.platforms.models import Platform
 
 from .conftest import (
@@ -115,6 +120,64 @@ def test_generation_input_is_complete_frozen_and_json_serializable(
     assert generation_input_errors(before) == []
     assert "storage_key" not in before["assets"][0]
     json.dumps(before)
+
+
+@pytest.mark.django_db
+def test_ready_brief_without_assets_builds_valid_input_and_runs_deterministically(
+    campaign_organizations, campaign_user
+):
+    organization, _ = campaign_organizations
+    product = make_product(organization)
+    platform = make_platform()
+    concept = make_concept(
+        organization, concept_type="INDUSTRY", code="NO_ASSET_INDUSTRY"
+    )
+    campaign = Campaign.objects.create(organization=organization, name="No asset")
+    brief = create_content_brief(
+        organization=organization,
+        campaign=campaign,
+        creator=campaign_user,
+        values=valid_brief_values(),
+        product_ids=[product.id],
+        asset_ids=[],
+        platform_ids=[platform.id],
+        concept_links=[{"role": "TARGET_INDUSTRY", "concept_id": concept.id}],
+    )
+    ready = mark_content_brief_ready(brief.id, reviewer=campaign_user)
+    snapshot = build_content_generation_input(ready.id).to_dict()
+    prompt = PromptVersionService.create(
+        purpose="CONTENT_GENERATE",
+        code="no-asset-content",
+        provider="fake",
+        model="fake-v1",
+        template="{product_name}|{target_country}|{target_platform}|{cta}|{concept_codes}",
+        output_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "body": {"type": "string"},
+                "cta": {"type": "string"},
+                "concept_codes": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["title", "body", "cta", "concept_codes"],
+            "additionalProperties": False,
+        },
+        status=PromptVersion.Status.PUBLISHED,
+    )
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=snapshot,
+    )
+
+    first = execute_generation_job(job.id, prompt_version_id=prompt.id)
+    duplicate = execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert snapshot["assets"] == []
+    assert generation_input_errors(snapshot) == []
+    assert first.status == AIRun.Status.SUCCEEDED
+    assert duplicate.pk == first.pk
+    assert duplicate.output_json == first.output_json
 
 
 @pytest.mark.django_db

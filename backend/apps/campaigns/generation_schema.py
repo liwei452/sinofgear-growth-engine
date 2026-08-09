@@ -149,7 +149,7 @@ CONTENT_GENERATION_INPUT_SCHEMA = object_schema(
         "campaign_id": UUID,
         "campaign_version": VERSION,
         "products": {"type": "array", "items": PRODUCT_SCHEMA, "minItems": 1},
-        "assets": {"type": "array", "items": ASSET_SCHEMA, "minItems": 1},
+        "assets": {"type": "array", "items": ASSET_SCHEMA},
         "target_country": NON_EMPTY_STRING,
         "customer_type": NON_EMPTY_STRING,
         "content_objective": NON_EMPTY_STRING,

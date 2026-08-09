@@ -121,6 +121,9 @@ it("opens and closes the narrow-screen navigation with button and Escape", async
   await user.click(menuButton)
   await user.click(screen.getByRole("link", { name: "产品库" }))
   expect(sidebar).toHaveAttribute("inert")
+  expect(screen.getByRole("heading", { name: "产品库" })).toBeVisible()
+  expect(screen.getByRole("main")).toHaveFocus()
+  expect(sidebar).not.toContainElement(document.activeElement)
   expect(menuButton).not.toHaveFocus()
 
   const viewportListener = mediaQuery.addEventListener.mock.calls[0]?.[1]
@@ -136,6 +139,35 @@ it("keeps the desktop navigation exposed when the drawer state is closed", async
   expect(sidebar).not.toHaveAttribute("aria-hidden")
   expect(sidebar).not.toHaveAttribute("inert")
   expect(screen.getByRole("link", { name: "产品库" })).toBeInTheDocument()
+})
+
+it("closes an open narrow drawer and focuses routed content after programmatic navigation", async () => {
+  const user = userEvent.setup()
+  const { router } = await renderShell("/", { narrow: true })
+  const sidebar = screen.getByTestId("app-sidebar")
+
+  await user.click(screen.getByRole("button", { name: "打开导航" }))
+  expect(sidebar).not.toHaveAttribute("inert")
+
+  await router.push("/products")
+
+  await waitFor(() => expect(sidebar).toHaveAttribute("inert"))
+  expect(screen.getByRole("heading", { name: "产品库" })).toBeVisible()
+  expect(screen.getByRole("main")).toHaveFocus()
+  expect(sidebar).not.toContainElement(document.activeElement)
+  expect(screen.getByRole("button", { name: "打开导航" })).not.toHaveFocus()
+})
+
+it("does not move focus for desktop or duplicate navigation", async () => {
+  const { router } = await renderShell()
+  const logoutButton = screen.getByRole("button", { name: "退出登录" })
+  logoutButton.focus()
+
+  await router.push("/products")
+  expect(logoutButton).toHaveFocus()
+
+  await router.push("/products")
+  expect(logoutButton).toHaveFocus()
 })
 
 it("logs out through the API, clears the session, and returns to login", async () => {

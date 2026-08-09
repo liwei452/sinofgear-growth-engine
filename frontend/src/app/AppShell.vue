@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router"
 
 import { ApiError } from "../api/client"
@@ -41,6 +41,7 @@ const navOpen = ref(false)
 const isNarrowViewport = ref(false)
 const sidebarElement = ref<HTMLElement | null>(null)
 const menuButtonElement = ref<HTMLButtonElement | null>(null)
+const contentElement = ref<HTMLElement | null>(null)
 const drawerClosed = computed(() => isNarrowViewport.value && !navOpen.value)
 const pageTitle = computed(() => String(route.meta.title ?? "工作台"))
 const logoutMutation = useMutation({
@@ -79,10 +80,10 @@ function drawerFocusableElements(): HTMLElement[] {
   )]
 }
 
-function closeNavigation(restoreFocus = true) {
+function closeNavigation() {
   const wasOpen = navOpen.value
   navOpen.value = false
-  if (wasOpen && restoreFocus && isNarrowViewport.value) {
+  if (wasOpen && isNarrowViewport.value) {
     void nextTick(() => menuButtonElement.value?.focus())
   }
 }
@@ -124,6 +125,13 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
+watch(() => route.fullPath, async () => {
+  if (!isNarrowViewport.value || !navOpen.value) return
+  navOpen.value = false
+  await nextTick()
+  contentElement.value?.focus()
+})
+
 onMounted(() => {
   viewportQuery = window.matchMedia("(max-width: 860px)")
   updateViewport(viewportQuery)
@@ -147,7 +155,7 @@ onBeforeUnmount(() => {
       :aria-hidden="drawerClosed ? 'true' : undefined"
       :inert="drawerClosed ? '' : null"
     >
-      <RouterLink class="brand-lockup" to="/" aria-label="SinofGear 首页" @click="closeNavigation(false)">
+      <RouterLink class="brand-lockup" to="/" aria-label="SinofGear 首页">
         <span class="brand-mark" aria-hidden="true">SG</span>
         <span><strong>SinofGear</strong><small>增长引擎</small></span>
       </RouterLink>
@@ -160,7 +168,6 @@ onBeforeUnmount(() => {
             :to="item.to"
             class="nav-link"
             exact-active-class="nav-link-active"
-            @click="closeNavigation(false)"
           >
             <span class="nav-icon" aria-hidden="true">{{ item.icon }}</span>
             <span>{{ item.label }}</span>
@@ -223,7 +230,7 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <main class="content-area">
+      <main ref="contentElement" class="content-area" tabindex="-1">
         <p v-if="currentUser.isPending.value" class="state-message" role="status" aria-live="polite">
           正在确认登录状态…
         </p>

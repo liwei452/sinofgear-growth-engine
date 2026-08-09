@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "apps.platforms.apps.PlatformsConfig",
     "apps.audit.apps.AuditConfig",
     "apps.knowledge.apps.KnowledgeConfig",
+    "apps.catalog.apps.CatalogConfig",
 ]
 
 MIDDLEWARE = [
@@ -77,6 +78,19 @@ REST_FRAMEWORK = {"DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema"}
 SPECTACULAR_SETTINGS = {
     "TITLE": "SinofGear Growth Engine API",
     "VERSION": "v1",
+    "ENUM_NAME_OVERRIDES": {
+        "KnowledgeStatusEnum": [
+            ("SUGGESTED", "Suggested"),
+            ("APPROVED", "Approved"),
+            ("REJECTED", "Rejected"),
+            ("DEPRECATED", "Deprecated"),
+        ],
+        "ProductStatusEnum": [
+            ("DRAFT", "Draft"),
+            ("ACTIVE", "Active"),
+            ("ARCHIVED", "Archived"),
+        ],
+    },
 }
 
 CELERY_BROKER_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")

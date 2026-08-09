@@ -58,13 +58,27 @@ class Role(models.Model):
                 PermissionCode.MEMBERSHIPS_MANAGE,
                 PermissionCode.KNOWLEDGE_READ,
                 PermissionCode.KNOWLEDGE_CREATE,
+                PermissionCode.PRODUCTS_READ,
+                PermissionCode.PRODUCTS_MANAGE,
             ),
         ),
         Code.REVIEWER: (
             "Reviewer",
-            (PermissionCode.MEMBERSHIPS_READ, PermissionCode.KNOWLEDGE_READ, PermissionCode.KNOWLEDGE_REVIEW_ORGANIZATION),
+            (
+                PermissionCode.MEMBERSHIPS_READ,
+                PermissionCode.KNOWLEDGE_READ,
+                PermissionCode.KNOWLEDGE_REVIEW_ORGANIZATION,
+                PermissionCode.PRODUCTS_READ,
+            ),
         ),
-        Code.READ_ONLY: ("Read only", (PermissionCode.MEMBERSHIPS_READ, PermissionCode.KNOWLEDGE_READ)),
+        Code.READ_ONLY: (
+            "Read only",
+            (
+                PermissionCode.MEMBERSHIPS_READ,
+                PermissionCode.KNOWLEDGE_READ,
+                PermissionCode.PRODUCTS_READ,
+            ),
+        ),
     }
 
     code = models.CharField(max_length=32, choices=Code.choices, unique=True)

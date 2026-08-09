@@ -10,3 +10,4 @@ urlpatterns = [
 urlpatterns += [path("api/v1/", include("apps.identity.urls"))]
 urlpatterns += [path("api/v1/", include("apps.platforms.urls"))]
 urlpatterns += [path("api/v1/", include("apps.knowledge.urls"))]
+urlpatterns += [path("api/v1/", include("apps.catalog.urls"))]

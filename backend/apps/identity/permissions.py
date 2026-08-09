@@ -12,6 +12,8 @@ class PermissionCode(StrEnum):
     KNOWLEDGE_REVIEW_ORGANIZATION = "knowledge.review_organization"
     KNOWLEDGE_MANAGE_SYSTEM = "knowledge.manage_system"
     KNOWLEDGE_DEPRECATE = "knowledge.deprecate"
+    PRODUCTS_READ = "products.read"
+    PRODUCTS_MANAGE = "products.manage"
 
 
 class HasOrganizationPermission(BasePermission):
@@ -59,3 +61,11 @@ class CanReviewOrganizationKnowledge(HasOrganizationPermission):
 
 class CanDeprecateKnowledge(HasOrganizationPermission):
     permission_code = PermissionCode.KNOWLEDGE_DEPRECATE
+
+
+class CanReadProducts(HasOrganizationPermission):
+    permission_code = PermissionCode.PRODUCTS_READ
+
+
+class CanManageProducts(HasOrganizationPermission):
+    permission_code = PermissionCode.PRODUCTS_MANAGE

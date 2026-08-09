@@ -15,3 +15,8 @@ def get_object_storage() -> ObjectStorage:
     if backend == "minio":
         return MinioObjectStorage()
     raise ValueError(f"Unsupported object storage backend: {backend}")
+
+
+def reset_object_storage() -> None:
+    """Drop the configured adapter and all process-local memory-backend state."""
+    get_object_storage.cache_clear()

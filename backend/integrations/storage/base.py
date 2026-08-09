@@ -4,7 +4,8 @@ from typing import BinaryIO
 
 class ObjectStorage(ABC):
     @abstractmethod
-    def put(self, stream: BinaryIO, key: str) -> None:
+    def put(self, stream: BinaryIO, key: str) -> bool:
+        """Create key from stream, returning False without overwriting on collision."""
         raise NotImplementedError
 
     @abstractmethod

@@ -8,7 +8,7 @@ from apps.assets.services import upload_asset
 from apps.catalog.models import Product
 from integrations.storage.memory_storage import MemoryObjectStorage
 
-from .conftest import make_product
+from .conftest import make_product, png_bytes
 from .test_asset_upload import ChunkOnlyUpload
 
 
@@ -19,7 +19,7 @@ def asset_and_products(organizations):
     asset = upload_asset(
         organization=own,
         creator=creator,
-        upload=ChunkOnlyUpload([b"\x89PNG\r\n\x1a\nlink"]),
+        upload=ChunkOnlyUpload([png_bytes(b"link")]),
         asset_type="IMAGE",
         storage=MemoryObjectStorage(),
     )
@@ -104,3 +104,22 @@ def test_link_survives_product_archiving_and_protects_product(asset_and_products
     assert link.product_id == product.id
     with pytest.raises(ProtectedError):
         product.delete()
+
+
+@pytest.mark.django_db
+def test_asset_product_link_history_rejects_instance_and_queryset_delete(
+    asset_and_products,
+) -> None:
+    asset, product, _ = asset_and_products
+    link = AssetProductLink.objects.create(
+        organization=asset.organization,
+        asset=asset,
+        product=product,
+    )
+
+    with pytest.raises(ProtectedError):
+        link.delete()
+    with pytest.raises(ProtectedError):
+        AssetProductLink._base_manager.filter(pk=link.pk).delete()
+
+    assert AssetProductLink.objects.filter(pk=link.pk).exists()

@@ -8,6 +8,7 @@ from apps.assets.models import MaterialAsset
 from apps.assets.services import OriginalAssetImmutable, replace_original, upload_asset
 from integrations.storage.memory_storage import MemoryObjectStorage
 
+from .conftest import png_bytes
 from .test_asset_upload import ChunkOnlyUpload
 
 
@@ -18,7 +19,7 @@ def asset(organizations) -> MaterialAsset:
     return upload_asset(
         organization=own,
         creator=creator,
-        upload=ChunkOnlyUpload([b"\x89PNG\r\n\x1a\nimmutable"]),
+        upload=ChunkOnlyUpload([png_bytes(b"immutable")]),
         asset_type="IMAGE",
         storage=MemoryObjectStorage(),
     )

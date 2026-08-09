@@ -3,7 +3,7 @@ from rest_framework.test import APIClient
 
 from apps.identity.models import Role
 
-from .conftest import create_member_client, upload_payload
+from .conftest import create_member_client, png_bytes, upload_payload
 
 
 @pytest.mark.django_db
@@ -35,7 +35,7 @@ def test_only_asset_managers_can_upload(
 
     response = client.post(
         "/api/v1/assets",
-        upload_payload(content=b"\x89PNG\r\n\x1a\n" + role_code.encode()),
+        upload_payload(content=png_bytes(role_code.encode())),
         format="multipart",
     )
 

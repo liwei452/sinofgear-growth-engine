@@ -9,7 +9,7 @@ from apps.assets.services import upload_asset
 from apps.identity.models import Role
 from integrations.storage.memory_storage import MemoryObjectStorage
 
-from .conftest import create_member_client, make_product, upload_payload
+from .conftest import create_member_client, make_product, png_bytes, upload_payload
 from .test_asset_upload import ChunkOnlyUpload
 
 
@@ -171,7 +171,7 @@ def test_cursor_pagination_filters_and_repeated_parameter_rules(organizations, r
         created = client.post(
             "/api/v1/assets",
             upload_payload(
-                content=b"\x89PNG\r\n\x1a\n" + bytes([index]),
+                content=png_bytes(bytes([index])),
                 tags=["shared", f"tag-{index}"],
             ),
             format="multipart",
@@ -215,7 +215,7 @@ def test_asset_list_product_links_have_bounded_query_count(
         asset = upload_asset(
             organization=own,
             creator=creator,
-            upload=ChunkOnlyUpload([b"\x89PNG\r\n\x1a\nquery" + bytes([index])]),
+            upload=ChunkOnlyUpload([png_bytes(b"query" + bytes([index]))]),
             asset_type="IMAGE",
             storage=MemoryObjectStorage(),
         )

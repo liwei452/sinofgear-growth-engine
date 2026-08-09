@@ -8,6 +8,8 @@ from apps.assets.models import MaterialAsset
 from apps.assets.services import AssetUploadError, upload_asset
 from integrations.storage.memory_storage import MemoryObjectStorage
 
+from .conftest import jpeg_bytes, mp4_bytes, pdf_bytes, png_bytes, webp_bytes
+
 
 class TrackingMemoryStorage(MemoryObjectStorage):
     def __init__(self, *, on_put=None) -> None:
@@ -16,11 +18,12 @@ class TrackingMemoryStorage(MemoryObjectStorage):
         self.deleted_keys: list[str] = []
         self.on_put = on_put
 
-    def put(self, stream, key: str) -> None:
-        super().put(stream, key)
+    def put(self, stream, key: str) -> bool:
+        created = super().put(stream, key)
         self.put_keys.append(key)
-        if self.on_put is not None:
+        if created and self.on_put is not None:
             self.on_put(key)
+        return created
 
     def delete(self, key: str) -> None:
         self.deleted_keys.append(key)
@@ -52,7 +55,7 @@ def test_same_org_duplicate_reuses_asset_without_overwriting_metadata(organizati
     own, _ = organizations
     creator = _creator("same-org")
     storage = TrackingMemoryStorage()
-    content = b"\x89PNG\r\n\x1a\nidentical"
+    content = png_bytes(b"identical")
 
     first = upload_asset(
         organization=own,
@@ -86,7 +89,7 @@ def test_identical_bytes_in_different_orgs_have_different_assets_and_keys(organi
     own, other = organizations
     creator = _creator("cross-org")
     storage = TrackingMemoryStorage()
-    content = b"\x89PNG\r\n\x1a\ncross-org"
+    content = png_bytes(b"cross-org")
 
     first = upload_asset(
         organization=own,
@@ -113,7 +116,8 @@ def test_identical_bytes_in_different_orgs_have_different_assets_and_keys(organi
 def test_upload_streams_chunks_and_never_leaks_filename_into_key(organizations) -> None:
     own, _ = organizations
     creator = _creator("chunked")
-    upload = ChunkOnlyUpload([b"\x89PNG\r\n\x1a\n", b"more", b"bytes"])
+    content = png_bytes(b"more-bytes")
+    upload = ChunkOnlyUpload([content[:8], content[8:24], content[24:]])
 
     asset = upload_asset(
         organization=own,
@@ -133,11 +137,11 @@ def test_upload_streams_chunks_and_never_leaks_filename_into_key(organizations) 
 @pytest.mark.parametrize(
     ("content", "client_mime", "asset_type", "verified_mime"),
     [
-        (b"\xff\xd8\xff\xe0jpeg", "image/jpeg", "IMAGE", "image/jpeg"),
-        (b"\x89PNG\r\n\x1a\npng", "image/png", "IMAGE", "image/png"),
-        (b"RIFF\x08\x00\x00\x00WEBPVP8 ", "image/webp", "IMAGE", "image/webp"),
-        (b"\x00\x00\x00\x18ftypisommp4", "video/mp4", "VIDEO", "video/mp4"),
-        (b"%PDF-1.7\npdf", "application/pdf", "DOCUMENT", "application/pdf"),
+        (jpeg_bytes(b"jpeg"), "image/jpeg", "IMAGE", "image/jpeg"),
+        (png_bytes(b"png"), "image/png", "IMAGE", "image/png"),
+        (webp_bytes(b"webp"), "image/webp", "IMAGE", "image/webp"),
+        (mp4_bytes(b"mp4"), "video/mp4", "VIDEO", "video/mp4"),
+        (pdf_bytes(b"pdf"), "application/pdf", "DOCUMENT", "application/pdf"),
     ],
 )
 def test_server_signature_detection_accepts_phase_a_formats(
@@ -168,8 +172,8 @@ def test_server_signature_detection_accepts_phase_a_formats(
         (b"", "image/png", "IMAGE", "empty"),
         (b"MZ\x90\x00executable", "application/octet-stream", "DOCUMENT", "unsupported"),
         (b"#!/bin/sh\necho unsafe", "text/plain", "DOCUMENT", "unsupported"),
-        (b"\x89PNG\r\n\x1a\nreal", "image/jpeg", "IMAGE", "MIME"),
-        (b"%PDF-1.7\nreal", "application/pdf", "IMAGE", "asset type"),
+        (png_bytes(b"real"), "image/jpeg", "IMAGE", "MIME"),
+        (pdf_bytes(b"real"), "application/pdf", "IMAGE", "asset type"),
     ],
 )
 def test_invalid_upload_content_is_rejected(
@@ -202,7 +206,7 @@ def test_oversized_upload_stops_without_writing_object(organizations) -> None:
         upload_asset(
             organization=own,
             creator=creator,
-            upload=ChunkOnlyUpload([b"\x89PNG\r\n\x1a\n", b"too-large"]),
+            upload=ChunkOnlyUpload([png_bytes(b"too-large")]),
             asset_type="IMAGE",
             storage=storage,
             max_size_bytes=12,
@@ -229,7 +233,7 @@ def test_database_failure_deletes_only_the_newly_written_object(
         upload_asset(
             organization=own,
             creator=creator,
-            upload=ChunkOnlyUpload([b"\x89PNG\r\n\x1a\ndb-failure"]),
+            upload=ChunkOnlyUpload([png_bytes(b"db-failure")]),
             asset_type="IMAGE",
             storage=storage,
         )
@@ -242,7 +246,7 @@ def test_database_failure_deletes_only_the_newly_written_object(
 def test_checksum_race_returns_winner_and_compensates_losing_object(organizations) -> None:
     own, _ = organizations
     creator = _creator("race")
-    content = b"\x89PNG\r\n\x1a\nrace"
+    content = png_bytes(b"race")
     checksum = hashlib.sha256(content).hexdigest()
     winner = None
 

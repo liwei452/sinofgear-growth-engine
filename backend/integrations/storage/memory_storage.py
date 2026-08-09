@@ -11,10 +11,13 @@ class MemoryObjectStorage(ObjectStorage):
         self._objects: dict[str, bytes] = {}
         self._lock = RLock()
 
-    def put(self, stream: BinaryIO, key: str) -> None:
+    def put(self, stream: BinaryIO, key: str) -> bool:
         payload = bytes(stream.read())
         with self._lock:
+            if key in self._objects:
+                return False
             self._objects[key] = payload
+        return True
 
     def open(self, key: str) -> BytesIO:
         with self._lock:

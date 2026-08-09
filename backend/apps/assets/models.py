@@ -4,6 +4,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models, transaction
+from django.db.models.deletion import ProtectedError
 from django.db.models.expressions import BaseExpression
 
 from apps.catalog.models import Product
@@ -27,6 +28,8 @@ ORIGINAL_IDENTITY_FIELDS = frozenset(
 LINK_IDENTITY_FIELDS = frozenset(
     {"organization", "organization_id", "asset", "asset_id", "product", "product_id"}
 )
+MAX_METADATA_JSON_BYTES = 64 * 1024
+MAX_METADATA_JSON_DEPTH = 8
 
 
 def validate_tags(value: object) -> None:
@@ -42,25 +45,38 @@ def validate_tags(value: object) -> None:
         raise ValidationError("Tags must be unique.")
 
 
-def _validate_json_keys(value: object) -> None:
+def _validate_json_tree(value: object, *, depth: int) -> None:
+    if isinstance(value, (dict, list)) and depth > MAX_METADATA_JSON_DEPTH:
+        raise ValidationError(
+            f"Metadata JSON nesting depth must not exceed {MAX_METADATA_JSON_DEPTH}."
+        )
     if isinstance(value, dict):
         if any(not isinstance(key, str) for key in value):
             raise ValidationError("Metadata object keys must be strings.")
         for child in value.values():
-            _validate_json_keys(child)
+            _validate_json_tree(child, depth=depth + 1)
     elif isinstance(value, list):
         for child in value:
-            _validate_json_keys(child)
+            _validate_json_tree(child, depth=depth + 1)
 
 
 def validate_metadata_json(value: object) -> None:
     if not isinstance(value, dict):
         raise ValidationError("Metadata must be a JSON object.")
-    _validate_json_keys(value)
+    _validate_json_tree(value, depth=1)
     try:
-        json.dumps(value, allow_nan=False)
+        encoded = json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
     except (TypeError, ValueError) as error:
         raise ValidationError("Metadata must contain only valid JSON values.") from error
+    if len(encoded) > MAX_METADATA_JSON_BYTES:
+        raise ValidationError(
+            f"Metadata JSON must not exceed {MAX_METADATA_JSON_BYTES} serialized UTF-8 bytes."
+        )
 
 
 class MaterialAssetQuerySet(models.QuerySet):
@@ -236,6 +252,15 @@ class AssetProductLinkQuerySet(models.QuerySet):
             raise ValidationError("Asset product link identity is immutable.")
         return super().bulk_update(objs, fields, **kwargs)
 
+    def delete(self):
+        protected = list(self)
+        if protected:
+            raise ProtectedError(
+                "Asset product link history cannot be deleted.",
+                protected,
+            )
+        return 0, {}
+
 
 class AssetProductLinkManager(models.Manager.from_queryset(AssetProductLinkQuerySet)):
     pass
@@ -294,3 +319,9 @@ class AssetProductLink(OrganizationScopedModel):
                 raise ValidationError("Asset product link identity is immutable.")
         self.full_clean()
         super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ProtectedError(
+            "Asset product link history cannot be deleted.",
+            [self],
+        )

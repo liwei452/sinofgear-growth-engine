@@ -1,6 +1,7 @@
 import json
 import re
 import unicodedata
+from urllib.parse import unquote_to_bytes
 
 from rest_framework import serializers
 
@@ -15,6 +16,8 @@ _MAX_AUDIT_KEYS = 24
 _MAX_AUDIT_ITEMS = 20
 _MAX_AUDIT_STRING_LENGTH = 256
 _MAX_AUDIT_VALUE_BYTES = 8_192
+_MAX_AUDIT_DETECTION_LENGTH = 4_096
+_MAX_PERCENT_DECODE_ROUNDS = 3
 _TRUNCATED = "[TRUNCATED]"
 
 _OUTPUT_SCHEMA = {
@@ -52,13 +55,39 @@ _AUTHORIZATION_SCHEME = re.compile(
     r"(?<![\w])authorization\s*(?:(?::|=|%3a|%3d)\s*)?(?:basic|bearer)\b",
     re.IGNORECASE,
 )
+_STANDALONE_AUTHORIZATION_SCHEME = re.compile(r"^(?:basic|bearer)[ \t]+")
+_MALFORMED_PERCENT_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
+
+
+def _audit_detection_copy(value: str) -> str | None:
+    detection_value = unicodedata.normalize("NFKC", value)
+    if len(detection_value) > _MAX_AUDIT_DETECTION_LENGTH:
+        detection_value = detection_value[:_MAX_AUDIT_DETECTION_LENGTH]
+    for _round in range(_MAX_PERCENT_DECODE_ROUNDS):
+        if "%" not in detection_value:
+            break
+        if _MALFORMED_PERCENT_ESCAPE.search(detection_value):
+            return None
+        try:
+            decoded = unquote_to_bytes(detection_value).decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return None
+        decoded = unicodedata.normalize("NFKC", decoded)
+        if len(decoded) > _MAX_AUDIT_DETECTION_LENGTH:
+            return None
+        if decoded == detection_value:
+            break
+        detection_value = decoded
+    return detection_value.casefold()
 
 
 def _redact_and_bound_string(value: str) -> str:
-    detection_value = unicodedata.normalize("NFKC", value).casefold()
+    detection_value = _audit_detection_copy(value)
     if (
-        _SENSITIVE_ASSIGNMENT.search(detection_value)
+        detection_value is None
+        or _SENSITIVE_ASSIGNMENT.search(detection_value)
         or _AUTHORIZATION_SCHEME.search(detection_value)
+        or _STANDALONE_AUTHORIZATION_SCHEME.search(detection_value.strip())
     ):
         return "[REDACTED]"
     if len(value) > _MAX_AUDIT_STRING_LENGTH:

@@ -224,6 +224,71 @@ def test_ai_run_public_strings_fail_closed_for_credential_markers(ai_api):
 
 
 @pytest.mark.django_db
+def test_ai_run_public_strings_redact_standalone_and_encoded_credentials(ai_api):
+    own, _other, _user, client = ai_api
+    run = make_run(own, suffix="encoded-credentials")
+    basic_value = "dXNlcjpwYXNz"
+    sensitive_values = [
+        "Bearer STANDALONE-BEARER-SENTINEL",
+        "bearer\tTAB-SENTINEL",
+        f"Basic {basic_value}",
+        'basic "QUOTED BASIC SENTINEL"',
+        "https://x/?access%5Ftoken=ENCODED-KEY-SENTINEL",
+        "https://x/#%61pi_key=ENCODED-NAME-SENTINEL",
+        "https://x/?client%5Fsecret=CLIENT-SENTINEL",
+        "https://x/?access%255Ftoken=DOUBLE-ENCODED-SENTINEL",
+        "https://x/?ACCESS%EF%BC%BFToken=UNICODE-KEY-SENTINEL",
+        "https://x/?access%ZZtoken=MALFORMED-PERCENT-SENTINEL",
+        "https://x/?api%FFkey=INVALID-UTF8-SENTINEL",
+    ]
+    stored = {
+        "input_snapshot": {
+            "brief_id": "brief-safe",
+            "keywords": [*sensitive_values, "token budget", "password policy"],
+        },
+        "output_json": {
+            "title": sensitive_values[0],
+            "body": sensitive_values[1],
+            "cta": sensitive_values[2],
+            "concept_codes": [*sensitive_values, "token budget", "password policy"],
+        },
+        "human_correction": {
+            "title": sensitive_values[3],
+            "body": sensitive_values[4],
+            "cta": sensitive_values[5],
+            "concept_codes": [*sensitive_values, "token budget", "password policy"],
+        },
+    }
+    original = deepcopy(stored)
+    with ai_audit_writes():
+        AIRun.objects.filter(pk=run.pk).update(**stored)
+
+    response = client.get(f"/api/v1/ai-runs/{run.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    serialized = json.dumps(data, ensure_ascii=False).casefold()
+    sentinels = [
+        "standalone-bearer-sentinel", "tab-sentinel", "quoted basic sentinel",
+        "encoded-key-sentinel", "encoded-name-sentinel", "client-sentinel",
+        "double-encoded-sentinel", "unicode-key-sentinel",
+        "malformed-percent-sentinel", "invalid-utf8-sentinel",
+    ]
+    for sentinel in sentinels:
+        encoded = "".join(f"%{byte:02X}" for byte in sentinel.encode()).casefold()
+        assert sentinel not in serialized
+        assert encoded not in serialized
+        assert quote(encoded, safe="").casefold() not in serialized
+    assert basic_value.casefold() not in serialized
+    assert "token budget" in data["output_json"]["concept_codes"]
+    assert "password policy" in data["output_json"]["concept_codes"]
+    assert "token budget" in data["human_correction"]["concept_codes"]
+    run.refresh_from_db()
+    for field, value in original.items():
+        assert getattr(run, field) == value
+
+
+@pytest.mark.django_db
 def test_ai_run_list_filters_paginates_and_rejects_bad_queries(ai_api):
     own, _other, _user, client = ai_api
     first = make_run(own, suffix="one", status=AIRun.Status.RUNNING)

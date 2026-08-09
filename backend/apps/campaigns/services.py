@@ -10,7 +10,12 @@ from django.utils import timezone
 from apps.assets.models import AssetProductLink, MaterialAsset
 from apps.catalog.models import Product, ProductConceptLink
 from apps.catalog.services import ProductSnapshot, _snapshot_from_locked_product
-from apps.knowledge.models import KnowledgeConcept
+from apps.knowledge.models import (
+    KnowledgeConcept,
+    KnowledgeEvidence,
+    KnowledgeGraphLock,
+    KnowledgeRelation,
+)
 from apps.knowledge.services import OntologyContextService, OntologySnapshot
 from apps.platforms.models import Platform, PlatformCapability
 
@@ -23,7 +28,9 @@ from .models import (
     ContentBriefConceptLink,
     ContentBriefPlatform,
     ContentBriefProduct,
+    draft_link_replacement_writes,
     lifecycle_writes,
+    revision_writes,
 )
 
 
@@ -107,6 +114,120 @@ def create_content_brief(
     return brief
 
 
+BRIEF_MUTABLE_FIELDS = frozenset(
+    {
+        "target_country", "customer_type", "content_objective", "cta",
+        "landing_page_url", "language", "prohibited_claims", "selling_points",
+        "advantages", "keywords",
+    }
+)
+
+
+@transaction.atomic
+def update_content_brief(
+    brief_id: UUID,
+    *,
+    values,
+    product_ids=None,
+    asset_ids=None,
+    platform_ids=None,
+    concept_links=None,
+) -> ContentBrief:
+    brief = ContentBrief.objects.select_for_update().get(pk=brief_id)
+    if brief.status != ContentBrief.Status.DRAFT:
+        raise ValidationError({"status": ["Only DRAFT briefs can be edited."]})
+    unknown = set(values) - BRIEF_MUTABLE_FIELDS
+    if unknown:
+        raise ValidationError({name: ["Unknown field."] for name in sorted(unknown)})
+
+    current_products = tuple(
+        brief.product_links.select_for_update().order_by("product_id").values_list(
+            "product_id", flat=True
+        )
+    )
+    current_assets = tuple(
+        brief.asset_links.select_for_update().order_by("asset_id").values_list(
+            "asset_id", flat=True
+        )
+    )
+    current_platforms = tuple(
+        brief.platform_links.select_for_update().order_by("platform_id").values_list(
+            "platform_id", flat=True
+        )
+    )
+    current_concepts = tuple(
+        brief.concept_links.select_for_update()
+        .order_by("role", "concept_id")
+        .values_list("role", "concept_id")
+    )
+    desired_products = (
+        current_products if product_ids is None else tuple(sorted(_unique_ids(product_ids, "product_ids"), key=str))
+    )
+    desired_assets = (
+        current_assets if asset_ids is None else tuple(sorted(_unique_ids(asset_ids, "asset_ids"), key=str))
+    )
+    desired_platforms = (
+        current_platforms if platform_ids is None else tuple(sorted(_unique_ids(platform_ids, "platform_ids"), key=str))
+    )
+    if concept_links is None:
+        desired_concepts = current_concepts
+    else:
+        specs = tuple(concept_links)
+        desired_concepts = tuple(
+            sorted(
+                ((item["role"], item["concept_id"]) for item in specs),
+                key=lambda item: (item[0], str(item[1])),
+            )
+        )
+        if len(desired_concepts) != len(set(desired_concepts)):
+            raise ValidationError({"concept_links": ["Duplicate role/concept pairs are not allowed."]})
+
+    scalar_changed = any(getattr(brief, key) != value for key, value in values.items())
+    relation_changed = (
+        desired_products != current_products
+        or desired_assets != current_assets
+        or desired_platforms != current_platforms
+        or desired_concepts != current_concepts
+    )
+    if not scalar_changed and not relation_changed:
+        return brief
+
+    if scalar_changed:
+        for key, value in values.items():
+            setattr(brief, key, value)
+        brief.save()
+
+    if relation_changed:
+        with draft_link_replacement_writes():
+            brief.asset_links.all().delete()
+            brief.concept_links.all().delete()
+            brief.platform_links.all().delete()
+            brief.product_links.all().delete()
+        ContentBriefProduct.objects.bulk_create([
+            ContentBriefProduct(organization=brief.organization, brief=brief, product_id=item)
+            for item in desired_products
+        ])
+        ContentBriefPlatform.objects.bulk_create([
+            ContentBriefPlatform(organization=brief.organization, brief=brief, platform_id=item)
+            for item in desired_platforms
+        ])
+        ContentBriefConceptLink.objects.bulk_create([
+            ContentBriefConceptLink(
+                organization=brief.organization, brief=brief, role=role, concept_id=concept_id
+            )
+            for role, concept_id in desired_concepts
+        ])
+        ContentBriefAsset.objects.bulk_create([
+            ContentBriefAsset(organization=brief.organization, brief=brief, asset_id=item)
+            for item in desired_assets
+        ])
+        if not scalar_changed:
+            brief.version += 1
+            with revision_writes():
+                brief.save(update_fields=["version", "updated_at"])
+    return brief
+
+
 def _ready_errors(brief: ContentBrief) -> dict[str, list[str]]:
     errors = {}
     for field in (
@@ -134,10 +255,56 @@ def mark_content_brief_ready(brief_id: UUID, *, reviewer) -> ContentBrief:
     brief = ContentBrief.objects.select_for_update().get(pk=brief_id)
     if brief.status != ContentBrief.Status.DRAFT:
         raise ValidationError({"status": ["Only DRAFT briefs can be marked READY."]})
-    list(brief.product_links.select_for_update().order_by("id"))
-    list(brief.asset_links.select_for_update().order_by("id"))
-    list(brief.platform_links.select_for_update().order_by("id"))
-    list(brief.concept_links.select_for_update().order_by("id"))
+    Campaign.objects.select_for_update().get(pk=brief.campaign_id)
+    product_links = list(brief.product_links.select_for_update().order_by("id"))
+    asset_links = list(brief.asset_links.select_for_update().order_by("id"))
+    platform_links = list(brief.platform_links.select_for_update().order_by("id"))
+    concept_links = list(brief.concept_links.select_for_update().order_by("id"))
+    products = {
+        row.id: row
+        for row in Product.objects.select_for_update()
+        .filter(id__in=[link.product_id for link in product_links])
+        .order_by("id")
+    }
+    assets = {
+        row.id: row
+        for row in MaterialAsset.objects.select_for_update()
+        .filter(id__in=[link.asset_id for link in asset_links])
+        .order_by("id")
+    }
+    platforms = {
+        row.id: row
+        for row in Platform.objects.select_for_update()
+        .filter(id__in=[link.platform_id for link in platform_links])
+        .order_by("id")
+    }
+    concepts = {
+        row.id: row
+        for row in KnowledgeConcept.objects.select_for_update()
+        .filter(id__in=[link.concept_id for link in concept_links])
+        .order_by("id")
+    }
+    list(
+        AssetProductLink.objects.select_for_update()
+        .filter(asset_id__in=assets)
+        .order_by("asset_id", "product_id", "id")
+    )
+    for link in product_links:
+        if link.product_id in products:
+            link.product = products[link.product_id]
+        link.full_clean()
+    for link in asset_links:
+        if link.asset_id in assets:
+            link.asset = assets[link.asset_id]
+        link.full_clean()
+    for link in platform_links:
+        if link.platform_id in platforms:
+            link.platform = platforms[link.platform_id]
+        link.full_clean()
+    for link in concept_links:
+        if link.concept_id in concepts:
+            link.concept = concepts[link.concept_id]
+        link.full_clean()
     errors = _ready_errors(brief)
     if errors:
         raise ValidationError(errors)
@@ -170,8 +337,9 @@ def revise_content_brief(brief_id: UUID, *, creator) -> ContentBrief:
         created_by=creator,
         **values,
     )
-    revision.full_clean()
-    revision.save(force_insert=True)
+    with revision_writes():
+        revision.full_clean()
+        revision.save(force_insert=True)
     ContentBriefProduct.objects.bulk_create([
         ContentBriefProduct(organization=source.organization, brief=revision, product_id=value)
         for value in source.product_links.values_list("product_id", flat=True)
@@ -252,6 +420,57 @@ def _json_value(value):
     return value
 
 
+def _lock_through_rows(through_model, source_model, source_ids):
+    source_field = next(
+        field
+        for field in through_model._meta.fields
+        if getattr(field, "related_model", None) is source_model
+    )
+    return list(
+        through_model.objects.select_for_update()
+        .filter(**{f"{source_field.attname}__in": source_ids})
+        .order_by("pk")
+    )
+
+
+def _build_locked_ontology_snapshot(*, organization, concept_ids):
+    KnowledgeGraphLock.objects.select_for_update().get(pk=1)
+    service = OntologyContextService(organization)
+    discovered = service.build_snapshot(concept_ids=concept_ids, max_depth=2)
+    locked_concept_ids = {item.concept_id for item in discovered.concept_versions}
+    locked_relation_ids = {item.relation_id for item in discovered.relation_versions}
+    locked_evidence_ids = {item.evidence_id for item in discovered.evidence_references}
+    list(
+        KnowledgeConcept.objects.select_for_update()
+        .filter(pk__in=locked_concept_ids)
+        .order_by("id")
+    )
+    list(
+        KnowledgeRelation.objects.select_for_update()
+        .filter(pk__in=locked_relation_ids)
+        .order_by("id")
+    )
+    list(
+        KnowledgeEvidence.objects.select_for_update()
+        .filter(pk__in=locked_evidence_ids)
+        .order_by("id")
+    )
+    _lock_through_rows(
+        KnowledgeConcept.evidence.through, KnowledgeConcept, locked_concept_ids
+    )
+    _lock_through_rows(
+        KnowledgeRelation.evidence.through, KnowledgeRelation, locked_relation_ids
+    )
+    snapshot = service.build_snapshot(concept_ids=concept_ids, max_depth=2)
+    if (
+        {item.concept_id for item in snapshot.concept_versions} != locked_concept_ids
+        or {item.relation_id for item in snapshot.relation_versions} != locked_relation_ids
+        or {item.evidence_id for item in snapshot.evidence_references} != locked_evidence_ids
+    ):
+        raise ValidationError("Ontology changed while the generation snapshot was locked.")
+    return snapshot
+
+
 @transaction.atomic
 def build_content_generation_input(brief_id: UUID) -> ContentGenerationInput:
     brief = (
@@ -268,6 +487,9 @@ def build_content_generation_input(brief_id: UUID) -> ContentGenerationInput:
     campaign = Campaign.objects.select_for_update(of=("self",)).get(pk=brief.campaign_id)
     if campaign.organization_id != brief.organization_id:
         raise ValidationError("Campaign is not visible to the brief organization.")
+    # Knowledge mutations acquire this singleton before concept/relation rows.
+    # Match that order before product snapshotting locks concept rows.
+    KnowledgeGraphLock.objects.select_for_update().get(pk=1)
 
     product_links = list(
         brief.product_links.select_for_update(of=("self",)).order_by("product_id", "id")
@@ -402,8 +624,9 @@ def build_content_generation_input(brief_id: UUID) -> ContentGenerationInput:
     ontology_ids = set(brief_concept_ids)
     for product_snapshot in product_snapshots:
         ontology_ids.update(item.concept_id for item in product_snapshot.concept_versions)
-    ontology = OntologyContextService(brief.organization).build_snapshot(
-        concept_ids=sorted(ontology_ids, key=str), max_depth=2
+    ontology = _build_locked_ontology_snapshot(
+        organization=brief.organization,
+        concept_ids=sorted(ontology_ids, key=str),
     )
     included_ids = {item.concept_id for item in ontology.concept_versions}
     if not ontology_ids.issubset(included_ids):

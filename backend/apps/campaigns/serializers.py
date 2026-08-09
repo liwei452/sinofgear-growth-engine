@@ -2,7 +2,17 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .models import Campaign, ContentBrief
-from .services import create_campaign, create_content_brief
+from .services import create_campaign, create_content_brief, update_content_brief
+
+
+class StrictFieldsMixin:
+    def to_internal_value(self, data):
+        unknown = set(data) - set(self.fields)
+        if unknown:
+            raise serializers.ValidationError(
+                {name: ["Unknown field."] for name in sorted(unknown)}
+            )
+        return super().to_internal_value(data)
 
 
 class CampaignSerializer(serializers.ModelSerializer):
@@ -22,7 +32,7 @@ class CampaignSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "version", "product_ids", "created_at", "updated_at"]
 
 
-class CampaignCreateSerializer(serializers.ModelSerializer):
+class CampaignCreateSerializer(StrictFieldsMixin, serializers.ModelSerializer):
     product_ids = serializers.ListField(
         child=serializers.UUIDField(), required=False, default=list
     )
@@ -40,13 +50,13 @@ class CampaignCreateSerializer(serializers.ModelSerializer):
         )
 
 
-class CampaignPatchSerializer(serializers.ModelSerializer):
+class CampaignPatchSerializer(StrictFieldsMixin, serializers.ModelSerializer):
     class Meta:
         model = Campaign
         fields = ["name", "description", "status"]
 
 
-class ConceptLinkInputSerializer(serializers.Serializer):
+class ConceptLinkInputSerializer(StrictFieldsMixin, serializers.Serializer):
     role = serializers.ChoiceField(choices=(
         "TARGET_INDUSTRY", "TARGET_CUSTOMER_TYPE", "PURCHASE_INTENT", "STANDARD", "APPLICATION"
     ))
@@ -104,7 +114,7 @@ BRIEF_VALUE_FIELDS = [
 ]
 
 
-class ContentBriefCreateSerializer(serializers.ModelSerializer):
+class ContentBriefCreateSerializer(StrictFieldsMixin, serializers.ModelSerializer):
     campaign_id = serializers.UUIDField()
     product_ids = serializers.ListField(child=serializers.UUIDField())
     asset_ids = serializers.ListField(child=serializers.UUIDField(), required=False, default=list)
@@ -136,10 +146,28 @@ class ContentBriefCreateSerializer(serializers.ModelSerializer):
         )
 
 
-class ContentBriefPatchSerializer(serializers.ModelSerializer):
+class ContentBriefPatchSerializer(StrictFieldsMixin, serializers.ModelSerializer):
+    product_ids = serializers.ListField(child=serializers.UUIDField(), required=False)
+    asset_ids = serializers.ListField(child=serializers.UUIDField(), required=False)
+    platform_ids = serializers.ListField(child=serializers.UUIDField(), required=False)
+    concept_links = ConceptLinkInputSerializer(many=True, required=False)
+
     class Meta:
         model = ContentBrief
-        fields = BRIEF_VALUE_FIELDS
+        fields = [
+            *BRIEF_VALUE_FIELDS,
+            "product_ids", "asset_ids", "platform_ids", "concept_links",
+        ]
+
+    def update(self, instance, validated_data):
+        relations = {
+            key: validated_data.pop(key)
+            for key in ("product_ids", "asset_ids", "platform_ids", "concept_links")
+            if key in validated_data
+        }
+        return update_content_brief(
+            instance.id, values=validated_data, **relations
+        )
 
 
 class CampaignFilterSerializer(serializers.Serializer):

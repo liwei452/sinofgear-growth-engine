@@ -1,6 +1,6 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
-from django.db.models import Prefetch
+from django.db.models import F, Prefetch, Q
 from django.http import Http404
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
 from rest_framework import status
@@ -65,24 +65,56 @@ def _validation_response(error):
     return Response({"errors": _error_values(values)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+def _unknown_action_body(request):
+    if request.data:
+        return _validation_response(
+            {name: ["Unknown field."] for name in sorted(request.data)}
+        )
+    return None
+
+
 def _campaign_queryset(organization):
     return Campaign.objects.filter(organization=organization).prefetch_related(
         Prefetch(
             "product_links",
-            queryset=CampaignProduct.objects.filter(organization=organization).order_by("product_id", "id"),
+            queryset=CampaignProduct.objects.filter(
+                organization=organization,
+                campaign__organization=organization,
+                product__organization=organization,
+            ).order_by("product_id", "id"),
             to_attr="safe_product_links",
         )
     )
 
 
 def _brief_queryset(organization):
-    return ContentBrief.objects.filter(organization=organization).select_related(
+    concept_compatibility = Q()
+    from .models import BRIEF_ROLE_CONCEPT_TYPES
+    for role, concept_type in BRIEF_ROLE_CONCEPT_TYPES.items():
+        concept_compatibility |= Q(role=role, concept__concept_type=concept_type)
+    return ContentBrief.objects.filter(
+        Q(previous_version__isnull=True)
+        | Q(
+            previous_version__organization=organization,
+            previous_version__campaign_id=F("campaign_id"),
+            previous_version__status=ContentBrief.Status.READY,
+            version=F("previous_version__version") + 1,
+        ),
+        organization=organization,
+        campaign__organization=organization,
+    ).select_related(
         "campaign", "created_by", "reviewed_by"
     ).prefetch_related(
-        Prefetch("product_links", queryset=ContentBriefProduct.objects.filter(organization=organization).order_by("product_id", "id"), to_attr="safe_product_links"),
-        Prefetch("asset_links", queryset=ContentBriefAsset.objects.filter(organization=organization).order_by("asset_id", "id"), to_attr="safe_asset_links"),
-        Prefetch("platform_links", queryset=ContentBriefPlatform.objects.filter(organization=organization).order_by("platform_id", "id"), to_attr="safe_platform_links"),
-        Prefetch("concept_links", queryset=ContentBriefConceptLink.objects.filter(organization=organization).order_by("role", "concept_id", "id"), to_attr="safe_concept_links"),
+        Prefetch("product_links", queryset=ContentBriefProduct.objects.filter(organization=organization, brief__organization=organization, product__organization=organization).order_by("product_id", "id"), to_attr="safe_product_links"),
+        Prefetch("asset_links", queryset=ContentBriefAsset.objects.filter(organization=organization, brief__organization=organization, asset__organization=organization).order_by("asset_id", "id"), to_attr="safe_asset_links"),
+        Prefetch("platform_links", queryset=ContentBriefPlatform.objects.filter(organization=organization, brief__organization=organization).order_by("platform_id", "id"), to_attr="safe_platform_links"),
+        Prefetch("concept_links", queryset=ContentBriefConceptLink.objects.filter(
+            Q(concept__organization__isnull=True) | Q(concept__organization=organization),
+            concept_compatibility,
+            organization=organization,
+            brief__organization=organization,
+            concept__status="APPROVED",
+        ).order_by("role", "concept_id", "id"), to_attr="safe_concept_links"),
     )
 
 
@@ -275,6 +307,9 @@ class ContentBriefReadyView(APIView):
 
     @extend_schema(operation_id="content_briefs_mark_ready", request=None, responses={200: ContentBriefSerializer, 400: ValidationErrorSerializer, **ERRORS})
     def post(self, request, brief_id):
+        invalid_body = _unknown_action_body(request)
+        if invalid_body:
+            return invalid_body
         brief = _get_brief(request.organization, brief_id)
         try:
             mark_content_brief_ready(brief.id, reviewer=request.user)
@@ -288,6 +323,9 @@ class ContentBriefRevisionView(APIView):
 
     @extend_schema(operation_id="content_briefs_create_revision", request=None, responses={201: ContentBriefSerializer, 400: ValidationErrorSerializer, **ERRORS})
     def post(self, request, brief_id):
+        invalid_body = _unknown_action_body(request)
+        if invalid_body:
+            return invalid_body
         source = _get_brief(request.organization, brief_id)
         try:
             revision = revise_content_brief(source.id, creator=request.user)

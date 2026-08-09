@@ -1,12 +1,19 @@
 import importlib
+import uuid
 
 import pytest
 from django.apps import apps as django_apps
+from django.db import connection
 
 from apps.campaigns.models import Campaign, ContentBrief
 from apps.identity.models import Role
 
 from .conftest import create_member_client, make_platform, make_product, valid_brief_values
+from .conftest import make_asset, make_concept
+from apps.campaigns.models import (
+    CampaignProduct,
+    ContentBriefProduct,
+)
 
 
 @pytest.mark.django_db
@@ -164,6 +171,25 @@ def test_campaign_permission_migration_seeds_builtin_roles_without_touching_cust
 
 
 @pytest.mark.django_db
+def test_campaign_permission_migration_merges_without_erasing_builtin_custom_permissions(
+    campaign_roles,
+):
+    operator = campaign_roles[Role.Code.OPERATOR]
+    operator.permissions = ["legacy.custom", "products.read"]
+    operator.save(update_fields=["permissions"])
+    migration = importlib.import_module(
+        "apps.identity.migrations.0005_refresh_campaign_permissions"
+    )
+
+    migration.refresh_builtin_role_permissions(django_apps, None)
+
+    operator.refresh_from_db()
+    assert operator.permissions == [
+        "legacy.custom", "products.read", "campaigns.read", "campaigns.manage"
+    ]
+
+
+@pytest.mark.django_db
 def test_campaign_openapi_documents_lists_crud_filters_and_lifecycle_action(client):
     response = client.get("/api/v1/schema")
     schema = response.json()
@@ -203,3 +229,159 @@ def test_brief_list_serialization_has_bounded_query_count(
 
     assert response.status_code == 200
     assert len(response.json()["results"]) == 3
+
+
+@pytest.mark.django_db
+def test_brief_patch_atomically_replaces_relationships_and_versions_once(
+    campaign_organizations, campaign_roles
+):
+    own, _ = campaign_organizations
+    first = make_product(own, name="First")
+    second = make_product(own, name="Second")
+    platform = make_platform()
+    _, client = create_member_client(
+        organization=own, role=campaign_roles[Role.Code.OPERATOR], username="replace-api"
+    )
+    campaign_id = client.post("/api/v1/campaigns", {"name": "Replace"}, format="json").json()["id"]
+    payload = {
+        "campaign_id": campaign_id,
+        **valid_brief_values(),
+        "product_ids": [str(first.id)],
+        "asset_ids": [],
+        "platform_ids": [str(platform.id)],
+        "concept_links": [],
+    }
+    brief_id = client.post("/api/v1/content-briefs", payload, format="json").json()["id"]
+
+    response = client.patch(
+        f"/api/v1/content-briefs/{brief_id}",
+        {"product_ids": [str(second.id)]},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["product_ids"] == [str(second.id)]
+    assert response.json()["version"] == 2
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("post", "/api/v1/campaigns", {"name": "Unknown", "mystery": 1}),
+        ("patch", "/api/v1/campaigns/{campaign_id}", {"mystery": 1}),
+        ("post", "/api/v1/content-briefs", {"mystery": 1}),
+        ("patch", "/api/v1/content-briefs/{brief_id}", {"mystery": 1}),
+        ("post", "/api/v1/content-briefs/{brief_id}/ready", {"mystery": 1}),
+        ("post", "/api/v1/content-briefs/{brief_id}/revisions", {"mystery": 1}),
+    ],
+)
+def test_unknown_request_fields_return_standard_json_400(
+    campaign_organizations, campaign_roles, method, path, payload
+):
+    own, _ = campaign_organizations
+    _, client = create_member_client(
+        organization=own, role=campaign_roles[Role.Code.ADMINISTRATOR], username=f"unknown-{method}-{len(path)}"
+    )
+    campaign = Campaign.objects.create(organization=own, name="Existing")
+    from django.contrib.auth import get_user_model
+    creator = get_user_model().objects.get(username=f"unknown-{method}-{len(path)}")
+    brief = ContentBrief.objects.create(
+        organization=own, campaign=campaign, created_by=creator
+    )
+    target = path.format(campaign_id=campaign.id, brief_id=brief.id)
+
+    response = getattr(client, method)(target, payload, format="json")
+
+    assert response.status_code == 400
+    assert response.json() == {"errors": {"mystery": ["Unknown field."]}}
+
+
+@pytest.mark.django_db
+def test_corrupt_foreign_relationship_identifiers_are_omitted_from_api(
+    campaign_organizations, campaign_roles
+):
+    own, other = campaign_organizations
+    own_product = make_product(own, name="Own")
+    foreign_product = make_product(other, name="Foreign")
+    user, client = create_member_client(
+        organization=own, role=campaign_roles[Role.Code.OPERATOR], username="legacy-safe"
+    )
+    foreign_asset = make_asset(other, user, checksum_char="b")
+    foreign_concept = make_concept(
+        other, concept_type="INDUSTRY", code="FOREIGN_LEGACY"
+    )
+    campaign = Campaign.objects.create(organization=own, name="Legacy")
+    campaign_link = CampaignProduct.objects.create(
+        organization=own, campaign=campaign, product=own_product
+    )
+    brief = ContentBrief.objects.create(
+        organization=own, campaign=campaign, created_by=user
+    )
+    product_link = ContentBriefProduct.objects.create(
+        organization=own, brief=brief, product=own_product
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE campaigns_campaignproduct SET product_id=%s WHERE id=%s",
+            [foreign_product.id.hex, campaign_link.id.hex],
+        )
+        cursor.execute(
+            "UPDATE campaigns_contentbriefproduct SET product_id=%s WHERE id=%s",
+            [foreign_product.id.hex, product_link.id.hex],
+        )
+        cursor.execute(
+            "INSERT INTO campaigns_contentbriefasset "
+            "(id, created_at, updated_at, organization_id, brief_id, asset_id) "
+            "VALUES (%s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, %s, %s, %s)",
+            [uuid.uuid4().hex, own.id.hex, brief.id.hex, foreign_asset.id.hex],
+        )
+        cursor.execute(
+            "INSERT INTO campaigns_contentbriefconceptlink "
+            "(id, created_at, updated_at, organization_id, brief_id, concept_id, role) "
+            "VALUES (%s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, %s, %s, %s, %s)",
+            [uuid.uuid4().hex, own.id.hex, brief.id.hex, foreign_concept.id.hex, "TARGET_INDUSTRY"],
+        )
+
+    campaign_response = client.get(f"/api/v1/campaigns/{campaign.id}")
+    brief_response = client.get(f"/api/v1/content-briefs/{brief.id}")
+
+    assert campaign_response.status_code == 200
+    assert campaign_response.json()["product_ids"] == []
+    assert brief_response.status_code == 200
+    assert brief_response.json()["product_ids"] == []
+    assert brief_response.json()["asset_ids"] == []
+    assert brief_response.json()["concept_links"] == []
+
+
+@pytest.mark.django_db
+def test_corrupt_foreign_campaign_or_predecessor_makes_brief_non_visible(
+    campaign_organizations, campaign_roles
+):
+    own, other = campaign_organizations
+    user, client = create_member_client(
+        organization=own, role=campaign_roles[Role.Code.READ_ONLY], username="legacy-root"
+    )
+    own_campaign = Campaign.objects.create(organization=own, name="Own")
+    foreign_campaign = Campaign.objects.create(organization=other, name="Foreign")
+    first = ContentBrief.objects.create(
+        organization=own, campaign=own_campaign, created_by=user
+    )
+    second = ContentBrief.objects.create(
+        organization=own, campaign=own_campaign, created_by=user
+    )
+    foreign_source = ContentBrief.objects.create(
+        organization=other, campaign=foreign_campaign, created_by=user
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE campaigns_contentbrief SET campaign_id=%s WHERE id=%s",
+            [foreign_campaign.id.hex, first.id.hex],
+        )
+        cursor.execute(
+            "UPDATE campaigns_contentbrief SET previous_version_id=%s WHERE id=%s",
+            [foreign_source.id.hex, second.id.hex],
+        )
+
+    assert client.get(f"/api/v1/content-briefs/{first.id}").status_code == 404
+    assert client.get(f"/api/v1/content-briefs/{second.id}").status_code == 404

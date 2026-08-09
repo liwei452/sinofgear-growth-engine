@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -12,7 +13,12 @@ from apps.campaigns.services import (
     revise_content_brief,
 )
 from apps.catalog.models import Product
-from apps.knowledge.models import KnowledgeConcept
+from apps.knowledge.models import (
+    KnowledgeConcept,
+    KnowledgeEvidence,
+    KnowledgeGraphLock,
+    KnowledgeRelation,
+)
 from apps.knowledge.guards import _test_fixture_writes
 from apps.platforms.models import Platform
 
@@ -147,3 +153,57 @@ def test_ready_relation_rows_cannot_be_mutated_or_deleted(
         ContentBriefConceptLink.objects.filter(pk=link.pk).update(role="APPLICATION")
     with pytest.raises(Exception):
         ContentBriefConceptLink.objects.filter(pk=link.pk).delete()
+
+
+@pytest.mark.django_db
+def test_generation_snapshot_locks_expanded_ontology_rows_and_evidence_associations(
+    campaign_organizations, campaign_user
+):
+    own, _ = campaign_organizations
+    ready, _, _, _, _, root = make_ready_brief(own, campaign_user)
+    target = make_concept(
+        own, concept_type="PURCHASE_INTENT", code="LOCKED_EXPANSION"
+    )
+    with _test_fixture_writes():
+        relation = KnowledgeRelation.objects.create(
+            organization=own,
+            subject_concept=root,
+            predicate="INDICATES_PURCHASE_INTENT",
+            object_concept=target,
+            status="APPROVED",
+        )
+        evidence = KnowledgeEvidence.objects.create(
+            organization=own,
+            evidence_type="HUMAN_ENTRY",
+            excerpt="Locked evidence",
+            status="APPROVED",
+        )
+    root.evidence.add(evidence)
+    relation.evidence.add(evidence)
+    concept_through = KnowledgeConcept.evidence.through
+    relation_through = KnowledgeRelation.evidence.through
+
+    managers = [
+        KnowledgeGraphLock.objects,
+        KnowledgeConcept.objects,
+        KnowledgeRelation.objects,
+        KnowledgeEvidence.objects,
+        concept_through.objects,
+        relation_through.objects,
+    ]
+    patches = [
+        patch.object(manager, "select_for_update", wraps=manager.select_for_update)
+        for manager in managers
+    ]
+    mocks = [item.start() for item in patches]
+    try:
+        snapshot = build_content_generation_input(ready.id)
+    finally:
+        for item in reversed(patches):
+            item.stop()
+
+    assert {item.concept_id for item in snapshot.ontology_snapshot.concept_versions} >= {
+        root.id,
+        target.id,
+    }
+    assert all(mock.called for mock in mocks)

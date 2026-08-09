@@ -21,8 +21,11 @@ from apps.platforms.models import Platform
 _allow_lifecycle_write: ContextVar[bool] = ContextVar(
     "campaigns_allow_lifecycle_write", default=False
 )
-_allow_explicit_version: ContextVar[bool] = ContextVar(
-    "campaigns_allow_explicit_version", default=False
+_allow_revision_write: ContextVar[bool] = ContextVar(
+    "campaigns_allow_revision_write", default=False
+)
+_allow_draft_link_replacement: ContextVar[bool] = ContextVar(
+    "campaigns_allow_draft_link_replacement", default=False
 )
 
 
@@ -36,12 +39,21 @@ def lifecycle_writes() -> Iterator[None]:
 
 
 @contextmanager
-def explicit_version_writes() -> Iterator[None]:
-    token = _allow_explicit_version.set(True)
+def revision_writes() -> Iterator[None]:
+    token = _allow_revision_write.set(True)
     try:
         yield
     finally:
-        _allow_explicit_version.reset(token)
+        _allow_revision_write.reset(token)
+
+
+@contextmanager
+def draft_link_replacement_writes() -> Iterator[None]:
+    token = _allow_draft_link_replacement.set(True)
+    try:
+        yield
+    finally:
+        _allow_draft_link_replacement.reset(token)
 
 
 def normalize_list_text(value: str) -> str:
@@ -123,6 +135,8 @@ class Campaign(OrganizationScopedModel):
         self.description = self.description.strip()
         if not self.name:
             raise ValidationError({"name": "Campaign name must not be blank."})
+        if self._state.adding and self.version != 1:
+            raise ValidationError({"version": "Campaigns must start at version 1."})
 
     @transaction.atomic
     def save(self, *args, **kwargs) -> None:
@@ -131,8 +145,7 @@ class Campaign(OrganizationScopedModel):
             if original.organization_id != self.organization_id:
                 raise ValidationError("Campaign organization is immutable.")
             if self.version != original.version:
-                if not _allow_explicit_version.get() or self.version != original.version + 1:
-                    raise ValidationError("Campaign version may change only through a versioned write.")
+                raise ValidationError("Campaign version cannot be assigned directly.")
             elif any(
                 getattr(self, field) != getattr(original, field)
                 for field in ("name", "description", "status")
@@ -208,6 +221,27 @@ class ContentBrief(OrganizationScopedModel):
             campaign = Campaign.objects.filter(pk=self.campaign_id).first()
             if campaign is None or campaign.organization_id != self.organization_id:
                 raise ValidationError({"campaign": "Campaign is not visible to this organization."})
+        if self._state.adding:
+            if self.previous_version_id is None:
+                if self.version != 1:
+                    raise ValidationError({"version": "Content briefs must start at version 1."})
+            else:
+                if not _allow_revision_write.get():
+                    raise ValidationError(
+                        {"previous_version": "Revisions must be created through the revision service."}
+                    )
+                previous = ContentBrief.objects.filter(pk=self.previous_version_id).first()
+                if (
+                    previous is None
+                    or previous.id == self.id
+                    or previous.organization_id != self.organization_id
+                    or previous.campaign_id != self.campaign_id
+                    or previous.status != self.Status.READY
+                    or self.version != previous.version + 1
+                ):
+                    raise ValidationError(
+                        {"previous_version": "Revision source, campaign, organization, status and sequence are invalid."}
+                    )
         for field in GENERATION_FIELDS[1:6]:
             value = getattr(self, field)
             setattr(self, field, value.strip())
@@ -232,6 +266,8 @@ class ContentBrief(OrganizationScopedModel):
             original = type(self).objects.select_for_update().get(pk=self.pk)
             if original.organization_id != self.organization_id:
                 raise ValidationError("Content brief organization is immutable.")
+            if original.previous_version_id != self.previous_version_id:
+                raise ValidationError("Content brief revision identity is immutable.")
             changed = {
                 field
                 for field in (*GENERATION_FIELDS, "status", "previous_version_id")
@@ -242,7 +278,7 @@ class ContentBrief(OrganizationScopedModel):
             if self.status != original.status and not _allow_lifecycle_write.get():
                 raise ValidationError("Content brief lifecycle changes require the service.")
             if self.version != original.version:
-                if not _allow_explicit_version.get() or self.version != original.version + 1:
+                if not _allow_revision_write.get() or self.version != original.version + 1:
                     raise ValidationError("Content brief version may change only through a versioned write.")
             elif changed:
                 self.version = original.version + 1
@@ -253,18 +289,41 @@ class ContentBrief(OrganizationScopedModel):
 
 
 LINK_IDENTITY_FIELDS = frozenset(
-    {"organization", "organization_id", "campaign", "campaign_id", "brief", "brief_id", "product", "product_id", "asset", "asset_id", "platform", "platform_id", "concept", "concept_id", "role"}
+    {"id", "pk", "organization", "organization_id", "campaign", "campaign_id", "brief", "brief_id", "product", "product_id", "asset", "asset_id", "platform", "platform_id", "concept", "concept_id", "role"}
 )
 
 
 class ImmutableLinkQuerySet(models.QuerySet):
+    @staticmethod
+    def _lock_brief_parents(rows):
+        brief_ids = sorted(
+            {row.brief_id for row in rows if hasattr(row, "brief_id")}, key=str
+        )
+        briefs = {
+            brief.id: brief
+            for brief in ContentBrief.objects.select_for_update()
+            .filter(pk__in=brief_ids)
+            .order_by("id")
+        }
+        for row in rows:
+            if hasattr(row, "brief_id"):
+                brief = briefs.get(row.brief_id)
+                if brief is None:
+                    raise ValidationError("Brief relationship parent does not exist.")
+                row.brief = brief
+
+    @transaction.atomic
     def bulk_create(self, objs, **kwargs):
         if kwargs.get("update_conflicts"):
             raise ValidationError("Link bulk upserts are not supported.")
         rows = sorted(objs, key=lambda row: str(row.pk))
+        self._lock_brief_parents(rows)
         for row in rows:
             row.full_clean()
-        return super().bulk_create(rows, **kwargs)
+        created = super().bulk_create(rows, **kwargs)
+        for row in created:
+            row._loaded_pk = row.pk
+        return created
 
     def update(self, **kwargs):
         if LINK_IDENTITY_FIELDS & set(kwargs):
@@ -280,6 +339,12 @@ class ImmutableLinkQuerySet(models.QuerySet):
     def delete(self):
         protected = list(self)
         if protected:
+            if _allow_draft_link_replacement.get() and all(
+                not hasattr(row, "brief_id")
+                or row.brief.status == ContentBrief.Status.DRAFT
+                for row in protected
+            ):
+                return super().delete()
             raise ProtectedError("Historical campaign relationships cannot be deleted.", protected)
         return 0, {}
 
@@ -290,6 +355,12 @@ class ImmutableLinkManager(models.Manager.from_queryset(ImmutableLinkQuerySet)):
 
 class ImmutableLink(OrganizationScopedModel):
     objects = ImmutableLinkManager()
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        instance._loaded_pk = instance.pk
+        return instance
 
     class Meta:
         abstract = True
@@ -302,12 +373,21 @@ class ImmutableLink(OrganizationScopedModel):
 
     @transaction.atomic
     def save(self, *args, **kwargs) -> None:
+        if self._state.adding and hasattr(self, "brief_id"):
+            try:
+                self.brief = ContentBrief.objects.select_for_update().get(pk=self.brief_id)
+            except ContentBrief.DoesNotExist as error:
+                raise ValidationError("Brief relationship parent does not exist.") from error
         if not self._state.adding:
-            original = type(self).objects.select_for_update().get(pk=self.pk)
+            loaded_pk = getattr(self, "_loaded_pk", self.pk)
+            if self.pk != loaded_pk:
+                raise ValidationError("Historical relationship identity is immutable.")
+            original = type(self).objects.select_for_update().get(pk=loaded_pk)
             if any(getattr(self, field) != getattr(original, field) for field in self.identity_fields):
                 raise ValidationError("Historical relationship identity is immutable.")
         self.full_clean()
         super().save(*args, **kwargs)
+        self._loaded_pk = self.pk
 
     def delete(self, *args, **kwargs):
         raise ProtectedError("Historical campaign relationships cannot be deleted.", [self])
@@ -327,7 +407,7 @@ class CampaignProduct(ImmutableLink):
 
     @property
     def identity_fields(self):
-        return ("organization_id", "campaign_id", "product_id")
+        return ("id", "organization_id", "campaign_id", "product_id")
 
     def clean(self):
         campaign = Campaign.objects.filter(pk=self.campaign_id).first()
@@ -347,7 +427,7 @@ class ContentBriefProduct(ImmutableLink):
 
     @property
     def identity_fields(self):
-        return ("organization_id", "brief_id", "product_id")
+        return ("id", "organization_id", "brief_id", "product_id")
 
     def clean(self):
         brief = ContentBrief.objects.filter(pk=self.brief_id).first()
@@ -368,7 +448,7 @@ class ContentBriefAsset(ImmutableLink):
 
     @property
     def identity_fields(self):
-        return ("organization_id", "brief_id", "asset_id")
+        return ("id", "organization_id", "brief_id", "asset_id")
 
     def clean(self):
         brief = ContentBrief.objects.filter(pk=self.brief_id).first()
@@ -395,7 +475,7 @@ class ContentBriefPlatform(ImmutableLink):
 
     @property
     def identity_fields(self):
-        return ("organization_id", "brief_id", "platform_id")
+        return ("id", "organization_id", "brief_id", "platform_id")
 
     def clean(self):
         brief = ContentBrief.objects.filter(pk=self.brief_id).first()
@@ -431,7 +511,7 @@ class ContentBriefConceptLink(ImmutableLink):
 
     @property
     def identity_fields(self):
-        return ("organization_id", "brief_id", "concept_id", "role")
+        return ("id", "organization_id", "brief_id", "concept_id", "role")
 
     def clean(self):
         brief = ContentBrief.objects.filter(pk=self.brief_id).first()

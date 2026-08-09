@@ -89,7 +89,12 @@ def _concept_link_specs(concept_links: Iterable[dict[str, object]]) -> tuple[dic
 
 
 def _lock_product(product: Product) -> Product:
-    return Product.objects.select_for_update().get(pk=product.pk)
+    return (
+        Product.objects.filter(pk=product.pk)
+        .order_by("id")
+        .select_for_update(of=("self",))
+        .get()
+    )
 
 
 def _lock_and_validate_concepts(
@@ -97,9 +102,9 @@ def _lock_and_validate_concepts(
 ) -> dict[UUID, KnowledgeConcept]:
     concept_ids = sorted({item["concept_id"] for item in specs}, key=str)
     concepts = list(
-        KnowledgeConcept.objects.select_for_update()
-        .filter(pk__in=concept_ids)
+        KnowledgeConcept.objects.filter(pk__in=concept_ids)
         .order_by("id")
+        .select_for_update(of=("self",))
     )
     by_id = {concept.id: concept for concept in concepts}
     for item in specs:
@@ -130,11 +135,10 @@ def _lock_and_validate_concepts(
 
 def _active_links_locked(product: Product) -> list[ProductConceptLink]:
     return list(
-        ProductConceptLink.objects.select_for_update()
-        .active()
+        ProductConceptLink.objects.active()
         .filter(product=product)
-        .select_related("concept")
         .order_by("id")
+        .select_for_update(of=("self",))
     )
 
 
@@ -147,8 +151,14 @@ def replace_product_links(*, product: Product, concept_links) -> Product:
     locked_product = _lock_product(product)
     specs = _concept_link_specs(concept_links)
     current_links = _active_links_locked(locked_product)
-    concepts = _lock_and_validate_concepts(product=locked_product, specs=specs)
     desired_keys = {(item["role"], item["concept_id"]) for item in specs}
+    if locked_product.status == Product.Status.ARCHIVED:
+        if desired_keys != _active_keys(current_links):
+            raise ValidationError(
+                {"concept_links": ["Archived products must retain their active concept links."]}
+            )
+        return locked_product
+    concepts = _lock_and_validate_concepts(product=locked_product, specs=specs)
     reusable: dict[tuple[str, UUID], ProductConceptLink] = {}
     for link in current_links:
         concept = concepts.get(link.concept_id)

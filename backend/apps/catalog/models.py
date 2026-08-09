@@ -119,13 +119,6 @@ class Product(OrganizationScopedModel):
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
     version = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     internal_notes = models.TextField(blank=True)
-    concepts = models.ManyToManyField(
-        KnowledgeConcept,
-        through="ProductConceptLink",
-        related_name="products",
-        blank=True,
-    )
-
     objects = ProductManager()
 
     class Meta:
@@ -248,16 +241,55 @@ LINK_IDENTITY_FIELDS = frozenset(
 )
 
 
+def _lock_and_refresh_link_references(links) -> None:
+    product_ids = sorted({link.product_id for link in links}, key=str)
+    products = {
+        product.id: product
+        for product in Product.objects.filter(pk__in=product_ids)
+        .order_by("id")
+        .select_for_update(of=("self",))
+    }
+    concept_ids = sorted({link.concept_id for link in links}, key=str)
+    concepts = {
+        concept.id: concept
+        for concept in KnowledgeConcept.objects.filter(pk__in=concept_ids)
+        .order_by("id")
+        .select_for_update(of=("self",))
+    }
+    for link in links:
+        product = products.get(link.product_id)
+        concept = concepts.get(link.concept_id)
+        if product is None:
+            raise ValidationError({"product": "Product does not exist."})
+        if concept is None:
+            raise ValidationError({"concept": "Concept does not exist."})
+        if product.status == Product.Status.ARCHIVED:
+            raise ValidationError({"product": "Archived products cannot accept new links."})
+        link.product = product
+        link.concept = concept
+
+
 class ProductConceptLinkQuerySet(models.QuerySet):
     def active(self):
         return self.filter(retired_at__isnull=True)
 
+    @transaction.atomic
     def bulk_create(self, objs, **kwargs):
         links = list(objs)
+        _lock_and_refresh_link_references(links)
         for link in links:
             link._validate_new_state()
             link.full_clean()
         return super().bulk_create(links, **kwargs)
+
+    def delete(self):
+        protected = list(self)
+        if protected:
+            raise ProtectedError(
+                "Product concept link history cannot be deleted; retire active links instead.",
+                protected,
+            )
+        return 0, {}
 
     @transaction.atomic
     def update(self, **kwargs):
@@ -352,8 +384,10 @@ class ProductConceptLink(OrganizationScopedModel):
         if self.version != 1 or self.retired_at is not None:
             raise ValidationError("New product concept links must start active at version 1.")
 
+    @transaction.atomic
     def save(self, *args, **kwargs) -> None:
         if self._state.adding:
+            _lock_and_refresh_link_references([self])
             self._validate_new_state()
         if not self._state.adding:
             original = type(self).objects.get(pk=self.pk)
@@ -372,6 +406,12 @@ class ProductConceptLink(OrganizationScopedModel):
                 return super().save(*args, **kwargs)
         self.full_clean()
         super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ProtectedError(
+            "Product concept link history cannot be deleted; retire active links instead.",
+            [self],
+        )
 
 
 def compatible_link_types_q(*, role_field: str = "role", concept_type_field: str = "concept__concept_type"):

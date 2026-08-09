@@ -248,23 +248,12 @@ def test_link_identity_is_immutable_so_snapshot_references_stay_stable(organizat
 
 
 @pytest.mark.django_db
-def test_m2m_add_cannot_bypass_link_validation(organizations) -> None:
-    own, other = organizations
+def test_product_has_no_unsafe_m2m_concept_mutation_surface(organizations) -> None:
+    own, _ = organizations
     product = Product.objects.create(**product_values(own))
-    foreign = make_concept(
-        code="FOREIGN_M2M_MATERIAL",
-        concept_type=KnowledgeConcept.ConceptType.MATERIAL,
-        organization=other,
-    )
 
-    with pytest.raises(ValidationError):
-        product.concepts.add(
-            foreign,
-            through_defaults={
-                "organization": own,
-                "role": ProductConceptLink.Role.MATERIAL,
-            },
-        )
+    with pytest.raises(AttributeError):
+        _ = product.concepts
 
 
 @pytest.mark.django_db

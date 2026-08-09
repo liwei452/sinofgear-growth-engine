@@ -4,6 +4,9 @@ from django.db.models.deletion import ProtectedError
 
 from apps.identity.models import Organization
 from apps.platforms.models import Platform
+from apps.content.models import PlatformContent
+from apps.publishing.models import PublishAttempt, PublishTask
+from apps.publishing.services import publish_task_is_consistent
 from apps.tracking.models import TrackingLink
 from apps.tracking.services import TrackingConflict, create_tracking_link
 
@@ -24,6 +27,19 @@ def _create(context, **overrides):
     }
     values.update(overrides)
     return create_tracking_link(**values)
+
+
+@pytest.mark.django_db
+def test_tracking_fixture_uses_canonical_publishing_success(tracking_context):
+    post = tracking_context["published_post"]
+    task = PublishTask.objects.select_related(
+        "platform_content__master_content__brief", "social_account", "platform",
+        "published_post__attempt",
+    ).get(pk=post.task_id)
+    assert publish_task_is_consistent(task)
+    assert task.status == PublishTask.Status.SUCCEEDED
+    assert post.attempt.status == PublishAttempt.Status.SUCCEEDED
+    assert task.platform_content.status == PlatformContent.Status.PUBLISHED
 
 
 @pytest.mark.django_db

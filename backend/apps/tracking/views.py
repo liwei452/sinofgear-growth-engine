@@ -21,7 +21,7 @@ from .serializers import (
     AnalyticsFilterSerializer, ChannelSummaryEnvelopeSerializer, CursorFilterSerializer,
     ShortCursorEnvelopeSerializer, ShortLinkCreateSerializer, ShortLinkSerializer,
     TrackingCursorEnvelopeSerializer, TrackingErrorSerializer, TrackingLinkCreateSerializer,
-    TrackingLinkSerializer,
+    TrackingLinkSerializer, TrackingValidationErrorSerializer,
 )
 from .services import (
     TrackingConflict, _short_consistent, _tracking_consistent, create_short_link,
@@ -55,6 +55,11 @@ def _key(request):
         return validate_idempotency_key(raw)
     except TrackingConflict as exc:
         raise ValidationError({"Idempotency-Key": [str(exc)]}) from exc
+
+
+def _domain_validation(exc):
+    errors = exc.message_dict if hasattr(exc, "message_dict") else {"non_field_errors": exc.messages}
+    return _validation(errors)
 
 
 class TrackingPagination(CursorPagination):
@@ -128,7 +133,11 @@ class TrackingLinkListView(APIView):
     @extend_schema(
         operation_id="tracking_links_create", request=TrackingLinkCreateSerializer,
         parameters=[IDEMPOTENCY_PARAMETER],
-        responses={201: TrackingLinkSerializer, 400: TrackingErrorSerializer, 409: TrackingErrorSerializer},
+        responses={
+            201: TrackingLinkSerializer,
+            400: TrackingValidationErrorSerializer,
+            409: TrackingErrorSerializer,
+        },
     )
     def post(self, request):
         serializer = TrackingLinkCreateSerializer(data=request.data)
@@ -152,6 +161,8 @@ class TrackingLinkListView(APIView):
                 product=product, published_post=post, idempotency_key=key,
                 actor=request.user, **values,
             )
+        except ValidationError as exc:
+            return _domain_validation(exc)
         except TrackingConflict as exc:
             return Response({"code": "tracking_conflict", "message": str(exc)}, status=409)
         return Response(TrackingLinkSerializer(_tracking_link(request.organization, link.id)).data, status=201)
@@ -253,9 +264,60 @@ class ChannelSummaryView(APIView):
             short_link__organization=request.organization,
             campaign__organization=request.organization,
             product__organization=request.organization,
+            short_link__tracking_link_id=F("tracking_link_id"),
+            short_link__organization_id=F("organization_id"),
+            tracking_link__organization_id=F("organization_id"),
             campaign_id=F("tracking_link__campaign_id"),
             platform_id=F("tracking_link__platform_id"),
             product_id=F("tracking_link__product_id"),
+            tracking_fingerprint=F("tracking_link__request_fingerprint"),
+            short_fingerprint=F("short_link__request_fingerprint"),
+            short_code_snapshot=F("short_link__code"),
+            publishing_fingerprint=F(
+                "tracking_link__published_post__task__request_fingerprint"
+            ),
+            short_link__status__in=ShortLink.Status.values,
+            short_link__code__regex=r"^s_[A-Za-z0-9_-]{12}$",
+            tracking_link__published_post__organization_id=F("organization_id"),
+            tracking_link__published_post__task__organization_id=F("organization_id"),
+            tracking_link__published_post__attempt__organization_id=F("organization_id"),
+            tracking_link__published_post__platform_content__organization_id=F(
+                "organization_id"
+            ),
+            tracking_link__published_post__task__platform_content_id=F(
+                "tracking_link__published_post__platform_content_id"
+            ),
+            tracking_link__published_post__task__social_account_id=F(
+                "tracking_link__published_post__social_account_id"
+            ),
+            tracking_link__published_post__attempt__task_id=F(
+                "tracking_link__published_post__task_id"
+            ),
+            tracking_link__published_post__task__platform_id=F("platform_id"),
+            tracking_link__published_post__platform_content__platform_id=F("platform_id"),
+            tracking_link__published_post__social_account__platform_id=F("platform_id"),
+            tracking_link__published_post__platform_content__master_content__brief__campaign_id=F(
+                "campaign_id"
+            ),
+            tracking_link__published_post__platform_content__master_content__brief__product_links__product_id=F(
+                "product_id"
+            ),
+            tracking_link__published_post__task__status="SUCCEEDED",
+            tracking_link__published_post__attempt__status="SUCCEEDED",
+            tracking_link__published_post__platform_content__status="PUBLISHED",
+            tracking_link__published_post__attempt__external_id=F(
+                "tracking_link__published_post__external_id"
+            ),
+            tracking_link__published_post__task__started_at=F(
+                "tracking_link__published_post__attempt__started_at"
+            ),
+            tracking_link__published_post__task__finished_at=F(
+                "tracking_link__published_post__attempt__finished_at"
+            ),
+        ).filter(
+            tracking_link__published_post__task__finished_at=F(
+                "tracking_link__published_post__published_at"
+            )
         )
         mapping = {"campaign": "campaign_id", "platform": "platform_id", "product": "product_id", "country": "country"}
         for name, field in mapping.items():

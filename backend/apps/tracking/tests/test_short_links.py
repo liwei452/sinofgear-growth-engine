@@ -69,10 +69,10 @@ def test_short_code_collision_retries_without_sequential_fallback(tracking_conte
         organization=tracking_context["organization"], tracking_link=tracking,
         idempotency_key="existing-code",
     )
-    codes = iter([existing.code, "safe-new-code"])
+    codes = iter([existing.code, "s_ABCDEFGHIJKL"])
     monkeypatch.setattr("apps.tracking.services.generate_short_code", lambda: next(codes))
     created = create_short_link(
         organization=tracking_context["organization"], tracking_link=tracking,
         idempotency_key="collision-retry",
     )
-    assert created.code == "safe-new-code"
+    assert created.code == "s_ABCDEFGHIJKL"

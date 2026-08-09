@@ -6,6 +6,8 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.identity.models import Membership, Role
+from apps.publishing.models import PublishTask, publishing_writes
+from apps.tracking.models import ShortLink, TrackingLink, tracking_writes
 from apps.tracking.services import (
     create_short_link, create_tracking_link, record_click_event,
 )
@@ -92,6 +94,20 @@ def test_tracking_and_short_api_idempotency_cursor_and_isolated_detail(tracking_
 
 
 @pytest.mark.django_db
+def test_tracking_create_maps_domain_validation_to_json_400(tracking_context):
+    client = _client(tracking_context["organization"], Role.Code.OPERATOR, suffix="invalid-url")
+    response = client.post(
+        "/api/v1/tracking-links",
+        {**_body(tracking_context), "destination": "https://example.com/%00hidden"},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="invalid-encoded-url",
+    )
+    assert response.status_code == 400
+    assert response.headers["Content-Type"].startswith("application/json")
+    assert set(response.json()) == {"errors"}
+
+
+@pytest.mark.django_db
 def test_channel_summary_is_database_aggregate_with_all_dimensions_and_filters(
     tracking_context, settings
 ):
@@ -156,6 +172,65 @@ def test_channel_summary_rejects_unknown_repeated_and_oversized_ranges(tracking_
     assert client.get(
         "/api/v1/analytics/channel-summary?start=2026-01-01&start=2026-01-02&end=2026-01-03"
     ).status_code == 400
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "corruption", ["tracking", "short", "publishing", "short_code", "short_identity"]
+)
+def test_channel_summary_excludes_corrupt_attribution_provenance(
+    tracking_context, corruption
+):
+    tracking = create_tracking_link(
+        organization=tracking_context["organization"], destination="https://example.com/analytics",
+        utm_source="linkedin", utm_medium="social", utm_campaign="launch",
+        campaign=tracking_context["campaign"], platform=tracking_context["platform"],
+        product=tracking_context["product"], published_post=tracking_context["published_post"],
+        idempotency_key=f"corrupt-tracking-{corruption}",
+    )
+    short = create_short_link(
+        organization=tracking_context["organization"], tracking_link=tracking,
+        idempotency_key=f"corrupt-short-{corruption}",
+    )
+    now = timezone.now()
+    record_click_event(
+        short_link=short, occurred_at=now, meta={"REMOTE_ADDR": "198.51.100.8"}
+    )
+    if corruption == "tracking":
+        with tracking_writes():
+            TrackingLink.objects.filter(pk=tracking.pk).update(request_fingerprint="f" * 64)
+    elif corruption == "short":
+        with tracking_writes():
+            ShortLink.objects.filter(pk=short.pk).update(request_fingerprint="f" * 64)
+    elif corruption == "short_code":
+        with tracking_writes():
+            ShortLink.objects.filter(pk=short.pk).update(code="arbitrary-code")
+    elif corruption == "short_identity":
+        replacement = create_short_link(
+            organization=tracking_context["organization"], tracking_link=tracking,
+            idempotency_key="replacement-short-identity",
+        )
+        from django.db import connection
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE tracking_clickevent SET short_link_id = %s WHERE short_link_id = %s",
+                [replacement.id.hex, short.id.hex],
+            )
+    else:
+        with publishing_writes():
+            PublishTask.objects.filter(pk=tracking_context["published_post"].task_id).update(
+                request_fingerprint="f" * 64
+            )
+    client = _client(
+        tracking_context["organization"], Role.Code.READ_ONLY, suffix=f"corrupt-{corruption}"
+    )
+    response = client.get(
+        "/api/v1/analytics/channel-summary",
+        {"start": now.date().isoformat(), "end": now.date().isoformat()},
+    )
+    assert response.status_code == 200
+    assert response.json()["count"] == 0
     assert client.get(
         "/api/v1/analytics/channel-summary",
         {"start": "2025-01-01", "end": "2026-12-31"},

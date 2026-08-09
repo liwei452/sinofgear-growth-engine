@@ -111,3 +111,7 @@ class ChannelSummaryEnvelopeSerializer(serializers.Serializer):
 class TrackingErrorSerializer(serializers.Serializer):
     code = serializers.CharField()
     message = serializers.CharField()
+
+
+class TrackingValidationErrorSerializer(serializers.Serializer):
+    errors = serializers.DictField()

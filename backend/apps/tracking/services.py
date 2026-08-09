@@ -5,7 +5,7 @@ import re
 import secrets
 from datetime import datetime
 import unicodedata
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote_to_bytes, urlencode, urlsplit, urlunsplit
 
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
@@ -16,6 +16,7 @@ from apps.campaigns.models import ContentBriefProduct
 from apps.catalog.models import Product
 from apps.content.models import PlatformContent
 from apps.publishing.models import PublishAttempt, PublishTask
+from apps.publishing.services import publish_task_is_consistent
 
 from .models import ClickEvent, ShortLink, TrackingLink, click_purges, click_writes, tracking_writes
 from .privacy import (
@@ -26,6 +27,7 @@ from .privacy import (
 MAX_SLUG_LENGTH = 128
 MAX_DESTINATION_LENGTH = 2048
 UTM_NAMES = ("utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term")
+SHORT_CODE_PATTERN = r"s_[A-Za-z0-9_-]{12}"
 
 
 class TrackingConflict(ValueError):
@@ -57,6 +59,8 @@ def normalize_slug(value: str) -> str:
 def _canonical_host(hostname: str | None) -> str:
     if not hostname:
         raise ValidationError("Destination must include a host.")
+    if "%" in hostname:
+        raise ValidationError("Scoped or percent-encoded destination hosts are not allowed.")
     hostname = hostname.rstrip(".").lower()
     try:
         address = ipaddress.ip_address(hostname)
@@ -94,6 +98,24 @@ def _utm_value(name: str, value: str | None, *, required: bool) -> str | None:
         raise ValidationError({name: exc.messages}) from exc
 
 
+def _validate_encoded_component(value: str, name: str) -> None:
+    if re.search(r"%(?![0-9A-Fa-f]{2})", value):
+        raise ValidationError(f"Destination {name} contains invalid percent encoding.")
+    try:
+        decoded = unquote_to_bytes(value).decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ValidationError(f"Destination {name} is not valid UTF-8.") from exc
+    if any(ord(character) < 32 or ord(character) == 127 for character in decoded):
+        raise ValidationError(f"Destination {name} contains control characters.")
+
+
+def _canonical_uri_component(value: str, *, safe: str) -> str:
+    encoded = quote(value, safe=f"{safe}%", encoding="utf-8", errors="strict")
+    return re.sub(
+        r"%[0-9A-Fa-f]{2}", lambda match: match.group(0).upper(), encoded
+    )
+
+
 def build_canonical_url(
     destination: str,
     *,
@@ -119,14 +141,20 @@ def build_canonical_url(
         raise ValidationError("Destination must use HTTP or HTTPS.")
     if parsed.username is not None or parsed.password is not None:
         raise ValidationError("Destination credentials are not allowed.")
+    _validate_encoded_component(parsed.path, "path")
+    _validate_encoded_component(parsed.query, "query")
+    _validate_encoded_component(parsed.fragment, "fragment")
     host = _canonical_host(parsed.hostname)
     if port is not None and not 1 <= port <= 65535:
         raise ValidationError("Destination port is invalid.")
     netloc = host if port is None else f"{host}:{port}"
     try:
-        query = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=False, max_num_fields=100)
-    except ValueError as exc:
-        raise ValidationError("Destination query is too large.") from exc
+        query = parse_qsl(
+            parsed.query, keep_blank_values=True, strict_parsing=False,
+            max_num_fields=100, encoding="utf-8", errors="strict",
+        )
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValidationError("Destination query is invalid or too large.") from exc
     if any(name.lower() in UTM_NAMES for name, _value in query):
         raise ValidationError("Destination must not already contain UTM parameters.")
     query = sorted(query, key=lambda item: (item[0], item[1]))
@@ -141,7 +169,13 @@ def build_canonical_url(
     )
     query.extend((name, value) for name, value in (*utm, *optional) if value is not None)
     result = urlunsplit(
-        (parsed.scheme.lower(), netloc, parsed.path or "/", urlencode(query, doseq=True), parsed.fragment)
+        (
+            parsed.scheme.lower(),
+            netloc,
+            _canonical_uri_component(parsed.path or "/", safe="/:@!$&'()*+,;=-._~"),
+            urlencode(query, doseq=True),
+            _canonical_uri_component(parsed.fragment, safe="/?:@!$&'()*+,;=-._~"),
+        )
     )
     if len(result) > MAX_DESTINATION_LENGTH:
         raise ValidationError("Canonical URL is too long.")
@@ -177,6 +211,19 @@ def _tracking_consistent(link: TrackingLink) -> bool:
             content=link.utm_content or None,
             term=link.utm_term or None,
         )
+        fingerprint = _tracking_fingerprint({
+            "destination": link.destination,
+            "full_url": canonical,
+            "utm_source": link.utm_source,
+            "utm_medium": link.utm_medium,
+            "utm_campaign": link.utm_campaign,
+            "utm_content": link.utm_content,
+            "utm_term": link.utm_term,
+            "campaign_id": str(link.campaign_id),
+            "platform_id": str(link.platform_id),
+            "product_id": str(link.product_id),
+            "published_post_id": str(link.published_post_id),
+        })
         return (
             link.organization_id == post.organization_id == content.organization_id
             and link.organization_id == link.campaign.organization_id == link.product.organization_id
@@ -188,6 +235,7 @@ def _tracking_consistent(link: TrackingLink) -> bool:
             and post.task.social_account_id == post.social_account_id
             and post.task.status == PublishTask.Status.SUCCEEDED
             and post.attempt.status == PublishAttempt.Status.SUCCEEDED
+            and publish_task_is_consistent(post.task)
             and not PlatformContent.objects.filter(previous_version_id=content.id).exists()
             and ContentBriefProduct.objects.filter(
                 organization_id=link.organization_id,
@@ -195,8 +243,15 @@ def _tracking_consistent(link: TrackingLink) -> bool:
                 product_id=link.product_id,
             ).exists()
             and link.full_url == canonical
+            and normalize_slug(link.utm_source) == link.utm_source
+            and normalize_slug(link.utm_medium) == link.utm_medium
+            and normalize_slug(link.utm_campaign) == link.utm_campaign
+            and (not link.utm_content or normalize_slug(link.utm_content) == link.utm_content)
+            and (not link.utm_term or normalize_slug(link.utm_term) == link.utm_term)
+            and validate_idempotency_key(link.idempotency_key) == link.idempotency_key
+            and link.request_fingerprint == fingerprint
         )
-    except (AttributeError, ObjectDoesNotExist, ValidationError):
+    except (AttributeError, ObjectDoesNotExist, TrackingConflict, ValidationError, ValueError):
         return False
 
 
@@ -272,12 +327,18 @@ def generate_short_code() -> str:
 
 def _short_consistent(short_link: ShortLink) -> bool:
     try:
+        fingerprint = _tracking_fingerprint({
+            "tracking_link_id": str(short_link.tracking_link_id)
+        })
         return (
             short_link.organization_id == short_link.tracking_link.organization_id
             and _tracking_consistent(short_link.tracking_link)
-            and re.fullmatch(r"[A-Za-z0-9_-]{10,32}", short_link.code) is not None
+            and short_link.status in ShortLink.Status.values
+            and re.fullmatch(SHORT_CODE_PATTERN, short_link.code) is not None
+            and validate_idempotency_key(short_link.idempotency_key) == short_link.idempotency_key
+            and short_link.request_fingerprint == fingerprint
         )
-    except ObjectDoesNotExist:
+    except (ObjectDoesNotExist, TrackingConflict, ValueError):
         return False
 
 
@@ -303,10 +364,13 @@ def create_short_link(*, organization, tracking_link, idempotency_key, actor=Non
     if not _tracking_consistent(locked):
         raise TrackingConflict("Tracking link is inconsistent.")
     for _attempt in range(8):
+        code = generate_short_code()
+        if re.fullmatch(SHORT_CODE_PATTERN, code) is None:
+            continue
         candidate = ShortLink(
             organization=organization,
             tracking_link=locked,
-            code=generate_short_code(),
+            code=code,
             status=ShortLink.Status.ACTIVE,
             idempotency_key=key,
             request_fingerprint=fingerprint,
@@ -343,7 +407,7 @@ def set_short_link_status(short_link: ShortLink, *, status: str) -> ShortLink:
 
 
 def resolve_active_short_link(code: str) -> ShortLink | None:
-    if not isinstance(code, str) or re.fullmatch(r"[A-Za-z0-9_-]{10,32}", code) is None:
+    if not isinstance(code, str) or re.fullmatch(SHORT_CODE_PATTERN, code) is None:
         return None
     short_link = ShortLink.objects.filter(code=code, status=ShortLink.Status.ACTIVE).select_related(
         "tracking_link__published_post__platform_content__master_content__brief",
@@ -382,6 +446,10 @@ def record_click_event(*, short_link: ShortLink, meta: dict[str, object], occurr
             referrer_host=normalize_referrer_host(meta.get("HTTP_REFERER")),
             network_hash=daily_network_hash(address, occurred_date),
             hash_version=settings.TRACKING_HASH_VERSION,
+            tracking_fingerprint=locked.tracking_link.request_fingerprint,
+            short_fingerprint=locked.request_fingerprint,
+            publishing_fingerprint=locked.tracking_link.published_post.task.request_fingerprint,
+            short_code_snapshot=locked.code,
         )
 
 

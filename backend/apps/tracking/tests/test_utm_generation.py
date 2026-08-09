@@ -29,6 +29,20 @@ def test_canonical_url_preserves_safe_query_and_fragment_with_stable_utm_order()
     )
 
 
+def test_canonical_url_preserves_safe_unicode_as_stable_idna_utf8_uri():
+    assert build_canonical_url(
+        "https://例子.测试/齿轮?名称=精密#规格",
+        source="领英",
+        medium="社交",
+        campaign="齿轮 发布",
+    ) == (
+        "https://xn--fsqu00a.xn--0zwm56d/%E9%BD%BF%E8%BD%AE?"
+        "%E5%90%8D%E7%A7%B0=%E7%B2%BE%E5%AF%86&"
+        "utm_source=%E9%A2%86%E8%8B%B1&utm_medium=%E7%A4%BE%E4%BA%A4&"
+        "utm_campaign=%E9%BD%BF%E8%BD%AE-%E5%8F%91%E5%B8%83#%E8%A7%84%E6%A0%BC"
+    )
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -40,6 +54,14 @@ def test_canonical_url_preserves_safe_query_and_fragment_with_stable_utm_order()
         "https://intranet/",
         "https://example.com/?UTM_Source=forged",
         "https://example.com/\nheader",
+        "https://example.com/%00hidden",
+        "https://example.com/path?next=%0D%0Aheader",
+        "https://example.com/path#bad%7Ffragment",
+        "https://example.com/%",
+        "https://example.com/%GG",
+        "https://example.com/%FF",
+        "https://example.com/?q=%C3%28",
+        "https://[2606:4700:4700::1111%25eth0]/",
     ],
 )
 def test_canonical_url_rejects_unsafe_destinations_and_utm_conflicts(url):

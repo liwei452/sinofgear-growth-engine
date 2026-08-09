@@ -1,8 +1,12 @@
 import pytest
 from django.db import DatabaseError
 
+from apps.content.models import PlatformContent, content_writes
+from apps.publishing.models import PublishTask, publishing_writes
 from apps.tracking.models import ClickEvent, ShortLink, TrackingLink, tracking_writes
-from apps.tracking.services import create_short_link, create_tracking_link, set_short_link_status
+from apps.tracking.services import (
+    create_short_link, create_tracking_link, resolve_active_short_link, set_short_link_status,
+)
 
 
 def _links(context):
@@ -53,6 +57,19 @@ def test_disabled_or_corrupt_short_link_is_non_enumerating_404(client, tracking_
 
 
 @pytest.mark.django_db
+def test_percent_encoded_control_corruption_never_redirects_or_records(client, tracking_context):
+    tracking, short = _links(tracking_context)
+    with tracking_writes():
+        TrackingLink.objects.filter(pk=tracking.pk).update(
+            destination="https://example.com/%0D%0Aheader"
+        )
+    response = client.get(f"/r/{short.code}", REMOTE_ADDR="198.51.100.25")
+    assert response.status_code == 404
+    assert "Location" not in response
+    assert ClickEvent.objects.count() == 0
+
+
+@pytest.mark.django_db
 def test_database_failure_returns_generic_503_without_redirect(client, tracking_context, monkeypatch):
     _tracking, short = _links(tracking_context)
     monkeypatch.setattr(
@@ -79,3 +96,60 @@ def test_malformed_trusted_forwarding_records_nothing_and_does_not_redirect(
     assert response.status_code == 400
     assert "Location" not in response
     assert ClickEvent.objects.count() == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("request_fingerprint", "f" * 64),
+        ("idempotency_key", " invalid "),
+        ("utm_source", "LinkedIn"),
+    ],
+)
+def test_redirect_rejects_tracking_identity_or_fingerprint_corruption(
+    tracking_context, field, value
+):
+    tracking, short = _links(tracking_context)
+    with tracking_writes():
+        TrackingLink.objects.filter(pk=tracking.pk).update(**{field: value})
+    assert resolve_active_short_link(short.code) is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("request_fingerprint", "f" * 64),
+        ("idempotency_key", " invalid "),
+        ("code", "arbitrary-code"),
+        ("status", "BROKEN"),
+    ],
+)
+def test_redirect_rejects_short_identity_status_or_code_corruption(
+    tracking_context, field, value
+):
+    _tracking, short = _links(tracking_context)
+    with tracking_writes():
+        ShortLink.objects.filter(pk=short.pk).update(**{field: value})
+    assert resolve_active_short_link(value if field == "code" else short.code) is None
+
+
+@pytest.mark.django_db
+def test_redirect_reuses_canonical_publish_task_consistency(tracking_context):
+    _tracking, short = _links(tracking_context)
+    with publishing_writes():
+        PublishTask.objects.filter(pk=tracking_context["published_post"].task_id).update(
+            request_fingerprint="f" * 64
+        )
+    assert resolve_active_short_link(short.code) is None
+
+
+@pytest.mark.django_db
+def test_redirect_requires_exact_published_content_status(tracking_context):
+    _tracking, short = _links(tracking_context)
+    with content_writes():
+        PlatformContent.objects.filter(pk=tracking_context["content"].pk).update(
+            status=PlatformContent.Status.APPROVED
+        )
+    assert resolve_active_short_link(short.code) is None

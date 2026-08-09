@@ -185,6 +185,10 @@ class ClickEvent(models.Model):
     referrer_host = models.CharField(max_length=253, blank=True)
     network_hash = models.CharField(max_length=64)
     hash_version = models.CharField(max_length=32)
+    tracking_fingerprint = models.CharField(max_length=64, null=True, editable=False)
+    short_fingerprint = models.CharField(max_length=64, null=True, editable=False)
+    publishing_fingerprint = models.CharField(max_length=64, null=True, editable=False)
+    short_code_snapshot = models.CharField(max_length=32, null=True, editable=False)
 
     class Meta:
         ordering = ["occurred_at", "id"]

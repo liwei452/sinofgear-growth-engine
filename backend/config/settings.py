@@ -39,6 +39,8 @@ INSTALLED_APPS = [
     "apps.catalog.apps.CatalogConfig",
     "apps.assets.apps.AssetsConfig",
     "apps.campaigns.apps.CampaignsConfig",
+    "apps.jobs.apps.JobsConfig",
+    "apps.ai.apps.AIConfig",
 ]
 
 MIDDLEWARE = [

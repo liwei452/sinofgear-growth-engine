@@ -75,6 +75,14 @@ def _attempt_history_is_consistent(task, post):
             and (
                 previous.finished_at is None
                 or previous.finished_at > attempt.started_at
+                or (
+                    previous.retry_at is not None
+                    and previous.retry_at > attempt.started_at
+                )
+                or (
+                    previous.status == PublishAttempt.Status.FAILED
+                    and previous.outcome == "TOKEN_EXPIRED"
+                )
             )
         ):
             return False
@@ -215,7 +223,8 @@ def publish_task_is_consistent(task):
             )
         if task.status == PublishTask.Status.SUCCEEDED:
             return (
-                task.claim_token is None and task.started_at is not None
+                content.status == PlatformContent.Status.PUBLISHED
+                and task.claim_token is None and task.started_at is not None
                 and task.finished_at is not None and task.canceled_at is None
                 and task.last_error is None and task.retry_not_before is None
                 and post is not None and latest is not None

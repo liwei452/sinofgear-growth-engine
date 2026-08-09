@@ -8,6 +8,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.content.models import PlatformContent, content_writes
 from apps.identity.models import Membership, Organization, Role
 from apps.publishing.services import (
     cancel_publish_task, claim_publish_task, create_publish_task,
@@ -299,6 +300,132 @@ def test_corrupt_attempt_history_is_omitted_and_detail_action_are_404(
     assert response.status_code == 200
     assert str(task.id) not in response.content.decode()
     assert "must-not-leak" not in response.content.decode()
+
+
+def test_succeeded_task_with_nonpublished_content_fails_closed_everywhere(
+    publishing_context,
+):
+    context = publishing_context
+    task = create_publish_task(
+        content=context["content"], account=context["account"],
+        idempotency_key="succeeded-content-state", actor=context["actor"],
+    )
+    execute_publish_task(task.id)
+    with content_writes():
+        PlatformContent.objects.filter(pk=context["content"].pk).update(
+            status=PlatformContent.Status.APPROVED
+        )
+    client = _client(
+        context["organization"], Role.Code.ADMINISTRATOR,
+        suffix="succeeded-content-state",
+    )
+
+    assert client.get(f"/api/v1/publish-tasks/{task.id}").status_code == 404
+    assert client.post(
+        f"/api/v1/publish-tasks/{task.id}/cancel", {}, format="json"
+    ).status_code == 404
+    response = client.get("/api/v1/publish-tasks")
+    assert response.status_code == 200
+    assert str(task.id) not in response.content.decode()
+
+
+def test_token_expired_attempt_cannot_have_a_legacy_successor(publishing_context):
+    context = publishing_context
+    context["account"].connector_metadata = {"mock_outcome": "token_expired"}
+    context["account"].save(update_fields=["connector_metadata", "updated_at"])
+    task = create_publish_task(
+        content=context["content"], account=context["account"],
+        idempotency_key="token-expired-successor", actor=context["actor"],
+    )
+    execute_publish_task(task.id)
+    first = PublishAttempt.objects.get(task=task)
+    second_started = first.finished_at + timedelta(seconds=1)
+    provider_error = {
+        "code": "PROVIDER_ERROR",
+        "message": "Provider rejected the publish request.",
+    }
+    with publishing_writes():
+        second = PublishAttempt.objects.create(
+            organization=task.organization,
+            task=task,
+            number=2,
+            claim_token=uuid.uuid4(),
+            status=PublishAttempt.Status.FAILED,
+            request_fingerprint=task.request_fingerprint,
+            outcome="PROVIDER_ERROR",
+            error=provider_error,
+            started_at=second_started,
+            finished_at=second_started + timedelta(seconds=1),
+        )
+        PublishTask.objects.filter(pk=task.pk).update(
+            attempt_number=2,
+            started_at=second.started_at,
+            finished_at=second.finished_at,
+            last_error=provider_error,
+            retry_not_before=None,
+        )
+    client = _client(
+        context["organization"], Role.Code.ADMINISTRATOR,
+        suffix="token-expired-successor",
+    )
+
+    assert client.get(f"/api/v1/publish-tasks/{task.id}").status_code == 404
+    assert client.post(
+        f"/api/v1/publish-tasks/{task.id}/retry", {}, format="json"
+    ).status_code == 404
+    response = client.get("/api/v1/publish-tasks")
+    assert response.status_code == 200
+    assert str(task.id) not in response.content.decode()
+
+
+def test_rate_limited_successor_cannot_start_before_retry_at(publishing_context):
+    context = publishing_context
+    context["account"].connector_metadata = {"mock_outcome": "rate_limit"}
+    context["account"].save(update_fields=["connector_metadata", "updated_at"])
+    task = create_publish_task(
+        content=context["content"], account=context["account"],
+        idempotency_key="rate-limit-early-successor", actor=context["actor"],
+    )
+    execute_publish_task(task.id)
+    first = PublishAttempt.objects.get(task=task)
+    second_started = first.finished_at + timedelta(microseconds=1)
+    assert second_started < first.retry_at
+    provider_error = {
+        "code": "PROVIDER_ERROR",
+        "message": "Provider rejected the publish request.",
+    }
+    with publishing_writes():
+        second = PublishAttempt.objects.create(
+            organization=task.organization,
+            task=task,
+            number=2,
+            claim_token=uuid.uuid4(),
+            status=PublishAttempt.Status.FAILED,
+            request_fingerprint=task.request_fingerprint,
+            outcome="PROVIDER_ERROR",
+            error=provider_error,
+            started_at=second_started,
+            finished_at=second_started + timedelta(microseconds=1),
+        )
+        PublishTask.objects.filter(pk=task.pk).update(
+            attempt_number=2,
+            started_at=second.started_at,
+            finished_at=second.finished_at,
+            last_error=provider_error,
+            retry_not_before=None,
+        )
+    client = _client(
+        context["organization"], Role.Code.ADMINISTRATOR,
+        suffix="rate-limit-early-successor",
+    )
+
+    assert client.get(f"/api/v1/publish-tasks/{task.id}").status_code == 404
+    assert client.post(
+        f"/api/v1/publish-tasks/{task.id}/retry", {}, format="json"
+    ).status_code == 404
+    response = client.get("/api/v1/publish-tasks")
+    assert response.status_code == 200
+    assert str(task.id) not in response.content.decode()
 
 
 @pytest.mark.parametrize(

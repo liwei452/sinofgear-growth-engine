@@ -21,6 +21,12 @@ def database_from_url(database_url: str) -> dict[str, object]:
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "development-only-django-secret-key")
 DEBUG = os.environ.get("DJANGO_DEBUG", "false").lower() == "true"
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+TRACKING_HASH_SECRET = os.environ.get("TRACKING_HASH_SECRET", "")
+TRACKING_HASH_VERSION = os.environ.get("TRACKING_HASH_VERSION", "v1")
+TRACKING_TRUSTED_PROXY_CIDRS = [
+    value.strip() for value in os.environ.get("TRACKING_TRUSTED_PROXY_CIDRS", "").split(",")
+    if value.strip()
+]
 
 INSTALLED_APPS = [
     "django.contrib.auth",
@@ -43,6 +49,7 @@ INSTALLED_APPS = [
     "apps.ai.apps.AIConfig",
     "apps.content.apps.ContentConfig",
     "apps.publishing.apps.PublishingConfig",
+    "apps.tracking.apps.TrackingConfig",
 ]
 
 MIDDLEWARE = [

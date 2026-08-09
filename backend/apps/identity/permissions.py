@@ -26,6 +26,8 @@ class PermissionCode(StrEnum):
     CONTENT_REVIEW = "content.review"
     PUBLISHING_READ = "publishing.read"
     PUBLISHING_MANAGE = "publishing.manage"
+    TRACKING_READ = "tracking.read"
+    TRACKING_MANAGE = "tracking.manage"
 
 
 class HasOrganizationPermission(BasePermission):
@@ -129,3 +131,11 @@ class CanReadPublishing(HasOrganizationPermission):
 
 class CanManagePublishing(HasOrganizationPermission):
     permission_code = PermissionCode.PUBLISHING_MANAGE
+
+
+class CanReadTracking(HasOrganizationPermission):
+    permission_code = PermissionCode.TRACKING_READ
+
+
+class CanManageTracking(HasOrganizationPermission):
+    permission_code = PermissionCode.TRACKING_MANAGE

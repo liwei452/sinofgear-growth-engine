@@ -1,5 +1,7 @@
 from django.contrib.auth import login, logout
 from django.http import Http404
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
@@ -11,6 +13,7 @@ from .permissions import CanManageMemberships, CanReadMemberships
 from .serializers import CurrentUserSerializer, LoginSerializer, MembershipSerializer
 
 
+@method_decorator(csrf_protect, name="dispatch")
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
@@ -27,6 +30,14 @@ class LogoutView(APIView):
 
     def post(self, request: Request) -> Response:
         logout(request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@method_decorator(ensure_csrf_cookie, name="dispatch")
+class CsrfCookieView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request: Request) -> Response:
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

@@ -1,0 +1,19 @@
+:root {
+  color-scheme: light;
+  --sg-brand: #005ba8;
+  --sg-brand-hover: #00477f;
+  --sg-brand-soft: #e8f2fa;
+  --sg-ink: #172231;
+  --sg-muted: #5c6877;
+  --sg-line: #dce3ea;
+  --sg-surface: #ffffff;
+  --sg-canvas: #f4f7fa;
+  --sg-danger: #a62626;
+  --sg-danger-soft: #fff0f0;
+  --sg-focus: #ffbf47;
+  --sg-radius-sm: 8px;
+  --sg-radius-md: 14px;
+  --sg-radius-lg: 22px;
+  --sg-shadow: 0 14px 42px rgb(23 34 49 / 10%);
+  --sg-sidebar-width: 260px;
+}

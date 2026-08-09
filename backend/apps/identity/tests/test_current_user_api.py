@@ -82,3 +82,20 @@ def test_login_does_not_disclose_whether_a_user_exists() -> None:
 
     assert missing_user.status_code == wrong_password.status_code == 400
     assert missing_user.json() == wrong_password.json() == {"detail": "Invalid credentials."}
+
+
+@pytest.mark.django_db
+def test_csrf_bootstrap_sets_cookie_and_login_requires_matching_header() -> None:
+    get_user_model().objects.create_user(username="csrf-user", password="safe-password")
+    client = APIClient(enforce_csrf_checks=True)
+
+    bootstrap = client.get("/api/v1/auth/csrf")
+
+    assert bootstrap.status_code == 204
+    assert bootstrap.cookies["csrftoken"].value
+    credentials = {"username": "csrf-user", "password": "safe-password"}
+    assert client.post("/api/v1/auth/login", credentials, format="json").status_code == 403
+    token = bootstrap.cookies["csrftoken"].value
+    assert client.post(
+        "/api/v1/auth/login", credentials, format="json", HTTP_X_CSRFTOKEN=token
+    ).status_code == 204

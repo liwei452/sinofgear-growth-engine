@@ -87,10 +87,33 @@ USE_TZ = True
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-REST_FRAMEWORK = {"DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema"}
+REST_FRAMEWORK = {
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_RENDERER_CLASSES": ["apps.common.renderers.RecoverableErrorJSONRenderer"],
+}
 SPECTACULAR_SETTINGS = {
     "TITLE": "SinofGear Growth Engine API",
     "VERSION": "v1",
+    "POSTPROCESSING_HOOKS": [
+        "drf_spectacular.hooks.postprocess_schema_enums",
+        "apps.common.openapi.enforce_mutation_error_contract",
+        "apps.publishing.openapi.enforce_publish_attempt_bound",
+    ],
+    "APPEND_COMPONENTS": {
+        "schemas": {
+            "ApiError": {
+                "type": "object",
+                "required": ["code", "message", "recovery_action"],
+                "properties": {
+                    "code": {"type": "string"},
+                    "message": {"type": "string"},
+                    "recovery_action": {"type": "string"},
+                    "detail": {"type": "string"},
+                    "errors": {"type": "object", "additionalProperties": True},
+                },
+            }
+        }
+    },
     "ENUM_NAME_OVERRIDES": {
         "KnowledgeStatusEnum": [
             ("SUGGESTED", "Suggested"),
@@ -102,6 +125,21 @@ SPECTACULAR_SETTINGS = {
             ("DRAFT", "Draft"),
             ("ACTIVE", "Active"),
             ("ARCHIVED", "Archived"),
+        ],
+        "ActiveStatusEnum": [("ACTIVE", "Active"), ("INACTIVE", "Inactive")],
+        "ProductConceptRoleEnum": [
+            ("TYPE", "Type"),
+            ("MATERIAL", "Material"),
+            ("PROCESS", "Process"),
+            ("STANDARD", "Standard"),
+            ("APPLICATION", "Application"),
+            ("PARAMETER", "Parameter"),
+        ],
+        "SocialAccountPublishModeEnum": [
+            ("API_AUTO", "API automatic"),
+            ("API_CONFIRM", "API confirmation"),
+            ("EXPORT_PACKAGE", "Export package"),
+            ("MANUAL", "Manual"),
         ],
         "PublishTaskStatusEnum": [
             ("SCHEDULED", "Scheduled"),

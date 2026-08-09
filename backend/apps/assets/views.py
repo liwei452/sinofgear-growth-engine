@@ -119,6 +119,7 @@ class AssetCursorPagination(CursorPagination):
     ordering = ("-created_at", "-id")
 
 
+@extend_schema(tags=["Assets"])
 class AssetListView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
@@ -202,6 +203,7 @@ class AssetListView(APIView):
         return Response(MaterialAssetSerializer(asset).data, status=response_status)
 
 
+@extend_schema(tags=["Assets"])
 class AssetDetailView(APIView):
     permission_classes = [CanReadAssets]
 
@@ -213,6 +215,7 @@ class AssetDetailView(APIView):
         return Response(MaterialAssetSerializer(_get_asset(request.organization, asset_id)).data)
 
 
+@extend_schema(tags=["Assets"])
 class AssetLinkProductView(APIView):
     permission_classes = [CanManageAssets]
 
@@ -249,6 +252,7 @@ class AssetLinkProductView(APIView):
         )
 
 
+@extend_schema(tags=["Assets"])
 class AssetDownloadURLView(APIView):
     permission_classes = [CanReadAssets]
 

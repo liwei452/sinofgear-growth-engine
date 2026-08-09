@@ -77,6 +77,7 @@ def _validated_query(request, serializer_class):
     return serializer.validated_data, None
 
 
+@extend_schema(tags=["PublishTasks"])
 class PublishTaskListView(APIView):
     serializer_class = PublishTaskSerializer
 
@@ -172,6 +173,7 @@ class PublishScheduleView(PublishTaskListView):
         return super().post(request)
 
 
+@extend_schema(tags=["PublishTasks"])
 class PublishTaskDetailView(APIView):
     permission_classes = [CanReadPublishing]
     serializer_class = PublishTaskSerializer
@@ -180,6 +182,7 @@ class PublishTaskDetailView(APIView):
         return Response(PublishTaskSerializer(_task(request.organization, task_id)).data)
 
 
+@extend_schema(tags=["PublishTasks"])
 class PublishActionView(APIView):
     permission_classes = [CanManagePublishing]
     serializer_class = EmptyActionSerializer
@@ -212,6 +215,7 @@ class PublishRetryView(PublishActionView):
     action = "retry"
 
 
+@extend_schema(tags=["PublishTasks"])
 class PublishCalendarView(APIView):
     permission_classes = [CanReadPublishing]
     serializer_class = CalendarFilterSerializer

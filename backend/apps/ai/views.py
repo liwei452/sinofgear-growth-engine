@@ -56,6 +56,7 @@ def _run(organization, run_id):
         raise Http404 from exc
 
 
+@extend_schema(tags=["AIRuns"])
 class AIRunListView(APIView):
     permission_classes = [CanReadJobs]
 
@@ -88,6 +89,7 @@ class AIRunListView(APIView):
         return paginator.get_paginated_response(AIRunSerializer(page, many=True).data)
 
 
+@extend_schema(tags=["AIRuns"])
 class AIRunDetailView(APIView):
     permission_classes = [CanReadJobs]
 

@@ -103,7 +103,12 @@ def test_two_clients_editing_same_version_get_one_conflict_without_partial_chang
 
     assert first.status_code == 200
     assert stale.status_code == 409
-    assert stale.json() == {"code": "PRODUCT_VERSION_CONFLICT", "current_version": 2}
+    assert stale.json() == {
+        "code": "PRODUCT_VERSION_CONFLICT",
+        "current_version": 2,
+        "message": "The request could not be completed.",
+        "recovery_action": "Refresh the latest data and try again.",
+    }
     product = Product.objects.get(pk=product_id)
     assert product.name_en == "First wins"
     assert product.moq == 10

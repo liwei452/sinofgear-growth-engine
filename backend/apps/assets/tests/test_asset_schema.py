@@ -49,8 +49,10 @@ def test_runtime_upload_validation_matches_documented_error_shape(organizations,
     documented = schema["paths"]["/api/v1/assets"]["post"]["responses"]["400"]
 
     assert response.status_code == 400
-    assert set(response.json()) == {"errors"}
+    assert set(response.json()) == {"errors", "code", "message", "recovery_action"}
     assert isinstance(response.json()["errors"]["asset_type"], list)
-    assert documented["content"]["application/json"]["schema"]["$ref"].endswith(
-        "AssetValidationError"
-    )
+    refs = {
+        item["$ref"].rsplit("/", 1)[-1]
+        for item in documented["content"]["application/json"]["schema"]["allOf"]
+    }
+    assert refs == {"ApiError", "AssetValidationError"}

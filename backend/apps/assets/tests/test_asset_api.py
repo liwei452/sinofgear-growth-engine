@@ -58,7 +58,12 @@ def test_cross_org_asset_detail_and_download_are_non_leaking_404(organizations, 
     assert detail.status_code == 404
     assert download.status_code == 404
     assert detail.json() == {"detail": "Not found."}
-    assert download.json() == {"detail": "Not found."}
+    assert download.json() == {
+        "detail": "Not found.",
+        "code": "http_404",
+        "message": "Not found.",
+        "recovery_action": "Refresh the page and choose an available resource.",
+    }
 
 
 @pytest.mark.django_db

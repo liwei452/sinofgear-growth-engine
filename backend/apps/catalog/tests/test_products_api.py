@@ -174,7 +174,7 @@ def test_create_rejects_foreign_nonapproved_and_duplicate_concept_links(
             "/api/v1/products", api_product_payload(concept_links=links), format="json"
         )
         assert response.status_code == 400
-        assert set(response.json()) == {"errors"}
+        assert set(response.json()) == {"errors", "code", "message", "recovery_action"}
 
     assert Product.objects.count() == 0
     assert ProductConceptLink.objects.count() == 0
@@ -194,5 +194,5 @@ def test_api_validation_uses_stable_errors_envelope(organizations, roles) -> Non
     )
 
     assert response.status_code == 400
-    assert set(response.json()) == {"errors"}
+    assert set(response.json()) == {"errors", "code", "message", "recovery_action"}
     assert {"name_en", "landing_page_url", "moq"} <= set(response.json()["errors"])

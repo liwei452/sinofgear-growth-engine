@@ -109,7 +109,7 @@ def test_invalid_revision_payload_returns_controlled_400(content_provenance):
     )
 
     assert response.status_code == 400
-    assert set(response.json()) == {"errors"}
+    assert set(response.json()) == {"errors", "code", "message", "recovery_action"}
 
 
 def test_master_current_head_is_authoritative_across_filters_and_detail(
@@ -245,7 +245,7 @@ def test_master_revision_rejects_platform_payload_at_serializer(content_provenan
     )
 
     assert response.status_code == 400
-    assert set(response.json()) == {"errors"}
+    assert set(response.json()) == {"errors", "code", "message", "recovery_action"}
 
 
 def test_platform_revision_requires_platform_payload_at_serializer(content_provenance):
@@ -265,4 +265,4 @@ def test_platform_revision_requires_platform_payload_at_serializer(content_prove
     )
 
     assert response.status_code == 400
-    assert set(response.json()) == {"errors"}
+    assert set(response.json()) == {"errors", "code", "message", "recovery_action"}

@@ -113,7 +113,12 @@ def test_login_does_not_disclose_whether_a_user_exists() -> None:
     wrong_password = client.post("/api/v1/auth/login", {"username": "existing", "password": "bad"}, format="json")
 
     assert missing_user.status_code == wrong_password.status_code == 400
-    assert missing_user.json() == wrong_password.json() == {"detail": "Invalid credentials."}
+    assert missing_user.json() == wrong_password.json() == {
+        "detail": "Invalid credentials.",
+        "code": "http_400",
+        "message": "Invalid credentials.",
+        "recovery_action": "Correct the request and try again.",
+    }
 
 
 @pytest.mark.django_db

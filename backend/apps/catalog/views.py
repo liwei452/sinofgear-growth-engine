@@ -239,6 +239,7 @@ class ProductCursorPagination(CursorPagination):
     ordering = ("name_en", "id")
 
 
+@extend_schema(tags=["Products"])
 class ProductListView(APIView):
     def get_permissions(self):
         return [(CanReadProducts if self.request.method == "GET" else CanManageProducts)()]
@@ -321,6 +322,7 @@ class ProductListView(APIView):
         return _response(product, response_status=status.HTTP_201_CREATED)
 
 
+@extend_schema(tags=["Products"])
 class ProductDetailView(APIView):
     def get_permissions(self):
         return [(CanReadProducts if self.request.method == "GET" else CanManageProducts)()]

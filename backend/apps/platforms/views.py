@@ -35,6 +35,7 @@ def _credential(organization, credential_id):
         raise Http404 from error
 
 
+@extend_schema(tags=["Platforms"])
 class PlatformListView(APIView):
     permission_classes = [CanReadMemberships]
 
@@ -44,6 +45,7 @@ class PlatformListView(APIView):
         return Response({"results": PlatformSerializer(platforms, many=True).data})
 
 
+@extend_schema(tags=["SocialAccounts"])
 class SocialAccountListView(APIView):
     def get_permissions(self):
         return [(CanManageCredentials if self.request.method == "POST" else CanReadPublishing)()]
@@ -68,6 +70,7 @@ class SocialAccountListView(APIView):
         return Response(SocialAccountReadSerializer(account).data, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(tags=["SocialAccounts"])
 class SocialAccountDetailView(APIView):
     def get_permissions(self):
         return [(CanManageCredentials if self.request.method == "PATCH" else CanReadPublishing)()]
@@ -90,6 +93,7 @@ class SocialAccountDetailView(APIView):
         return Response(SocialAccountReadSerializer(serializer.save()).data)
 
 
+@extend_schema(tags=["SocialAccounts"])
 class SocialAccountConnectionView(APIView):
     permission_classes = [CanManageCredentials]
 
@@ -105,6 +109,7 @@ class SocialAccountConnectionView(APIView):
         )
 
 
+@extend_schema(tags=["ConnectorCredentials"])
 class ConnectorCredentialListView(APIView):
     permission_classes = [CanManageCredentials]
 
@@ -132,6 +137,7 @@ class ConnectorCredentialListView(APIView):
         )
 
 
+@extend_schema(tags=["ConnectorCredentials"])
 class ConnectorCredentialDetailView(APIView):
     permission_classes = [CanManageCredentials]
 

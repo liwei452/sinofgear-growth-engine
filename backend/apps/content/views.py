@@ -149,12 +149,12 @@ class ContentListView(APIView):
         return paginator.get_paginated_response(self.serializer(safe_page, many=True).data)
 
 
-@extend_schema_view(get=extend_schema(operation_id="master_contents_list"))
+@extend_schema_view(get=extend_schema(operation_id="master_contents_list", tags=["MasterContents"]))
 class MasterListView(ContentListView):
     pass
 
 
-@extend_schema_view(get=extend_schema(operation_id="platform_contents_list"))
+@extend_schema_view(get=extend_schema(operation_id="platform_contents_list", tags=["PlatformContents"]))
 class PlatformListView(ContentListView):
     model = PlatformContent
     serializer = PlatformContentSerializer
@@ -171,18 +171,19 @@ class ContentDetailView(APIView):
         return Response(self.serializer(_object(self.model, request.organization, content_id)).data)
 
 
-@extend_schema_view(get=extend_schema(operation_id="master_contents_retrieve"))
+@extend_schema_view(get=extend_schema(operation_id="master_contents_retrieve", tags=["MasterContents"]))
 class MasterDetailView(ContentDetailView):
     pass
 
 
-@extend_schema_view(get=extend_schema(operation_id="platform_contents_retrieve"))
+@extend_schema_view(get=extend_schema(operation_id="platform_contents_retrieve", tags=["PlatformContents"]))
 class PlatformDetailView(ContentDetailView):
     model = PlatformContent
     serializer = PlatformContentSerializer
     serializer_class = PlatformContentSerializer
 
 
+@extend_schema(tags=["MasterContents"])
 class MasterRevisionView(APIView):
     permission_classes = [CanManageContent]
     serializer_class = MasterRevisionSerializer
@@ -202,6 +203,7 @@ class MasterRevisionView(APIView):
         return Response(MasterContentSerializer(revision).data, status=201)
 
 
+@extend_schema(tags=["PlatformContents"])
 class PlatformRevisionView(APIView):
     permission_classes = [CanManageContent]
     serializer_class = PlatformRevisionSerializer
@@ -244,18 +246,22 @@ class ContentActionView(APIView):
         return Response(self.serializer(content).data)
 
 
+@extend_schema(tags=["MasterContents"])
 class MasterApproveView(ContentActionView):
     action = "APPROVE"
 
 
+@extend_schema(tags=["MasterContents"])
 class MasterRejectView(ContentActionView):
     action = "REJECT"
 
 
+@extend_schema(tags=["MasterContents"])
 class MasterArchiveView(ContentActionView):
     action = "ARCHIVE"
 
 
+@extend_schema(tags=["MasterContents"])
 class MasterSubmitView(ContentActionView):
     permission_classes = [CanManageContent]
     action = "SUBMIT"
@@ -266,23 +272,28 @@ class PlatformActionView(ContentActionView):
     serializer = PlatformContentSerializer
 
 
+@extend_schema(tags=["PlatformContents"])
 class PlatformApproveView(PlatformActionView):
     action = "APPROVE"
 
 
+@extend_schema(tags=["PlatformContents"])
 class PlatformRejectView(PlatformActionView):
     action = "REJECT"
 
 
+@extend_schema(tags=["PlatformContents"])
 class PlatformArchiveView(PlatformActionView):
     action = "ARCHIVE"
 
 
+@extend_schema(tags=["PlatformContents"])
 class PlatformSubmitView(PlatformActionView):
     permission_classes = [CanManageContent]
     action = "SUBMIT"
 
 
+@extend_schema(tags=["MasterContents"])
 class GeneratePlatformView(APIView):
     permission_classes = [CanManageContent]
 
@@ -302,6 +313,7 @@ class GeneratePlatformView(APIView):
         return Response(PlatformContentSerializer(content).data, status=201)
 
 
+@extend_schema(tags=["ContentBriefs"])
 class GenerateMasterView(APIView):
     permission_classes = [CanManageContent]
 

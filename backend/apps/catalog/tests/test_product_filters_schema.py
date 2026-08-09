@@ -157,8 +157,10 @@ def test_runtime_product_validation_matches_documented_schema(organizations, rol
     documented = schema["paths"]["/api/v1/products"]["post"]["responses"]["400"]
 
     assert response.status_code == 400
-    assert set(response.json()) == {"errors"}
+    assert set(response.json()) == {"errors", "code", "message", "recovery_action"}
     assert isinstance(response.json()["errors"]["status"], list)
-    assert documented["content"]["application/json"]["schema"]["$ref"].endswith(
-        "ProductValidationError"
-    )
+    refs = {
+        item["$ref"].rsplit("/", 1)[-1]
+        for item in documented["content"]["application/json"]["schema"]["allOf"]
+    }
+    assert refs == {"ApiError", "ProductValidationError"}

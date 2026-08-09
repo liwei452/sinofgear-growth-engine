@@ -157,6 +157,7 @@ class BriefCursorPagination(CampaignCursorPagination):
     pass
 
 
+@extend_schema(tags=["Campaigns"])
 class CampaignListView(APIView):
     def get_permissions(self):
         return [(CanReadCampaigns if self.request.method == "GET" else CanManageCampaigns)()]
@@ -201,6 +202,7 @@ class CampaignListView(APIView):
         return Response(CampaignSerializer(_get_campaign(request.organization, campaign.id)).data, status=201)
 
 
+@extend_schema(tags=["Campaigns"])
 class CampaignDetailView(APIView):
     def get_permissions(self):
         return [(CanReadCampaigns if self.request.method == "GET" else CanManageCampaigns)()]
@@ -229,6 +231,7 @@ class CampaignDetailView(APIView):
         return Response(status=204)
 
 
+@extend_schema(tags=["ContentBriefs"])
 class ContentBriefListView(APIView):
     def get_permissions(self):
         return [(CanReadCampaigns if self.request.method == "GET" else CanManageCampaigns)()]
@@ -276,6 +279,7 @@ class ContentBriefListView(APIView):
         return Response(ContentBriefSerializer(_get_brief(request.organization, brief.id)).data, status=201)
 
 
+@extend_schema(tags=["ContentBriefs"])
 class ContentBriefDetailView(APIView):
     def get_permissions(self):
         return [(CanReadCampaigns if self.request.method == "GET" else CanManageCampaigns)()]
@@ -302,6 +306,7 @@ class ContentBriefDetailView(APIView):
         return _validation_response({"status": ["Content brief history cannot be deleted."]})
 
 
+@extend_schema(tags=["ContentBriefs"])
 class ContentBriefReadyView(APIView):
     permission_classes = [CanReviewCampaigns]
 
@@ -318,6 +323,7 @@ class ContentBriefReadyView(APIView):
         return Response(ContentBriefSerializer(_get_brief(request.organization, brief_id)).data)
 
 
+@extend_schema(tags=["ContentBriefs"])
 class ContentBriefRevisionView(APIView):
     permission_classes = [CanManageCampaigns]
 

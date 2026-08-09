@@ -113,7 +113,7 @@ def test_tracking_create_maps_domain_validation_to_json_400(tracking_context):
     )
     assert response.status_code == 400
     assert response.headers["Content-Type"].startswith("application/json")
-    assert set(response.json()) == {"errors"}
+    assert set(response.json()) == {"errors", "code", "message", "recovery_action"}
 
 
 @pytest.mark.django_db

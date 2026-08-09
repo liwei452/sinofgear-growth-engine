@@ -1,11 +1,17 @@
 from django.urls import include, path
+from drf_spectacular.utils import extend_schema
 from drf_spectacular.views import SpectacularJSONAPIView
 
 from apps.common.api import health_check
 
+
+@extend_schema(tags=["System"])
+class OpenAPISchemaView(SpectacularJSONAPIView):
+    pass
+
 urlpatterns = [
     path("api/v1/health", health_check, name="health-check"),
-    path("api/v1/schema", SpectacularJSONAPIView.as_view(), name="openapi-schema"),
+    path("api/v1/schema", OpenAPISchemaView.as_view(), name="openapi-schema"),
 ]
 urlpatterns += [path("", include("apps.tracking.urls"))]
 urlpatterns += [path("api/v1/", include("apps.identity.urls"))]

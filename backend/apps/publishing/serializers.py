@@ -74,11 +74,7 @@ class PublishTaskSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-    @extend_schema_field({
-        "type": "array",
-        "items": {"$ref": "#/components/schemas/PublishAttempt"},
-        "maxItems": MAX_PUBLISH_ATTEMPTS,
-    })
+    @extend_schema_field(PublishAttemptSerializer(many=True))
     def get_attempts(self, task):
         attempts = getattr(task, "_safe_attempts", None)
         if attempts is None:

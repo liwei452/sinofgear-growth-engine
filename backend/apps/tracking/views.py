@@ -115,6 +115,7 @@ IDEMPOTENCY_PARAMETER = OpenApiParameter(
 )
 
 
+@extend_schema(tags=["TrackingLinks"])
 class TrackingLinkListView(APIView):
     serializer_class = TrackingLinkSerializer
 
@@ -176,6 +177,7 @@ class TrackingLinkListView(APIView):
         return Response(TrackingLinkSerializer(_tracking_link(request.organization, link.id)).data, status=201)
 
 
+@extend_schema(tags=["TrackingLinks"])
 class TrackingLinkDetailView(APIView):
     permission_classes = [CanReadTracking]
     serializer_class = TrackingLinkSerializer
@@ -185,6 +187,7 @@ class TrackingLinkDetailView(APIView):
         return Response(TrackingLinkSerializer(_tracking_link(request.organization, link_id)).data)
 
 
+@extend_schema(tags=["ShortLinks"])
 class ShortLinkListView(APIView):
     serializer_class = ShortLinkSerializer
 
@@ -231,6 +234,7 @@ class ShortLinkListView(APIView):
         return Response(ShortLinkSerializer(_short_link(request.organization, short_link.id)).data, status=201)
 
 
+@extend_schema(tags=["ShortLinks"])
 class ShortLinkDetailView(APIView):
     permission_classes = [CanReadTracking]
     serializer_class = ShortLinkSerializer
@@ -240,6 +244,7 @@ class ShortLinkDetailView(APIView):
         return Response(ShortLinkSerializer(_short_link(request.organization, link_id)).data)
 
 
+@extend_schema(tags=["Analytics"])
 class ChannelSummaryView(APIView):
     permission_classes = [CanReadTracking]
     serializer_class = ChannelSummaryEnvelopeSerializer
@@ -415,6 +420,7 @@ class ChannelSummaryView(APIView):
         })
 
 
+@extend_schema(tags=["ShortLinks"])
 class PublicRedirectView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]

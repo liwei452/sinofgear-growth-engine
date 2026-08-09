@@ -1,3 +1,4 @@
+from drf_spectacular.utils import OpenApiTypes, extend_schema_field
 from rest_framework import serializers
 
 from .models import MasterContent, PlatformContent
@@ -17,6 +18,7 @@ class StrictMixin:
 class MasterContentSerializer(serializers.ModelSerializer):
     is_current_head = serializers.SerializerMethodField()
 
+    @extend_schema_field(OpenApiTypes.BOOL)
     def get_is_current_head(self, content):
         annotated = getattr(content, "_is_current_head", None)
         if annotated is not None:
@@ -39,6 +41,7 @@ class MasterContentSerializer(serializers.ModelSerializer):
 class PlatformContentSerializer(serializers.ModelSerializer):
     is_current_head = serializers.SerializerMethodField()
 
+    @extend_schema_field(OpenApiTypes.BOOL)
     def get_is_current_head(self, content):
         annotated = getattr(content, "_is_current_head", None)
         if annotated is not None:

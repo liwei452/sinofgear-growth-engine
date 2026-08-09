@@ -86,6 +86,7 @@ def _filter_review_visibility(request: Request, queryset):
     return queryset
 
 
+@extend_schema(tags=["KnowledgeConcepts"])
 class KnowledgeConceptListView(APIView):
     def get_permissions(self):
         return [(CanReadKnowledge if self.request.method == "GET" else CanCreateKnowledge)()]
@@ -119,6 +120,7 @@ class KnowledgeConceptListView(APIView):
         return Response(KnowledgeConceptSerializer(concept).data, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(tags=["KnowledgeConcepts"])
 class KnowledgeConceptDetailView(APIView):
     permission_classes = [CanReadKnowledge]
 
@@ -132,6 +134,7 @@ class KnowledgeConceptDetailView(APIView):
         return Response(KnowledgeConceptSerializer(concept).data)
 
 
+@extend_schema(tags=["KnowledgeRelations"])
 class KnowledgeRelationListView(APIView):
     def get_permissions(self):
         return [(CanReadKnowledge if self.request.method == "GET" else CanCreateKnowledge)()]
@@ -161,6 +164,7 @@ class KnowledgeRelationListView(APIView):
         return Response(KnowledgeRelationSerializer(relation).data, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(tags=["KnowledgeAliases"])
 class KnowledgeAliasListView(APIView):
     def get_permissions(self):
         return [(CanReadKnowledge if self.request.method == "GET" else CanCreateKnowledge)()]
@@ -188,6 +192,7 @@ class KnowledgeAliasListView(APIView):
         return Response(KnowledgeAliasSerializer(alias).data, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(tags=["KnowledgeEvidence"])
 class KnowledgeEvidenceListView(APIView):
     def get_permissions(self):
         return [(CanReadKnowledge if self.request.method == "GET" else CanCreateKnowledge)()]
@@ -212,6 +217,7 @@ class KnowledgeEvidenceListView(APIView):
         return Response(KnowledgeEvidenceSerializer(evidence).data, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(tags=["KnowledgeConcepts"])
 class ResolveAliasView(APIView):
     permission_classes = [CanReadKnowledge]
 
@@ -302,10 +308,17 @@ def review_action_view(*, model, action: str):
         (KnowledgeReviewActionView,),
         {"model": model, "action": action},
     )
+    tags = {
+        KnowledgeConcept: ["KnowledgeConcepts"],
+        KnowledgeRelation: ["KnowledgeRelations"],
+        KnowledgeAlias: ["KnowledgeAliases"],
+        KnowledgeEvidence: ["KnowledgeEvidence"],
+    }[model]
     documented = extend_schema_view(
         post=extend_schema(
             request=request_serializer,
             responses={200: serializer_class, **ERROR_RESPONSES},
+            tags=tags,
         )
     )(view_class)
     return documented.as_view()

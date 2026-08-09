@@ -106,9 +106,14 @@ def test_retry_cancel_bodies_are_strict_and_lifecycle_errors_are_json(
     invalid_retry = client.post(f"/api/v1/jobs/{job.id}/retry", {}, format="json")
 
     assert unknown.status_code == 400
-    assert unknown.json() == {"errors": {"unexpected": ["Unknown field."]}}
+    assert unknown.json() == {
+        "errors": {"unexpected": ["Unknown field."]},
+        "code": "http_400",
+        "message": "The request contains invalid fields.",
+        "recovery_action": "Correct the request and try again.",
+    }
     assert invalid_retry.status_code == 409
-    assert set(invalid_retry.json()) == {"code", "detail"}
+    assert set(invalid_retry.json()) == {"code", "detail", "message", "recovery_action"}
 
 
 @pytest.mark.django_db

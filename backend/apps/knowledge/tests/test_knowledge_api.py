@@ -279,7 +279,10 @@ def test_alias_approval_conflict_is_client_error_without_version_or_audit(organi
     second.refresh_from_db()
     assert response.status_code == 400
     assert response.json() == {
-        "errors": {"alias": ["An approved alias with this scope, language, and normalized value already exists."]}
+        "errors": {"alias": ["An approved alias with this scope, language, and normalized value already exists."]},
+        "code": "http_400",
+        "message": "The request contains invalid fields.",
+        "recovery_action": "Correct the request and try again.",
     }
     assert second.status == "SUGGESTED"
     assert second.version == 1
@@ -302,10 +305,14 @@ def test_runtime_validation_error_matches_documented_schema(organizations, roles
     schema = APIClient().get("/api/v1/schema").json()
 
     assert response.status_code == 400
-    assert set(response.json()) == {"errors"}
+    assert set(response.json()) == {"errors", "code", "message", "recovery_action"}
     assert isinstance(response.json()["errors"]["concept_type"], list)
     documented = schema["paths"]["/api/v1/knowledge/concepts"]["post"]["responses"]["400"]
-    assert documented["content"]["application/json"]["schema"]["$ref"].endswith("KnowledgeValidationError")
+    refs = {
+        item["$ref"].rsplit("/", 1)[-1]
+        for item in documented["content"]["application/json"]["schema"]["allOf"]
+    }
+    assert refs == {"ApiError", "KnowledgeValidationError"}
 
 
 @pytest.mark.django_db

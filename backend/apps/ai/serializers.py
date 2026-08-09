@@ -3,6 +3,7 @@ import re
 import unicodedata
 from urllib.parse import unquote_to_bytes
 
+from drf_spectacular.utils import OpenApiTypes, extend_schema_field
 from rest_framework import serializers
 
 from apps.campaigns.generation_schema import CONTENT_GENERATION_INPUT_SCHEMA
@@ -188,6 +189,7 @@ class AIRunSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_prompt(self, run: AIRun) -> dict[str, object]:
         prompt = run.prompt_version
         return {
@@ -198,22 +200,27 @@ class AIRunSerializer(serializers.ModelSerializer):
             "model": prompt.model,
         }
 
+    @extend_schema_field({"type": "object", "nullable": True})
     def get_reviewer(self, run: AIRun) -> dict[str, object] | None:
         if run.reviewed_by_id is None:
             return None
         return {"id": run.reviewed_by_id, "username": run.reviewed_by.get_username()}
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_input_snapshot(self, run: AIRun):
         return _bounded_summary(run.input_snapshot, CONTENT_GENERATION_INPUT_SCHEMA)
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_output_json(self, run: AIRun):
         return _bounded_summary(run.output_json, _OUTPUT_SCHEMA)
 
+    @extend_schema_field({"type": "object", "nullable": True})
     def get_error(self, run: AIRun):
         if run.error is None:
             return None
         return normalize_persisted_error(run.error)
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_provider_metadata(self, run: AIRun):
         summary = _bounded_summary(run.provider_metadata, _PROVIDER_METADATA_SCHEMA)
         if not isinstance(summary, dict):
@@ -223,6 +230,7 @@ class AIRunSerializer(serializers.ModelSerializer):
             if not (isinstance(value, str) and "[REDACTED]" in value)
         }
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_human_correction(self, run: AIRun):
         return _bounded_summary(run.human_correction, _OUTPUT_SCHEMA)
 

@@ -56,6 +56,7 @@ def _job(organization, job_id):
         raise Http404 from exc
 
 
+@extend_schema(tags=["Jobs"])
 class JobListView(APIView):
     permission_classes = [CanReadJobs]
 
@@ -89,6 +90,7 @@ class JobListView(APIView):
         return paginator.get_paginated_response(JobSerializer(page, many=True).data)
 
 
+@extend_schema(tags=["Jobs"])
 class JobDetailView(APIView):
     permission_classes = [CanReadJobs]
 
@@ -100,6 +102,7 @@ class JobDetailView(APIView):
         return Response(JobSerializer(_job(request.organization, job_id)).data)
 
 
+@extend_schema(tags=["Jobs"])
 class JobActionView(APIView):
     permission_classes = [CanManageJobs]
     action = ""

@@ -2,6 +2,7 @@ from django.contrib.auth import login, logout
 from django.http import Http404
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
@@ -14,9 +15,11 @@ from .serializers import CurrentUserSerializer, LoginSerializer, MembershipSeria
 
 
 @method_decorator(csrf_protect, name="dispatch")
+@extend_schema(tags=["Auth"])
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
+    @extend_schema(request=LoginSerializer, responses={204: None})
     def post(self, request: Request) -> Response:
         serializer = LoginSerializer(data=request.data, context={"request": request})
         if not serializer.is_valid():
@@ -25,29 +28,36 @@ class LoginView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+@extend_schema(tags=["Auth"])
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=None, responses={204: None})
     def post(self, request: Request) -> Response:
         logout(request)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @method_decorator(ensure_csrf_cookie, name="dispatch")
+@extend_schema(tags=["Auth"])
 class CsrfCookieView(APIView):
     permission_classes = [AllowAny]
 
+    @extend_schema(responses={204: None})
     def get(self, request: Request) -> Response:
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+@extend_schema(tags=["Auth"])
 class CurrentUserView(APIView):
     permission_classes = [CanReadMemberships]
 
+    @extend_schema(responses={200: CurrentUserSerializer})
     def get(self, request: Request) -> Response:
         return Response(CurrentUserSerializer(request.membership).data)
 
 
+@extend_schema(tags=["Auth"])
 class MembershipDetailView(APIView):
     def get_permissions(self) -> list[IsAuthenticated]:
         permission_class = CanReadMemberships if self.request.method == "GET" else CanManageMemberships
@@ -62,9 +72,11 @@ class MembershipDetailView(APIView):
         except Membership.DoesNotExist as error:
             raise Http404 from error
 
+    @extend_schema(responses={200: MembershipSerializer})
     def get(self, request: Request, membership_id: str) -> Response:
         return Response(MembershipSerializer(self.get_object(request, membership_id)).data)
 
+    @extend_schema(request=MembershipSerializer, responses={200: MembershipSerializer})
     def patch(self, request: Request, membership_id: str) -> Response:
         serializer = MembershipSerializer(
             self.get_object(request, membership_id), data=request.data, partial=True

@@ -294,7 +294,12 @@ def test_unknown_request_fields_return_standard_json_400(
     response = getattr(client, method)(target, payload, format="json")
 
     assert response.status_code == 400
-    assert response.json() == {"errors": {"mystery": ["Unknown field."]}}
+    assert response.json() == {
+        "errors": {"mystery": ["Unknown field."]},
+        "code": "http_400",
+        "message": "The request contains invalid fields.",
+        "recovery_action": "Correct the request and try again.",
+    }
 
 
 @pytest.mark.django_db

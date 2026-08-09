@@ -2,9 +2,16 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
 import { describe, expect, expectTypeOf, it } from "vitest"
-import openapi from "./generated/openapi.json"
-import "./generated/schema"
+import { openapiDocument } from "./generated/schema"
 import type { components, paths } from "./generated/schema"
+
+type RuntimeSchema = { properties?: Record<string, { nullable?: boolean }> }
+type RuntimeOpenAPI = {
+  paths: Record<string, Record<string, unknown>>
+  components: { schemas: Record<string, RuntimeSchema> }
+  servers?: unknown
+}
+const openapi = openapiDocument as unknown as RuntimeOpenAPI
 
 type RequiredPaths =
   | "/api/v1/knowledge/concepts"
@@ -87,7 +94,7 @@ describe("generated API contract", () => {
   it("keeps nullable AI JSON fields nullable in generated response types", () => {
     expectTypeOf<components["schemas"]["AIRun"]["output_json"]>().toMatchTypeOf<object | null>()
     expectTypeOf<components["schemas"]["AIRun"]["human_correction"]>().toMatchTypeOf<object | null>()
-    expect(openapi.components.schemas.AIRun.properties.output_json.nullable).toBe(true)
-    expect(openapi.components.schemas.AIRun.properties.human_correction.nullable).toBe(true)
+    expect(openapi.components.schemas.AIRun.properties?.output_json.nullable).toBe(true)
+    expect(openapi.components.schemas.AIRun.properties?.human_correction.nullable).toBe(true)
   })
 })

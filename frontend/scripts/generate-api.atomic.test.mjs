@@ -5,10 +5,28 @@ import { mkdtemp, rm } from "node:fs/promises"
 
 import { afterEach, describe, expect, it } from "vitest"
 
-import { writeFileAtomically } from "./generate-api.mjs"
+import { main, writeFileAtomically } from "./generate-api.mjs"
 
 
 const temporaryDirectories = []
+
+const partialWriteFailureFilesystem = () => ({
+  open: async (...args) => {
+    const handle = await open(...args)
+    return {
+      writeFile: async () => {
+        await handle.writeFile("partial-new-contract", "utf8")
+        throw new Error("simulated disk failure")
+      },
+      sync: () => handle.sync(),
+      close: () => handle.close(),
+    }
+  },
+  rename: async () => {
+    throw new Error("rename must not run after a failed write")
+  },
+  rm,
+})
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(directory =>
@@ -22,31 +40,30 @@ describe("atomic generated-artifact replacement", () => {
     temporaryDirectories.push(directory)
     const canonical = join(directory, "schema.ts")
     await writeFile(canonical, "canonical-contract", "utf8")
-    const failingFilesystem = {
-      open: async (...args) => {
-        const handle = await open(...args)
-        return {
-          writeFile: async () => {
-            await handle.writeFile("partial-new-contract", "utf8")
-            throw new Error("simulated disk failure")
-          },
-          sync: () => handle.sync(),
-          close: () => handle.close(),
-        }
-      },
-      rename: async () => {
-        throw new Error("rename must not run after a failed write")
-      },
-      rm,
-    }
 
     await expect(writeFileAtomically(
       canonical,
       "replacement-contract",
-      failingFilesystem,
+      partialWriteFailureFilesystem(),
     )).rejects.toThrow("simulated disk failure")
 
     expect(await readFile(canonical, "utf8")).toBe("canonical-contract")
+    expect(await readdir(directory)).toEqual(["schema.ts"])
+  })
+
+  it("keeps the sole canonical artifact intact when main cannot finish its atomic write", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "sinofgear-main-atomic-test-"))
+    temporaryDirectories.push(directory)
+    const canonical = join(directory, "schema.ts")
+    await writeFile(canonical, "old-authoritative-contract", "utf8")
+
+    await expect(main("generate", {
+      generatedFile: canonical,
+      generatedContract: async () => "new-authoritative-contract",
+      filesystem: partialWriteFailureFilesystem(),
+    })).rejects.toThrow("simulated disk failure")
+
+    expect(await readFile(canonical, "utf8")).toBe("old-authoritative-contract")
     expect(await readdir(directory)).toEqual(["schema.ts"])
   })
 })

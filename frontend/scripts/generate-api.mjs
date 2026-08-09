@@ -11,8 +11,7 @@ const frontendDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repositoryDirectory = resolve(frontendDirectory, "..")
 const backendDirectory = join(repositoryDirectory, "backend")
 const generatedDirectory = join(frontendDirectory, "src", "api", "generated")
-const generatedTypesFile = join(generatedDirectory, "schema.ts")
-const generatedOpenAPIFile = join(generatedDirectory, "openapi.json")
+const generatedFile = join(generatedDirectory, "schema.ts")
 const activeTemporaryFiles = new Set()
 const realFilesystem = { open, rename, rm }
 
@@ -57,7 +56,18 @@ async function generatedContract() {
       alphabetize: true,
       immutable: true,
     })
-    return { openapi, types: `${COMMENT_HEADER}${astToString(nodes)}` }
+    return [
+      COMMENT_HEADER,
+      astToString(nodes),
+      "\nexport type RuntimeOpenAPIDocument = {\n",
+      "    readonly paths: Record<string, Record<string, unknown>>;\n",
+      "    readonly components: { readonly schemas: Record<string, unknown> };\n",
+      "    readonly [key: string]: unknown;\n",
+      "};\n",
+      "export const openapiDocument = JSON.parse(",
+      JSON.stringify(openapi.trim()),
+      ") as RuntimeOpenAPIDocument;\n",
+    ].join("")
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true })
   }
@@ -85,25 +95,24 @@ export async function writeFileAtomically(destination, contents, filesystem = re
   }
 }
 
-export async function main(mode = process.argv[2] ?? "generate") {
+export async function main(mode = process.argv[2] ?? "generate", options = {}) {
   if (mode !== "generate" && mode !== "check") {
     throw new Error("Usage: node scripts/generate-api.mjs [generate|check]")
   }
-  const expected = await generatedContract()
+  const targetFile = options.generatedFile ?? generatedFile
+  const createContract = options.generatedContract ?? generatedContract
+  const filesystem = options.filesystem ?? realFilesystem
+  const expected = await createContract()
   if (mode === "check") {
-    const [currentTypes, currentOpenAPI] = await Promise.all([
-      readFile(generatedTypesFile, "utf8").catch(() => null),
-      readFile(generatedOpenAPIFile, "utf8").catch(() => null),
-    ])
-    if (currentTypes !== expected.types || currentOpenAPI !== expected.openapi) {
-      throw new Error("Generated API artifacts are stale. Run `pnpm api:generate` and commit the result.")
+    const current = await readFile(targetFile, "utf8").catch(() => null)
+    if (current !== expected) {
+      throw new Error("Generated API artifact is stale. Run `pnpm api:generate` and commit the result.")
     }
-    process.stdout.write("Generated API artifacts are current.\n")
+    process.stdout.write("Generated API artifact is current.\n")
     return
   }
-  await writeFileAtomically(generatedOpenAPIFile, expected.openapi)
-  await writeFileAtomically(generatedTypesFile, expected.types)
-  process.stdout.write(`Generated ${generatedTypesFile} and ${generatedOpenAPIFile}\n`)
+  await writeFileAtomically(targetFile, expected, filesystem)
+  process.stdout.write(`Generated ${targetFile}\n`)
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

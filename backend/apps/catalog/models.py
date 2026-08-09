@@ -1,4 +1,7 @@
+from contextlib import contextmanager
+from contextvars import ContextVar
 from decimal import Decimal
+from typing import Iterator
 
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -8,6 +11,30 @@ from django.db.models.expressions import BaseExpression
 
 from apps.common.models import OrganizationScopedModel
 from apps.knowledge.models import KnowledgeConcept
+
+
+_allow_explicit_product_version: ContextVar[bool] = ContextVar(
+    "allow_explicit_product_version", default=False
+)
+_allow_link_retirement: ContextVar[bool] = ContextVar("allow_link_retirement", default=False)
+
+
+@contextmanager
+def _explicit_product_version_writes() -> Iterator[None]:
+    token = _allow_explicit_product_version.set(True)
+    try:
+        yield
+    finally:
+        _allow_explicit_product_version.reset(token)
+
+
+@contextmanager
+def _product_link_retirement_writes() -> Iterator[None]:
+    token = _allow_link_retirement.set(True)
+    try:
+        yield
+    finally:
+        _allow_link_retirement.reset(token)
 
 
 def validate_string_list(value: object) -> None:
@@ -20,9 +47,11 @@ def validate_string_list(value: object) -> None:
 class ProductQuerySet(models.QuerySet):
     @transaction.atomic
     def update(self, **kwargs):
-        if "organization" in kwargs or "organization_id" in kwargs:
+        if "version" in kwargs:
+            raise ValidationError("Product version cannot be assigned directly.")
+        if {"organization", "organization_id"} & set(kwargs):
             raise ValidationError("Product organization is immutable after creation.")
-        rows = list(self)
+        rows = list(self.select_for_update().order_by("pk"))
         for row in rows:
             for field, value in kwargs.items():
                 if isinstance(value, BaseExpression):
@@ -30,24 +59,28 @@ class ProductQuerySet(models.QuerySet):
                         f"Expression updates are not supported for validated product field '{field}'."
                     )
                 setattr(row, field, value)
-            row.full_clean()
-        return super().update(**kwargs)
+            row.save(update_fields=[*kwargs, "updated_at"])
+        return len(rows)
 
     def bulk_create(self, objs, **kwargs):
-        rows = list(objs)
+        rows = sorted(objs, key=lambda row: str(row.pk))
         for row in rows:
+            if row.version != 1:
+                raise ValidationError("New products must start at version 1.")
             row.full_clean()
         return super().bulk_create(rows, **kwargs)
 
     @transaction.atomic
     def bulk_update(self, objs, fields, **kwargs):
         field_names = {field.name if hasattr(field, "name") else str(field) for field in fields}
+        if "version" in field_names:
+            raise ValidationError("Product version cannot be assigned directly.")
         if {"organization", "organization_id"} & field_names:
             raise ValidationError("Product organization is immutable after creation.")
-        rows = list(objs)
+        rows = sorted(objs, key=lambda row: str(row.pk))
         for row in rows:
-            row.full_clean()
-        return super().bulk_update(rows, fields, **kwargs)
+            row.save(update_fields=[*field_names, "updated_at"])
+        return len(rows)
 
 
 class ProductManager(models.Manager.from_queryset(ProductQuerySet)):
@@ -97,6 +130,8 @@ class Product(OrganizationScopedModel):
 
     class Meta:
         ordering = ["name_en", "id"]
+        base_manager_name = "objects"
+        default_manager_name = "objects"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(module_min__gt=0), name="catalog_product_module_min_positive"
@@ -137,11 +172,40 @@ class Product(OrganizationScopedModel):
                     {"tooth_count_max": "Tooth-count maximum must be at least the minimum."}
                 )
 
+    @transaction.atomic
     def save(self, *args, **kwargs) -> None:
-        if not self._state.adding:
-            original_organization_id = type(self).objects.only("organization_id").get(pk=self.pk).organization_id
-            if original_organization_id != self.organization_id:
+        creating = self._state.adding
+        if creating and self.version != 1:
+            raise ValidationError("New products must start at version 1.")
+        if not creating:
+            original = type(self).objects.select_for_update().get(pk=self.pk)
+            if original.organization_id != self.organization_id:
                 raise ValidationError("Product organization is immutable after creation.")
+            update_fields = kwargs.get("update_fields")
+            persisted_fields = (
+                {field.removesuffix("_id") for field in update_fields}
+                if update_fields is not None
+                else {field.name for field in self._meta.concrete_fields}
+            )
+            changed_fields = {
+                field.name
+                for field in self._meta.concrete_fields
+                if field.name in persisted_fields
+                and getattr(self, field.attname) != getattr(original, field.attname)
+            }
+            explicit_version_change = self.version != original.version
+            if explicit_version_change:
+                if (
+                    not _allow_explicit_product_version.get()
+                    or self.version != original.version + 1
+                ):
+                    raise ValidationError(
+                        "Product version may change only by one through a versioned write."
+                    )
+            elif changed_fields - {"updated_at"}:
+                self.version = original.version + 1
+                if update_fields is not None:
+                    kwargs["update_fields"] = set(update_fields) | {"version"}
         self.full_clean()
         super().save(*args, **kwargs)
 
@@ -170,14 +234,28 @@ ROLE_CONCEPT_TYPES = {
 }
 
 LINK_IDENTITY_FIELDS = frozenset(
-    {"organization", "organization_id", "product", "product_id", "concept", "concept_id", "role", "version"}
+    {
+        "organization",
+        "organization_id",
+        "product",
+        "product_id",
+        "concept",
+        "concept_id",
+        "role",
+        "version",
+        "retired_at",
+    }
 )
 
 
 class ProductConceptLinkQuerySet(models.QuerySet):
+    def active(self):
+        return self.filter(retired_at__isnull=True)
+
     def bulk_create(self, objs, **kwargs):
         links = list(objs)
         for link in links:
+            link._validate_new_state()
             link.full_clean()
         return super().bulk_create(links, **kwargs)
 
@@ -229,19 +307,29 @@ class ProductConceptLink(OrganizationScopedModel):
     )
     role = models.CharField(max_length=16, choices=Role.choices)
     version = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
+    retired_at = models.DateTimeField(null=True, blank=True)
 
     objects = ProductConceptLinkManager()
 
     class Meta:
         ordering = ["role", "concept__code", "id"]
+        base_manager_name = "objects"
+        default_manager_name = "objects"
         constraints = [
             models.UniqueConstraint(
                 fields=["product", "role", "concept"],
+                condition=models.Q(retired_at__isnull=True),
                 name="catalog_unique_product_role_concept",
             ),
             models.CheckConstraint(
                 condition=models.Q(version__gt=0), name="catalog_product_link_version_positive"
             ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["product", "retired_at", "role"],
+                name="catalog_link_active_role_idx",
+            )
         ]
 
     def clean(self) -> None:
@@ -260,7 +348,13 @@ class ProductConceptLink(OrganizationScopedModel):
                 {"concept": f"Concept type is not compatible with the {self.role} product role."}
             )
 
+    def _validate_new_state(self) -> None:
+        if self.version != 1 or self.retired_at is not None:
+            raise ValidationError("New product concept links must start active at version 1.")
+
     def save(self, *args, **kwargs) -> None:
+        if self._state.adding:
+            self._validate_new_state()
         if not self._state.adding:
             original = type(self).objects.get(pk=self.pk)
             if any(
@@ -270,5 +364,23 @@ class ProductConceptLink(OrganizationScopedModel):
                 raise ValidationError(
                     "Product concept link identity is immutable; replace the link instead."
                 )
+            if self.retired_at != original.retired_at:
+                if not _allow_link_retirement.get() or original.retired_at is not None:
+                    raise ValidationError(
+                        "Product concept link retirement requires the catalog service."
+                    )
+                return super().save(*args, **kwargs)
         self.full_clean()
         super().save(*args, **kwargs)
+
+
+def compatible_link_types_q(*, role_field: str = "role", concept_type_field: str = "concept__concept_type"):
+    query = models.Q()
+    for role, concept_types in ROLE_CONCEPT_TYPES.items():
+        query |= models.Q(
+            **{
+                role_field: role,
+                f"{concept_type_field}__in": tuple(concept_types),
+            }
+        )
+    return query

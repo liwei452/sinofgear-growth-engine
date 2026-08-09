@@ -132,7 +132,9 @@ def test_openapi_documents_product_contract_filters_etag_and_errors() -> None:
     )
     assert {item["name"] for item in collection["get"]["parameters"]} == {
         "application",
+        "cursor",
         "material",
+        "page_size",
         "status",
         "type",
     }

@@ -3,7 +3,7 @@ import uuid
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Prefetch, QuerySet
+from django.db.models import Prefetch, Q, QuerySet
 from django.http import Http404
 from drf_spectacular.utils import (
     OpenApiParameter,
@@ -11,13 +11,22 @@ from drf_spectacular.utils import (
     extend_schema,
 )
 from rest_framework import status
+from rest_framework.exceptions import NotFound
+from rest_framework.pagination import CursorPagination
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.identity.permissions import CanManageProducts, CanReadProducts
 
-from .models import Product, ProductConceptLink
+from apps.knowledge.models import KnowledgeConcept
+
+from .models import (
+    ROLE_CONCEPT_TYPES,
+    Product,
+    ProductConceptLink,
+    compatible_link_types_q,
+)
 from .serializers import (
     ProductCreateSerializer,
     ProductErrorSerializer,
@@ -44,8 +53,8 @@ FILTER_PARAMETERS = [
         location=OpenApiParameter.QUERY,
         required=False,
         description=(
-            "Match a visible linked concept by UUID or exact case-sensitive code. "
-            f"Only links with role {role} are considered."
+            "Resolve one visible APPROVED concept by UUID or exact case-sensitive code, then "
+            f"match current active {role} links. Ambiguous and repeated values return 400."
         ),
     )
     for name, role in (
@@ -61,7 +70,21 @@ FILTER_PARAMETERS = [
         location=OpenApiParameter.QUERY,
         required=False,
         description="Exact product status: DRAFT, ACTIVE, or ARCHIVED.",
-    )
+    ),
+    OpenApiParameter(
+        name="cursor",
+        type=str,
+        location=OpenApiParameter.QUERY,
+        required=False,
+        description="Opaque cursor from the next or previous page URL.",
+    ),
+    OpenApiParameter(
+        name="page_size",
+        type=int,
+        location=OpenApiParameter.QUERY,
+        required=False,
+        description="Requested page size. Defaults to 20 and is capped at 50.",
+    ),
 ]
 
 
@@ -90,12 +113,26 @@ class ProductVersionConflict(Exception):
 
 
 def _product_queryset(organization) -> QuerySet[Product]:
+    safe_links = (
+        ProductConceptLink.objects.active()
+        .filter(
+            organization=organization,
+            product__organization=organization,
+            concept__status=KnowledgeConcept.Status.APPROVED,
+        )
+        .filter(
+            Q(concept__organization__isnull=True)
+            | Q(concept__organization=organization)
+        )
+        .filter(compatible_link_types_q())
+        .select_related("concept")
+        .order_by("role", "concept__code", "id")
+    )
     return Product.objects.filter(organization=organization).prefetch_related(
         Prefetch(
             "concept_links",
-            queryset=ProductConceptLink.objects.select_related("concept").order_by(
-                "role", "concept__code", "id"
-            ),
+            queryset=safe_links,
+            to_attr="active_concept_links",
         )
     )
 
@@ -156,12 +193,50 @@ def _parse_if_match(request: Request) -> int | Response:
     return int(match.group(1))
 
 
-def _concept_filter(queryset: QuerySet[Product], *, role: str, value: str) -> QuerySet[Product]:
+def _resolve_filter_concept(*, organization, role: str, value: str, field_name: str):
+    identifier = None
     try:
-        concept_id = uuid.UUID(value)
+        identifier = uuid.UUID(value)
     except ValueError:
-        return queryset.filter(concept_links__role=role, concept_links__concept__code=value)
-    return queryset.filter(concept_links__role=role, concept_links__concept_id=concept_id)
+        pass
+    identifier_query = Q(code=value)
+    if identifier is not None:
+        identifier_query |= Q(id=identifier)
+    matches = list(
+        KnowledgeConcept.objects.filter(
+            Q(organization__isnull=True) | Q(organization=organization),
+            identifier_query,
+            status=KnowledgeConcept.Status.APPROVED,
+            concept_type__in=ROLE_CONCEPT_TYPES[role],
+        )
+        .order_by("id")[:2]
+    )
+    if len(matches) > 1:
+        raise DjangoValidationError(
+            {field_name: ["Ambiguous concept filter; use a unique concept UUID or code."]}
+        )
+    return matches[0] if matches else None
+
+
+def _concept_filter(
+    queryset: QuerySet[Product], *, organization, role: str, concept
+) -> QuerySet[Product]:
+    if concept is None:
+        return queryset.none()
+    return queryset.filter(
+        concept_links__retired_at__isnull=True,
+        concept_links__organization=organization,
+        concept_links__role=role,
+        concept_links__concept=concept,
+        concept_links__concept__status=KnowledgeConcept.Status.APPROVED,
+    )
+
+
+class ProductCursorPagination(CursorPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 50
+    ordering = ("name_en", "id")
 
 
 class ProductListView(APIView):
@@ -178,6 +253,13 @@ class ProductListView(APIView):
         },
     )
     def get(self, request: Request) -> Response:
+        repeated = {
+            name: ["Provide this filter at most once."]
+            for name in ("type", "material", "application", "status")
+            if len(request.query_params.getlist(name)) > 1
+        }
+        if repeated:
+            return _validation_response(repeated)
         filters = ProductFilterSerializer(data=request.query_params)
         if not filters.is_valid():
             return _validation_response(filters.errors)
@@ -189,11 +271,30 @@ class ProductListView(APIView):
             ("application", ProductConceptLink.Role.APPLICATION),
         ):
             if name in values:
-                queryset = _concept_filter(queryset, role=role, value=values[name])
+                try:
+                    concept = _resolve_filter_concept(
+                        organization=request.organization,
+                        role=role,
+                        value=values[name],
+                        field_name=name,
+                    )
+                except DjangoValidationError as error:
+                    return _validation_response(error)
+                queryset = _concept_filter(
+                    queryset,
+                    organization=request.organization,
+                    role=role,
+                    concept=concept,
+                )
         if "status" in values:
             queryset = queryset.filter(status=values["status"])
         queryset = queryset.distinct().order_by("name_en", "id")
-        return Response({"results": ProductSerializer(queryset, many=True).data})
+        paginator = ProductCursorPagination()
+        try:
+            page = paginator.paginate_queryset(queryset, request, view=self)
+        except NotFound:
+            return _validation_response({"cursor": ["Invalid or expired cursor."]})
+        return paginator.get_paginated_response(ProductSerializer(page, many=True).data)
 
     @extend_schema(
         operation_id="products_create",

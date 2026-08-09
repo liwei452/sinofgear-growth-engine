@@ -1,9 +1,15 @@
 from django.db.models import Q
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.knowledge.models import KnowledgeConcept
 
-from .models import Product, ProductConceptLink, ROLE_CONCEPT_TYPES
+from .models import (
+    ROLE_CONCEPT_TYPES,
+    Product,
+    ProductConceptLink,
+    compatible_link_types_q,
+)
 from .services import create_product, update_product
 
 
@@ -41,8 +47,6 @@ class ProductConceptLinkInputSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"concept_id": f"Concept type is not compatible with the {role} product role."}
             )
-        attrs["concept"] = concept
-        del attrs["concept_id"]
         return attrs
 
 
@@ -68,7 +72,41 @@ PRODUCT_FIELDS = [
 
 
 class ProductSerializer(serializers.ModelSerializer):
-    concept_links = ProductConceptLinkSerializer(many=True, read_only=True)
+    concept_links = serializers.SerializerMethodField()
+
+    @extend_schema_field(ProductConceptLinkSerializer(many=True))
+    def get_concept_links(self, product: Product) -> list[dict[str, object]]:
+        links = getattr(product, "active_concept_links", None)
+        if links is None:
+            links = list(
+                ProductConceptLink.objects.active()
+                .filter(
+                    product=product,
+                    organization_id=product.organization_id,
+                    product__organization_id=product.organization_id,
+                    concept__status=KnowledgeConcept.Status.APPROVED,
+                )
+                .filter(
+                    Q(concept__organization__isnull=True)
+                    | Q(concept__organization_id=product.organization_id)
+                )
+                .filter(compatible_link_types_q())
+                .select_related("concept")
+                .order_by("role", "concept__code", "id")
+            )
+        links = [
+            link
+            for link in links
+            if (
+                link.retired_at is None
+                and link.product_id == product.id
+                and link.organization_id == product.organization_id
+                and link.concept.organization_id in {None, product.organization_id}
+                and link.concept.status == KnowledgeConcept.Status.APPROVED
+                and link.concept.concept_type in ROLE_CONCEPT_TYPES.get(link.role, ())
+            )
+        ]
+        return ProductConceptLinkSerializer(links, many=True).data
 
     class Meta:
         model = Product
@@ -85,6 +123,8 @@ class ProductSerializer(serializers.ModelSerializer):
 
 
 class ProductListSerializer(serializers.Serializer):
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
     results = ProductSerializer(many=True)
 
 

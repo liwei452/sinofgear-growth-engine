@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { currentUserQueryOptions, type CurrentUser } from "../auth/auth"
+import ProductLibraryPage from "../products/ProductLibraryPage.vue"
+import { knowledgeQueryKeys } from "./api"
 import KnowledgeLibraryPage from "./KnowledgeLibraryPage.vue"
 
 const userWith = (permissions: string[]): CurrentUser => ({
@@ -121,6 +123,28 @@ it("hides SYSTEM review without system permission and renders an actionable empt
   await user.type(screen.getAllByLabelText("搜索知识").at(-1)!, "不存在")
 })
 
+it.each([
+  { name: "system manager without reviewer", permissions: ["knowledge.read", "knowledge.manage_system"], scope: "SYSTEM", visible: false },
+  { name: "organization reviewer on organization", permissions: ["knowledge.read", "knowledge.review_organization"], scope: "ORGANIZATION", visible: true },
+  { name: "organization reviewer on system", permissions: ["knowledge.read", "knowledge.review_organization"], scope: "SYSTEM", visible: false },
+  { name: "system reviewer with both permissions", permissions: ["knowledge.read", "knowledge.review_organization", "knowledge.manage_system"], scope: "SYSTEM", visible: true },
+  { name: "administrator permission set", permissions: ["knowledge.read", "knowledge.create", "knowledge.review_organization", "knowledge.manage_system", "knowledge.deprecate"], scope: "SYSTEM", visible: true },
+])("enforces the review permission matrix for $name", async ({ permissions, scope, visible }) => {
+  const fetchMock = mockLists([concept({ scope, organization: scope === "SYSTEM" ? null : "org-1" })])
+  vi.stubGlobal("fetch", fetchMock)
+  renderPage(permissions)
+  await screen.findByText("合金钢")
+
+  if (visible) {
+    expect(screen.getByRole("button", { name: "通过" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "驳回" })).toBeInTheDocument()
+  } else {
+    expect(screen.queryByRole("button", { name: "通过" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "驳回" })).not.toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/approve") || String(path).endsWith("/reject"))).toBe(false)
+  }
+})
+
 it("does not submit SYSTEM suggestions with organization-create permission alone", async () => {
   vi.stubGlobal("fetch", mockLists([concept({ scope: "SYSTEM", organization: null })]))
   renderPage(["knowledge.read", "knowledge.create"])
@@ -191,4 +215,102 @@ it("never renders a fresh knowledge cache from another organization on the same 
   expect(screen.queryByText("组织 A 知识")).not.toBeInTheDocument()
   expect(await screen.findByText("组织 B 知识")).toBeInTheDocument()
   expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/knowledge/concepts")).toHaveLength(2)
+})
+
+it("invalidates the fresh product-concept cache after review so the product page refetches approved applications", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let reviewed = false
+  const suggested = concept({ concept_type: "INDUSTRY", code: "AUTOMOTIVE", label_zh: "汽车行业" })
+  const approved = concept({ ...suggested, status: "APPROVED", reviewed_by: 1 })
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path.endsWith("/approve") && options?.method === "POST") {
+      reviewed = true
+      return new Response(JSON.stringify(approved), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/knowledge/concepts") {
+      return new Response(JSON.stringify({ results: [reviewed ? approved : suggested] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })
+    }
+    if (path === "/api/v1/products") {
+      return new Response(JSON.stringify({ next: null, previous: null, results: [] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })
+    }
+    return new Response(JSON.stringify({ results: [] }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
+  queryClient.setQueryData(knowledgeQueryKeys.productConcepts("org-1"), [])
+  const user = userEvent.setup()
+  const knowledge = renderPageWithClient(queryClient, userWith([
+    "knowledge.read", "knowledge.review_organization",
+  ]))
+  await screen.findByText("汽车行业")
+  await user.click(screen.getByRole("button", { name: "通过" }))
+  await screen.findByText("已通过“汽车行业”")
+  knowledge.unmount()
+
+  render(ProductLibraryPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+  expect(await screen.findByRole("option", { name: "汽车行业" })).toBeInTheDocument()
+  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/knowledge/concepts")).toHaveLength(2)
+})
+
+it.each([
+  { action: "reject", startStatus: "SUGGESTED", resultStatus: "REJECTED", button: "驳回", notice: "已驳回“汽车行业”" },
+  { action: "deprecate", startStatus: "APPROVED", resultStatus: "DEPRECATED", button: "停用", notice: "已停用“汽车行业”" },
+])("removes stale approved product concepts after $action", async ({ action, startStatus, resultStatus, button, notice }) => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let reviewed = false
+  const approved = concept({
+    concept_type: "INDUSTRY", code: "AUTOMOTIVE", label_zh: "汽车行业", status: "APPROVED", reviewed_by: 1,
+  })
+  const starting = concept({ ...approved, status: startStatus })
+  const updated = concept({ ...approved, status: resultStatus })
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path.endsWith(`/${action}`) && options?.method === "POST") {
+      reviewed = true
+      return new Response(JSON.stringify(updated), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/knowledge/concepts") {
+      return new Response(JSON.stringify({ results: [reviewed ? updated : starting] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })
+    }
+    if (path === "/api/v1/products") {
+      return new Response(JSON.stringify({ next: null, previous: null, results: [] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })
+    }
+    return new Response(JSON.stringify({ results: [] }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
+  queryClient.setQueryData(knowledgeQueryKeys.productConcepts("org-1"), [approved])
+  const user = userEvent.setup()
+  const knowledge = renderPageWithClient(queryClient, userWith([
+    "knowledge.read", "knowledge.review_organization", "knowledge.deprecate",
+  ]))
+  await screen.findByText("汽车行业")
+  await user.click(screen.getByRole("button", { name: button }))
+  if (action === "reject") {
+    await user.type(screen.getByLabelText("驳回原因（必填）"), "不再适用")
+    await user.click(screen.getByRole("button", { name: "确认驳回" }))
+  }
+  await screen.findByText(notice)
+  knowledge.unmount()
+
+  render(ProductLibraryPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+  await waitFor(() => expect(fetchMock.mock.calls.filter(
+    ([path]) => path === "/api/v1/knowledge/concepts",
+  )).toHaveLength(2))
+  await waitFor(() => expect(screen.queryByRole("option", { name: "汽车行业" })).not.toBeInTheDocument())
 })

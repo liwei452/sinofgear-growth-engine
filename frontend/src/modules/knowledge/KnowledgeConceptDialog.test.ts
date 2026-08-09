@@ -26,10 +26,8 @@ it("focuses its title, keeps focus inside, and closes on Escape", async () => {
   const title = await screen.findByRole("heading", { name: "新增知识建议" })
   await waitFor(() => expect(title).toHaveFocus())
 
-  const close = screen.getByRole("button", { name: "关闭" })
   const submit = screen.getByRole("button", { name: "提交知识建议" })
-  close.focus()
-  await user.tab({ shift: true })
+  await user.keyboard("{Shift>}{Tab}{/Shift}")
   expect(submit).toHaveFocus()
   await user.keyboard("{Escape}")
   expect(result.emitted("close")).toHaveLength(1)

@@ -83,9 +83,8 @@ const typeLabels: Record<ConceptType, string> = {
 }
 
 function canReview(concept: KnowledgeConcept): boolean {
-  return concept.scope === "SYSTEM"
-    ? has("knowledge.manage_system")
-    : has("knowledge.review_organization") || has("knowledge.manage_system")
+  return has("knowledge.review_organization")
+    && (concept.scope === "ORGANIZATION" || has("knowledge.manage_system"))
 }
 
 function canSubmit(concept: KnowledgeConcept): boolean {
@@ -116,6 +115,9 @@ async function runAction(concept: KnowledgeConcept, action: ReviewAction, commen
     const updated = await reviewConcept(concept.id, action, comment.trim())
     queryClient.setQueryData<KnowledgeConcept[]>(knowledgeQueryKeys.concepts(organizationId.value), (items = []) =>
       items.map((item) => item.id === updated.id ? updated : item))
+    await queryClient.invalidateQueries({
+      queryKey: knowledgeQueryKeys.productConcepts(organizationId.value),
+    })
     const verb = action === "approve" ? "已通过" : action === "reject" ? "已驳回"
       : action === "deprecate" ? "已停用" : "已提交审核"
     notice.value = `${verb}“${updated.label_zh || updated.label_en}”`

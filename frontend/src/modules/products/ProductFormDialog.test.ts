@@ -58,8 +58,7 @@ it("focuses the title, traps Tab, closes on Escape, and restores the opener", as
 
   const close = screen.getByRole("button", { name: "关闭" })
   const save = screen.getByRole("button", { name: "保存产品" })
-  close.focus()
-  await user.tab({ shift: true })
+  await user.keyboard("{Shift>}{Tab}{/Shift}")
   expect(save).toHaveFocus()
   await user.tab()
   expect(close).toHaveFocus()
@@ -72,6 +71,16 @@ it("focuses the title, traps Tab, closes on Escape, and restores the opener", as
   expect(opener).toHaveFocus()
   opener.remove()
   background.remove()
+})
+
+it("moves forward from the initially focused title to the first control", async () => {
+  const user = userEvent.setup()
+  renderDialog()
+  const title = await screen.findByRole("heading", { name: "新建产品" })
+  await waitFor(() => expect(title).toHaveFocus())
+
+  await user.keyboard("{Tab}")
+  expect(screen.getByRole("button", { name: "关闭" })).toHaveFocus()
 })
 
 it("validates ranges and URL, focuses the first error, and cancels without submitting", async () => {

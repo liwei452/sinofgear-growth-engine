@@ -75,10 +75,15 @@ export function useModalFocus(options: {
     const first = focusable[0]
     const last = focusable[focusable.length - 1]
     const active = document.activeElement
-    if (event.shiftKey && (active === first || !dialog.contains(active))) {
+    const activeIndex = focusable.indexOf(active as HTMLElement)
+    if (activeIndex === -1) {
+      event.preventDefault()
+      if (event.shiftKey) last?.focus()
+      else first?.focus()
+    } else if (event.shiftKey && active === first) {
       event.preventDefault()
       last?.focus()
-    } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+    } else if (!event.shiftKey && active === last) {
       event.preventDefault()
       first?.focus()
     }

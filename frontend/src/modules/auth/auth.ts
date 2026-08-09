@@ -5,7 +5,7 @@ import { apiRequest } from "../../api/client"
 export type CurrentUser = {
   user: { id: number; username: string }
   organization: { id: string; name: string; slug: string }
-  membership: { id: string; role: string; status: string }
+  membership: { id: string; role: string; status: string; permissions: string[] }
 }
 
 export type LoginCredentials = { username: string; password: string }

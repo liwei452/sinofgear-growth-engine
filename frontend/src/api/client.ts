@@ -4,25 +4,47 @@ type ErrorPayload = {
   detail?: unknown
   message?: unknown
   recovery_action?: unknown
+  errors?: unknown
+  code?: unknown
+  current_version?: unknown
+}
+
+type ApiErrorMetadata = {
+  fieldErrors?: Record<string, string[]>
+  code?: string
+  currentVersion?: number
 }
 
 export class ApiError extends Error {
   readonly status: number
   readonly userMessage: string
   readonly recoveryAction?: string
+  readonly fieldErrors?: Record<string, string[]>
+  readonly code?: string
+  readonly currentVersion?: number
 
-  constructor(status: number, userMessage: string, recoveryAction?: string) {
+  constructor(
+    status: number,
+    userMessage: string,
+    recoveryAction?: string,
+    metadata: ApiErrorMetadata = {},
+  ) {
     super(userMessage)
     this.name = "ApiError"
     this.status = status
     this.userMessage = userMessage
     this.recoveryAction = recoveryAction
+    this.fieldErrors = metadata.fieldErrors
+    this.code = metadata.code
+    this.currentVersion = metadata.currentVersion
   }
 }
 
 export type ApiRequestOptions = Omit<RequestInit, "body" | "credentials"> & {
   body?: unknown
 }
+
+export type ApiResponse<T> = { data: T | undefined; response: Response }
 
 function cookieValue(name: string): string | undefined {
   const prefix = `${encodeURIComponent(name)}=`
@@ -38,6 +60,17 @@ function statusMessage(status: number): string {
   if (status === 403) return "你暂时没有权限执行此操作。"
   if (status >= 500) return "服务暂时不可用，请稍后重试。"
   return "请求未能完成，请检查后重试。"
+}
+
+function fieldErrors(value: unknown): Record<string, string[]> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const normalized: Record<string, string[]> = {}
+  for (const [field, messages] of Object.entries(value)) {
+    if (!Array.isArray(messages)) continue
+    const safeMessages = messages.filter((message): message is string => typeof message === "string")
+    if (safeMessages.length) normalized[field] = safeMessages
+  }
+  return Object.keys(normalized).length ? normalized : undefined
 }
 
 async function errorFromResponse(response: Response): Promise<ApiError> {
@@ -61,7 +94,18 @@ async function errorFromResponse(response: Response): Promise<ApiError> {
   const recovery = typeof payload.recovery_action === "string"
     ? payload.recovery_action
     : undefined
-  return new ApiError(response.status, detail ?? message ?? statusMessage(response.status), recovery)
+  return new ApiError(
+    response.status,
+    detail ?? message ?? statusMessage(response.status),
+    recovery,
+    {
+      fieldErrors: fieldErrors(payload.errors),
+      code: typeof payload.code === "string" ? payload.code : undefined,
+      currentVersion: typeof payload.current_version === "number"
+        ? payload.current_version
+        : undefined,
+    },
+  )
 }
 
 export async function ensureCsrfCookie(): Promise<void> {
@@ -79,10 +123,10 @@ export async function ensureCsrfCookie(): Promise<void> {
   if (!response.ok) throw await errorFromResponse(response)
 }
 
-export async function apiRequest<T>(
+async function request(
   path: string,
   options: ApiRequestOptions = {},
-): Promise<T | undefined> {
+): Promise<Response> {
   const method = (options.method ?? "GET").toUpperCase()
   if (!SAFE_METHODS.has(method)) await ensureCsrfCookie()
 
@@ -113,9 +157,27 @@ export async function apiRequest<T>(
     throw new ApiError(0, "网络连接失败，请检查网络后重试。")
   }
   if (!response.ok) throw await errorFromResponse(response)
-  if (response.status === 204) return undefined
+  return response
+}
+
+export async function apiRequestWithMeta<T>(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<ApiResponse<T>> {
+  const response = await request(path, options)
+  let data: T | undefined
+  if (response.status === 204) return { data: undefined, response }
   if (response.headers.get("Content-Type")?.includes("application/json")) {
-    return await response.json() as T
+    data = await response.json() as T
+  } else {
+    data = await response.text() as T
   }
-  return await response.text() as T
+  return { data, response }
+}
+
+export async function apiRequest<T>(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<T | undefined> {
+  return (await apiRequestWithMeta<T>(path, options)).data
 }

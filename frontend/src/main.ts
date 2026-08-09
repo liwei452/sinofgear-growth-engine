@@ -1,5 +1,5 @@
 import { VueQueryPlugin } from "@tanstack/vue-query"
-import { createApp } from "vue"
+import { createApp, defineAsyncComponent } from "vue"
 
 import App from "./App.vue"
 import AppShell from "./app/AppShell.vue"
@@ -16,6 +16,8 @@ const router = createAppRouter(queryClient, {
     Login: LoginPage,
     Shell: AppShell,
     Dashboard: DashboardPage,
+    Products: defineAsyncComponent(() => import("./modules/products/ProductLibraryPage.vue")),
+    Knowledge: defineAsyncComponent(() => import("./modules/knowledge/KnowledgeLibraryPage.vue")),
     Placeholder: PlaceholderPage,
   },
 })

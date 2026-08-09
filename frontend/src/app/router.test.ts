@@ -9,6 +9,8 @@ import { createAppRouter, safeRedirect } from "./router"
 const Login = defineComponent({ name: "LoginStub", template: "<p>登录页面</p>" })
 const Shell = defineComponent({ name: "ShellStub", template: "<router-view />" })
 const Dashboard = defineComponent({ name: "DashboardStub", template: "<p>首页内容</p>" })
+const Products = defineComponent({ name: "ProductsStub", template: "<p>真实产品库</p>" })
+const Knowledge = defineComponent({ name: "KnowledgeStub", template: "<p>真实知识库</p>" })
 const Placeholder = defineComponent({ name: "PlaceholderStub", template: "<p>占位内容</p>" })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
@@ -27,7 +29,7 @@ function router(client = queryClient(), initialPath?: string) {
   if (initialPath) history.push(initialPath)
   return createAppRouter(client, {
     history,
-    components: { Login, Shell, Dashboard, Placeholder },
+    components: { Login, Shell, Dashboard, Products, Knowledge, Placeholder },
   })
 }
 
@@ -41,7 +43,7 @@ describe("protected routing", () => {
     render(Root, { global: { plugins: [appRouter] } })
     const navigation = appRouter.isReady()
 
-    expect(screen.queryByText("占位内容")).not.toBeInTheDocument()
+    expect(screen.queryByText("真实产品库")).not.toBeInTheDocument()
 
     pending.resolve(new Response(JSON.stringify({
       user: { id: 1, username: "operator" },
@@ -49,7 +51,18 @@ describe("protected routing", () => {
       membership: { id: "member-1", role: "OPERATOR", status: "ACTIVE" },
     }), { status: 200, headers: { "Content-Type": "application/json" } }))
     await navigation
-    expect(await screen.findByText("占位内容")).toBeInTheDocument()
+    expect(await screen.findByText("真实产品库")).toBeInTheDocument()
+  })
+
+  it("mounts distinct real product and knowledge route components", async () => {
+    const client = queryClient()
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: [] } })
+    const appRouter = router(client)
+    render(Root, { global: { plugins: [appRouter] } })
+    await appRouter.push("/products")
+    expect(await screen.findByText("真实产品库")).toBeInTheDocument()
+    await appRouter.push("/knowledge")
+    expect(await screen.findByText("真实知识库")).toBeInTheDocument()
   })
 
   it.each([401, 403])("redirects status %s to login with the local target", async (status) => {

@@ -60,6 +60,38 @@ def test_me_uses_authenticated_membership_organization_ignoring_requested_organi
 
 
 @pytest.mark.django_db
+def test_me_returns_only_authenticated_membership_permissions_in_stable_order(
+    authenticated_client: tuple[APIClient, Membership, Membership],
+) -> None:
+    client, own_membership, other_membership = authenticated_client
+    own_membership.role.permissions = [
+        "products.manage",
+        "memberships.read",
+        "knowledge.read",
+        "products.read",
+    ]
+    own_membership.role.save(update_fields=["permissions"])
+    foreign_role = Role.objects.create(
+        code="FOREIGN_TEST",
+        name="Foreign test role",
+        permissions=["knowledge.manage_system", "memberships.manage"],
+    )
+    other_membership.role = foreign_role
+    other_membership.save(update_fields=["role"])
+
+    response = client.get("/api/v1/auth/me")
+
+    assert response.status_code == 200
+    assert response.json()["membership"]["permissions"] == [
+        "knowledge.read",
+        "memberships.read",
+        "products.manage",
+        "products.read",
+    ]
+    assert "knowledge.manage_system" not in response.json()["membership"]["permissions"]
+
+
+@pytest.mark.django_db
 def test_membership_in_another_organization_is_not_readable_or_mutable(
     authenticated_client: tuple[APIClient, Membership, Membership],
 ) -> None:

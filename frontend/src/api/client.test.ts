@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { ApiError, apiRequest } from "./client"
+import { ApiError, apiRequest, apiRequestWithMeta } from "./client"
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -17,6 +17,39 @@ describe("apiRequest", () => {
       "/api/v1/auth/me",
       expect.objectContaining({ credentials: "include", method: "GET" }),
     )
+  })
+
+  it("returns successful response metadata without weakening request defaults", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ id: "product-1" }),
+      { status: 200, headers: { "Content-Type": "application/json", ETag: '"7"' } },
+    ))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const result = await apiRequestWithMeta<{ id: string }>("/api/v1/products/product-1")
+
+    expect(result.data).toEqual({ id: "product-1" })
+    expect(result.response.headers.get("ETag")).toBe('"7"')
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/products/product-1",
+      expect.objectContaining({ credentials: "include", method: "GET" }),
+    )
+  })
+
+  it("preserves structured 4xx field errors and conflict metadata", async () => {
+    document.cookie = "csrftoken=csrf-value; path=/"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      code: "PRODUCT_VERSION_CONFLICT",
+      current_version: 3,
+      errors: { name_en: ["This field is required."] },
+    }), { status: 409, headers: { "Content-Type": "application/json" } })))
+
+    await expect(apiRequest("/api/v1/products/product-1", { method: "PATCH" })).rejects.toMatchObject({
+      status: 409,
+      code: "PRODUCT_VERSION_CONFLICT",
+      currentVersion: 3,
+      fieldErrors: { name_en: ["This field is required."] },
+    })
   })
 
   it("bootstraps CSRF and sends its cookie on unsafe requests", async () => {
@@ -80,6 +113,7 @@ describe("apiRequest", () => {
       userMessage: "服务暂时不可用，请稍后重试。",
       recoveryAction: "请稍后重试；若问题持续，请联系管理员。",
     })
+    expect(error).toMatchObject({ code: undefined, fieldErrors: undefined })
     expect(JSON.stringify(error)).not.toMatch(/Traceback|password|db\.internal|DROP TABLE/)
   })
 

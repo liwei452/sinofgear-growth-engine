@@ -40,5 +40,6 @@ class CurrentUserSerializer(serializers.Serializer):
                 "id": str(membership.id),
                 "role": membership.role.code,
                 "status": membership.status,
+                "permissions": sorted(str(permission) for permission in membership.role.permissions),
             },
         }

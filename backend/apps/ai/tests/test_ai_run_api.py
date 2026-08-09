@@ -1,7 +1,7 @@
 import json
 from copy import deepcopy
 from datetime import timedelta
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -283,6 +283,68 @@ def test_ai_run_public_strings_redact_standalone_and_encoded_credentials(ai_api)
     assert "token budget" in data["output_json"]["concept_codes"]
     assert "password policy" in data["output_json"]["concept_codes"]
     assert "token budget" in data["human_correction"]["concept_codes"]
+    run.refresh_from_db()
+    for field, value in original.items():
+        assert getattr(run, field) == value
+
+
+@pytest.mark.django_db
+def test_ai_run_public_strings_fail_closed_beyond_percent_decode_budget(ai_api):
+    own, _other, _user, client = ai_api
+    run = make_run(own, suffix="excessive-encoding")
+    decode_budget = 3
+
+    def encoded_access_token(depth: int, sentinel: str) -> str:
+        separator = "%5F"
+        for _round in range(depth - 1):
+            separator = separator.replace("%", "%25")
+        return f"https://x/?access{separator}token={sentinel}"
+
+    depth4 = encoded_access_token(decode_budget + 1, "DEPTH4-SENTINEL")
+    depth6 = encoded_access_token(decode_budget + 3, "DEPTH6-SENTINEL")
+    assert depth4 == "https://x/?access%2525255Ftoken=DEPTH4-SENTINEL"
+    assert depth6 == "https://x/?access%25252525255Ftoken=DEPTH6-SENTINEL"
+    stored = {
+        "input_snapshot": {
+            "brief_id": "brief-safe",
+            "keywords": [depth4, depth6, "token budget", "password policy"],
+        },
+        "output_json": {
+            "title": depth4,
+            "body": depth6,
+            "cta": "safe cta",
+            "concept_codes": [depth4, depth6, "token budget", "password policy"],
+        },
+        "human_correction": {
+            "title": depth6,
+            "body": depth4,
+            "cta": "safe correction",
+            "concept_codes": [depth4, depth6, "token budget", "password policy"],
+        },
+    }
+    original = deepcopy(stored)
+    with ai_audit_writes():
+        AIRun.objects.filter(pk=run.pk).update(**stored)
+
+    response = client.get(f"/api/v1/ai-runs/{run.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    serialized = json.dumps(data, ensure_ascii=False).casefold()
+    for value, depth, sentinel in (
+        (depth4, decode_budget + 1, "depth4-sentinel"),
+        (depth6, decode_budget + 3, "depth6-sentinel"),
+    ):
+        decoded_forms = [value]
+        for _round in range(depth):
+            decoded_forms.append(unquote(decoded_forms[-1]))
+        assert decoded_forms[-1].startswith("https://x/?access_token=")
+        assert len(set(decoded_forms)) == depth + 1
+        assert sentinel not in serialized
+        for decoded_form in decoded_forms:
+            assert decoded_form.casefold() not in serialized
+    assert "token budget" in data["output_json"]["concept_codes"]
+    assert "password policy" in data["human_correction"]["concept_codes"]
     run.refresh_from_db()
     for field, value in original.items():
         assert getattr(run, field) == value

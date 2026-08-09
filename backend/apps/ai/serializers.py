@@ -57,6 +57,7 @@ _AUTHORIZATION_SCHEME = re.compile(
 )
 _STANDALONE_AUTHORIZATION_SCHEME = re.compile(r"^(?:basic|bearer)[ \t]+")
 _MALFORMED_PERCENT_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
+_VALID_PERCENT_ESCAPE = re.compile(r"%[0-9a-fA-F]{2}")
 
 
 def _audit_detection_copy(value: str) -> str | None:
@@ -78,6 +79,8 @@ def _audit_detection_copy(value: str) -> str | None:
         if decoded == detection_value:
             break
         detection_value = decoded
+    if _VALID_PERCENT_ESCAPE.search(detection_value):
+        return None
     return detection_value.casefold()
 
 

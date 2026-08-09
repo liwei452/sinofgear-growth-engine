@@ -7,6 +7,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .models import PublishAttempt, PublishedPost, PublishTask
+from .services import MAX_PUBLISH_ATTEMPTS
 
 
 class StrictMixin:
@@ -73,11 +74,18 @@ class PublishTaskSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-    @extend_schema_field(PublishAttemptSerializer(many=True))
+    @extend_schema_field({
+        "type": "array",
+        "items": {"$ref": "#/components/schemas/PublishAttempt"},
+        "maxItems": MAX_PUBLISH_ATTEMPTS,
+    })
     def get_attempts(self, task):
         attempts = getattr(task, "_safe_attempts", None)
         if attempts is None:
-            attempts = task.attempts.all()
+            attempts = task.attempts.order_by("-number")[:MAX_PUBLISH_ATTEMPTS]
+        attempts = sorted(attempts, key=lambda attempt: attempt.number)[
+            -MAX_PUBLISH_ATTEMPTS:
+        ]
         return PublishAttemptSerializer(attempts, many=True).data
 
     @extend_schema_field(PublishedPostSerializer(allow_null=True))
@@ -126,6 +134,31 @@ class CalendarFilterSerializer(StrictMixin, serializers.Serializer):
         if attrs["end"] - attrs["start"] > timedelta(days=366):
             raise serializers.ValidationError({"end": "Calendar range is limited to 366 days."})
         return attrs
+
+
+class PublishTaskCursorEnvelopeSerializer(serializers.Serializer):
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    results = PublishTaskSerializer(many=True)
+
+
+class PublishCalendarMetadataSerializer(serializers.Serializer):
+    max_entries = serializers.IntegerField(min_value=1)
+    returned_entries = serializers.IntegerField(min_value=0)
+    truncated = serializers.BooleanField()
+
+
+class PublishCalendarDaySerializer(serializers.Serializer):
+    date = serializers.DateField()
+    entries = PublishTaskSerializer(many=True)
+
+
+class PublishCalendarEnvelopeSerializer(serializers.Serializer):
+    timezone = serializers.CharField()
+    start = serializers.DateTimeField()
+    end = serializers.DateTimeField()
+    metadata = PublishCalendarMetadataSerializer()
+    days = PublishCalendarDaySerializer(many=True)
 
 
 class PublishingErrorSerializer(serializers.Serializer):

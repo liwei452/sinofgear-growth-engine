@@ -17,12 +17,18 @@ from apps.platforms.models import SocialAccount
 from .models import PublishAttempt, PublishTask
 from .serializers import (
     CalendarFilterSerializer, EmptyActionSerializer, PublishCreateSerializer,
-    PublishFilterSerializer, PublishingErrorSerializer, PublishTaskSerializer,
+    PublishCalendarEnvelopeSerializer, PublishFilterSerializer,
+    PublishingErrorSerializer, PublishTaskCursorEnvelopeSerializer,
+    PublishTaskSerializer,
 )
 from .services import (
-    PublishingConflict, cancel_publish_task, create_publish_task,
-    publish_task_is_consistent, retry_publish_task, validate_idempotency_key,
+    MAX_PUBLISH_ATTEMPTS, PublishingConflict, cancel_publish_task,
+    create_publish_task, publish_task_is_consistent, retry_publish_task,
+    validate_idempotency_key,
 )
+
+
+MAX_CALENDAR_ENTRIES = 200
 
 
 class PublishPagination(CursorPagination):
@@ -46,7 +52,13 @@ def _safe_queryset(organization):
             "published_post__attempt",
         )
         .prefetch_related(
-            Prefetch("attempts", queryset=PublishAttempt.objects.order_by("number"), to_attr="_safe_attempts")
+            Prefetch(
+                "attempts",
+                queryset=PublishAttempt.objects.order_by("-number")[
+                    :MAX_PUBLISH_ATTEMPTS + 1
+                ],
+                to_attr="_safe_attempts",
+            )
         )
         .annotate(
             _selected_platform=Exists(
@@ -103,13 +115,16 @@ class PublishTaskListView(APIView):
         return [permission() for permission in classes]
 
     @extend_schema(
+        operation_id="publish_task_list",
         parameters=[
             OpenApiParameter("status", OpenApiTypes.STR, enum=PublishTask.Status.values),
             OpenApiParameter("platform", OpenApiTypes.UUID),
             OpenApiParameter("account", OpenApiTypes.UUID),
             OpenApiParameter("content", OpenApiTypes.UUID),
+            OpenApiParameter("cursor", OpenApiTypes.STR),
+            OpenApiParameter("page_size", OpenApiTypes.INT),
         ],
-        responses={200: PublishTaskSerializer(many=True)},
+        responses={200: PublishTaskCursorEnvelopeSerializer},
     )
     def get(self, request):
         values, error = _validated_query(request, PublishFilterSerializer)
@@ -171,6 +186,8 @@ class PublishTaskListView(APIView):
 
 
 class PublishScheduleView(PublishTaskListView):
+    http_method_names = ["post", "options"]
+
     @extend_schema(
         request=PublishCreateSerializer,
         parameters=[OpenApiParameter(
@@ -238,6 +255,12 @@ class PublishCalendarView(APIView):
             OpenApiParameter("country", OpenApiTypes.STR),
             OpenApiParameter("status", OpenApiTypes.STR, enum=PublishTask.Status.values),
         ],
+        responses={200: PublishCalendarEnvelopeSerializer},
+        description=(
+            "Returns at most 200 tasks ordered by UTC scheduled time and ID, "
+            "grouped into IANA local display dates. metadata.truncated reports "
+            "whether more matching database rows exist."
+        ),
     )
     def get(self, request):
         values, error = _validated_query(request, CalendarFilterSerializer)
@@ -259,10 +282,14 @@ class PublishCalendarView(APIView):
             queryset = queryset.filter(
                 platform_content__master_content__brief__product_links__product_id=values["product"]
             )
+        candidates = list(
+            queryset.distinct().order_by("scheduled_at", "id")[
+                :MAX_CALENDAR_ENTRIES + 1
+            ]
+        )
         tasks = [
-            task for task in queryset.distinct().order_by("scheduled_at", "id")
-            if publish_task_is_consistent(task)
-        ]
+            task for task in candidates if publish_task_is_consistent(task)
+        ][:MAX_CALENDAR_ENTRIES]
         zone = ZoneInfo(values["timezone"])
         grouped = defaultdict(list)
         for task in tasks:
@@ -273,6 +300,11 @@ class PublishCalendarView(APIView):
             {
                 "timezone": values["timezone"],
                 "start": values["start"], "end": values["end"],
+                "metadata": {
+                    "max_entries": MAX_CALENDAR_ENTRIES,
+                    "returned_entries": len(tasks),
+                    "truncated": len(candidates) > MAX_CALENDAR_ENTRIES,
+                },
                 "days": [
                     {"date": date, "entries": grouped[date]} for date in sorted(grouped)
                 ],

@@ -14,7 +14,7 @@ from apps.content.services import content_is_consistent
 from apps.content.services import transition_content
 from apps.platforms.capabilities import resolve_account_capabilities
 from apps.platforms.codes import AccountCapability
-from apps.platforms.models import SocialAccount
+from apps.platforms.models import ConnectorCredential, PlatformCapability, SocialAccount
 
 from integrations.platforms.base import PublishRequest, PublishResult
 from integrations.platforms.registry import get_connector
@@ -24,6 +24,26 @@ from .models import PublishAttempt, PublishedPost, PublishTask, publishing_write
 
 
 MAX_SCHEDULE_AHEAD = timedelta(days=366)
+MAX_PUBLISH_ATTEMPTS = 10
+SAFE_PUBLISH_ERRORS = {
+    "PUBLISH_NOT_ELIGIBLE": {
+        "code": "PUBLISH_NOT_ELIGIBLE",
+        "message": "Publish eligibility changed before execution.",
+    },
+    "RATE_LIMITED": {
+        "code": "RATE_LIMITED", "message": "Provider rate limit reached.",
+    },
+    "TOKEN_EXPIRED": {
+        "code": "TOKEN_EXPIRED", "message": "Account authorization has expired.",
+    },
+    "PROVIDER_ERROR": {
+        "code": "PROVIDER_ERROR", "message": "Provider rejected the publish request.",
+    },
+    "PUBLISH_FINALIZE_ERROR": {
+        "code": "PUBLISH_FINALIZE_ERROR",
+        "message": "Publishing result could not be finalized.",
+    },
+}
 
 
 class PublishingConflict(ValueError):
@@ -33,12 +53,13 @@ class PublishingConflict(ValueError):
 def _attempt_history_is_consistent(task, post):
     attempts = getattr(task, "_safe_attempts", None)
     if attempts is None:
-        attempts = list(task.attempts.order_by("number"))
+        attempts = list(task.attempts.order_by("-number")[:MAX_PUBLISH_ATTEMPTS + 1])
+    attempts = sorted(attempts, key=lambda attempt: attempt.number)
+    if len(attempts) > MAX_PUBLISH_ATTEMPTS:
+        return False
     if [attempt.number for attempt in attempts] != list(range(1, task.attempt_number + 1)):
         return False
-    allowed_errors = {
-        "RATE_LIMITED", "TOKEN_EXPIRED", "PROVIDER_ERROR", "PUBLISH_FINALIZE_ERROR",
-    }
+    previous = None
     for attempt in attempts:
         if (
             attempt.organization_id != task.organization_id
@@ -47,8 +68,21 @@ def _attempt_history_is_consistent(task, post):
             or attempt.request_fingerprint != task.request_fingerprint
         ):
             return False
+        if attempt.finished_at is not None and attempt.finished_at < attempt.started_at:
+            return False
+        if (
+            previous is not None
+            and (
+                previous.finished_at is None
+                or previous.finished_at > attempt.started_at
+            )
+        ):
+            return False
         if attempt.status == PublishAttempt.Status.RUNNING and any(
-            (attempt.outcome, attempt.error, attempt.finished_at, attempt.external_id)
+            (
+                attempt.outcome, attempt.error, attempt.retry_at,
+                attempt.finished_at, attempt.external_id,
+            )
         ):
             return False
         if attempt.status == PublishAttempt.Status.SUCCEEDED and not (
@@ -60,9 +94,12 @@ def _attempt_history_is_consistent(task, post):
         ):
             return False
         if attempt.status == PublishAttempt.Status.FAILED and not (
-            isinstance(attempt.error, dict)
-            and attempt.error.get("code") in allowed_errors
+            _safe_error_is_exact(attempt.error)
             and attempt.outcome == attempt.error["code"]
+            and (
+                (attempt.error["code"] == "RATE_LIMITED" and attempt.retry_at is not None)
+                or (attempt.error["code"] != "RATE_LIMITED" and attempt.retry_at is None)
+            )
             and not attempt.external_id
             and attempt.finished_at is not None
         ):
@@ -70,18 +107,46 @@ def _attempt_history_is_consistent(task, post):
         if attempt.status == PublishAttempt.Status.CANCELED and not (
             attempt.outcome == "CANCELED"
             and attempt.error is None
+            and attempt.retry_at is None
             and not attempt.external_id
             and attempt.finished_at is not None
         ):
             return False
-        if attempt.status == PublishAttempt.Status.STALE and attempt.finished_at is None:
+        if attempt.status == PublishAttempt.Status.STALE and not (
+            not attempt.outcome
+            and attempt.error is None
+            and attempt.retry_at is None
+            and not attempt.external_id
+            and attempt.finished_at is not None
+        ):
             return False
+        if attempt.retry_at is not None and attempt.retry_at < attempt.finished_at:
+            return False
+        previous = attempt
+    latest = attempts[-1] if attempts else None
+    if any(
+        attempt.status in {
+            PublishAttempt.Status.RUNNING,
+            PublishAttempt.Status.SUCCEEDED,
+            PublishAttempt.Status.CANCELED,
+        }
+        for attempt in attempts[:-1]
+    ):
+        return False
     if post is not None and (
-        not attempts or post.attempt_id != attempts[-1].id
-        or attempts[-1].status != PublishAttempt.Status.SUCCEEDED
+        latest is None or post.attempt_id != latest.id
+        or latest.status != PublishAttempt.Status.SUCCEEDED
     ):
         return False
     return True
+
+
+def _safe_error_is_exact(value):
+    return (
+        isinstance(value, dict)
+        and value.get("code") in SAFE_PUBLISH_ERRORS
+        and value == SAFE_PUBLISH_ERRORS[value["code"]]
+    )
 
 
 def publish_task_is_consistent(task):
@@ -119,37 +184,94 @@ def publish_task_is_consistent(task):
         if not base:
             return False
         if task.status == PublishTask.Status.SCHEDULED:
-            return task.scheduled_at is not None and task.claim_token is None and post is None
+            return (
+                task.scheduled_at is not None
+                and task.claim_token is None
+                and task.attempt_number == 0
+                and task.started_at is None
+                and task.finished_at is None
+                and task.canceled_at is None
+                and task.last_error is None
+                and task.retry_not_before is None
+                and post is None
+            )
+        attempts = getattr(task, "_safe_attempts", None)
+        if attempts is None:
+            attempts = list(
+                task.attempts.order_by("-number")[:MAX_PUBLISH_ATTEMPTS + 1]
+            )
+        attempts = sorted(attempts, key=lambda attempt: attempt.number)
+        latest = attempts[-1] if attempts else None
         if task.status == PublishTask.Status.RUNNING:
             return (
                 task.claim_token is not None and task.attempt_number > 0
-                and task.started_at is not None and task.finished_at is None and post is None
+                and task.started_at is not None and task.finished_at is None
+                and task.canceled_at is None and task.last_error is None
+                and task.retry_not_before is None and post is None
+                and latest is not None
+                and latest.status == PublishAttempt.Status.RUNNING
+                and latest.claim_token == task.claim_token
+                and latest.started_at == task.started_at
             )
         if task.status == PublishTask.Status.SUCCEEDED:
             return (
-                task.claim_token is None and task.finished_at is not None and post is not None
+                task.claim_token is None and task.started_at is not None
+                and task.finished_at is not None and task.canceled_at is None
+                and task.last_error is None and task.retry_not_before is None
+                and post is not None and latest is not None
+                and latest.status == PublishAttempt.Status.SUCCEEDED
+                and latest.started_at == task.started_at
+                and latest.finished_at == task.finished_at == post.published_at
                 and post.organization_id == task.organization_id
                 and post.platform_content_id == task.platform_content_id
                 and post.social_account_id == task.social_account_id
-                and post.attempt.task_id == task.id
-                and post.external_id
+                and post.attempt_id == latest.id
+                and post.external_id == latest.external_id
             )
         if task.status == PublishTask.Status.FAILED:
             return (
-                task.claim_token is None and task.finished_at is not None
-                and isinstance(task.last_error, dict)
-                and task.last_error.get("code") in {
-                    "RATE_LIMITED", "TOKEN_EXPIRED", "PROVIDER_ERROR",
-                    "PUBLISH_FINALIZE_ERROR",
-                }
+                task.claim_token is None and task.started_at is not None
+                and task.finished_at is not None and task.canceled_at is None
+                and _safe_error_is_exact(task.last_error)
+                and latest is not None and latest.status == PublishAttempt.Status.FAILED
+                and latest.started_at == task.started_at
+                and latest.finished_at == task.finished_at
+                and latest.error == task.last_error
+                and latest.retry_at == task.retry_not_before
                 and post is None
             )
         if task.status == PublishTask.Status.CANCELED:
-            return (
+            base_canceled = (
                 task.claim_token is None and task.canceled_at is not None
-                and task.finished_at is not None and post is None
+                and task.finished_at == task.canceled_at
+                and task.last_error is None and task.retry_not_before is None
+                and post is None
             )
-        return task.status == PublishTask.Status.QUEUED and task.claim_token is None and post is None
+            if not base_canceled:
+                return False
+            if task.attempt_number == 0:
+                return task.started_at is None and latest is None
+            return (
+                latest is not None
+                and latest.status == PublishAttempt.Status.CANCELED
+                and latest.started_at == task.started_at
+                and latest.finished_at == task.finished_at
+            )
+        if task.status != PublishTask.Status.QUEUED:
+            return False
+        base_queued = (
+            task.claim_token is None and task.finished_at is None
+            and task.canceled_at is None and task.last_error is None
+            and task.retry_not_before is None and post is None
+        )
+        if not base_queued:
+            return False
+        if task.attempt_number == 0:
+            return task.started_at is None and latest is None
+        return (
+            latest is not None and latest.status == PublishAttempt.Status.FAILED
+            and task.started_at == latest.started_at
+        )
     except (AttributeError, KeyError, TypeError, ValueError, ZoneInfoNotFoundError):
         return False
 
@@ -300,6 +422,70 @@ def claim_publish_task(task_id=None):
         return None
     token = uuid.uuid4()
     now = timezone.now()
+    content = PlatformContent.objects.select_for_update().select_related(
+        "platform", "master_content__brief", "master_content__generation_job",
+        "master_content__ai_run", "master_content__previous_version", "previous_version",
+    ).get(pk=task.platform_content_id)
+    account = SocialAccount.objects.select_for_update().select_related("platform").get(
+        pk=task.social_account_id
+    )
+    credential = None
+    if account.credential_id:
+        credential = ConnectorCredential.objects.select_for_update().filter(
+            pk=account.credential_id
+        ).first()
+    list(
+        PlatformCapability.objects.select_for_update().filter(
+            platform_id=account.platform_id
+        ).values_list("id", flat=True)
+    )
+    task._state.fields_cache["platform_content"] = content
+    task._state.fields_cache["social_account"] = account
+    eligible = (
+        publish_task_is_consistent(task)
+        and content_is_consistent(content)
+        and content.status == PlatformContent.Status.APPROVED
+        and not PlatformContent.objects.select_for_update().filter(
+            previous_version=content
+        ).exists()
+        and task.organization_id == content.organization_id == account.organization_id
+        and task.platform_id == content.platform_id == account.platform_id
+        and task.content_version == content.version
+        and account.status == SocialAccount.Status.ACTIVE
+        and account.publish_mode == SocialAccount.PublishMode.API_AUTO
+        and credential is not None
+        and credential.organization_id == account.organization_id
+        and credential.platform_id == account.platform_id
+        and (credential.expires_at is None or credential.expires_at > now)
+        and AccountCapability.PUBLISH in resolve_account_capabilities(account.id)
+    )
+    if not eligible:
+        error = SAFE_PUBLISH_ERRORS["PUBLISH_NOT_ELIGIBLE"]
+        task.status = PublishTask.Status.FAILED
+        task.claim_token = None
+        task.attempt_number += 1
+        task.started_at = now
+        task.finished_at = now
+        task.last_error = error
+        task.retry_not_before = None
+        with publishing_writes():
+            task.save(update_fields=[
+                "status", "claim_token", "attempt_number", "started_at",
+                "finished_at", "last_error", "retry_not_before", "updated_at",
+            ])
+            PublishAttempt.objects.create(
+                organization=task.organization,
+                task=task,
+                number=task.attempt_number,
+                claim_token=token,
+                status=PublishAttempt.Status.FAILED,
+                request_fingerprint=task.request_fingerprint,
+                outcome=error["code"],
+                error=error,
+                started_at=now,
+                finished_at=now,
+            )
+        return None
     task.status = PublishTask.Status.RUNNING
     task.claim_token = token
     task.attempt_number += 1
@@ -324,15 +510,8 @@ def claim_publish_task(task_id=None):
 
 
 def _safe_error(result):
-    allowed = {"RATE_LIMITED", "TOKEN_EXPIRED", "PROVIDER_ERROR", "PUBLISH_FINALIZE_ERROR"}
-    code = result.error_code if result.error_code in allowed else "PROVIDER_ERROR"
-    messages = {
-        "RATE_LIMITED": "Provider rate limit reached.",
-        "TOKEN_EXPIRED": "Account authorization has expired.",
-        "PROVIDER_ERROR": "Provider rejected the publish request.",
-        "PUBLISH_FINALIZE_ERROR": "Publishing result could not be finalized.",
-    }
-    return {"code": code, "message": messages[code]}
+    code = result.error_code if result.error_code in SAFE_PUBLISH_ERRORS else "PROVIDER_ERROR"
+    return SAFE_PUBLISH_ERRORS[code]
 
 
 @transaction.atomic
@@ -510,6 +689,8 @@ def retry_publish_task(task, *, actor=None):
     task = PublishTask.objects.select_for_update().get(pk=task.pk)
     if task.status != PublishTask.Status.FAILED:
         raise PublishingConflict("Only failed publish tasks can be retried.")
+    if task.attempt_number >= MAX_PUBLISH_ATTEMPTS:
+        raise PublishingConflict("Publish attempt limit has been reached.")
     if (task.last_error or {}).get("code") == "TOKEN_EXPIRED":
         raise PublishingConflict("Expired account token requires reauthorization before retry.")
     if task.retry_not_before and task.retry_not_before > timezone.now():

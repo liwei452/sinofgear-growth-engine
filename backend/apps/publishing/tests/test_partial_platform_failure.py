@@ -6,6 +6,8 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from apps.content.models import PlatformContent
+from apps.content.models import content_writes
+from apps.content.services import create_platform_revision
 from apps.publishing.models import (
     PublishAttempt, PublishedPost, PublishTask, publishing_writes,
 )
@@ -14,7 +16,7 @@ from apps.publishing.services import (
     claim_publish_task, complete_publish_success, enqueue_due_publish_tasks,
     execute_publish_task, retry_publish_task,
 )
-from apps.platforms.models import SocialAccount
+from apps.platforms.models import PlatformCapability, SocialAccount
 from integrations.platforms.base import PublishResult
 
 
@@ -208,3 +210,85 @@ def test_stale_claim_token_cannot_finalize_publish(publishing_context):
     assert task.claim_token == replacement_token
     assert attempt.status == PublishAttempt.Status.STALE
     assert not PublishedPost.objects.filter(task=task).exists()
+
+
+@pytest.mark.parametrize(
+    "revoked_fact",
+    [
+        "task_fingerprint", "content_status", "content_head", "account_status",
+        "credential", "capability",
+    ],
+)
+def test_execution_revalidates_eligibility_before_connector(
+    publishing_context, monkeypatch, revoked_fact,
+):
+    context = publishing_context
+    task = _task(context, f"revalidate-{revoked_fact}")
+    if revoked_fact == "task_fingerprint":
+        with publishing_writes():
+            PublishTask.objects.filter(pk=task.pk).update(request_fingerprint="0" * 64)
+    elif revoked_fact == "content_status":
+        with content_writes():
+            PlatformContent.objects.filter(pk=context["content"].pk).update(
+                status=PlatformContent.Status.IN_REVIEW
+            )
+    elif revoked_fact == "content_head":
+        create_platform_revision(
+            context["content"], actor=context["actor"],
+            payload={**context["content"].payload, "title": "new head"},
+        )
+    elif revoked_fact == "account_status":
+        context["account"].status = SocialAccount.Status.INACTIVE
+        context["account"].save(update_fields=["status", "updated_at"])
+    elif revoked_fact == "credential":
+        credential = context["account"].credential
+        credential.expires_at = timezone.now() - timedelta(seconds=1)
+        credential.save(update_fields=["expires_at", "updated_at"])
+    else:
+        PlatformCapability.objects.filter(
+            platform=context["platform"], code="PUBLISH"
+        ).delete()
+
+    calls = []
+
+    class RecordingConnector:
+        def publish(self, request):
+            calls.append(request.task_id)
+            return PublishResult(succeeded=True, external_id="must-not-publish")
+
+    monkeypatch.setattr(
+        "apps.publishing.services.get_connector",
+        lambda _code, _account: RecordingConnector(),
+    )
+
+    assert execute_publish_task(task.id) is None
+
+    task.refresh_from_db()
+    attempt = PublishAttempt.objects.get(task=task)
+    assert calls == []
+    assert task.status == PublishTask.Status.FAILED
+    assert task.last_error == {
+        "code": "PUBLISH_NOT_ELIGIBLE",
+        "message": "Publish eligibility changed before execution.",
+    }
+    assert attempt.status == PublishAttempt.Status.FAILED
+    assert attempt.error == task.last_error
+    assert not PublishedPost.objects.filter(task=task).exists()
+
+
+def test_explicit_retry_stops_at_bounded_attempt_history(publishing_context):
+    context = publishing_context
+    context["account"].connector_metadata = {"mock_outcome": "provider_error"}
+    context["account"].save(update_fields=["connector_metadata", "updated_at"])
+    task = _task(context, "attempt-bound")
+
+    for number in range(1, 11):
+        assert execute_publish_task(task.id) is None
+        task.refresh_from_db()
+        assert task.attempt_number == number
+        if number < 10:
+            retry_publish_task(task, actor=context["actor"])
+
+    with pytest.raises(PublishingConflict, match="attempt limit"):
+        retry_publish_task(task, actor=context["actor"])
+    assert PublishAttempt.objects.filter(task=task).count() == 10

@@ -6,6 +6,8 @@ from rest_framework.test import APIClient
 
 from apps.identity.models import Membership, Organization, Role
 from apps.platforms.models import ConnectorCredential, Platform, PlatformCapability, SocialAccount
+from apps.platforms.capabilities import CONNECTOR_CAPABILITIES
+from apps.platforms.codes import AccountCapability
 
 
 def create_member(*, organization: Organization, role: Role, username: str) -> APIClient:
@@ -100,8 +102,12 @@ def test_administrator_can_create_social_account_without_exposing_credential_sec
     )
 
     assert response.status_code == 201
-    assert response.json()["organization"] == str(organization.id)
-    assert response.json()["credential"] == str(credential.id)
+    assert response.json() == {
+        "id": response.json()["id"], "platform_id": str(platform.id),
+        "display_name": "Acme LinkedIn", "publish_mode": "EXPORT_PACKAGE",
+        "status": "ACTIVE", "effective_capabilities": [],
+        "credential_configured": True,
+    }
     assert "secret_reference" not in response.json()
     assert "vault://linkedin/acme" not in response.content.decode()
 
@@ -119,7 +125,135 @@ def test_lower_privilege_member_cannot_create_social_account(
     )
 
     assert response.status_code == 403
-    assert client.get("/api/v1/social-accounts").status_code == 403
+    assert client.get("/api/v1/social-accounts").status_code == 200
+
+
+@pytest.mark.django_db
+def test_publishing_reader_gets_safe_account_list_and_detail(
+    platform: Platform, organizations: tuple[Organization, Organization], roles: dict[str, Role], monkeypatch
+) -> None:
+    organization, other = organizations
+    PlatformCapability.objects.create(platform=platform, code="PUBLISH")
+    monkeypatch.setitem(CONNECTOR_CAPABILITIES, platform.code, frozenset({AccountCapability.PUBLISH}))
+    credential = ConnectorCredential.objects.create(
+        organization=organization, platform=platform,
+        secret_reference="vault://linkedin/reader-secret", granted_scopes=["PUBLISH"],
+    )
+    account = SocialAccount.objects.create(
+        organization=organization, platform=platform, credential=credential,
+        external_id="reader-linkedin", display_name="Reader LinkedIn", publish_mode="API_AUTO",
+    )
+    SocialAccount.objects.create(
+        organization=other, platform=platform, external_id="foreign", display_name="Foreign secret",
+    )
+    client = create_member(
+        organization=organization, role=roles[Role.Code.REVIEWER], username="safe-reader"
+    )
+
+    listing = client.get("/api/v1/social-accounts")
+    detail = client.get(f"/api/v1/social-accounts/{account.id}")
+
+    expected = {
+        "id": str(account.id), "platform_id": str(platform.id),
+        "display_name": "Reader LinkedIn", "publish_mode": "API_AUTO",
+        "status": "ACTIVE", "effective_capabilities": ["PUBLISH"],
+        "credential_configured": True,
+    }
+    assert listing.status_code == detail.status_code == 200
+    assert listing.json() == {"results": [expected]}
+    assert detail.json() == expected
+    serialized = f"{listing.json()} {detail.json()}"
+    assert str(credential.id) not in serialized
+    assert "reader-secret" not in serialized
+    assert "Foreign secret" not in serialized
+
+
+@pytest.mark.django_db
+def test_social_account_patch_is_strict_managed_and_organization_scoped(
+    platform: Platform, organizations: tuple[Organization, Organization], roles: dict[str, Role]
+) -> None:
+    own, other = organizations
+    own_credential = ConnectorCredential.objects.create(
+        organization=own, platform=platform, secret_reference="vault://own", granted_scopes=[]
+    )
+    foreign_credential = ConnectorCredential.objects.create(
+        organization=other, platform=platform, secret_reference="vault://foreign", granted_scopes=[]
+    )
+    own_account = SocialAccount.objects.create(
+        organization=own, platform=platform, external_id="own", display_name="Before"
+    )
+    foreign_account = SocialAccount.objects.create(
+        organization=other, platform=platform, external_id="foreign", display_name="Foreign"
+    )
+    admin = create_member(organization=own, role=roles[Role.Code.ADMINISTRATOR], username="patch-admin")
+    reader = create_member(organization=own, role=roles[Role.Code.REVIEWER], username="patch-reader")
+
+    assert reader.patch(
+        f"/api/v1/social-accounts/{own_account.id}", {"display_name": "Nope"}, format="json"
+    ).status_code == 403
+    assert admin.get(f"/api/v1/social-accounts/{foreign_account.id}").status_code == 404
+    assert admin.patch(
+        f"/api/v1/social-accounts/{foreign_account.id}", {"display_name": "Nope"}, format="json"
+    ).status_code == 404
+    assert admin.patch(
+        f"/api/v1/social-accounts/{own_account.id}", {"external_id": "changed"}, format="json"
+    ).status_code == 400
+    assert admin.patch(
+        f"/api/v1/social-accounts/{own_account.id}", {"credential": str(foreign_credential.id)}, format="json"
+    ).status_code == 400
+
+    updated = admin.patch(
+        f"/api/v1/social-accounts/{own_account.id}",
+        {"display_name": "After", "publish_mode": "MANUAL", "status": "INACTIVE", "credential": str(own_credential.id)},
+        format="json",
+    )
+    assert updated.status_code == 200
+    assert updated.json()["display_name"] == "After"
+    assert updated.json()["credential_configured"] is True
+    assert str(own_credential.id) not in str(updated.json())
+
+
+@pytest.mark.django_db
+def test_connector_credentials_are_managed_write_only_and_scope_checked(
+    platform: Platform, organizations: tuple[Organization, Organization], roles: dict[str, Role]
+) -> None:
+    own, _other = organizations
+    PlatformCapability.objects.create(platform=platform, code="PUBLISH")
+    admin = create_member(organization=own, role=roles[Role.Code.ADMINISTRATOR], username="credential-admin")
+    reader = create_member(organization=own, role=roles[Role.Code.REVIEWER], username="credential-reader")
+    payload = {
+        "platform": str(platform.id), "secret_reference": "vault://linkedin/top-secret",
+        "granted_scopes": ["PUBLISH"], "expires_at": None,
+    }
+
+    assert reader.get("/api/v1/connector-credentials").status_code == 403
+    assert reader.post("/api/v1/connector-credentials", payload, format="json").status_code == 403
+    invalid = admin.post(
+        "/api/v1/connector-credentials", {**payload, "granted_scopes": ["METRICS_READ"]}, format="json"
+    )
+    unknown = admin.post(
+        "/api/v1/connector-credentials", {**payload, "unknown": "top-secret"}, format="json"
+    )
+    created = admin.post("/api/v1/connector-credentials", payload, format="json")
+
+    assert invalid.status_code == unknown.status_code == 400
+    assert created.status_code == 201
+    credential_id = created.json()["id"]
+    expected = {
+        "id": credential_id, "platform_id": str(platform.id),
+        "granted_scopes": ["PUBLISH"], "expires_at": None, "configured": True,
+    }
+    assert created.json() == expected
+    assert "top-secret" not in created.content.decode()
+    assert admin.get("/api/v1/connector-credentials").json() == {"results": [expected]}
+
+    updated = admin.patch(
+        f"/api/v1/connector-credentials/{credential_id}",
+        {"secret_reference": "vault://linkedin/replaced", "granted_scopes": []}, format="json",
+    )
+    assert updated.status_code == 200
+    assert updated.json()["configured"] is True
+    assert "replaced" not in updated.content.decode()
 
 
 @pytest.mark.django_db

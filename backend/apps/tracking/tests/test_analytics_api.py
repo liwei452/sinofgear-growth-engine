@@ -96,6 +96,10 @@ def test_tracking_and_short_api_idempotency_cursor_and_isolated_detail(tracking_
         "/api/v1/short-links", {"tracking_link_id": tracking_id, "unknown": 1}, format="json",
         HTTP_IDEMPOTENCY_KEY="api-short-unknown",
     ).status_code == 400
+    for path in ("/api/v1/tracking-links?cursor=bad", "/api/v1/short-links?cursor=bad"):
+        invalid_cursor = client.get(path)
+        assert invalid_cursor.status_code == 400
+        assert set(invalid_cursor.json()["errors"]) == {"cursor"}
 
 
 @pytest.mark.django_db
@@ -148,6 +152,7 @@ def test_channel_summary_is_database_aggregate_with_all_dimensions_and_filters(
     assert response.status_code == 200
     payload = response.json()
     assert payload["count"] == 1
+    assert payload["total_clicks"] == 2
     row = payload["results"][0]
     assert row == {
         "date": now.date().isoformat(),
@@ -169,6 +174,16 @@ def test_channel_summary_is_database_aggregate_with_all_dimensions_and_filters(
         )
         assert filtered.status_code == 200
         assert filtered.json()["count"] == 2
+        assert filtered.json()["total_clicks"] == 3
+
+    paged = client.get(
+        "/api/v1/analytics/channel-summary",
+        {"start": start, "end": end, "limit": 1, "offset": 1},
+    )
+    assert paged.status_code == 200
+    assert paged.json()["count"] == 2
+    assert paged.json()["total_clicks"] == 3
+    assert len(paged.json()["results"]) == 1
 
 
 @pytest.mark.django_db

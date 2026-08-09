@@ -139,8 +139,12 @@ async function request(
   }
   let body: BodyInit | undefined
   if (options.body !== undefined) {
-    headers["Content-Type"] = "application/json"
-    body = JSON.stringify(options.body)
+    if (options.body instanceof FormData) {
+      body = options.body
+    } else {
+      headers["Content-Type"] = "application/json"
+      body = JSON.stringify(options.body)
+    }
   }
 
   let response: Response

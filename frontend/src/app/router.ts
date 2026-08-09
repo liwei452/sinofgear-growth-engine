@@ -15,6 +15,10 @@ export type AppRouteComponents = {
   Knowledge: Component
   ContentFactory: Component
   Reviews: Component
+  Assets: Component
+  PublishingCalendar: Component
+  PlatformAccounts: Component
+  Analytics: Component
   Placeholder: Component
 }
 
@@ -22,13 +26,6 @@ type RouterOptions = {
   history?: RouterHistory
   components: AppRouteComponents
 }
-
-const placeholderRoutes: Array<{ path: string; name: string; title: string }> = [
-  { path: "assets", name: "assets", title: "素材库" },
-  { path: "publishing-calendar", name: "publishing-calendar", title: "发布日历" },
-  { path: "platform-accounts", name: "platform-accounts", title: "平台账号" },
-  { path: "analytics", name: "analytics", title: "数据看板" },
-]
 
 export function safeRedirect(value: unknown): string {
   if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) {
@@ -82,11 +79,10 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
       component: options.components.Reviews,
       meta: { title: "审核中心" },
     },
-    ...placeholderRoutes.map((route) => ({
-      ...route,
-      component: options.components.Placeholder,
-      meta: { title: route.title },
-    })),
+    { path: "assets", name: "assets", component: options.components.Assets, meta: { title: "素材库" } },
+    { path: "publishing-calendar", name: "publishing-calendar", component: options.components.PublishingCalendar, meta: { title: "发布日历" } },
+    { path: "platform-accounts", name: "platform-accounts", component: options.components.PlatformAccounts, meta: { title: "平台账户" } },
+    { path: "analytics", name: "analytics", component: options.components.Analytics, meta: { title: "数据看板" } },
   ]
   const router = createRouter({
     history: options.history ?? createWebHistory(),

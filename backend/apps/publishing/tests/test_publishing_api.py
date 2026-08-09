@@ -86,6 +86,9 @@ def test_publish_create_requires_header_and_strict_endpoint_body(publishing_cont
         "/api/v1/publish-tasks", body, format="json",
         HTTP_IDEMPOTENCY_KEY="x" * 129,
     ).status_code == 400
+    invalid_cursor = client.get("/api/v1/publish-tasks?cursor=bad")
+    assert invalid_cursor.status_code == 400
+    assert set(invalid_cursor.json()["errors"]) == {"cursor"}
 
 
 def test_publish_and_calendar_datetimes_require_explicit_timezone(publishing_context):

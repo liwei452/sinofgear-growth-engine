@@ -79,6 +79,22 @@ describe("apiRequest", () => {
     )
   })
 
+  it("sends FormData with CSRF without forcing a JSON content type", async () => {
+    document.cookie = "csrftoken=csrf-value; path=/"
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const form = new FormData()
+    form.append("asset_type", "IMAGE")
+    form.append("file", new File(["pixels"], "product.png", { type: "image/png" }))
+
+    await apiRequest("/api/v1/assets", { method: "POST", body: form })
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(init.body).toBe(form)
+    expect(new Headers(init.headers).get("Content-Type")).toBeNull()
+    expect(new Headers(init.headers).get("X-CSRFToken")).toBe("csrf-value")
+  })
+
   it("maps safe client-error detail, message, and recovery_action", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       detail: "请求无法完成",

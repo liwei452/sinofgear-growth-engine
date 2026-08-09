@@ -14,6 +14,10 @@ const Knowledge = defineComponent({ name: "KnowledgeStub", template: "<p>真实�
 const ContentFactory = defineComponent({ name: "ContentFactoryStub", template: "<p>真实内容工厂</p>" })
 const Reviews = defineComponent({ name: "ReviewsStub", template: "<p>真实审核中心</p>" })
 const Placeholder = defineComponent({ name: "PlaceholderStub", template: "<p>占位内容</p>" })
+const Assets = defineComponent({ name: "AssetsStub", template: "<p>真实素材库</p>" })
+const PublishingCalendar = defineComponent({ name: "PublishingStub", template: "<p>真实发布日历</p>" })
+const PlatformAccounts = defineComponent({ name: "AccountsStub", template: "<p>真实平台账户</p>" })
+const Analytics = defineComponent({ name: "AnalyticsStub", template: "<p>真实数据看板</p>" })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
 function deferred<T>() {
@@ -31,7 +35,7 @@ function router(client = queryClient(), initialPath?: string) {
   if (initialPath) history.push(initialPath)
   return createAppRouter(client, {
     history,
-    components: { Login, Shell, Dashboard, Products, Knowledge, ContentFactory, Reviews, Placeholder },
+    components: { Login, Shell, Dashboard, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, Placeholder },
   })
 }
 
@@ -78,6 +82,17 @@ describe("protected routing", () => {
     await appRouter.push("/reviews")
     expect(await screen.findByText("真实审核中心")).toBeInTheDocument()
     expect(screen.queryByText("占位内容")).not.toBeInTheDocument()
+  })
+
+  it("mounts all four distinct publishing operations workspaces", async () => {
+    const client = queryClient()
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: [] } })
+    const appRouter = router(client)
+    render(Root, { global: { plugins: [appRouter] } })
+    for (const [path, label] of [["/assets", "真实素材库"], ["/publishing-calendar", "真实发布日历"], ["/platform-accounts", "真实平台账户"], ["/analytics", "真实数据看板"]]) {
+      await appRouter.push(path)
+      expect(await screen.findByText(label)).toBeInTheDocument()
+    }
   })
 
   it.each([401, 403])("redirects status %s to login with the local target", async (status) => {

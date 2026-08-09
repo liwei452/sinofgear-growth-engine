@@ -20,6 +20,10 @@ const router = createAppRouter(queryClient, {
     Knowledge: defineAsyncComponent(() => import("./modules/knowledge/KnowledgeLibraryPage.vue")),
     ContentFactory: defineAsyncComponent(() => import("./modules/content/ContentFactoryPage.vue")),
     Reviews: defineAsyncComponent(() => import("./modules/content/ReviewCenterPage.vue")),
+    Assets: defineAsyncComponent(() => import("./modules/assets/AssetLibraryPage.vue")),
+    PublishingCalendar: defineAsyncComponent(() => import("./modules/publishing/PublishingCalendarPage.vue")),
+    PlatformAccounts: defineAsyncComponent(() => import("./modules/platformAccounts/PlatformAccountsPage.vue")),
+    Analytics: defineAsyncComponent(() => import("./modules/analytics/AnalyticsPage.vue")),
     Placeholder: PlaceholderPage,
   },
 })

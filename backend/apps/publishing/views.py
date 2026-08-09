@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from django.http import Http404
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
 from rest_framework import status
+from rest_framework.exceptions import NotFound
 from rest_framework.pagination import CursorPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -108,7 +109,10 @@ class PublishTaskListView(APIView):
             if name in values:
                 queryset = queryset.filter(**{field: values[name]})
         paginator = PublishPagination()
-        page = paginator.paginate_queryset(queryset, request, view=self)
+        try:
+            page = paginator.paginate_queryset(queryset, request, view=self)
+        except NotFound:
+            return _validation({"cursor": ["Invalid or expired cursor."]})
         safe = [task for task in page if publish_task_is_consistent(task)]
         return paginator.get_paginated_response(PublishTaskSerializer(safe, many=True).data)
 

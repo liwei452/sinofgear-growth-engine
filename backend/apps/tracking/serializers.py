@@ -103,6 +103,7 @@ class ChannelSummaryRowSerializer(serializers.Serializer):
 
 class ChannelSummaryEnvelopeSerializer(serializers.Serializer):
     count = serializers.IntegerField(min_value=0)
+    total_clicks = serializers.IntegerField(min_value=0)
     next = serializers.URLField(allow_null=True)
     previous = serializers.URLField(allow_null=True)
     results = ChannelSummaryRowSerializer(many=True)

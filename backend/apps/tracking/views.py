@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 from django.http import Http404, HttpResponse, HttpResponseNotFound, HttpResponseRedirect
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, OpenApiTypes, extend_schema
 from rest_framework import status
+from rest_framework.exceptions import NotFound
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -130,7 +131,10 @@ class TrackingLinkListView(APIView):
         if error:
             return error
         paginator = TrackingPagination()
-        page = paginator.paginate_queryset(_tracking_queryset(request.organization), request, view=self)
+        try:
+            page = paginator.paginate_queryset(_tracking_queryset(request.organization), request, view=self)
+        except NotFound:
+            return _validation({"cursor": ["Invalid or expired cursor."]})
         safe = [link for link in page if _tracking_consistent(link)]
         return paginator.get_paginated_response(TrackingLinkSerializer(safe, many=True).data)
 
@@ -197,7 +201,10 @@ class ShortLinkListView(APIView):
         if error:
             return error
         paginator = TrackingPagination()
-        page = paginator.paginate_queryset(_short_queryset(request.organization), request, view=self)
+        try:
+            page = paginator.paginate_queryset(_short_queryset(request.organization), request, view=self)
+        except NotFound:
+            return _validation({"cursor": ["Invalid or expired cursor."]})
         safe = [link for link in page if _short_consistent(link)]
         return paginator.get_paginated_response(ShortLinkSerializer(safe, many=True).data)
 
@@ -376,6 +383,7 @@ class ChannelSummaryView(APIView):
                 "tracking_link__published_post__published_at"
             )
         )
+        total_clicks = queryset.count()
         groups = queryset.values(
             "occurred_date", "campaign_id", "platform_id", "country", "product_id"
         ).annotate(clicks=Count("id")).order_by(
@@ -400,6 +408,7 @@ class ChannelSummaryView(APIView):
             return request.build_absolute_uri(f"{request.path}?{params.urlencode()}")
         return Response({
             "count": count,
+            "total_clicks": total_clicks,
             "next": page_url(offset + limit),
             "previous": page_url(max(0, offset - limit)) if offset else None,
             "results": ChannelSummaryEnvelopeSerializer().fields["results"].to_representation(rows),

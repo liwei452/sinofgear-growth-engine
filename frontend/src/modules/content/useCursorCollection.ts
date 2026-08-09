@@ -1,4 +1,4 @@
-import { computed, ref, watch, type Ref, type WatchSource } from "vue"
+import { computed, onScopeDispose, ref, watch, type Ref, type WatchSource } from "vue"
 
 import { ApiError } from "../../api/client"
 import { getCursorPage, type CursorPage } from "./api"
@@ -13,8 +13,12 @@ export function useCursorCollection<T>(
   const next = ref<string | null>(null)
   const loading = ref(false)
   const error = ref("")
+  let generation = 0
+  let disposed = false
 
   function reset(): void {
+    if (disposed) return
+    generation += 1
     additional.value = []
     next.value = firstPage.value?.next ?? null
     loading.value = false
@@ -23,7 +27,7 @@ export function useCursorCollection<T>(
 
   watch(resetKey, reset, { immediate: true })
   watch(firstPage, (page) => {
-    if (!additional.value.length) next.value = page?.next ?? null
+    if (!disposed && !additional.value.length) next.value = page?.next ?? null
   })
 
   const items = computed(() => {
@@ -34,19 +38,27 @@ export function useCursorCollection<T>(
   async function loadMore(): Promise<void> {
     if (!next.value || loading.value) return
     const cursor = next.value
+    const loadGeneration = generation
     loading.value = true
     error.value = ""
     try {
       const page = await getCursorPage<T>(cursor, exactPath)
+      if (disposed || loadGeneration !== generation) return
       const known = new Set(items.value.map(identity))
       additional.value.push(...page.results.filter((item) => !known.has(identity(item))))
       next.value = page.next
     } catch (reason) {
+      if (disposed || loadGeneration !== generation) return
       error.value = reason instanceof ApiError ? reason.userMessage : "下一页没有加载成功，请重试。"
     } finally {
-      loading.value = false
+      if (!disposed && loadGeneration === generation) loading.value = false
     }
   }
+
+  onScopeDispose(() => {
+    disposed = true
+    generation += 1
+  })
 
   return { items, next, loading, error, loadMore, reset }
 }

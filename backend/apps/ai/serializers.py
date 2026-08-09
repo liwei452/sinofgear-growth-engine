@@ -1,5 +1,6 @@
 import json
 import re
+import unicodedata
 
 from rest_framework import serializers
 
@@ -40,16 +41,26 @@ _PROVIDER_METADATA_SCHEMA = {
     },
 }
 
-_BEARER_SECRET = re.compile(r"(?i)\b(?:authorization\s*[:=]?\s*)?bearer\s+[^\s,;]+")
-_NAMED_SECRET = re.compile(
-    r"(?i)\b(?:api[_ -]?key|password|passwd|token|cookie|secret|credential)"
-    r"\s*[:=]\s*[^\s,;]+"
+_SENSITIVE_NAME = (
+    r"(?:authorization|api[\s_-]*key|access[\s_-]*token|refresh[\s_-]*token|"
+    r"client[\s_-]*secret|password|passwd|passphrase|set[\s_-]*cookie|cookie|token)"
+)
+_SENSITIVE_ASSIGNMENT = re.compile(
+    rf"(?<![\w]){_SENSITIVE_NAME}\s*(?::|=|%3a|%3d)", re.IGNORECASE
+)
+_AUTHORIZATION_SCHEME = re.compile(
+    r"(?<![\w])authorization\s*(?:(?::|=|%3a|%3d)\s*)?(?:basic|bearer)\b",
+    re.IGNORECASE,
 )
 
 
 def _redact_and_bound_string(value: str) -> str:
-    value = _BEARER_SECRET.sub("[REDACTED]", value)
-    value = _NAMED_SECRET.sub("[REDACTED]", value)
+    detection_value = unicodedata.normalize("NFKC", value).casefold()
+    if (
+        _SENSITIVE_ASSIGNMENT.search(detection_value)
+        or _AUTHORIZATION_SCHEME.search(detection_value)
+    ):
+        return "[REDACTED]"
     if len(value) > _MAX_AUDIT_STRING_LENGTH:
         return f"{value[:_MAX_AUDIT_STRING_LENGTH - len(_TRUNCATED)]}{_TRUNCATED}"
     return value

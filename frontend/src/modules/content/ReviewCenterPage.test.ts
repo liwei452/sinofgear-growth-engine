@@ -252,3 +252,37 @@ it("resets accumulated cursor pages when review filters change", async () => {
   expect(await screen.findByText("草稿筛选结果")).toBeInTheDocument()
   expect(screen.queryByText("旧筛选第二页")).not.toBeInTheDocument()
 })
+
+it("recovers campaign and platform filter options after first-page errors", async () => {
+  const attempts = new Map<string, number>()
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    if (path === "/api/v1/campaigns" || path === "/api/v1/platforms") {
+      const attempt = (attempts.get(path) ?? 0) + 1
+      attempts.set(path, attempt)
+      if (attempt === 1) return new Response(JSON.stringify({ detail: "temporary" }), {
+        status: 503, headers: { "Content-Type": "application/json" },
+      })
+      const results = path.endsWith("campaigns")
+        ? [{ ...campaign, id: "campaign-recovered", name: "恢复的活动" }]
+        : [{ id: "platform-recovered", code: "RECOVERED", name: "恢复的平台", capabilities: [] }]
+      return new Response(JSON.stringify({ next: null, previous: null, results }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })
+    }
+    return new Response(JSON.stringify(
+      path.startsWith("/api/v1/master-contents") ? page([]) : common(path),
+    ), { status: 200, headers: { "Content-Type": "application/json" } })
+  }))
+  const user = userEvent.setup()
+  renderPage(["content.read"])
+
+  await user.click(await screen.findByRole("button", { name: "重新加载活动" }))
+  await user.click(screen.getByRole("button", { name: "重新加载平台" }))
+
+  expect(await screen.findByRole("option", { name: "恢复的活动" })).toBeInTheDocument()
+  await user.click(screen.getByRole("tab", { name: "平台版本" }))
+  expect(await screen.findByRole("option", { name: "恢复的平台" })).toBeInTheDocument()
+  expect(attempts).toEqual(new Map([
+    ["/api/v1/campaigns", 2], ["/api/v1/platforms", 2],
+  ]))
+})

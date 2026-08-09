@@ -48,6 +48,21 @@ const form = reactive({
 const backdrop = ref<HTMLElement | null>(null)
 const dialog = ref<HTMLElement | null>(null)
 const title = ref<HTMLElement | null>(null)
+const alertElement = ref<HTMLElement | null>(null)
+
+const fieldAliases: Record<string, string> = {
+  campaign_id: "campaign", campaigns: "campaign",
+  product_ids: "products", products: "products",
+  platform_ids: "platforms", target_platforms: "platforms", platforms: "platforms",
+  asset_ids: "assets", assets: "assets",
+}
+const fieldSteps: Record<string, number> = {
+  campaign: 1, campaign_name: 1,
+  products: 2, platforms: 2, assets: 2,
+  target_country: 3, customer_type: 3, content_objective: 3, cta: 3,
+  landing_page_url: 3, language: 3, selling_points: 3, advantages: 3,
+  keywords: 3, prohibited_claims: 3,
+}
 
 useModalFocus({ backdrop, dialog, initialFocus: title, close: () => emit("close") })
 
@@ -56,10 +71,47 @@ function clearErrors(): void {
   for (const key of Object.keys(fieldErrors)) delete fieldErrors[key]
 }
 
-async function focusFirstError(): Promise<void> {
+async function focusFirstError(preferred?: string): Promise<void> {
   await nextTick()
-  const name = Object.keys(fieldErrors)[0]
-  dialog.value?.querySelector<HTMLElement>(`[data-field="${name}"]`)?.focus()
+  const name = preferred ?? Object.keys(fieldErrors)[0]
+  const field = name
+    ? dialog.value?.querySelector<HTMLElement>(`[data-field="${name}"]`)
+    : undefined
+  const target = field?.matches("input, select, textarea, button")
+    ? field
+    : field?.querySelector<HTMLElement>("input, select, textarea, button")
+  if (target) target.focus()
+  else alertElement.value?.focus()
+}
+
+async function applyServerFieldErrors(error: ApiError): Promise<boolean> {
+  if (!error.fieldErrors || !Object.keys(error.fieldErrors).length) return false
+  clearErrors()
+  const summaryMessages: string[] = []
+  const knownFields: string[] = []
+  for (const [rawField, messages] of Object.entries(error.fieldErrors)) {
+    const field = fieldAliases[rawField] ?? rawField
+    const message = messages.join(" ")
+    if (fieldSteps[field]) {
+      fieldErrors[field] = fieldErrors[field] ? `${fieldErrors[field]} ${message}` : message
+      if (!knownFields.includes(field)) knownFields.push(field)
+    } else {
+      summaryMessages.push(message)
+    }
+  }
+  if (knownFields.length) {
+    const targetStep = Math.min(...knownFields.map((field) => fieldSteps[field]))
+    step.value = targetStep
+    const targetField = knownFields.find((field) => fieldSteps[field] === targetStep)
+    alert.value = summaryMessages.length
+      ? `请检查以下问题：${summaryMessages.join(" ")}`
+      : "请检查标出的字段后重试。"
+    await focusFirstError(targetField)
+  } else {
+    alert.value = summaryMessages.join(" ") || error.userMessage
+    await focusFirstError()
+  }
+  return true
 }
 
 function list(value: string): string[] {
@@ -130,7 +182,7 @@ async function next(): Promise<void> {
 
 async function submit(): Promise<void> {
   busy.value = true
-  alert.value = ""
+  clearErrors()
   try {
     const input = {
       target_country: form.target_country.trim(), customer_type: form.customer_type.trim(),
@@ -146,7 +198,9 @@ async function submit(): Promise<void> {
       : await createBrief({ campaign_id: campaignId.value, ...input })
     emit("saved", brief)
   } catch (error) {
-    alert.value = error instanceof ApiError ? error.userMessage : "需求草稿没有创建成功，请重试。"
+    if (!(error instanceof ApiError) || !(await applyServerFieldErrors(error))) {
+      alert.value = error instanceof ApiError ? error.userMessage : "需求草稿没有创建成功，请重试。"
+    }
   } finally { busy.value = false }
 }
 </script>
@@ -159,7 +213,7 @@ async function submit(): Promise<void> {
           <div><p class="eyebrow">第 {{ step }} 步，共 4 步</p><h2 id="wizard-title" ref="title" tabindex="-1">{{ brief ? '编辑需求草稿' : '创建内容任务' }}</h2></div>
           <button type="button" aria-label="关闭" @click="emit('close')">×</button>
         </header>
-        <p v-if="alert" role="alert" class="form-alert">{{ alert }}</p>
+        <p v-if="alert" ref="alertElement" role="alert" class="form-alert" tabindex="-1">{{ alert }}</p>
 
         <section v-if="step === 1" aria-labelledby="campaign-step">
           <h3 id="campaign-step">准备活动</h3>
@@ -178,24 +232,24 @@ async function submit(): Promise<void> {
 
         <section v-else-if="step === 2" aria-labelledby="selection-step">
           <h3 id="selection-step">选择产品和平台</h3>
-          <fieldset data-field="products"><legend>产品（至少一个）</legend><label v-for="item in products" :key="item.id"><input v-model="productIds" type="checkbox" :value="item.id" :aria-label="item.name_zh || item.name_en"> {{ item.name_zh || item.name_en }}</label><button v-if="more.products" type="button" @click="emit('loadMore', 'products')">加载更多产品</button><span v-if="pageErrors.products" role="alert">{{ pageErrors.products }} <button type="button" @click="emit('loadMore', 'products')">重试</button></span></fieldset>
-          <fieldset data-field="platforms"><legend>平台（至少一个）</legend><label v-for="item in platforms" :key="item.id"><input v-model="platformIds" type="checkbox" :value="item.id" :aria-label="item.name"> {{ item.name }} <small>{{ item.capabilities.join('、') || '基础内容' }}</small></label><button v-if="more.platforms" type="button" @click="emit('loadMore', 'platforms')">加载更多平台</button><span v-if="pageErrors.platforms" role="alert">{{ pageErrors.platforms }} <button type="button" @click="emit('loadMore', 'platforms')">重试</button></span></fieldset>
-          <fieldset v-if="assets.length || more.assets"><legend>可选素材</legend><label v-for="item in assets" :key="item.id"><input v-model="assetIds" type="checkbox" :value="item.id"> {{ item.original_filename }}</label><button v-if="more.assets" type="button" @click="emit('loadMore', 'assets')">加载更多素材</button><span v-if="pageErrors.assets" role="alert">{{ pageErrors.assets }} <button type="button" @click="emit('loadMore', 'assets')">重试</button></span></fieldset>
+          <fieldset data-field="products"><legend>产品（至少一个）</legend><span v-if="fieldErrors.products" class="field-error">{{ fieldErrors.products }}</span><label v-for="item in products" :key="item.id"><input v-model="productIds" type="checkbox" :value="item.id" :aria-label="item.name_zh || item.name_en"> {{ item.name_zh || item.name_en }}</label><button v-if="more.products" type="button" @click="emit('loadMore', 'products')">加载更多产品</button><span v-if="pageErrors.products" role="alert">{{ pageErrors.products }} <button type="button" @click="emit('loadMore', 'products')">重试</button></span></fieldset>
+          <fieldset data-field="platforms"><legend>平台（至少一个）</legend><span v-if="fieldErrors.platforms" class="field-error">{{ fieldErrors.platforms }}</span><label v-for="item in platforms" :key="item.id"><input v-model="platformIds" type="checkbox" :value="item.id" :aria-label="item.name"> {{ item.name }} <small>{{ item.capabilities.join('、') || '基础内容' }}</small></label><button v-if="more.platforms" type="button" @click="emit('loadMore', 'platforms')">加载更多平台</button><span v-if="pageErrors.platforms" role="alert">{{ pageErrors.platforms }} <button type="button" @click="emit('loadMore', 'platforms')">重试</button></span></fieldset>
+          <fieldset v-if="assets.length || more.assets || fieldErrors.assets" data-field="assets"><legend>可选素材</legend><span v-if="fieldErrors.assets" class="field-error">{{ fieldErrors.assets }}</span><label v-for="item in assets" :key="item.id"><input v-model="assetIds" type="checkbox" :value="item.id"> {{ item.original_filename }}</label><button v-if="more.assets" type="button" @click="emit('loadMore', 'assets')">加载更多素材</button><span v-if="pageErrors.assets" role="alert">{{ pageErrors.assets }} <button type="button" @click="emit('loadMore', 'assets')">重试</button></span></fieldset>
         </section>
 
         <section v-else-if="step === 3" aria-labelledby="details-step">
           <h3 id="details-step">填写内容需求</h3>
           <div class="form-grid">
-            <label>目标国家（必填）<input v-model="form.target_country" aria-label="目标国家（必填）" data-field="target_country"></label>
-            <label>客户类型（必填）<input v-model="form.customer_type" aria-label="客户类型（必填）" data-field="customer_type"></label>
-            <label>内容目标（必填）<input v-model="form.content_objective" aria-label="内容目标（必填）" data-field="content_objective"></label>
-            <label>行动号召（必填）<input v-model="form.cta" aria-label="行动号召（必填）" data-field="cta"></label>
-            <label>落地页（必填）<input v-model="form.landing_page_url" aria-label="落地页（必填）" data-field="landing_page_url"></label>
-            <label>语言（必填）<input v-model="form.language" aria-label="语言（必填）" data-field="language"></label>
-            <label>卖点（至少一个）<textarea v-model="form.selling_points" aria-label="卖点" data-field="selling_points" rows="2" /></label>
-            <label>优势（至少一个）<textarea v-model="form.advantages" aria-label="优势" data-field="advantages" rows="2" /></label>
-            <label>关键词（至少一个）<textarea v-model="form.keywords" aria-label="关键词" data-field="keywords" rows="2" /></label>
-            <label>禁用说法<textarea v-model="form.prohibited_claims" aria-label="禁用说法" rows="2" /></label>
+            <label>目标国家（必填）<input v-model="form.target_country" aria-label="目标国家（必填）" data-field="target_country"><span v-if="fieldErrors.target_country" class="field-error">{{ fieldErrors.target_country }}</span></label>
+            <label>客户类型（必填）<input v-model="form.customer_type" aria-label="客户类型（必填）" data-field="customer_type"><span v-if="fieldErrors.customer_type" class="field-error">{{ fieldErrors.customer_type }}</span></label>
+            <label>内容目标（必填）<input v-model="form.content_objective" aria-label="内容目标（必填）" data-field="content_objective"><span v-if="fieldErrors.content_objective" class="field-error">{{ fieldErrors.content_objective }}</span></label>
+            <label>行动号召（必填）<input v-model="form.cta" aria-label="行动号召（必填）" data-field="cta"><span v-if="fieldErrors.cta" class="field-error">{{ fieldErrors.cta }}</span></label>
+            <label>落地页（必填）<input v-model="form.landing_page_url" aria-label="落地页（必填）" data-field="landing_page_url"><span v-if="fieldErrors.landing_page_url" class="field-error">{{ fieldErrors.landing_page_url }}</span></label>
+            <label>语言（必填）<input v-model="form.language" aria-label="语言（必填）" data-field="language"><span v-if="fieldErrors.language" class="field-error">{{ fieldErrors.language }}</span></label>
+            <label>卖点（至少一个）<textarea v-model="form.selling_points" aria-label="卖点" data-field="selling_points" rows="2" /><span v-if="fieldErrors.selling_points" class="field-error">{{ fieldErrors.selling_points }}</span></label>
+            <label>优势（至少一个）<textarea v-model="form.advantages" aria-label="优势" data-field="advantages" rows="2" /><span v-if="fieldErrors.advantages" class="field-error">{{ fieldErrors.advantages }}</span></label>
+            <label>关键词（至少一个）<textarea v-model="form.keywords" aria-label="关键词" data-field="keywords" rows="2" /><span v-if="fieldErrors.keywords" class="field-error">{{ fieldErrors.keywords }}</span></label>
+            <label>禁用说法<textarea v-model="form.prohibited_claims" aria-label="禁用说法" data-field="prohibited_claims" rows="2" /><span v-if="fieldErrors.prohibited_claims" class="field-error">{{ fieldErrors.prohibited_claims }}</span></label>
           </div>
         </section>
 
@@ -216,5 +270,5 @@ async function submit(): Promise<void> {
 </template>
 
 <style scoped>
-.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.wizard-dialog{width:min(820px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:#fff}.wizard-dialog header,.wizard-dialog footer{display:flex;justify-content:space-between;gap:1rem}.wizard-dialog section,.wizard-dialog label{display:grid;gap:.45rem}.wizard-dialog section{gap:1rem}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.wizard-dialog footer{justify-content:flex-end;position:sticky;bottom:-1.5rem;padding:1rem 0 0;background:#fff}.form-alert{padding:.75rem;border-radius:.7rem;background:#fff0ed;color:#79291d}fieldset{display:grid;gap:.5rem;border:1px solid #d8dee8;border-radius:.75rem}@media(max-width:650px){.form-grid{grid-template-columns:1fr}}
+.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.wizard-dialog{width:min(820px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:#fff}.wizard-dialog header,.wizard-dialog footer{display:flex;justify-content:space-between;gap:1rem}.wizard-dialog section,.wizard-dialog label{display:grid;gap:.45rem}.wizard-dialog section{gap:1rem}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.wizard-dialog footer{justify-content:flex-end;position:sticky;bottom:-1.5rem;padding:1rem 0 0;background:#fff}.form-alert{padding:.75rem;border-radius:.7rem;background:#fff0ed;color:#79291d}.field-error{color:#79291d;font-size:.9rem}fieldset{display:grid;gap:.5rem;border:1px solid #d8dee8;border-radius:.75rem}@media(max-width:650px){.form-grid{grid-template-columns:1fr}}
 </style>

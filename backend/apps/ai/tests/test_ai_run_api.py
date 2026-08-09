@@ -1,6 +1,7 @@
 import json
 from copy import deepcopy
 from datetime import timedelta
+from urllib.parse import quote
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -148,6 +149,75 @@ def test_ai_run_detail_is_allowlisted_value_redacted_bounded_and_non_mutating(ai
     assert set(data["human_correction"]) <= {"title", "body", "cta", "concept_codes", "platform_code", "_truncated"}
     assert "[TRUNCATED]" in serialized or '"_truncated": true' in serialized
     assert len(response.content) <= 32_768
+    run.refresh_from_db()
+    for field, value in original.items():
+        assert getattr(run, field) == value
+
+
+@pytest.mark.django_db
+def test_ai_run_public_strings_fail_closed_for_credential_markers(ai_api):
+    own, _other, _user, client = ai_api
+    run = make_run(own, suffix="fail-closed")
+    basic_value = "QkFTSUMtU0VOVElORUwtMDE="
+    sensitive_values = [
+        f"Authorization： Basic {basic_value} trailing BASIC-SENTINEL-01",
+        'authorization=\tBearer "BEARER-SENTINEL-02 has spaces"',
+        "api_key = 'API-SENTINEL-03 continues here'",
+        "accessToken: ACCESS-SENTINEL-04 with suffix",
+        "refresh_token=REFRESH-SENTINEL-05 more",
+        "client secret：CLIENT-SENTINEL-06 more",
+        "password = PASSWORD-SENTINEL-07 more",
+        "passPhrase: PASSPHRASE-SENTINEL-08 more",
+        "cookie=COOKIE-SENTINEL-09; Path=/",
+        "set-cookie： SETCOOKIE-SENTINEL-10; HttpOnly",
+        "token=TOKEN-SENTINEL-11 and trailing words",
+        "ＡＰＩ＿ＫＥＹ＝ＦＵＬＬＷＩＤＴＨ－ＳＥＮＴＩＮＥＬ－１２",
+        "https://example.com/path?access_token=URL-SENTINEL-13#section",
+        "https://example.com/#refreshToken=FRAGMENT-SENTINEL-14",
+        "https://example.com/?client_secret=ENCODED%2DSENTINEL%2D15",
+    ]
+    stored = {
+        "input_snapshot": {
+            "brief_id": "brief-safe",
+            "landing_page_url": sensitive_values[-3],
+            "keywords": sensitive_values,
+        },
+        "output_json": {
+            "title": sensitive_values[0],
+            "body": sensitive_values[1],
+            "cta": sensitive_values[2],
+            "concept_codes": [*sensitive_values[3:], "token budget", "password policy"],
+        },
+        "human_correction": {
+            "title": sensitive_values[4],
+            "body": sensitive_values[5],
+            "cta": "safe correction",
+            "concept_codes": [sensitive_values[6]],
+        },
+    }
+    original = deepcopy(stored)
+    with ai_audit_writes():
+        AIRun.objects.filter(pk=run.pk).update(**stored)
+
+    response = client.get(f"/api/v1/ai-runs/{run.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    serialized = json.dumps(data, ensure_ascii=False).casefold()
+    sentinels = [
+        "basic-sentinel-01", "bearer-sentinel-02", "api-sentinel-03",
+        "access-sentinel-04", "refresh-sentinel-05", "client-sentinel-06",
+        "password-sentinel-07", "passphrase-sentinel-08", "cookie-sentinel-09",
+        "setcookie-sentinel-10", "token-sentinel-11",
+        "ｆｕｌｌｗｉｄｔｈ－ｓｅｎｔｉｎｅｌ－１２", "url-sentinel-13",
+        "fragment-sentinel-14", "encoded-sentinel-15",
+    ]
+    for sentinel in sentinels:
+        assert sentinel not in serialized
+        assert quote(sentinel, safe="").casefold() not in serialized
+    assert basic_value.casefold() not in serialized
+    assert "token budget" in data["output_json"]["concept_codes"]
+    assert "password policy" in data["output_json"]["concept_codes"]
     run.refresh_from_db()
     for field, value in original.items():
         assert getattr(run, field) == value

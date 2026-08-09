@@ -100,6 +100,7 @@ class AIRun(AuditModel):
         RUNNING = "RUNNING", "Running"
         SUCCEEDED = "SUCCEEDED", "Succeeded"
         FAILED = "FAILED", "Failed"
+        CANCELED = "CANCELED", "Canceled"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(

@@ -12,6 +12,7 @@ from apps.campaigns.services import (
     mark_content_brief_ready,
     revise_content_brief,
 )
+from apps.campaigns.generation_schema import generation_input_errors
 from apps.catalog.models import Product
 from apps.knowledge.models import (
     KnowledgeConcept,
@@ -110,6 +111,8 @@ def test_generation_input_is_complete_frozen_and_json_serializable(
         concept.id
     }
     assert snapshot.to_dict() == before
+    assert before["schema_version"] == "1.0"
+    assert generation_input_errors(before) == []
     assert "storage_key" not in before["assets"][0]
     json.dumps(before)
 

@@ -7,6 +7,7 @@ from django.utils import timezone
 from jsonschema import ValidationError as JSONSchemaValidationError
 from jsonschema.validators import validator_for
 
+from apps.campaigns.generation_schema import generation_input_errors
 from apps.common.security import scrub_secrets
 from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService
@@ -23,6 +24,27 @@ class GenerationError(ValueError):
     def __init__(self, code: str, message: str):
         self.code = code
         super().__init__(message)
+
+
+class GenerationPreflightError(GenerationError):
+    """A controlled configuration/input error detected before job ownership."""
+
+
+def _validate_generation_input(snapshot: dict, *, organization_id) -> None:
+    if generation_input_errors(snapshot):
+        raise GenerationPreflightError(
+            "invalid_generation_input",
+            "Frozen generation input does not match the required schema.",
+        )
+    expected = str(organization_id)
+    if (
+        snapshot["organization_id"] != expected
+        or snapshot["ontology_snapshot"]["organization_id"] != expected
+    ):
+        raise GenerationPreflightError(
+            "generation_input_organization_mismatch",
+            "Frozen generation input does not belong to the job organization.",
+        )
 
 
 def _approved_concept_codes(snapshot: dict) -> list[str]:
@@ -98,9 +120,12 @@ def _create_run(*, job: Job, prompt: PromptVersion, provider: str) -> AIRun:
 
 @transaction.atomic
 def _record_success(run_id, *, job_id, claim_token, output: dict) -> AIRun:
+    job = Job.objects.select_for_update().get(pk=job_id)
     run = AIRun.objects.select_for_update().get(pk=run_id)
     if run.status != AIRun.Status.RUNNING:
         return run
+    if job.status == Job.Status.CANCELED:
+        return _record_canceled_run(run)
     run.status = AIRun.Status.SUCCEEDED
     run.output_json = output
     run.confidence = Decimal("1.0000")
@@ -124,9 +149,12 @@ def _record_success(run_id, *, job_id, claim_token, output: dict) -> AIRun:
 
 @transaction.atomic
 def _record_failure(run_id, *, job_id, claim_token, error: dict) -> AIRun:
+    job = Job.objects.select_for_update().get(pk=job_id)
     run = AIRun.objects.select_for_update().get(pk=run_id)
     if run.status != AIRun.Status.RUNNING:
         return run
+    if job.status == Job.Status.CANCELED:
+        return _record_canceled_run(run)
     run.status = AIRun.Status.FAILED
     run.output_json = None
     run.error = scrub_secrets(error)
@@ -137,13 +165,72 @@ def _record_failure(run_id, *, job_id, claim_token, error: dict) -> AIRun:
     return run
 
 
+def _record_canceled_run(run: AIRun) -> AIRun:
+    run.status = AIRun.Status.CANCELED
+    run.output_json = None
+    run.confidence = None
+    run.provider_metadata = {}
+    run.error = {"code": "job_canceled", "message": "Job was canceled."}
+    run.finished_at = timezone.now()
+    with ai_audit_writes():
+        run.save(
+            update_fields=[
+                "status", "output_json", "confidence", "provider_metadata",
+                "error", "finished_at",
+            ]
+        )
+    return run
+
+
 def execute_generation_job(
     job_id, *, prompt_version_id, provider_code: str | None = None, worker_id="ai-worker"
 ) -> AIRun:
-    existing = AIRun.objects.filter(job_id=job_id).order_by("-job_attempt").first()
     job = Job.objects.get(pk=job_id)
-    if existing and existing.status in {AIRun.Status.RUNNING, AIRun.Status.SUCCEEDED}:
+    existing = AIRun.objects.filter(job_id=job_id).order_by("-job_attempt").first()
+    if (
+        existing
+        and existing.job_attempt == job.attempt
+        and existing.status in {
+            AIRun.Status.RUNNING, AIRun.Status.SUCCEEDED,
+            AIRun.Status.FAILED, AIRun.Status.CANCELED,
+        }
+    ):
         return existing
+
+    try:
+        prompt = PromptVersion.objects.get(
+            pk=prompt_version_id, status=PromptVersion.Status.PUBLISHED
+        )
+    except PromptVersion.DoesNotExist as exc:
+        raise GenerationPreflightError(
+            "prompt_not_available", "Published prompt version is not available."
+        ) from exc
+    provider_name = provider_code or prompt.provider
+    try:
+        provider = provider_registry.get(provider_name)
+    except (TypeError, ValueError) as exc:
+        raise GenerationPreflightError(
+            "provider_not_available", "AI provider is not available."
+        ) from exc
+    if not callable(getattr(provider, "generate", None)):
+        raise GenerationPreflightError(
+            "provider_not_available", "AI provider is not available."
+        )
+    snapshot = scrub_secrets(job.input_snapshot)
+    _validate_generation_input(snapshot, organization_id=job.organization_id)
+    try:
+        rendered = _render_prompt(prompt.template, snapshot)
+    except GenerationError as exc:
+        raise GenerationPreflightError(exc.code, str(exc)) from exc
+    try:
+        output_validator_class = validator_for(prompt.output_schema)
+        output_validator_class.check_schema(prompt.output_schema)
+        output_validator = output_validator_class(prompt.output_schema)
+    except Exception as exc:
+        raise GenerationPreflightError(
+            "invalid_prompt_schema", "Prompt output schema is invalid."
+        ) from exc
+
     claimed = JobService.claim(worker_id=worker_id, job_id=job_id)
     if claimed is None:
         existing = AIRun.objects.filter(job_id=job_id).order_by("-job_attempt").first()
@@ -151,26 +238,27 @@ def execute_generation_job(
             return existing
         raise JobConflictError(f"Job in status {job.status} cannot be claimed.")
     token = claimed.claim_token
-    prompt = PromptVersion.objects.get(
-        pk=prompt_version_id, status=PromptVersion.Status.PUBLISHED
-    )
-    provider_name = provider_code or prompt.provider
-    run = _create_run(job=claimed, prompt=prompt, provider=provider_name)
+    try:
+        run = _create_run(job=claimed, prompt=prompt, provider=provider_name)
+    except Exception as exc:
+        JobService.fail(
+            claimed.id,
+            claim_token=token,
+            error={"code": "ai_run_start_failed", "message": "AI audit run could not start."},
+        )
+        raise GenerationError(
+            "ai_run_start_failed", "AI audit run could not start."
+        ) from exc
     if run.status != AIRun.Status.RUNNING:
         return run
     try:
-        snapshot = scrub_secrets(run.input_snapshot)
-        rendered = _render_prompt(prompt.template, snapshot)
-        provider = provider_registry.get(provider_name)
         output = scrub_secrets(provider.generate(prompt=rendered, schema=prompt.output_schema))
         if not isinstance(output, dict):
             raise GenerationError("invalid_provider_output", "Provider output must be an object.")
         encoded = json.dumps(output, sort_keys=True, separators=(",", ":")).encode()
         if len(encoded) > MAX_OUTPUT_BYTES:
             raise GenerationError("output_too_large", "Provider output exceeds the size limit.")
-        validator = validator_for(prompt.output_schema)
-        validator.check_schema(prompt.output_schema)
-        validator(prompt.output_schema).validate(output)
+        output_validator.validate(output)
     except GenerationError as exc:
         error = {"code": exc.code, "message": str(exc)}
     except JSONSchemaValidationError:

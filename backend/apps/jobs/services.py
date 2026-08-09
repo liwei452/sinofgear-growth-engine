@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from copy import deepcopy
 from uuid import UUID, uuid4
 
@@ -50,8 +51,16 @@ def _input_digest(value) -> str:
 
 def _normalized_error(error) -> dict[str, object]:
     if isinstance(error, dict):
-        return _json_copy(scrub_secrets(error))
-    return {"code": "job_error", "message": str(error)}
+        normalized = _json_copy(scrub_secrets(error))
+        message = normalized.get("message")
+        if isinstance(message, str) and re.search(
+            r"authorization|bearer|api[\s_-]*key|token|password|secret|cookie|private[\s_-]*key",
+            message,
+            flags=re.IGNORECASE,
+        ):
+            normalized["message"] = "Job execution failed."
+        return normalized
+    return {"code": "job_error", "message": "Job execution failed."}
 
 
 class JobService:

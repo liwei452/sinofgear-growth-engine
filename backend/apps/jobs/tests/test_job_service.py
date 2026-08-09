@@ -154,6 +154,38 @@ def test_worker_error_and_result_references_are_secret_scrubbed(job):
 
 
 @pytest.mark.django_db
+def test_unstructured_worker_error_never_persists_raw_exception_text(job):
+    claimed = JobService.claim(worker_id="worker-a")
+    failed = JobService.fail(
+        job.id,
+        claim_token=claimed.claim_token,
+        error="Authorization: Bearer top-secret-value",
+    )
+
+    assert failed.error == {
+        "code": "job_error",
+        "message": "Job execution failed.",
+    }
+    assert "top-secret-value" not in str(failed.error)
+
+
+@pytest.mark.django_db
+def test_structured_worker_error_message_never_persists_secret_text(job):
+    claimed = JobService.claim(worker_id="worker-a")
+    failed = JobService.fail(
+        job.id,
+        claim_token=claimed.claim_token,
+        error={"code": "provider_error", "message": "api_key=top-secret-value"},
+    )
+
+    assert failed.error == {
+        "code": "provider_error",
+        "message": "Job execution failed.",
+    }
+    assert "top-secret-value" not in str(failed.error)
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("initial", ["QUEUED", "RUNNING", "RETRY_QUEUED"])
 def test_cancel_prevents_later_success(job, initial):
     token = None

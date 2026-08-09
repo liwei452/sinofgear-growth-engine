@@ -1,10 +1,11 @@
 from copy import deepcopy
+from uuid import uuid4
 
 import pytest
 from django.core.exceptions import ValidationError
 
 from apps.ai.models import AIRun, PromptVersion
-from apps.ai.orchestration import execute_generation_job
+from apps.ai.orchestration import GenerationPreflightError, execute_generation_job
 from apps.ai.services import PromptVersionService, scrub_secrets
 from apps.identity.models import Organization
 from apps.jobs.models import Job
@@ -32,22 +33,62 @@ def organization(db):
 
 @pytest.fixture
 def frozen_input(organization):
+    concept_alpha = str(uuid4())
+    concept_zeta = str(uuid4())
     return {
+        "schema_version": "1.0",
         "organization_id": str(organization.id),
-        "brief_id": "brief-1",
-        "products": [{"name_en": "Precision Gear"}],
+        "brief_id": str(uuid4()),
+        "brief_version": 2,
+        "campaign_id": str(uuid4()),
+        "campaign_version": 3,
+        "products": [{
+            "product_id": str(uuid4()), "product_version": 4,
+            "name_zh": "精密齿轮", "name_en": "Precision Gear",
+            "module_min": "1.0000", "module_max": "2.0000",
+            "tooth_count_min": 10, "tooth_count_max": 40,
+            "pressure_angle": "20.000", "accuracy_grade": "ISO 6",
+            "heat_treatment": "Carburized", "surface_treatment": "",
+            "manufacturing_capabilities": ["hobbing"],
+            "inspection_capabilities": ["CMM"], "moq": 1,
+            "lead_time": "4 weeks", "landing_page_url": "https://example.com/product",
+            "status": "ACTIVE",
+            "concept_versions": [{
+                "link_id": str(uuid4()), "link_version": 1, "role": "TYPE",
+                "concept_id": concept_alpha, "concept_code": "ALPHA",
+                "concept_type": "PRODUCT_TYPE", "concept_version": 1,
+            }],
+        }],
+        "assets": [{
+            "asset_id": str(uuid4()), "checksum": "a" * 64,
+            "mime_type": "image/png", "asset_type": "IMAGE", "language": "en",
+            "tags": ["gear"], "product_ids": [str(uuid4())],
+        }],
         "target_country": "Germany",
-        "target_platforms": [{"code": "LINKEDIN"}],
+        "customer_type": "Industrial buyer",
+        "content_objective": "Generate leads",
         "cta": "Request a quote",
+        "landing_page_url": "https://example.com/landing",
+        "language": "en",
+        "keywords": ["precision gear"],
+        "prohibited_claims": ["zero wear"],
+        "selling_points": ["Ground teeth"],
+        "advantages": ["Short lead time"],
+        "target_platforms": [{
+            "platform_id": str(uuid4()), "code": "LINKEDIN", "name": "LinkedIn",
+            "capability_codes": ["PUBLISH"],
+        }],
         "ontology_snapshot": {
+            "organization_id": str(organization.id),
             "concept_versions": [
-                {"code": "ZETA", "status": "APPROVED", "version": 2},
-                {"code": "ALPHA", "status": "APPROVED", "version": 1},
+                {"concept_id": concept_zeta, "code": "ZETA", "concept_type": "APPLICATION", "label_zh": "泽塔", "label_en": "Zeta", "status": "APPROVED", "version": 2},
+                {"concept_id": concept_alpha, "code": "ALPHA", "concept_type": "PRODUCT_TYPE", "label_zh": "阿尔法", "label_en": "Alpha", "status": "APPROVED", "version": 1},
             ],
-            "relation_versions": [{"status": "APPROVED", "version": 1}],
-            "evidence_references": [{"status": "APPROVED", "version": 1}],
+            "relation_versions": [{"relation_id": str(uuid4()), "subject_concept_id": concept_alpha, "predicate": "APPLIES_TO", "object_concept_id": concept_zeta, "status": "APPROVED", "version": 1}],
+            "evidence_references": [{"evidence_id": str(uuid4()), "evidence_type": "HUMAN_ENTRY", "source_object_type": "", "source_object_id": None, "source_url": None, "excerpt": "Approved evidence", "captured_at": None, "status": "APPROVED", "version": 1}],
+            "generated_at": "2026-08-09T08:00:00Z",
         },
-        "nested": {"Api-Key": "secret", "safe": [{"PASSWORD": "hidden", "x": 1}]},
+        "generated_at": "2026-08-09T08:00:01Z",
     }
 
 
@@ -70,13 +111,24 @@ def test_scrub_secrets_recursively_without_mutating_source():
         "Nested": [{"Authorization": "Bearer two", "safe": 3}],
         "private-key": "three",
         "TOKENS": ["four"],
+        "github_auth_token": "five",
+        "githubToken": "five-b",
+        "serviceApiKeyValue": "six",
+        "database-password-current": "seven",
+        "session_cookie_data": "eight",
+        "signing_private_key_pem": "nine",
+        "public_token_count": 12,
+        "password_policy": "strong",
         "safe_tokenized_name": "kept",
     }
     original = deepcopy(source)
 
     scrubbed = scrub_secrets(source)
 
-    assert scrubbed == {"Nested": [{"safe": 3}], "safe_tokenized_name": "kept"}
+    assert scrubbed == {
+        "Nested": [{"safe": 3}], "public_token_count": 12,
+        "password_policy": "strong", "safe_tokenized_name": "kept",
+    }
     assert source == original
 
 
@@ -124,7 +176,6 @@ def test_successful_run_freezes_scrubbed_input_and_completes_job(
     job.refresh_from_db()
     assert run.status == AIRun.Status.SUCCEEDED
     assert run.input_snapshot["products"][0]["name_en"] == "Precision Gear"
-    assert "Api-Key" not in run.input_snapshot["nested"]
     assert run.prompt_version_id == prompt.id
     assert run.provider == "fake"
     assert run.model == "fake-v1"
@@ -146,13 +197,14 @@ def test_corrupt_snapshot_with_disallowed_knowledge_fails_closed(
         input_snapshot=frozen_input,
     )
 
-    run = execute_generation_job(job.id, prompt_version_id=prompt.id)
+    with pytest.raises(GenerationPreflightError) as error:
+        execute_generation_job(job.id, prompt_version_id=prompt.id)
 
     job.refresh_from_db()
-    assert run.status == AIRun.Status.FAILED
-    assert run.output_json is None
-    assert job.status == Job.Status.FAILED
-    assert job.error["code"] == "invalid_ontology_snapshot"
+    assert error.value.code == "invalid_generation_input"
+    assert job.status == Job.Status.QUEUED
+    assert job.attempts.count() == 0
+    assert AIRun.objects.filter(job=job).count() == 0
 
 
 @pytest.mark.django_db
@@ -166,12 +218,14 @@ def test_missing_required_prompt_input_fails_with_controlled_error(
         input_snapshot=frozen_input,
     )
 
-    run = execute_generation_job(job.id, prompt_version_id=prompt.id)
+    with pytest.raises(GenerationPreflightError) as error:
+        execute_generation_job(job.id, prompt_version_id=prompt.id)
 
     job.refresh_from_db()
-    assert run.status == AIRun.Status.FAILED
-    assert run.error["code"] == "invalid_prompt_input"
-    assert job.status == Job.Status.FAILED
+    assert error.value.code == "invalid_generation_input"
+    assert job.status == Job.Status.QUEUED
+    assert job.attempts.count() == 0
+    assert AIRun.objects.filter(job=job).count() == 0
 
 
 class InvalidProvider:
@@ -257,3 +311,132 @@ def test_duplicate_delivery_does_not_create_second_successful_run(
 
     assert second.pk == first.pk
     assert AIRun.objects.filter(job=job, status=AIRun.Status.SUCCEEDED).count() == 1
+
+
+@pytest.mark.django_db
+def test_prompt_and_provider_preflight_failure_does_not_claim_job(
+    organization, frozen_input
+):
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+
+    with pytest.raises(GenerationPreflightError) as error:
+        execute_generation_job(job.id, prompt_version_id=uuid4())
+
+    job.refresh_from_db()
+    assert error.value.code == "prompt_not_available"
+    assert job.status == Job.Status.QUEUED
+    assert job.attempts.count() == 0
+    assert AIRun.objects.filter(job=job).count() == 0
+
+
+@pytest.mark.django_db
+def test_unknown_provider_is_rejected_before_claim(organization, frozen_input, prompt):
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+
+    with pytest.raises(GenerationPreflightError) as error:
+        execute_generation_job(
+            job.id, prompt_version_id=prompt.id, provider_code="not-registered"
+        )
+
+    job.refresh_from_db()
+    assert error.value.code == "provider_not_available"
+    assert job.status == Job.Status.QUEUED
+    assert job.attempts.count() == 0
+    assert AIRun.objects.filter(job=job).count() == 0
+
+
+class CancelingProvider:
+    def __init__(self, job_id, *, raises=False):
+        self.job_id = job_id
+        self.raises = raises
+
+    def generate(self, *, prompt, schema):
+        JobService.cancel(self.job_id)
+        if self.raises:
+            raise RuntimeError("late provider error")
+        return FakeAIProvider().generate(prompt=prompt, schema=schema)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("raises", [False, True])
+def test_late_provider_completion_converges_airun_to_canceled(
+    organization, frozen_input, prompt, raises
+):
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+    code = f"canceling-{raises}"
+    provider_registry.register(code, CancelingProvider(job.id, raises=raises), replace=True)
+
+    run = execute_generation_job(
+        job.id, prompt_version_id=prompt.id, provider_code=code
+    )
+    duplicate = execute_generation_job(
+        job.id, prompt_version_id=prompt.id, provider_code=code
+    )
+
+    job.refresh_from_db()
+    assert run.status == AIRun.Status.CANCELED
+    assert run.output_json is None
+    assert duplicate.pk == run.pk
+    assert duplicate.status == AIRun.Status.CANCELED
+    assert job.status == Job.Status.CANCELED
+    assert job.attempts.get(number=1).status == "CANCELED"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda value: value.pop("campaign_version"),
+        lambda value: value["products"][0].pop("product_version"),
+        lambda value: value["ontology_snapshot"].pop("generated_at"),
+        lambda value: value["ontology_snapshot"]["relation_versions"][0].pop("relation_id"),
+        lambda value: value["assets"].clear(),
+        lambda value: value.update({"unknown_provenance": "forged"}),
+    ],
+)
+def test_incomplete_or_unknown_task8_snapshot_is_rejected_before_claim(
+    organization, frozen_input, prompt, mutation
+):
+    mutation(frozen_input)
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+
+    with pytest.raises(GenerationPreflightError) as error:
+        execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    job.refresh_from_db()
+    assert error.value.code == "invalid_generation_input"
+    assert job.status == Job.Status.QUEUED
+    assert job.attempts.count() == 0
+
+
+@pytest.mark.django_db
+def test_task8_snapshot_organization_must_match_job_and_ontology(
+    organization, frozen_input, prompt
+):
+    frozen_input["ontology_snapshot"]["organization_id"] = str(uuid4())
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+
+    with pytest.raises(GenerationPreflightError) as error:
+        execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert error.value.code == "generation_input_organization_mismatch"

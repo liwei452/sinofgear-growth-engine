@@ -407,7 +407,12 @@ class ContentGenerationInput:
     generated_at: datetime
 
     def to_dict(self) -> dict[str, object]:
-        return _json_value(asdict(self))
+        from .generation_schema import CONTENT_GENERATION_INPUT_SCHEMA_VERSION
+
+        return {
+            "schema_version": CONTENT_GENERATION_INPUT_SCHEMA_VERSION,
+            **_json_value(asdict(self)),
+        }
 
 
 def _json_value(value):

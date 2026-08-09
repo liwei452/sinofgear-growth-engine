@@ -8,7 +8,7 @@ from apps.content.models import PlatformContent
 from apps.publishing.models import PublishAttempt, PublishTask
 from apps.publishing.services import publish_task_is_consistent
 from apps.tracking.models import TrackingLink
-from apps.tracking.services import TrackingConflict, create_tracking_link
+from apps.tracking.services import TrackingConflict, create_short_link, create_tracking_link
 
 
 def _create(context, **overrides):
@@ -78,3 +78,34 @@ def test_tracking_link_rejects_cross_org_or_inconsistent_references(tracking_con
     other_platform = Platform.objects.create(code="OTHER", name="Other")
     with pytest.raises(TrackingConflict):
         _create(tracking_context, platform=other_platform, idempotency_key="bad-platform")
+
+
+@pytest.mark.django_db
+def test_nfc_equivalent_destination_reuses_key_and_redirects_to_one_stable_url(
+    client, tracking_context
+):
+    first = _create(
+        tracking_context,
+        destination="https://example.com/cafe\u0301?q=re\u0301sume\u0301#de\u0301tail",
+        idempotency_key="nfc-equivalent",
+    )
+    second = _create(
+        tracking_context,
+        destination="https://example.com/caf%C3%A9?q=r%C3%A9sum%C3%A9#d%C3%A9tail",
+        idempotency_key="nfc-equivalent",
+    )
+    assert second.pk == first.pk
+    assert first.destination == (
+        "https://example.com/caf%C3%A9?q=r%C3%A9sum%C3%A9#d%C3%A9tail"
+    )
+    short = create_short_link(
+        organization=tracking_context["organization"], tracking_link=first,
+        idempotency_key="nfc-equivalent-short",
+    )
+    response = client.get(f"/r/{short.code}", REMOTE_ADDR="198.51.100.20")
+    assert response.status_code == 302
+    assert response["Location"] == (
+        "https://example.com/caf%C3%A9?q=r%C3%A9sum%C3%A9&"
+        "utm_source=linkedin&utm_medium=social-post&utm_campaign=gear-launch&"
+        "utm_content=hero#d%C3%A9tail"
+    )

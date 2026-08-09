@@ -188,6 +188,8 @@ class ClickEvent(models.Model):
     tracking_fingerprint = models.CharField(max_length=64, null=True, editable=False)
     short_fingerprint = models.CharField(max_length=64, null=True, editable=False)
     publishing_fingerprint = models.CharField(max_length=64, null=True, editable=False)
+    content_provenance_snapshot = models.JSONField(null=True, editable=False)
+    master_content_provenance_snapshot = models.JSONField(null=True, editable=False)
     short_code_snapshot = models.CharField(max_length=32, null=True, editable=False)
 
     class Meta:

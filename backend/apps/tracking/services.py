@@ -98,7 +98,7 @@ def _utm_value(name: str, value: str | None, *, required: bool) -> str | None:
         raise ValidationError({name: exc.messages}) from exc
 
 
-def _validate_encoded_component(value: str, name: str) -> None:
+def _validate_encoded_component(value: str, name: str) -> str:
     if re.search(r"%(?![0-9A-Fa-f]{2})", value):
         raise ValidationError(f"Destination {name} contains invalid percent encoding.")
     try:
@@ -107,24 +107,29 @@ def _validate_encoded_component(value: str, name: str) -> None:
         raise ValidationError(f"Destination {name} is not valid UTF-8.") from exc
     if any(ord(character) < 32 or ord(character) == 127 for character in decoded):
         raise ValidationError(f"Destination {name} contains control characters.")
+    return unicodedata.normalize("NFC", decoded)
 
 
 def _canonical_uri_component(value: str, *, safe: str) -> str:
-    encoded = quote(value, safe=f"{safe}%", encoding="utf-8", errors="strict")
-    return re.sub(
-        r"%[0-9A-Fa-f]{2}", lambda match: match.group(0).upper(), encoded
-    )
+    preserved = set(safe) - set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+    preserved.add("%")
+    output: list[str] = []
+    start = 0
+    for match in re.finditer(r"%([0-9A-Fa-f]{2})", value):
+        character = chr(int(match.group(1), 16))
+        if character not in preserved:
+            continue
+        segment = value[start : match.start()]
+        normalized = _validate_encoded_component(segment, "component")
+        output.append(quote(normalized, safe=safe, encoding="utf-8", errors="strict"))
+        output.append(f"%{match.group(1).upper()}")
+        start = match.end()
+    normalized = _validate_encoded_component(value[start:], "component")
+    output.append(quote(normalized, safe=safe, encoding="utf-8", errors="strict"))
+    return "".join(output)
 
 
-def build_canonical_url(
-    destination: str,
-    *,
-    source: str,
-    medium: str,
-    campaign: str,
-    content: str | None = None,
-    term: str | None = None,
-) -> str:
+def canonicalize_destination(destination: str) -> str:
     if (
         not isinstance(destination, str)
         or not destination
@@ -157,7 +162,42 @@ def build_canonical_url(
         raise ValidationError("Destination query is invalid or too large.") from exc
     if any(name.lower() in UTM_NAMES for name, _value in query):
         raise ValidationError("Destination must not already contain UTM parameters.")
-    query = sorted(query, key=lambda item: (item[0], item[1]))
+    query = sorted(
+        (
+            unicodedata.normalize("NFC", name),
+            unicodedata.normalize("NFC", value),
+        )
+        for name, value in query
+    )
+    result = urlunsplit(
+        (
+            parsed.scheme.lower(),
+            netloc,
+            _canonical_uri_component(parsed.path or "/", safe="/:@!$&'()*+,;=-._~"),
+            urlencode(query, doseq=True),
+            _canonical_uri_component(parsed.fragment, safe="/?:@!$&'()*+,;=-._~"),
+        )
+    )
+    if len(result) > MAX_DESTINATION_LENGTH:
+        raise ValidationError("Canonical destination is too long.")
+    return result
+
+
+def build_canonical_url(
+    destination: str,
+    *,
+    source: str,
+    medium: str,
+    campaign: str,
+    content: str | None = None,
+    term: str | None = None,
+) -> str:
+    canonical_destination = canonicalize_destination(destination)
+    parsed = urlsplit(canonical_destination)
+    query = parse_qsl(
+        parsed.query, keep_blank_values=True, strict_parsing=False,
+        max_num_fields=100, encoding="utf-8", errors="strict",
+    )
     utm = [
         ("utm_source", _utm_value("source", source, required=True)),
         ("utm_medium", _utm_value("medium", medium, required=True)),
@@ -170,11 +210,11 @@ def build_canonical_url(
     query.extend((name, value) for name, value in (*utm, *optional) if value is not None)
     result = urlunsplit(
         (
-            parsed.scheme.lower(),
-            netloc,
-            _canonical_uri_component(parsed.path or "/", safe="/:@!$&'()*+,;=-._~"),
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
             urlencode(query, doseq=True),
-            _canonical_uri_component(parsed.fragment, safe="/?:@!$&'()*+,;=-._~"),
+            parsed.fragment,
         )
     )
     if len(result) > MAX_DESTINATION_LENGTH:
@@ -203,8 +243,9 @@ def _tracking_consistent(link: TrackingLink) -> bool:
         post = link.published_post
         content = post.platform_content
         brief = content.master_content.brief
+        canonical_destination = canonicalize_destination(link.destination)
         canonical = build_canonical_url(
-            link.destination,
+            canonical_destination,
             source=link.utm_source,
             medium=link.utm_medium,
             campaign=link.utm_campaign,
@@ -212,7 +253,7 @@ def _tracking_consistent(link: TrackingLink) -> bool:
             term=link.utm_term or None,
         )
         fingerprint = _tracking_fingerprint({
-            "destination": link.destination,
+            "destination": canonical_destination,
             "full_url": canonical,
             "utm_source": link.utm_source,
             "utm_medium": link.utm_medium,
@@ -243,6 +284,7 @@ def _tracking_consistent(link: TrackingLink) -> bool:
                 product_id=link.product_id,
             ).exists()
             and link.full_url == canonical
+            and link.destination == canonical_destination
             and normalize_slug(link.utm_source) == link.utm_source
             and normalize_slug(link.utm_medium) == link.utm_medium
             and normalize_slug(link.utm_campaign) == link.utm_campaign
@@ -267,12 +309,13 @@ def create_tracking_link(
     campaign_value = _utm_value("utm_campaign", utm_campaign, required=True)
     content_value = _utm_value("utm_content", utm_content, required=False) or ""
     term_value = _utm_value("utm_term", utm_term, required=False) or ""
+    canonical_destination = canonicalize_destination(destination)
     full_url = build_canonical_url(
-        destination, source=source, medium=medium, campaign=campaign_value,
+        canonical_destination, source=source, medium=medium, campaign=campaign_value,
         content=content_value or None, term=term_value or None,
     )
     payload = {
-        "destination": destination,
+        "destination": canonical_destination,
         "full_url": full_url,
         "utm_source": source,
         "utm_medium": medium,
@@ -304,7 +347,8 @@ def create_tracking_link(
         organization=organization, campaign=locked_campaign, platform=locked_platform,
         product=locked_product,
         published_post=locked_post, idempotency_key=key, request_fingerprint=fingerprint,
-        created_by=actor, destination=destination, full_url=full_url, utm_source=source,
+        created_by=actor, destination=canonical_destination, full_url=full_url,
+        utm_source=source,
         utm_medium=medium, utm_campaign=campaign_value, utm_content=content_value,
         utm_term=term_value,
     )
@@ -449,6 +493,12 @@ def record_click_event(*, short_link: ShortLink, meta: dict[str, object], occurr
             tracking_fingerprint=locked.tracking_link.request_fingerprint,
             short_fingerprint=locked.request_fingerprint,
             publishing_fingerprint=locked.tracking_link.published_post.task.request_fingerprint,
+            content_provenance_snapshot=(
+                locked.tracking_link.published_post.platform_content.provenance
+            ),
+            master_content_provenance_snapshot=(
+                locked.tracking_link.published_post.platform_content.master_content.provenance
+            ),
             short_code_snapshot=locked.code,
         )
 

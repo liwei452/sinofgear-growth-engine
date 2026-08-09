@@ -1,12 +1,15 @@
 from datetime import timedelta
+import uuid
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.identity.models import Membership, Role
-from apps.publishing.models import PublishTask, publishing_writes
+from apps.content.models import MasterContent, PlatformContent, content_writes
+from apps.identity.models import Membership, Organization, Role
+from apps.platforms.models import SocialAccount
+from apps.publishing.models import PublishAttempt, PublishTask, publishing_writes
 from apps.tracking.models import ShortLink, TrackingLink, tracking_writes
 from apps.tracking.services import (
     create_short_link, create_tracking_link, record_click_event,
@@ -176,7 +179,14 @@ def test_channel_summary_rejects_unknown_repeated_and_oversized_ranges(tracking_
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(
-    "corruption", ["tracking", "short", "publishing", "short_code", "short_identity"]
+    "corruption",
+    [
+        "tracking", "short", "publishing", "short_code", "short_identity",
+        "attempt_outcome", "attempt_error", "attempt_retry",
+        "task_claim", "task_error", "task_retry", "task_cancel",
+        "task_attempt_number", "task_content_version", "account_organization",
+        "content_provenance", "master_content_provenance",
+    ],
 )
 def test_channel_summary_excludes_corrupt_attribution_provenance(
     tracking_context, corruption
@@ -217,11 +227,51 @@ def test_channel_summary_excludes_corrupt_attribution_provenance(
                 "UPDATE tracking_clickevent SET short_link_id = %s WHERE short_link_id = %s",
                 [replacement.id.hex, short.id.hex],
             )
-    else:
+    elif corruption == "publishing":
         with publishing_writes():
             PublishTask.objects.filter(pk=tracking_context["published_post"].task_id).update(
                 request_fingerprint="f" * 64
             )
+    elif corruption.startswith("attempt_"):
+        changes = {
+            "attempt_outcome": {"outcome": ""},
+            "attempt_error": {"error": {"code": "CORRUPT"}},
+            "attempt_retry": {"retry_at": now},
+        }[corruption]
+        with publishing_writes():
+            PublishAttempt.objects.filter(
+                pk=tracking_context["published_post"].attempt_id
+            ).update(**changes)
+    elif corruption.startswith("task_"):
+        changes = {
+            "task_claim": {"claim_token": uuid.uuid4()},
+            "task_error": {"last_error": {"code": "CORRUPT"}},
+            "task_retry": {"retry_not_before": now},
+            "task_cancel": {"canceled_at": now},
+            "task_attempt_number": {"attempt_number": 2},
+            "task_content_version": {
+                "content_version": tracking_context["content"].version + 1
+            },
+        }[corruption]
+        with publishing_writes():
+            PublishTask.objects.filter(
+                pk=tracking_context["published_post"].task_id
+            ).update(**changes)
+    elif corruption == "account_organization":
+        other = Organization.objects.create(name="Other", slug=f"other-{short.id.hex}")
+        SocialAccount.objects.filter(pk=tracking_context["account"].pk).update(
+            organization=other
+        )
+    elif corruption == "content_provenance":
+        with content_writes():
+            PlatformContent.objects.filter(pk=tracking_context["content"].pk).update(
+                provenance={"corrupt": True}
+            )
+    else:
+        with content_writes():
+            MasterContent.objects.filter(
+                pk=tracking_context["content"].master_content_id
+            ).update(provenance={"corrupt": True})
     client = _client(
         tracking_context["organization"], Role.Code.READ_ONLY, suffix=f"corrupt-{corruption}"
     )

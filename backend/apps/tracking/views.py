@@ -276,6 +276,12 @@ class ChannelSummaryView(APIView):
             publishing_fingerprint=F(
                 "tracking_link__published_post__task__request_fingerprint"
             ),
+            content_provenance_snapshot=F(
+                "tracking_link__published_post__platform_content__provenance"
+            ),
+            master_content_provenance_snapshot=F(
+                "tracking_link__published_post__platform_content__master_content__provenance"
+            ),
             short_link__status__in=ShortLink.Status.values,
             short_link__code__regex=r"^s_[A-Za-z0-9_-]{12}$",
             tracking_link__published_post__organization_id=F("organization_id"),
@@ -289,6 +295,12 @@ class ChannelSummaryView(APIView):
             ),
             tracking_link__published_post__task__social_account_id=F(
                 "tracking_link__published_post__social_account_id"
+            ),
+            tracking_link__published_post__task__social_account__organization_id=F(
+                "organization_id"
+            ),
+            tracking_link__published_post__social_account__organization_id=F(
+                "organization_id"
             ),
             tracking_link__published_post__attempt__task_id=F(
                 "tracking_link__published_post__task_id"
@@ -304,7 +316,23 @@ class ChannelSummaryView(APIView):
             ),
             tracking_link__published_post__task__status="SUCCEEDED",
             tracking_link__published_post__attempt__status="SUCCEEDED",
+            tracking_link__published_post__attempt__outcome="SUCCEEDED",
+            tracking_link__published_post__attempt__error__isnull=True,
+            tracking_link__published_post__attempt__retry_at__isnull=True,
             tracking_link__published_post__platform_content__status="PUBLISHED",
+            tracking_link__published_post__task__claim_token__isnull=True,
+            tracking_link__published_post__task__last_error__isnull=True,
+            tracking_link__published_post__task__retry_not_before__isnull=True,
+            tracking_link__published_post__task__canceled_at__isnull=True,
+            tracking_link__published_post__task__attempt_number=F(
+                "tracking_link__published_post__attempt__number"
+            ),
+            tracking_link__published_post__task__content_version=F(
+                "tracking_link__published_post__platform_content__version"
+            ),
+            tracking_link__published_post__attempt__request_fingerprint=F(
+                "tracking_link__published_post__task__request_fingerprint"
+            ),
             tracking_link__published_post__attempt__external_id=F(
                 "tracking_link__published_post__external_id"
             ),

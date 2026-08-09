@@ -43,6 +43,25 @@ def test_canonical_url_preserves_safe_unicode_as_stable_idna_utf8_uri():
     )
 
 
+def test_canonical_url_collapses_literal_and_encoded_nfc_nfd_equivalents():
+    expected = (
+        "https://example.com/caf%C3%A9?q=r%C3%A9sum%C3%A9&"
+        "utm_source=linkedin&utm_medium=social&utm_campaign=launch#d%C3%A9tail"
+    )
+    destinations = [
+        "https://example.com/café?q=résumé#détail",
+        "https://example.com/cafe\u0301?q=re\u0301sume\u0301#de\u0301tail",
+        "https://example.com/caf%C3%A9?q=r%C3%A9sum%C3%A9#d%C3%A9tail",
+        "https://example.com/cafe%CC%81?q=re%CC%81sume%CC%81#de%CC%81tail",
+    ]
+    assert {
+        build_canonical_url(
+            destination, source="linkedin", medium="social", campaign="launch"
+        )
+        for destination in destinations
+    } == {expected}
+
+
 @pytest.mark.parametrize(
     "url",
     [

@@ -1,11 +1,15 @@
 from uuid import UUID
 
+from django.conf import settings
 from django.utils import timezone
 
 from .codes import AccountCapability
 from .models import SocialAccount
 
-CONNECTOR_CAPABILITIES: dict[str, frozenset[AccountCapability]] = {}
+CONNECTOR_CAPABILITIES: dict[str, frozenset[AccountCapability]] = {
+    code: frozenset(AccountCapability(value) for value in values)
+    for code, values in settings.PLATFORM_CONNECTOR_CAPABILITIES.items()
+}
 
 
 def _valid_granted_scopes(value: object) -> set[str]:

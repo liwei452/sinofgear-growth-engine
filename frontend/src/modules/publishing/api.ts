@@ -14,6 +14,7 @@ export const getPublishCalendar=async(input:{start:string;end:string;timezone:st
 export const schedulePublish=async(input:{platform_content_id:string;social_account_id:string;scheduled_at:string;timezone:string},key:string):Promise<PublishTask>=>required(await apiRequest(`${taskPath}/schedule`,{method:"POST",headers:{"Idempotency-Key":key},body:input}))
 export const cancelPublish=async(id:string):Promise<PublishTask>=>required(await apiRequest(`${taskPath}/${id}/cancel`,{method:"POST",body:{}}))
 export const retryPublish=async(id:string):Promise<PublishTask>=>required(await apiRequest(`${taskPath}/${id}/retry`,{method:"POST",body:{}}))
+export const runPublish=async(id:string):Promise<PublishTask>=>required(await apiRequest(`${taskPath}/${id}/run`,{method:"POST",body:{}}))
 
 export function localMonthRange(anchor:Date,timezone:string):{start:string;end:string;timezone:string}{
   const start=new Date(anchor.getFullYear(),anchor.getMonth(),1)
@@ -33,7 +34,7 @@ export function approvedCurrentHeads(items:PlatformContent[]):PlatformContent[]{
 export async function listApprovedCurrentHeads():Promise<PlatformContent[]>{
   const all:PlatformContent[]=[]
   const visited=new Set<string>()
-  let page=await listPlatformContents({page_size:100})
+  let page=await listPlatformContents({page_size:50})
   all.push(...page.results)
   while(page.next){const next=safeCursorUrl(page.next,"/api/v1/platform-contents");if(!next||visited.has(next))throw new ApiError(0,"内容分页地址无效。");visited.add(next);page=await getCursorPage<PlatformContent>(next,"/api/v1/platform-contents");all.push(...page.results)}
   return approvedCurrentHeads(all)

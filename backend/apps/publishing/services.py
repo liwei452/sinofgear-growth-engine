@@ -760,6 +760,22 @@ def retry_publish_task(task, *, actor=None):
 
 
 @transaction.atomic
+def run_publish_task_now(task, *, actor=None):
+    """Queue one explicitly selected scheduled task, regardless of its future slot."""
+    del actor
+    task = PublishTask.objects.select_for_update().get(pk=task.pk)
+    if task.status != PublishTask.Status.SCHEDULED:
+        raise PublishingConflict("Only scheduled publish tasks can be run now.")
+    task.status = PublishTask.Status.QUEUED
+    with publishing_writes():
+        task.save(update_fields=["status", "updated_at"])
+    from .tasks import run_publish_task
+
+    transaction.on_commit(lambda: run_publish_task.delay(str(task.id)))
+    return task
+
+
+@transaction.atomic
 def enqueue_due_publish_tasks(*, limit=100):
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
         raise ValueError("Queue limit must be an integer from 1 to 500.")

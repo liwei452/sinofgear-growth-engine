@@ -132,6 +132,36 @@ def test_publish_task_cross_organization_detail_and_action_are_404(publishing_co
     ).status_code == 404
 
 
+def test_operator_can_run_one_scheduled_task_now_but_reader_cannot(
+    publishing_context, monkeypatch, django_capture_on_commit_callbacks
+):
+    context = publishing_context
+    task = create_publish_task(
+        content=context["content"], account=context["account"],
+        idempotency_key="run-now", scheduled_at=timezone.now() + timedelta(hours=1),
+        actor=context["actor"],
+    )
+    dispatched = []
+    monkeypatch.setattr("apps.publishing.tasks.run_publish_task.delay", dispatched.append)
+    reader = _client(context["organization"], Role.Code.READ_ONLY, suffix="run-reader")
+    operator = _client(context["organization"], Role.Code.OPERATOR, suffix="run-operator")
+
+    assert reader.post(
+        f"/api/v1/publish-tasks/{task.id}/run", {}, format="json"
+    ).status_code == 403
+    with django_capture_on_commit_callbacks(execute=True):
+        response = operator.post(
+            f"/api/v1/publish-tasks/{task.id}/run", {}, format="json"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == PublishTask.Status.QUEUED
+    assert dispatched == [str(task.id)]
+    assert operator.post(
+        f"/api/v1/publish-tasks/{task.id}/run", {}, format="json"
+    ).status_code == 409
+
+
 def test_calendar_groups_by_iana_local_date_and_applies_every_filter(
     publishing_context,
 ):

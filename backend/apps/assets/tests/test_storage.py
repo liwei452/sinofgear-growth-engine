@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 import pytest
 from minio.error import S3Error
 
+from integrations.storage.filesystem_storage import FileSystemObjectStorage
 from integrations.storage.memory_storage import MemoryObjectStorage
 from integrations.storage.minio_storage import MinioObjectStorage
 
@@ -52,6 +53,23 @@ def test_memory_storage_signed_url_has_exact_expiry_and_no_credentials() -> None
     assert "expires=300" in url
     assert "secret" not in url.lower()
     assert "credential" not in url.lower()
+
+
+def test_filesystem_storage_is_collision_safe_and_confined(tmp_path) -> None:
+    storage = FileSystemObjectStorage(root=tmp_path)
+
+    assert storage.put(BytesIO(b"first"), "organizations/org/assets/asset/original") is True
+    assert storage.put(BytesIO(b"second"), "organizations/org/assets/asset/original") is False
+    assert storage.open("organizations/org/assets/asset/original").read() == b"first"
+    assert storage.presigned_download_url("organizations/org/assets/asset/original", 60).startswith(
+        "file://"
+    )
+    with pytest.raises(ValueError, match="safe relative"):
+        storage.put(BytesIO(b"escape"), "../outside")
+
+    storage.delete("organizations/org/assets/asset/original")
+    with pytest.raises(FileNotFoundError):
+        storage.open("organizations/org/assets/asset/original")
 
 
 class FakeMinioClient:

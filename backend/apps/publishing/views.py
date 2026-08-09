@@ -24,7 +24,7 @@ from .serializers import (
 from .services import (
     PublishingConflict, cancel_publish_task, create_publish_task,
     publish_task_consistency_queryset, publish_task_is_consistent,
-    retry_publish_task, validate_idempotency_key,
+    retry_publish_task, run_publish_task_now, validate_idempotency_key,
 )
 
 
@@ -201,6 +201,8 @@ class PublishActionView(APIView):
         try:
             if self.action == "retry":
                 task = retry_publish_task(task, actor=request.user)
+            elif self.action == "run":
+                task = run_publish_task_now(task, actor=request.user)
             else:
                 task = cancel_publish_task(task, actor=request.user)
         except PublishingConflict as exc:
@@ -214,6 +216,10 @@ class PublishCancelView(PublishActionView):
 
 class PublishRetryView(PublishActionView):
     action = "retry"
+
+
+class PublishRunView(PublishActionView):
+    action = "run"
 
 
 @extend_schema(tags=["PublishTasks"])

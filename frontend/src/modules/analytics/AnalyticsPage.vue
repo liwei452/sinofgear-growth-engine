@@ -8,7 +8,10 @@ import { getBrief, getMasterContent, getPlatformContent } from "../content/api"
 import { getPublishTask, getPublishTaskPage, listPublishTasks } from "../publishing/api"
 import { analyticsKeys,createShortLink,createTrackingLink,getChannelSummary,getChannelSummaryPage,getShortPage,getTrackingPage,listShortLinks,listTrackingLinks } from "./api"
 
-const iso=(date:Date)=>date.toISOString().slice(0,10)
+const iso=(date:Date)=>{
+  const two=(value:number)=>String(value).padStart(2,"0")
+  return `${date.getFullYear()}-${two(date.getMonth()+1)}-${two(date.getDate())}`
+}
 const today=new Date(),startDefault=new Date(today.getTime()-29*86400000)
 const start=ref(iso(startDefault)),end=ref(iso(today)),campaign=ref(""),platform=ref(""),product=ref(""),country=ref("")
 const summaryUrl=ref<string|null>(null),trackingUrl=ref<string|null>(null),shortUrl=ref<string|null>(null),publishedUrl=ref<string|null>(null)

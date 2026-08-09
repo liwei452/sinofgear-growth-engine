@@ -88,6 +88,32 @@ def test_connector_failures_are_safe_and_retry_policy_is_explicit(
             retry_publish_task(task, actor=context["actor"])
 
 
+def test_mock_fail_once_supports_visible_failure_then_successful_retry(publishing_context):
+    context = publishing_context
+    account = context["account"]
+    account.connector_metadata = {"mock_outcome": "fail_once"}
+    account.save(update_fields=["connector_metadata", "updated_at"])
+    task = _task(context, "fail-once")
+
+    assert execute_publish_task(task.id) is None
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.FAILED
+    assert task.last_error == {
+        "code": "PROVIDER_ERROR",
+        "message": "Provider rejected the publish request.",
+    }
+
+    retry_publish_task(task, actor=context["actor"])
+    post = execute_publish_task(task.id)
+    task.refresh_from_db()
+    assert post is not None
+    assert task.status == PublishTask.Status.SUCCEEDED
+    assert list(task.attempts.values_list("status", flat=True)) == [
+        PublishAttempt.Status.FAILED,
+        PublishAttempt.Status.SUCCEEDED,
+    ]
+
+
 def test_canceled_task_never_calls_connector(publishing_context, monkeypatch):
     context = publishing_context
     task = _task(context, "cancel")

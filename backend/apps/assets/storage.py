@@ -3,6 +3,7 @@ from functools import lru_cache
 from django.conf import settings
 
 from integrations.storage.base import ObjectStorage
+from integrations.storage.filesystem_storage import FileSystemObjectStorage
 from integrations.storage.memory_storage import MemoryObjectStorage
 from integrations.storage.minio_storage import MinioObjectStorage
 
@@ -12,6 +13,8 @@ def get_object_storage() -> ObjectStorage:
     backend = settings.OBJECT_STORAGE_BACKEND
     if backend == "memory":
         return MemoryObjectStorage()
+    if backend == "filesystem":
+        return FileSystemObjectStorage(root=settings.OBJECT_STORAGE_FILESYSTEM_ROOT)
     if backend == "minio":
         return MinioObjectStorage()
     raise ValueError(f"Unsupported object storage backend: {backend}")

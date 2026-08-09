@@ -34,7 +34,6 @@ MIME_ASSET_TYPES = {
     "application/pdf": MaterialAsset.AssetType.DOCUMENT,
 }
 MIME_ALIASES = {"image/jpg": "image/jpeg"}
-DANGEROUS_EMBEDDED_SIGNATURES = (b"MZ", b"\x7fELF", b"PK\x03\x04", b"#!/")
 STRUCTURE_SCAN_BYTES = 64 * 1024
 
 
@@ -79,9 +78,27 @@ def _validate_jpeg(stream, size: int) -> None:
             break
         if marker == 0xDA:
             scan_start = offset + segment_length
-            if scan_start >= size - 2 or _read_at(stream, size - 2, 2) != b"\xff\xd9":
+            if scan_start >= size - 2:
                 break
-            return
+            scan = _read_at(stream, scan_start, size - scan_start)
+            scan_offset = 0
+            while scan_offset + 1 < len(scan):
+                if scan[scan_offset] != 0xFF:
+                    scan_offset += 1
+                    continue
+                marker_offset = scan_offset + 1
+                while marker_offset < len(scan) and scan[marker_offset] == 0xFF:
+                    marker_offset += 1
+                if marker_offset >= len(scan):
+                    break
+                scan_marker = scan[marker_offset]
+                if scan_marker == 0x00 or scan_marker in range(0xD0, 0xD8):
+                    scan_offset = marker_offset + 1
+                    continue
+                if scan_marker == 0xD9 and marker_offset + 1 == len(scan):
+                    return
+                break
+            break
         offset += segment_length
     raise AssetUploadError("JPEG is truncated or has an invalid structure.")
 
@@ -177,15 +194,6 @@ def _validate_pdf(stream, size: int) -> None:
         raise AssetUploadError("PDF is truncated or has an invalid structure.")
 
 
-def _validate_no_polyglot_signatures(stream, size: int) -> None:
-    head = _read_at(stream, 0, min(size, STRUCTURE_SCAN_BYTES))
-    tail_offset = max(0, size - STRUCTURE_SCAN_BYTES)
-    tail = b"" if tail_offset == 0 else _read_at(stream, tail_offset, STRUCTURE_SCAN_BYTES)
-    inspected = head + tail
-    if any(signature in inspected for signature in DANGEROUS_EMBEDDED_SIGNATURES):
-        raise AssetUploadError("Upload contains an unsafe polyglot-like payload signature.")
-
-
 def _validate_structure(stream, *, size: int, mime_type: str) -> None:
     validators = {
         "image/jpeg": _validate_jpeg,
@@ -195,7 +203,6 @@ def _validate_structure(stream, *, size: int, mime_type: str) -> None:
         "application/pdf": _validate_pdf,
     }
     validators[mime_type](stream, size)
-    _validate_no_polyglot_signatures(stream, size)
     stream.seek(0)
 
 

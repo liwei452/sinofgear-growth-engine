@@ -12,6 +12,9 @@ from minio.signer import sign_v4_s3
 from .base import ObjectStorage
 
 
+COLLISION_ERROR_CODES = {"KeyAlreadyExists", "ObjectAlreadyExists", "PreconditionFailed"}
+
+
 def _remaining_length(stream: BinaryIO) -> int:
     start = stream.tell()
     stream.seek(0, 2)
@@ -72,11 +75,14 @@ def _conditional_put_object(client, bucket: str, key: str, stream: BinaryIO) -> 
     try:
         if response.status in {200, 204}:
             return True
-        if response.status in {409, 412}:
+        if response.status == 412:
             return False
         response.read(cache_content=True)
         if response.data:
-            raise S3Error.fromxml(response)
+            error = S3Error.fromxml(response)
+            if response.status == 409 and error.code in COLLISION_ERROR_CODES:
+                return False
+            raise error
         raise S3Error(
             response=response,
             code="ConditionalPutFailed",
@@ -128,6 +134,7 @@ class MinioObjectStorage(ObjectStorage):
             access_key=settings.MINIO_ACCESS_KEY,
             secret_key=settings.MINIO_SECRET_KEY,
             secure=settings.MINIO_SECURE,
+            region=settings.MINIO_REGION,
         )
         self.public_client = public_client or (
             self.client
@@ -137,6 +144,7 @@ class MinioObjectStorage(ObjectStorage):
                 access_key=settings.MINIO_ACCESS_KEY,
                 secret_key=settings.MINIO_SECRET_KEY,
                 secure=settings.MINIO_PUBLIC_SECURE,
+                region=settings.MINIO_REGION,
             )
         )
         if not self.client.bucket_exists(self.bucket):

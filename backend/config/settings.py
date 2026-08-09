@@ -103,6 +103,7 @@ MINIO_PUBLIC_ENDPOINT = os.environ.get("MINIO_PUBLIC_ENDPOINT", "localhost:9000"
 MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")
 MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "")
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "sinofgear-assets")
+MINIO_REGION = os.environ.get("MINIO_REGION", "us-east-1")
 MINIO_SECURE = os.environ.get("MINIO_SECURE", "false").lower() == "true"
 MINIO_PUBLIC_SECURE = os.environ.get("MINIO_PUBLIC_SECURE", "false").lower() == "true"
 ASSET_MAX_UPLOAD_BYTES = int(os.environ.get("ASSET_MAX_UPLOAD_BYTES", str(250 * 1024 * 1024)))

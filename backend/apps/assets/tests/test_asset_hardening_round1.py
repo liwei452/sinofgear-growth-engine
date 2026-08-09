@@ -51,25 +51,43 @@ def test_magic_only_and_truncated_supported_formats_are_rejected(
     ("content", "content_type", "asset_type"),
     [
         (jpeg_bytes(b"MZ executable"), "image/jpeg", "IMAGE"),
-        (png_bytes(b"PK\x03\x04 archive"), "image/png", "IMAGE"),
+        (png_bytes(b"MZ harmless metadata PK\x03\x04"), "image/png", "IMAGE"),
         (webp_bytes(b"\x7fELF executable"), "image/webp", "IMAGE"),
         (mp4_bytes(b"#!/bin/sh"), "video/mp4", "VIDEO"),
         (pdf_bytes(b"MZ executable"), "application/pdf", "DOCUMENT"),
     ],
 )
-def test_supported_header_plus_polyglot_payload_is_rejected(
+def test_supported_format_allows_harmless_signature_bytes_inside_valid_payload(
     organizations, content, content_type, asset_type
 ) -> None:
     own, _ = organizations
     upload = ChunkOnlyUpload([content])
     upload.content_type = content_type
 
-    with pytest.raises(AssetUploadError, match="unsafe|polyglot"):
+    asset = upload_asset(
+        organization=own,
+        creator=_creator(f"signature-bytes-{asset_type}-{len(content)}"),
+        upload=upload,
+        asset_type=asset_type,
+        storage=MemoryObjectStorage(),
+    )
+
+    assert asset.mime_type == content_type
+
+
+@pytest.mark.django_db
+def test_valid_png_with_concatenated_executable_is_rejected(organizations) -> None:
+    own, _ = organizations
+    content = png_bytes(b"valid metadata") + b"MZ\x90\x00executable"
+    upload = ChunkOnlyUpload([content])
+    upload.content_type = "image/png"
+
+    with pytest.raises(AssetUploadError, match="truncated|structure"):
         upload_asset(
             organization=own,
-            creator=_creator(f"polyglot-{asset_type}-{len(content)}"),
+            creator=_creator("concatenated-executable"),
             upload=upload,
-            asset_type=asset_type,
+            asset_type="IMAGE",
             storage=MemoryObjectStorage(),
         )
 

@@ -14,7 +14,7 @@ class MultipartJSONField(serializers.JSONField):
         if isinstance(data, str):
             try:
                 data = json.loads(data)
-            except json.JSONDecodeError as error:
+            except (json.JSONDecodeError, RecursionError) as error:
                 raise serializers.ValidationError("Enter valid JSON.") from error
         return super().to_internal_value(data)
 

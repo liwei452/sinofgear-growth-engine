@@ -524,7 +524,7 @@ def test_cursor_pagination_is_stable_bounded_and_preserves_filters(organizations
 
 
 @pytest.mark.django_db
-def test_cursor_page_size_has_a_hard_maximum(organizations, roles) -> None:
+def test_cursor_page_size_above_documented_maximum_is_rejected(organizations, roles) -> None:
     own, _ = organizations
     Product.objects.bulk_create(
         [
@@ -538,9 +538,10 @@ def test_cursor_page_size_has_a_hard_maximum(organizations, roles) -> None:
 
     response = client.get("/api/v1/products?page_size=999")
 
-    assert response.status_code == 200
-    assert len(response.json()["results"]) == 50
-    assert response.json()["next"] is not None
+    assert response.status_code == 400
+    assert response.json()["errors"] == {
+        "page_size": ["Ensure this value is less than or equal to 50."]
+    }
 
 
 @pytest.mark.django_db

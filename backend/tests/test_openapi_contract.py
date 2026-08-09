@@ -22,6 +22,22 @@ RESOURCE_TAGS = {
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 MUTATION_METHODS = {"post", "put", "patch", "delete"}
 ERROR_FIELDS = {"code", "message", "recovery_action"}
+PAGINATION_CONTRACTS = {
+    ("/api/v1/ai-runs", "page_size"): (1, 50),
+    ("/api/v1/assets", "page_size"): (1, 50),
+    ("/api/v1/campaigns", "page_size"): (1, 50),
+    ("/api/v1/content-briefs", "page_size"): (1, 50),
+    ("/api/v1/jobs", "page_size"): (1, 50),
+    ("/api/v1/master-contents", "page_size"): (1, 50),
+    ("/api/v1/platform-contents", "page_size"): (1, 50),
+    ("/api/v1/products", "page_size"): (1, 50),
+    ("/api/v1/publish-tasks", "page_size"): (1, 50),
+    ("/api/v1/short-links", "page_size"): (1, 50),
+    ("/api/v1/tracking-links", "page_size"): (1, 50),
+    ("/api/v1/analytics/channel-summary", "limit"): (1, 100),
+    ("/api/v1/analytics/channel-summary", "offset"): (0, None),
+    ("/api/v1/analytics/channel-summary", "page_size"): (1, 100),
+}
 
 
 def _operations(schema: dict) -> Iterable[tuple[str, str, dict]]:
@@ -102,6 +118,19 @@ def test_generated_method_field_types_match_runtime_values(openapi_schema: dict)
         "readOnly": True,
     }
     assert schemas["AIRun"]["properties"]["prompt"]["type"] == "object"
+    for field in ("output_json", "human_correction"):
+        assert schemas["AIRun"]["properties"][field]["type"] == "object"
+        assert schemas["AIRun"]["properties"][field]["nullable"] is True
+
+
+def test_manually_declared_pagination_bounds_match_runtime_contract(openapi_schema: dict) -> None:
+    for (path, name), (minimum, maximum) in PAGINATION_CONTRACTS.items():
+        parameters = openapi_schema["paths"][path]["get"].get("parameters", [])
+        parameter = next((item for item in parameters if item["name"] == name), None)
+        assert parameter is not None, f"GET {path} is missing {name}"
+        parameter_schema = parameter["schema"]
+        assert parameter_schema.get("minimum") == minimum, f"GET {path} {name} minimum"
+        assert parameter_schema.get("maximum") == maximum, f"GET {path} {name} maximum"
 
 
 def test_every_local_schema_reference_resolves(openapi_schema: dict) -> None:

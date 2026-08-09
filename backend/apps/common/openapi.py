@@ -1,5 +1,7 @@
 from copy import deepcopy
 
+from drf_spectacular.utils import OpenApiParameter
+
 
 _MUTATION_METHODS = {"post", "put", "patch", "delete"}
 _DEFAULT_ERRORS = {
@@ -8,6 +10,13 @@ _DEFAULT_ERRORS = {
     "403": "The request is forbidden or failed CSRF validation.",
 }
 _ERROR_REF = {"$ref": "#/components/schemas/ApiError"}
+
+
+def bounded_integer_query_parameter(name: str, *, minimum: int, maximum: int | None = None):
+    schema = {"type": "integer", "minimum": minimum}
+    if maximum is not None:
+        schema["maximum"] = maximum
+    return OpenApiParameter(name, type=schema, location=OpenApiParameter.QUERY)
 
 
 def _json_error_response(description: str, schema: dict | None = None) -> dict:

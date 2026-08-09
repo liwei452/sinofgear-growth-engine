@@ -172,14 +172,14 @@ class ContentBriefPatchSerializer(StrictFieldsMixin, serializers.ModelSerializer
 
 class CampaignFilterSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=Campaign.Status.choices, required=False)
-    page_size = serializers.IntegerField(min_value=1, required=False)
+    page_size = serializers.IntegerField(min_value=1, max_value=50, required=False)
     cursor = serializers.CharField(required=False)
 
 
 class ContentBriefFilterSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=ContentBrief.Status.choices, required=False)
     campaign = serializers.UUIDField(required=False)
-    page_size = serializers.IntegerField(min_value=1, required=False)
+    page_size = serializers.IntegerField(min_value=1, max_value=50, required=False)
     cursor = serializers.CharField(required=False)
 
 

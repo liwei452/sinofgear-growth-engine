@@ -15,10 +15,14 @@ _RECOVERY_BY_STATUS = {
 
 
 def recoverable_error(data: Any, status_code: int) -> dict[str, Any]:
-    payload = dict(data) if isinstance(data, dict) else {"detail": data}
     if status_code >= 500:
-        message = "The server could not complete the request."
-    elif isinstance(payload.get("message"), str):
+        return {
+            "code": "internal_server_error",
+            "message": "The server could not complete the request.",
+            "recovery_action": "Try again later.",
+        }
+    payload = dict(data) if isinstance(data, dict) else {"detail": data}
+    if isinstance(payload.get("message"), str):
         message = payload["message"]
     elif isinstance(payload.get("detail"), str):
         message = payload["detail"]

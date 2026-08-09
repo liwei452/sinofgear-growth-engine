@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 from apps.ai.models import PromptVersion
 from apps.campaigns.models import ContentBrief, ContentBriefPlatform
 from apps.campaigns.services import build_content_generation_input
+from apps.common.openapi import bounded_integer_query_parameter
 from apps.identity.permissions import CanManageContent, CanReadContent, CanReviewContent
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
@@ -90,7 +91,10 @@ class ContentListView(APIView):
     serializer = MasterContentSerializer
     serializer_class = MasterContentSerializer
 
-    @extend_schema(parameters=[OpenApiParameter("status", OpenApiTypes.STR)])
+    @extend_schema(parameters=[
+        OpenApiParameter("status", OpenApiTypes.STR),
+        bounded_integer_query_parameter("page_size", minimum=1, maximum=50),
+    ])
     def get(self, request):
         queryset = self.model.objects.filter(organization=request.organization)
         queryset = _with_current_head(queryset, self.model)

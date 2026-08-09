@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.content.models import PlatformContent
+from apps.common.openapi import bounded_integer_query_parameter
 from apps.identity.permissions import CanManagePublishing, CanReadPublishing
 from apps.platforms.models import SocialAccount
 
@@ -93,7 +94,7 @@ class PublishTaskListView(APIView):
             OpenApiParameter("account", OpenApiTypes.UUID),
             OpenApiParameter("content", OpenApiTypes.UUID),
             OpenApiParameter("cursor", OpenApiTypes.STR),
-            OpenApiParameter("page_size", OpenApiTypes.INT),
+            bounded_integer_query_parameter("page_size", minimum=1, maximum=50),
         ],
         responses={200: PublishTaskCursorEnvelopeSerializer},
     )

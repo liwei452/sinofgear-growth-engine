@@ -6,6 +6,7 @@ from rest_framework.pagination import CursorPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.common.openapi import bounded_integer_query_parameter
 from apps.identity.permissions import CanReadJobs
 
 from .models import AIRun
@@ -66,7 +67,7 @@ class AIRunListView(APIView):
             OpenApiParameter("job", OpenApiTypes.UUID),
             OpenApiParameter("status", OpenApiTypes.STR, enum=AIRun.Status.values),
             OpenApiParameter("cursor", OpenApiTypes.STR),
-            OpenApiParameter("page_size", OpenApiTypes.INT),
+            bounded_integer_query_parameter("page_size", minimum=1, maximum=50),
         ],
         responses={200: AIRunListSerializer, 400: AIRunValidationErrorSerializer},
     )

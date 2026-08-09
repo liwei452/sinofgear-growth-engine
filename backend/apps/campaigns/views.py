@@ -15,6 +15,7 @@ from apps.identity.permissions import (
     CanReadCampaigns,
     CanReviewCampaigns,
 )
+from apps.common.openapi import bounded_integer_query_parameter
 
 from .models import (
     Campaign,
@@ -167,7 +168,7 @@ class CampaignListView(APIView):
         parameters=[
             OpenApiParameter("status", OpenApiTypes.STR, enum=Campaign.Status.values),
             OpenApiParameter("cursor", OpenApiTypes.STR),
-            OpenApiParameter("page_size", OpenApiTypes.INT),
+            bounded_integer_query_parameter("page_size", minimum=1, maximum=50),
         ],
         responses={200: CampaignListSerializer, 400: ValidationErrorSerializer, 403: ErrorSerializer},
     )
@@ -242,7 +243,7 @@ class ContentBriefListView(APIView):
             OpenApiParameter("status", OpenApiTypes.STR, enum=ContentBrief.Status.values),
             OpenApiParameter("campaign", OpenApiTypes.UUID),
             OpenApiParameter("cursor", OpenApiTypes.STR),
-            OpenApiParameter("page_size", OpenApiTypes.INT),
+            bounded_integer_query_parameter("page_size", minimum=1, maximum=50),
         ],
         responses={200: ContentBriefListSerializer, 400: ValidationErrorSerializer, 403: ErrorSerializer},
     )

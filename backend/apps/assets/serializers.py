@@ -101,7 +101,7 @@ class AssetFilterSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=MaterialAsset.Status.choices, required=False)
     product = serializers.UUIDField(required=False)
     tag = serializers.CharField(max_length=64, allow_blank=False, required=False)
-    page_size = serializers.IntegerField(min_value=1, required=False)
+    page_size = serializers.IntegerField(min_value=1, max_value=50, required=False)
     cursor = serializers.CharField(required=False)
 
 

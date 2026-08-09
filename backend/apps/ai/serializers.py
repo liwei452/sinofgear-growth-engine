@@ -210,7 +210,7 @@ class AIRunSerializer(serializers.ModelSerializer):
     def get_input_snapshot(self, run: AIRun):
         return _bounded_summary(run.input_snapshot, CONTENT_GENERATION_INPUT_SCHEMA)
 
-    @extend_schema_field(OpenApiTypes.OBJECT)
+    @extend_schema_field({"type": "object", "nullable": True})
     def get_output_json(self, run: AIRun):
         return _bounded_summary(run.output_json, _OUTPUT_SCHEMA)
 
@@ -230,7 +230,7 @@ class AIRunSerializer(serializers.ModelSerializer):
             if not (isinstance(value, str) and "[REDACTED]" in value)
         }
 
-    @extend_schema_field(OpenApiTypes.OBJECT)
+    @extend_schema_field({"type": "object", "nullable": True})
     def get_human_correction(self, run: AIRun):
         return _bounded_summary(run.human_correction, _OUTPUT_SCHEMA)
 

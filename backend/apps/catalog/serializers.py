@@ -160,6 +160,8 @@ class ProductFilterSerializer(serializers.Serializer):
     material = serializers.CharField(required=False, allow_blank=False)
     application = serializers.CharField(required=False, allow_blank=False)
     status = serializers.ChoiceField(choices=Product.Status.choices, required=False)
+    cursor = serializers.CharField(required=False)
+    page_size = serializers.IntegerField(min_value=1, max_value=50, required=False)
 
 
 class ProductErrorSerializer(serializers.Serializer):

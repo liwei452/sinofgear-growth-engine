@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.14.0",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
@@ -11,8 +14,8 @@
     "test": "vitest",
     "lint": "eslint .",
     "typecheck": "vue-tsc --noEmit",
-    "api:generate": "node scripts/generate-api.ts generate",
-    "api:check": "node scripts/generate-api.ts check"
+    "api:generate": "node scripts/generate-api.mjs generate",
+    "api:check": "node scripts/generate-api.mjs check"
   },
   "dependencies": {
     "@tanstack/vue-query": "^5.0.0",

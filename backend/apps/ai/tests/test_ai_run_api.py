@@ -85,6 +85,20 @@ def test_ai_run_detail_is_organization_scoped_and_recursively_scrubbed(ai_api):
 
 
 @pytest.mark.django_db
+def test_ai_run_nullable_json_fields_are_null_at_runtime(ai_api):
+    own, _other, _user, client = ai_api
+    run = make_run(own, suffix="nullable")
+    with ai_audit_writes():
+        AIRun.objects.filter(pk=run.pk).update(output_json=None, human_correction=None)
+
+    response = client.get(f"/api/v1/ai-runs/{run.id}")
+
+    assert response.status_code == 200
+    assert response.json()["output_json"] is None
+    assert response.json()["human_correction"] is None
+
+
+@pytest.mark.django_db
 def test_ai_run_detail_is_allowlisted_value_redacted_bounded_and_non_mutating(ai_api):
     own, _other, _user, client = ai_api
     run = make_run(own, suffix="bounded")

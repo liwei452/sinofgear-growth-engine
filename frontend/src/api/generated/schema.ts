@@ -1326,9 +1326,7 @@ export interface components {
             readonly error: Record<string, never> | null;
             /** Format: date-time */
             readonly finished_at: string | null;
-            readonly human_correction: {
-                readonly [key: string]: unknown;
-            };
+            readonly human_correction: Record<string, never> | null;
             /** Format: uuid */
             readonly id: string;
             readonly input_snapshot: {
@@ -1338,9 +1336,7 @@ export interface components {
             /** Format: uuid */
             readonly job_id: string;
             readonly model: string;
-            readonly output_json: {
-                readonly [key: string]: unknown;
-            };
+            readonly output_json: Record<string, never> | null;
             readonly prompt: {
                 readonly [key: string]: unknown;
             };
@@ -2526,7 +2522,6 @@ export interface operations {
             readonly query?: {
                 /** @description Opaque stable cursor; generated links preserve all active filters. */
                 readonly cursor?: string;
-                /** @description Page size from 1 to 50. Values above 50 are capped at 50. */
                 readonly page_size?: number;
                 /** @description Organization-scoped product UUID. May be supplied at most once. */
                 readonly product?: string;
@@ -5381,6 +5376,7 @@ export interface operations {
     readonly master_contents_list: {
         readonly parameters: {
             readonly query?: {
+                readonly page_size?: number;
                 readonly status?: string;
             };
             readonly header?: never;
@@ -5822,6 +5818,7 @@ export interface operations {
     readonly platform_contents_list: {
         readonly parameters: {
             readonly query?: {
+                readonly page_size?: number;
                 readonly status?: string;
             };
             readonly header?: never;
@@ -6159,7 +6156,6 @@ export interface operations {
                 readonly cursor?: string;
                 /** @description Resolve one visible APPROVED concept by UUID or exact case-sensitive code, then match current active MATERIAL links. Ambiguous and repeated values return 400. */
                 readonly material?: string;
-                /** @description Requested page size. Defaults to 20 and is capped at 50. */
                 readonly page_size?: number;
                 /** @description Exact product status: DRAFT, ACTIVE, or ARCHIVED. */
                 readonly status?: "ACTIVE" | "ARCHIVED" | "DRAFT";

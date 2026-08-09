@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.catalog.models import Product
+from apps.common.openapi import bounded_integer_query_parameter
 from apps.identity.permissions import CanManageAssets, CanReadAssets
 
 from .models import AssetProductLink, MaterialAsset
@@ -57,11 +58,7 @@ FILTER_PARAMETERS = [
         OpenApiTypes.STR,
         description="Opaque stable cursor; generated links preserve all active filters.",
     ),
-    OpenApiParameter(
-        "page_size",
-        OpenApiTypes.INT,
-        description="Page size from 1 to 50. Values above 50 are capped at 50.",
-    ),
+    bounded_integer_query_parameter("page_size", minimum=1, maximum=50),
 ]
 ERROR_RESPONSES = {403: AssetErrorSerializer, 404: AssetErrorSerializer}
 

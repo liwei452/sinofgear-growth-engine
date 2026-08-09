@@ -17,8 +17,8 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.common.openapi import bounded_integer_query_parameter
 from apps.identity.permissions import CanManageProducts, CanReadProducts
-
 from apps.knowledge.models import KnowledgeConcept
 
 from .models import (
@@ -78,13 +78,7 @@ FILTER_PARAMETERS = [
         required=False,
         description="Opaque cursor from the next or previous page URL.",
     ),
-    OpenApiParameter(
-        name="page_size",
-        type=int,
-        location=OpenApiParameter.QUERY,
-        required=False,
-        description="Requested page size. Defaults to 20 and is capped at 50.",
-    ),
+    bounded_integer_query_parameter("page_size", minimum=1, maximum=50),
 ]
 
 

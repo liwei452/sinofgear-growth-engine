@@ -1,0 +1,111 @@
+import { spawnSync } from "node:child_process"
+import { randomUUID } from "node:crypto"
+import { existsSync, rmSync } from "node:fs"
+import { mkdir, mkdtemp, open, readFile, rename, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { basename, dirname, join, resolve } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
+import openapiTS, { astToString, COMMENT_HEADER } from "openapi-typescript"
+
+const frontendDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const repositoryDirectory = resolve(frontendDirectory, "..")
+const backendDirectory = join(repositoryDirectory, "backend")
+const generatedDirectory = join(frontendDirectory, "src", "api", "generated")
+const generatedTypesFile = join(generatedDirectory, "schema.ts")
+const generatedOpenAPIFile = join(generatedDirectory, "openapi.json")
+const activeTemporaryFiles = new Set()
+const realFilesystem = { open, rename, rm }
+
+process.once("exit", () => {
+  for (const temporaryFile of activeTemporaryFiles) {
+    rmSync(temporaryFile, { force: true })
+  }
+})
+
+function pythonCommand() {
+  if (process.env.PYTHON) return process.env.PYTHON
+  const virtualEnvironmentPython = process.platform === "win32"
+    ? join(backendDirectory, ".venv", "Scripts", "python.exe")
+    : join(backendDirectory, ".venv", "bin", "python")
+  return existsSync(virtualEnvironmentPython) ? virtualEnvironmentPython : "python"
+}
+
+async function generatedContract() {
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), "sinofgear-openapi-"))
+  const schemaFile = join(temporaryDirectory, "schema.json")
+  try {
+    const exported = spawnSync(
+      pythonCommand(),
+      [
+        "manage.py", "spectacular", "--settings=config.test_settings", "--validate",
+        "--format", "openapi-json", "--file", schemaFile,
+      ],
+      {
+        cwd: backendDirectory,
+        encoding: "utf8",
+        env: { ...process.env, PYTHONHASHSEED: "0" },
+      },
+    )
+    if (exported.status !== 0) {
+      process.stderr.write(exported.stdout)
+      process.stderr.write(exported.stderr)
+      throw new Error(`OpenAPI schema export failed with exit code ${exported.status ?? "unknown"}.`)
+    }
+    const openapi = await readFile(schemaFile, "utf8")
+    JSON.parse(openapi)
+    const nodes = await openapiTS(pathToFileURL(schemaFile), {
+      alphabetize: true,
+      immutable: true,
+    })
+    return { openapi, types: `${COMMENT_HEADER}${astToString(nodes)}` }
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true })
+  }
+}
+
+export async function writeFileAtomically(destination, contents, filesystem = realFilesystem) {
+  await mkdir(dirname(destination), { recursive: true })
+  const temporaryFile = join(
+    dirname(destination),
+    `.${basename(destination)}.${process.pid}.${randomUUID()}.tmp`,
+  )
+  activeTemporaryFiles.add(temporaryFile)
+  let handle
+  try {
+    handle = await filesystem.open(temporaryFile, "wx", 0o600)
+    await handle.writeFile(contents, "utf8")
+    await handle.sync()
+    await handle.close()
+    handle = undefined
+    await filesystem.rename(temporaryFile, destination)
+  } finally {
+    if (handle) await handle.close().catch(() => undefined)
+    await filesystem.rm(temporaryFile, { force: true }).catch(() => undefined)
+    activeTemporaryFiles.delete(temporaryFile)
+  }
+}
+
+export async function main(mode = process.argv[2] ?? "generate") {
+  if (mode !== "generate" && mode !== "check") {
+    throw new Error("Usage: node scripts/generate-api.mjs [generate|check]")
+  }
+  const expected = await generatedContract()
+  if (mode === "check") {
+    const [currentTypes, currentOpenAPI] = await Promise.all([
+      readFile(generatedTypesFile, "utf8").catch(() => null),
+      readFile(generatedOpenAPIFile, "utf8").catch(() => null),
+    ])
+    if (currentTypes !== expected.types || currentOpenAPI !== expected.openapi) {
+      throw new Error("Generated API artifacts are stale. Run `pnpm api:generate` and commit the result.")
+    }
+    process.stdout.write("Generated API artifacts are current.\n")
+    return
+  }
+  await writeFileAtomically(generatedOpenAPIFile, expected.openapi)
+  await writeFileAtomically(generatedTypesFile, expected.types)
+  process.stdout.write(`Generated ${generatedTypesFile} and ${generatedOpenAPIFile}\n`)
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main()
+}

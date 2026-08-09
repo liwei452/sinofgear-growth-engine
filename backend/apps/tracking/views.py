@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 
 from apps.campaigns.models import Campaign
 from apps.catalog.models import Product
+from apps.common.openapi import bounded_integer_query_parameter
 from apps.identity.permissions import CanManageTracking, CanReadTracking
 from apps.platforms.models import Platform
 from apps.publishing.models import PublishedPost
@@ -124,7 +125,10 @@ class TrackingLinkListView(APIView):
 
     @extend_schema(
         operation_id="tracking_links_list",
-        parameters=[OpenApiParameter("cursor", OpenApiTypes.STR), OpenApiParameter("page_size", OpenApiTypes.INT)],
+        parameters=[
+            OpenApiParameter("cursor", OpenApiTypes.STR),
+            bounded_integer_query_parameter("page_size", minimum=1, maximum=50),
+        ],
         responses={200: TrackingCursorEnvelopeSerializer},
     )
     def get(self, request):
@@ -196,7 +200,10 @@ class ShortLinkListView(APIView):
 
     @extend_schema(
         operation_id="short_links_list",
-        parameters=[OpenApiParameter("cursor", OpenApiTypes.STR), OpenApiParameter("page_size", OpenApiTypes.INT)],
+        parameters=[
+            OpenApiParameter("cursor", OpenApiTypes.STR),
+            bounded_integer_query_parameter("page_size", minimum=1, maximum=50),
+        ],
         responses={200: ShortCursorEnvelopeSerializer},
     )
     def get(self, request):
@@ -258,9 +265,9 @@ class ChannelSummaryView(APIView):
             OpenApiParameter("platform", OpenApiTypes.UUID),
             OpenApiParameter("product", OpenApiTypes.UUID),
             OpenApiParameter("country", OpenApiTypes.STR),
-            OpenApiParameter("limit", OpenApiTypes.INT),
-            OpenApiParameter("offset", OpenApiTypes.INT),
-            OpenApiParameter("page_size", OpenApiTypes.INT),
+            bounded_integer_query_parameter("limit", minimum=1, maximum=100),
+            bounded_integer_query_parameter("offset", minimum=0),
+            bounded_integer_query_parameter("page_size", minimum=1, maximum=100),
         ],
         responses={200: ChannelSummaryEnvelopeSerializer},
         description=(

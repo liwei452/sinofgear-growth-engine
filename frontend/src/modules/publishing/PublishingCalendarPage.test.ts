@@ -95,3 +95,44 @@ it("does not let a stale schedule completion close or reset a newly reopened dia
   expect(screen.getByRole("dialog")).toBeInTheDocument()
   expect(screen.getByLabelText("发布时间")).toHaveValue("2026-08-13T13:30")
 })
+
+it("keeps a deferred scheduling preflight bound to its original form snapshot",async()=>{
+  document.cookie="csrftoken=t; path=/"
+  let uuidSequence=0,lastUuid=""
+  vi.spyOn(crypto,"randomUUID").mockImplementation(()=>{
+    lastUuid=`00000000-0000-4000-8000-${String(++uuidSequence).padStart(12,"0")}`
+    return lastUuid as `${string}-${string}-${string}-${string}-${string}`
+  })
+  let resolveContents!:(response:Response)=>void,resolveAccounts!:(response:Response)=>void
+  const pendingContents=new Promise<Response>(resolve=>{resolveContents=resolve}),pendingAccounts=new Promise<Response>(resolve=>{resolveAccounts=resolve})
+  const content=(id:string,platformId:string,title:string)=>({id,master_content_id:`master-${id}`,master_version:1,platform_id:platformId,lineage_id:`line-${id}`,previous_version_id:null,version:1,payload:{title,body:"",cta:"",concept_codes:[],platform_code:platformId},provenance:{},status:"APPROVED",is_current_head:true,created_by_id:1,created_at:"",updated_at:""})
+  const account=(id:string,platformId:string,name:string)=>({id,platform_id:platformId,display_name:name,publish_mode:"API_AUTO",status:"ACTIVE",effective_capabilities:["PUBLISH"],credential_configured:true})
+  const contents=[content("old-content","old-platform","Original content"),content("new-content","new-platform","Reopened content")]
+  const accounts=[account("old-account","old-platform","Original account"),account("new-account","new-platform","Reopened account")]
+  let contentCalls=0,accountCalls=0
+  const scheduleRequests:RequestInit[]=[]
+  const fetch=vi.fn((path:string,init?:RequestInit)=>{
+    if(path.startsWith("/api/v1/publish-calendar"))return Promise.resolve(new Response(JSON.stringify({timezone:"UTC",start:"",end:"",metadata:{max_entries:100,returned_entries:0,truncated:false},days:[]}),{status:200,headers:{"Content-Type":"application/json"}}))
+    if(path.startsWith("/api/v1/platform-contents")){contentCalls++;return contentCalls===1?Promise.resolve(new Response(JSON.stringify({next:null,previous:null,results:contents}),{status:200,headers:{"Content-Type":"application/json"}})):pendingContents}
+    if(path==="/api/v1/social-accounts"){accountCalls++;return accountCalls===1?Promise.resolve(new Response(JSON.stringify({results:accounts}),{status:200,headers:{"Content-Type":"application/json"}})):pendingAccounts}
+    if(path==="/api/v1/publish-tasks/schedule"&&init?.method==="POST"){scheduleRequests.push(init);return Promise.resolve(new Response(JSON.stringify({id:"old-task"}),{status:201,headers:{"Content-Type":"application/json"}}))}
+    return Promise.resolve(new Response(JSON.stringify({next:null,previous:null,results:[]}),{status:200,headers:{"Content-Type":"application/json"}}))
+  })
+  renderPublishing(["publishing.read","publishing.manage"],fetch)
+  const open=await screen.findByRole("button",{name:"安排发布"});await userEvent.click(open)
+  await userEvent.selectOptions(await screen.findByLabelText("已审核当前内容"),"old-content");await userEvent.selectOptions(screen.getByLabelText("可发布账户"),"old-account");await userEvent.type(screen.getByLabelText("发布时间"),"2026-08-12T12:00")
+  const originalIntentKey=lastUuid
+  await userEvent.click(screen.getByRole("button",{name:"确认安排"}))
+  await waitFor(()=>{expect(contentCalls).toBe(2);expect(accountCalls).toBe(2)})
+  await userEvent.keyboard("{Escape}");await userEvent.click(open)
+  await userEvent.selectOptions(screen.getByLabelText("已审核当前内容"),"new-content");await userEvent.selectOptions(screen.getByLabelText("可发布账户"),"new-account");await userEvent.type(screen.getByLabelText("发布时间"),"2026-08-13T13:30")
+  resolveContents(new Response(JSON.stringify({next:null,previous:null,results:contents}),{status:200,headers:{"Content-Type":"application/json"}}));resolveAccounts(new Response(JSON.stringify({results:accounts}),{status:200,headers:{"Content-Type":"application/json"}}))
+  await waitFor(()=>expect(scheduleRequests).toHaveLength(1))
+  const body=JSON.parse(String(scheduleRequests[0].body))
+  expect(body).toMatchObject({platform_content_id:"old-content",social_account_id:"old-account",scheduled_at:new Date("2026-08-12T12:00").toISOString()})
+  expect(new Headers(scheduleRequests[0].headers).get("Idempotency-Key")).toBe(originalIntentKey)
+  expect(screen.getByRole("dialog")).toBeInTheDocument()
+  expect(screen.getByLabelText("已审核当前内容")).toHaveValue("new-content")
+  expect(screen.getByLabelText("可发布账户")).toHaveValue("new-account")
+  expect(screen.getByLabelText("发布时间")).toHaveValue("2026-08-13T13:30")
+})

@@ -18,8 +18,8 @@ const contents=useQuery({queryKey:computed(()=>[...publishingKeys.all(org.value)
 const accounts=useQuery({queryKey:computed(()=>[...publishingKeys.all(org.value),"accounts"]),queryFn:listSocialAccounts,enabled:computed(()=>Boolean(org.value))})
 const selectedContent=computed(()=>contents.data.value?.find(item=>item.id===contentId.value))
 const eligible=computed(()=>selectedContent.value?accounts.data.value?.filter(account=>isEligiblePublishingPair(selectedContent.value!,account))??[]:[])
-const refresh=()=>client.invalidateQueries({queryKey:publishingKeys.all(org.value)})
-const schedule=useMutation({mutationFn:(input:{contentId:string;accountId:string;scheduledAt:string;key:string})=>schedulePublish({platform_content_id:input.contentId,social_account_id:input.accountId,scheduled_at:input.scheduledAt,timezone},input.key)})
+const refresh=(organizationId=org.value)=>client.invalidateQueries({queryKey:publishingKeys.all(organizationId)})
+const schedule=useMutation({mutationFn:(input:{contentId:string;accountId:string;scheduledAt:string;timezone:string;key:string})=>schedulePublish({platform_content_id:input.contentId,social_account_id:input.accountId,scheduled_at:input.scheduledAt,timezone:input.timezone},input.key)})
 const action=useMutation({mutationFn:({id,kind}:{id:string;kind:"cancel"|"retry"})=>kind==="cancel"?cancelPublish(id):retryPublish(id)})
 const err=(v:unknown)=>v instanceof ApiError?v.userMessage:"发布数据暂时无法加载，请稍后重试。"
 function move(delta:number){anchor.value=new Date(anchor.value.getFullYear(),anchor.value.getMonth()+delta,1)}
@@ -29,20 +29,21 @@ function closeSchedule(){dialogGeneration.value+=1;open.value=false;contentId.va
 async function submitSchedule(){
   const generation=dialogGeneration.value
   if(submittingGeneration.value===generation)return
+  const selectedLocalTime=localTime.value,parsedTime=new Date(selectedLocalTime)
+  const snapshot=Object.freeze({generation,organizationId:org.value,contentId:contentId.value,accountId:accountId.value,localTime:selectedLocalTime,scheduledAt:Number.isNaN(parsedTime.getTime())?null:parsedTime.toISOString(),timezone,key:intentKey.value})
   submittingGeneration.value=generation
   try{
+    if(!snapshot.scheduledAt)throw new ApiError(0,"请选择有效的发布时间。")
     const [freshContents,freshAccounts]=await Promise.all([listApprovedCurrentHeads(),listSocialAccounts()])
-    const content=freshContents.find(item=>item.id===contentId.value)
-    const account=freshAccounts.find(item=>item.id===accountId.value)
+    const content=freshContents.find(item=>item.id===snapshot.contentId)
+    const account=freshAccounts.find(item=>item.id===snapshot.accountId)
     if(!content||!account||!isEligiblePublishingPair(content,account))throw new ApiError(0,"内容或账户已发生变化，请重新选择。")
-    const scheduledAt=new Date(localTime.value)
-    if(Number.isNaN(scheduledAt.getTime()))throw new ApiError(0,"请选择有效的发布时间。")
-    await schedule.mutateAsync({contentId:content.id,accountId:account.id,scheduledAt:scheduledAt.toISOString(),key:intentKey.value})
+    await schedule.mutateAsync({contentId:snapshot.contentId,accountId:snapshot.accountId,scheduledAt:snapshot.scheduledAt,timezone:snapshot.timezone,key:snapshot.key})
     message.value="发布任务已安排。"
-    void refresh()
-    if(generation===dialogGeneration.value&&open.value)closeSchedule()
-  }catch(error){if(generation===dialogGeneration.value)formError.value=err(error)
-  }finally{if(submittingGeneration.value===generation)submittingGeneration.value=null}
+    void refresh(snapshot.organizationId)
+    if(snapshot.generation===dialogGeneration.value&&open.value)closeSchedule()
+  }catch(error){if(snapshot.generation===dialogGeneration.value)formError.value=err(error)
+  }finally{if(submittingGeneration.value===snapshot.generation)submittingGeneration.value=null}
 }
 const currentSubmissionPending=computed(()=>submittingGeneration.value===dialogGeneration.value)
 function actionKey(id:string,kind:"cancel"|"retry"){return `${kind}:${id}`}

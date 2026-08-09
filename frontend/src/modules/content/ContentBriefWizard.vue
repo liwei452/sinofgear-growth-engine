@@ -5,7 +5,7 @@ import { ApiError } from "../../api/client"
 import { useModalFocus } from "../../shared/composables/useModalFocus"
 import type { Product } from "../products/api"
 import {
-  createBrief, createCampaign, type Asset, type Campaign, type ContentBrief, type Platform,
+  createBrief, createCampaign, patchBrief, type Asset, type Campaign, type ContentBrief, type Platform,
 } from "./api"
 
 const props = defineProps<{
@@ -13,23 +13,37 @@ const props = defineProps<{
   products: Product[]
   platforms: Platform[]
   assets: Asset[]
+  brief?: ContentBrief | null
+  more: Record<"campaigns" | "products" | "platforms" | "assets", boolean>
+  pageErrors: Record<"campaigns" | "products" | "platforms" | "assets", string>
 }>()
-const emit = defineEmits<{ close: []; saved: [brief: ContentBrief] }>()
+const emit = defineEmits<{
+  close: []
+  saved: [brief: ContentBrief]
+  loadMore: [kind: "campaigns" | "products" | "platforms" | "assets"]
+}>()
 
 const step = ref(1)
 const busy = ref(false)
 const alert = ref("")
 const fieldErrors = reactive<Record<string, string>>({})
 const quickCampaign = ref(false)
-const campaignId = ref(props.campaigns[0]?.id ?? "")
+const campaignId = ref(props.brief?.campaign_id ?? props.campaigns[0]?.id ?? "")
 const newCampaign = reactive({ name: "", description: "" })
-const productIds = ref<string[]>([])
-const platformIds = ref<string[]>([])
-const assetIds = ref<string[]>([])
+const productIds = ref<string[]>([...(props.brief?.product_ids ?? [])])
+const platformIds = ref<string[]>([...(props.brief?.platform_ids ?? [])])
+const assetIds = ref<string[]>([...(props.brief?.asset_ids ?? [])])
 const form = reactive({
-  target_country: "", customer_type: "", content_objective: "", cta: "",
-  landing_page_url: "", language: "", selling_points: "", advantages: "",
-  keywords: "", prohibited_claims: "",
+  target_country: props.brief?.target_country ?? "",
+  customer_type: props.brief?.customer_type ?? "",
+  content_objective: props.brief?.content_objective ?? "",
+  cta: props.brief?.cta ?? "",
+  landing_page_url: props.brief?.landing_page_url ?? "",
+  language: props.brief?.language ?? "",
+  selling_points: props.brief?.selling_points.join(", ") ?? "",
+  advantages: props.brief?.advantages.join(", ") ?? "",
+  keywords: props.brief?.keywords.join(", ") ?? "",
+  prohibited_claims: props.brief?.prohibited_claims.join(", ") ?? "",
 })
 const backdrop = ref<HTMLElement | null>(null)
 const dialog = ref<HTMLElement | null>(null)
@@ -60,7 +74,9 @@ function list(value: string): string[] {
 async function next(): Promise<void> {
   clearErrors()
   if (step.value === 1) {
-    if (quickCampaign.value) {
+    if (props.brief) {
+      campaignId.value = props.brief.campaign_id
+    } else if (quickCampaign.value) {
       if (!newCampaign.name.trim()) {
         fieldErrors.campaign_name = "请填写活动名称。"
         alert.value = "请先完成活动信息。"
@@ -100,6 +116,9 @@ async function next(): Promise<void> {
         if (!(["http:", "https:"] as string[]).includes(url.protocol)) throw new Error()
       } catch { fieldErrors.landing_page_url = "请输入 http 或 https 开头的网址。" }
     }
+    if (!list(form.selling_points).length) fieldErrors.selling_points = "请至少填写一个卖点。"
+    if (!list(form.advantages).length) fieldErrors.advantages = "请至少填写一个优势。"
+    if (!list(form.keywords).length) fieldErrors.keywords = "请至少填写一个关键词。"
     if (Object.keys(fieldErrors).length) {
       alert.value = "请检查需求信息中的必填项。"
       await focusFirstError()
@@ -113,16 +132,18 @@ async function submit(): Promise<void> {
   busy.value = true
   alert.value = ""
   try {
-    const brief = await createBrief({
-      campaign_id: campaignId.value,
+    const input = {
       target_country: form.target_country.trim(), customer_type: form.customer_type.trim(),
       content_objective: form.content_objective.trim(), cta: form.cta.trim(),
       landing_page_url: form.landing_page_url.trim(), language: form.language.trim().toLowerCase(),
       prohibited_claims: list(form.prohibited_claims), selling_points: list(form.selling_points),
       advantages: list(form.advantages), keywords: list(form.keywords),
       product_ids: productIds.value, asset_ids: assetIds.value, platform_ids: platformIds.value,
-      concept_links: [],
-    })
+      concept_links: props.brief?.concept_links ?? [],
+    }
+    const brief = props.brief
+      ? await patchBrief(props.brief.id, input)
+      : await createBrief({ campaign_id: campaignId.value, ...input })
     emit("saved", brief)
   } catch (error) {
     alert.value = error instanceof ApiError ? error.userMessage : "需求草稿没有创建成功，请重试。"
@@ -135,28 +156,31 @@ async function submit(): Promise<void> {
     <div ref="backdrop" class="dialog-backdrop" @click.self="emit('close')">
       <section ref="dialog" class="wizard-dialog" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
         <header>
-          <div><p class="eyebrow">第 {{ step }} 步，共 4 步</p><h2 id="wizard-title" ref="title" tabindex="-1">创建内容任务</h2></div>
+          <div><p class="eyebrow">第 {{ step }} 步，共 4 步</p><h2 id="wizard-title" ref="title" tabindex="-1">{{ brief ? '编辑需求草稿' : '创建内容任务' }}</h2></div>
           <button type="button" aria-label="关闭" @click="emit('close')">×</button>
         </header>
         <p v-if="alert" role="alert" class="form-alert">{{ alert }}</p>
 
         <section v-if="step === 1" aria-labelledby="campaign-step">
           <h3 id="campaign-step">准备活动</h3>
-          <label><input v-model="quickCampaign" type="checkbox" aria-label="快速新建活动"> 快速新建活动</label>
-          <template v-if="quickCampaign">
+          <p v-if="brief">活动保持不变：{{ campaigns.find(item => item.id === campaignId)?.name || campaignId }}</p>
+          <label v-else><input v-model="quickCampaign" type="checkbox" aria-label="快速新建活动"> 快速新建活动</label>
+          <template v-if="!brief && quickCampaign">
             <label>活动名称（必填）<input v-model="newCampaign.name" aria-label="活动名称（必填）" data-field="campaign_name"></label>
             <label>活动说明<textarea v-model="newCampaign.description" aria-label="活动说明" rows="3" /></label>
           </template>
-          <label v-else>已有活动
+          <label v-else-if="!brief">已有活动
             <select v-model="campaignId" data-field="campaign"><option value="">请选择</option><option v-for="item in campaigns" :key="item.id" :value="item.id">{{ item.name }}</option></select>
+            <button v-if="more.campaigns" type="button" @click="emit('loadMore', 'campaigns')">加载更多活动</button>
+            <span v-if="pageErrors.campaigns" role="alert">{{ pageErrors.campaigns }} <button type="button" @click="emit('loadMore', 'campaigns')">重试</button></span>
           </label>
         </section>
 
         <section v-else-if="step === 2" aria-labelledby="selection-step">
           <h3 id="selection-step">选择产品和平台</h3>
-          <fieldset data-field="products"><legend>产品（至少一个）</legend><label v-for="item in products" :key="item.id"><input v-model="productIds" type="checkbox" :value="item.id" :aria-label="item.name_zh || item.name_en"> {{ item.name_zh || item.name_en }}</label></fieldset>
-          <fieldset data-field="platforms"><legend>平台（至少一个）</legend><label v-for="item in platforms" :key="item.id"><input v-model="platformIds" type="checkbox" :value="item.id" :aria-label="item.name"> {{ item.name }} <small>{{ item.capabilities.join('、') || '基础内容' }}</small></label></fieldset>
-          <fieldset v-if="assets.length"><legend>可选素材</legend><label v-for="item in assets" :key="item.id"><input v-model="assetIds" type="checkbox" :value="item.id"> {{ item.original_filename }}</label></fieldset>
+          <fieldset data-field="products"><legend>产品（至少一个）</legend><label v-for="item in products" :key="item.id"><input v-model="productIds" type="checkbox" :value="item.id" :aria-label="item.name_zh || item.name_en"> {{ item.name_zh || item.name_en }}</label><button v-if="more.products" type="button" @click="emit('loadMore', 'products')">加载更多产品</button><span v-if="pageErrors.products" role="alert">{{ pageErrors.products }} <button type="button" @click="emit('loadMore', 'products')">重试</button></span></fieldset>
+          <fieldset data-field="platforms"><legend>平台（至少一个）</legend><label v-for="item in platforms" :key="item.id"><input v-model="platformIds" type="checkbox" :value="item.id" :aria-label="item.name"> {{ item.name }} <small>{{ item.capabilities.join('、') || '基础内容' }}</small></label><button v-if="more.platforms" type="button" @click="emit('loadMore', 'platforms')">加载更多平台</button><span v-if="pageErrors.platforms" role="alert">{{ pageErrors.platforms }} <button type="button" @click="emit('loadMore', 'platforms')">重试</button></span></fieldset>
+          <fieldset v-if="assets.length || more.assets"><legend>可选素材</legend><label v-for="item in assets" :key="item.id"><input v-model="assetIds" type="checkbox" :value="item.id"> {{ item.original_filename }}</label><button v-if="more.assets" type="button" @click="emit('loadMore', 'assets')">加载更多素材</button><span v-if="pageErrors.assets" role="alert">{{ pageErrors.assets }} <button type="button" @click="emit('loadMore', 'assets')">重试</button></span></fieldset>
         </section>
 
         <section v-else-if="step === 3" aria-labelledby="details-step">
@@ -168,9 +192,9 @@ async function submit(): Promise<void> {
             <label>行动号召（必填）<input v-model="form.cta" aria-label="行动号召（必填）" data-field="cta"></label>
             <label>落地页（必填）<input v-model="form.landing_page_url" aria-label="落地页（必填）" data-field="landing_page_url"></label>
             <label>语言（必填）<input v-model="form.language" aria-label="语言（必填）" data-field="language"></label>
-            <label>卖点<textarea v-model="form.selling_points" aria-label="卖点" rows="2" /></label>
-            <label>优势<textarea v-model="form.advantages" aria-label="优势" rows="2" /></label>
-            <label>关键词<textarea v-model="form.keywords" aria-label="关键词" rows="2" /></label>
+            <label>卖点（至少一个）<textarea v-model="form.selling_points" aria-label="卖点" data-field="selling_points" rows="2" /></label>
+            <label>优势（至少一个）<textarea v-model="form.advantages" aria-label="优势" data-field="advantages" rows="2" /></label>
+            <label>关键词（至少一个）<textarea v-model="form.keywords" aria-label="关键词" data-field="keywords" rows="2" /></label>
             <label>禁用说法<textarea v-model="form.prohibited_claims" aria-label="禁用说法" rows="2" /></label>
           </div>
         </section>
@@ -184,7 +208,7 @@ async function submit(): Promise<void> {
         <footer>
           <button v-if="step > 1" type="button" :disabled="busy" @click="step -= 1">上一步</button>
           <button v-if="step < 4" class="primary-action" type="button" :disabled="busy" @click="next">{{ busy ? "正在处理…" : "下一步" }}</button>
-          <button v-else class="primary-action" type="button" :disabled="busy" @click="submit">{{ busy ? "正在创建…" : "创建需求草稿" }}</button>
+          <button v-else class="primary-action" type="button" :disabled="busy" @click="submit">{{ busy ? "正在保存…" : brief ? "保存需求草稿" : "创建需求草稿" }}</button>
         </footer>
       </section>
     </div>

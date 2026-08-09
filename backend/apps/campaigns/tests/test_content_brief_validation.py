@@ -49,7 +49,10 @@ def test_ready_requires_complete_fields_product_and_platform(
     with pytest.raises(ValidationError) as captured:
         mark_content_brief_ready(brief.id, reviewer=campaign_user)
 
-    assert {"target_country", "products", "target_platforms"} <= set(
+    assert {
+        "target_country", "selling_points", "advantages", "keywords",
+        "products", "target_platforms",
+    } <= set(
         captured.value.message_dict
     )
 

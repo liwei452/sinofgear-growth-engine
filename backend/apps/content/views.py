@@ -38,6 +38,15 @@ class ContentPagination(CursorPagination):
     ordering = ("-created_at", "-id")
 
 
+def _with_current_head(queryset, model):
+    successors = model.objects.filter(
+        organization_id=OuterRef("organization_id"),
+        lineage_id=OuterRef("lineage_id"),
+        previous_version_id=OuterRef("pk"),
+    )
+    return queryset.annotate(_is_current_head=~Exists(successors))
+
+
 def _object(model, organization, pk):
     try:
         queryset = model.objects.select_related(
@@ -58,7 +67,9 @@ def _object(model, organization, pk):
                     )
                 )
             )
-        content = queryset.get(pk=pk, organization=organization)
+        content = _with_current_head(queryset, model).get(
+            pk=pk, organization=organization
+        )
         if not content_is_consistent(content):
             raise Http404
         return content
@@ -82,6 +93,7 @@ class ContentListView(APIView):
     @extend_schema(parameters=[OpenApiParameter("status", OpenApiTypes.STR)])
     def get(self, request):
         queryset = self.model.objects.filter(organization=request.organization)
+        queryset = _with_current_head(queryset, self.model)
         if self.model is MasterContent:
             queryset = queryset.select_related(
                 "brief", "generation_job", "ai_run", "previous_version"

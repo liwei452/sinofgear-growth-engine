@@ -1,3 +1,5 @@
+import json
+from copy import deepcopy
 from datetime import timedelta
 
 import pytest
@@ -79,6 +81,76 @@ def test_ai_run_detail_is_organization_scoped_and_recursively_scrubbed(ai_api):
     for secret in ("bearer secret", "api_key", "password", "client_secret", "secret template"):
         assert secret not in serialized
     assert client.get(f"/api/v1/ai-runs/{foreign.id}").status_code == 404
+
+
+@pytest.mark.django_db
+def test_ai_run_detail_is_allowlisted_value_redacted_bounded_and_non_mutating(ai_api):
+    own, _other, _user, client = ai_api
+    run = make_run(own, suffix="bounded")
+    stored = {
+        "input_snapshot": {
+            "brief_id": "brief-1",
+            "target_country": "Germany",
+            "keywords": ["precision", "Authorization Bearer TOP-SECRET"],
+            "products": [{
+                "name_en": "Gear",
+                "detail": "api_key=KEY-SECRET",
+                "deep": {"one": {"two": {"three": {"four": "password=PASS-SECRET"}}}},
+            }],
+            "unknown_private_blob": "must-not-be-public",
+            "oversized": "x" * 20_000,
+        },
+        "output_json": {
+            "title": "Safe title token=OUTPUT-SECRET",
+            "body": "b" * 20_000,
+            "cta": "Contact us",
+            "concept_codes": [f"CODE-{index}" for index in range(100)],
+            "internal": {"cookie": "COOKIE-SECRET"},
+        },
+        "provider_metadata": {
+            "provider_code": "fake",
+            "request_id": "cookie=REQUEST-SECRET",
+            "raw_response": "must-not-be-public",
+        },
+        "error": {
+            "code": "provider_error",
+            "message": "Authorization: Bearer ERROR-SECRET",
+            "detail": "password=ERROR-PASSWORD",
+        },
+        "human_correction": {
+            "title": "Edited",
+            "body": "token=HUMAN-SECRET",
+            "cta": "Review",
+            "concept_codes": ["SAFE"] * 50,
+            "notes": "must-not-be-public",
+        },
+    }
+    original = deepcopy(stored)
+    with ai_audit_writes():
+        AIRun.objects.filter(pk=run.pk).update(**stored)
+
+    response = client.get(f"/api/v1/ai-runs/{run.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    serialized = json.dumps(data, ensure_ascii=False).casefold()
+    for forbidden in (
+        "top-secret", "key-secret", "pass-secret", "output-secret",
+        "cookie-secret", "request-secret", "error-secret", "error-password",
+        "human-secret", "must-not-be-public", "unknown_private_blob", "raw_response",
+    ):
+        assert forbidden not in serialized
+    assert data["error"] == {
+        "code": "provider_error", "message": "AI provider generation failed.",
+    }
+    assert data["provider_metadata"] == {"provider_code": "fake"}
+    assert set(data["output_json"]) <= {"title", "body", "cta", "concept_codes", "platform_code", "_truncated"}
+    assert set(data["human_correction"]) <= {"title", "body", "cta", "concept_codes", "platform_code", "_truncated"}
+    assert "[TRUNCATED]" in serialized or '"_truncated": true' in serialized
+    assert len(response.content) <= 32_768
+    run.refresh_from_db()
+    for field, value in original.items():
+        assert getattr(run, field) == value
 
 
 @pytest.mark.django_db

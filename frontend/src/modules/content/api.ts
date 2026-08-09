@@ -38,13 +38,13 @@ export type MasterContent = {
   id: string; brief_id: string; brief_version: number; generation_job_id: string
   ai_run_id: string; lineage_id: string; previous_version_id: string | null; version: number
   payload: MasterPayload; provenance: Record<string, unknown>; status: ContentStatus
-  created_by_id: number | null; created_at: string; updated_at: string
+  is_current_head: boolean; created_by_id: number | null; created_at: string; updated_at: string
 }
 export type PlatformContent = {
   id: string; master_content_id: string; master_version: number; platform_id: string
   lineage_id: string; previous_version_id: string | null; version: number
   payload: PlatformPayload; provenance: Record<string, unknown>; status: ContentStatus
-  created_by_id: number | null; created_at: string; updated_at: string
+  is_current_head: boolean; created_by_id: number | null; created_at: string; updated_at: string
 }
 export type AIRun = {
   id: string; job_id: string; job_attempt: number; status: string
@@ -124,6 +124,10 @@ export const reviseBrief = async (id: string): Promise<ContentBrief> =>
 
 export const listPlatforms = async (): Promise<Platform[]> =>
   (required(await apiRequest<{ results: Platform[] }>("/api/v1/platforms"))).results
+export const listPlatformPage = async (): Promise<CursorPage<Platform>> => {
+  const page = required(await apiRequest<CursorPage<Platform>>("/api/v1/platforms"))
+  return { next: page.next ?? null, previous: page.previous ?? null, results: page.results }
+}
 export const listAssets = async (): Promise<CursorPage<Asset>> =>
   required(await apiRequest<CursorPage<Asset>>("/api/v1/assets"))
 

@@ -15,21 +15,46 @@ class StrictMixin:
 
 
 class MasterContentSerializer(serializers.ModelSerializer):
+    is_current_head = serializers.SerializerMethodField()
+
+    def get_is_current_head(self, content):
+        annotated = getattr(content, "_is_current_head", None)
+        if annotated is not None:
+            return annotated
+        return not MasterContent.objects.filter(
+            organization_id=content.organization_id,
+            lineage_id=content.lineage_id,
+            previous_version_id=content.id,
+        ).exists()
+
     class Meta:
         model = MasterContent
         fields = [
             "id", "brief_id", "brief_version", "generation_job_id", "ai_run_id",
             "lineage_id", "previous_version_id", "version", "payload", "provenance",
-            "status", "created_by_id", "created_at", "updated_at",
+            "status", "is_current_head", "created_by_id", "created_at", "updated_at",
         ]
 
 
 class PlatformContentSerializer(serializers.ModelSerializer):
+    is_current_head = serializers.SerializerMethodField()
+
+    def get_is_current_head(self, content):
+        annotated = getattr(content, "_is_current_head", None)
+        if annotated is not None:
+            return annotated
+        return not PlatformContent.objects.filter(
+            organization_id=content.organization_id,
+            lineage_id=content.lineage_id,
+            previous_version_id=content.id,
+        ).exists()
+
     class Meta:
         model = PlatformContent
         fields = [
             "id", "master_content_id", "master_version", "platform_id", "lineage_id",
             "previous_version_id", "version", "payload", "provenance", "status",
+            "is_current_head",
             "created_by_id", "created_at", "updated_at",
         ]
 

@@ -8,9 +8,10 @@ import { listProducts, productQueryKeys } from "../products/api"
 import ContentBriefWizard from "./ContentBriefWizard.vue"
 import {
   cancelJob, contentQueryKeys, generateMaster, getJob, listAssets, listBriefs,
-  listCampaigns, listJobs, listMasterContents, listPlatforms, markBriefReady,
-  patchBrief, retryJob, reviseBrief, type ContentBrief, type Job,
+  listCampaigns, listJobs, listMasterContents, listPlatformPage, markBriefReady,
+  retryJob, reviseBrief, type ContentBrief, type Job,
 } from "./api"
+import { useCursorCollection } from "./useCursorCollection"
 
 const queryClient = useQueryClient()
 const currentUserQuery = useQuery(currentUserQueryOptions())
@@ -24,22 +25,29 @@ const actionError = ref("")
 const actionId = ref("")
 const liveJobs = ref<Job[]>([])
 const editingBrief = ref<ContentBrief | null>(null)
-const editForm = ref({ target_country: "", customer_type: "", content_objective: "", cta: "", landing_page_url: "", language: "" })
 const timers = new Set<ReturnType<typeof setTimeout>>()
 const pollingJobs = new Set<string>()
 const jobTimers = new Map<string, ReturnType<typeof setTimeout>>()
+let disposed = false
 
-const campaignsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.campaigns(organizationId.value)), queryFn: listCampaigns, enabled })
-const briefsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.briefs(organizationId.value)), queryFn: () => listBriefs(), enabled })
-const productsQuery = useQuery({ queryKey: computed(() => productQueryKeys.list(organizationId.value, {})), queryFn: () => listProducts(), enabled })
-const platformsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.platforms(organizationId.value)), queryFn: listPlatforms, enabled })
+const campaignsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.campaigns(organizationId.value)), queryFn: listCampaigns, enabled: computed(() => enabled.value && has("campaigns.read")) })
+const briefsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.briefs(organizationId.value)), queryFn: () => listBriefs(), enabled: computed(() => enabled.value && has("campaigns.read")) })
+const productsQuery = useQuery({ queryKey: computed(() => productQueryKeys.list(organizationId.value, {})), queryFn: () => listProducts(), enabled: computed(() => enabled.value && has("products.read")) })
+const platformsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.platforms(organizationId.value)), queryFn: listPlatformPage, enabled })
 const assetsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.assets(organizationId.value)), queryFn: listAssets, enabled: computed(() => enabled.value && has("assets.read")) })
 const jobsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.jobs(organizationId.value)), queryFn: () => listJobs(), enabled: computed(() => enabled.value && has("jobs.read")) })
 const masterQuery = useQuery({ queryKey: computed(() => contentQueryKeys.masterContents(organizationId.value, {})), queryFn: () => listMasterContents(), enabled: computed(() => enabled.value && has("content.read")) })
 
-const briefs = computed(() => briefsQuery.data.value?.results ?? [])
+const campaigns = useCursorCollection(campaignsQuery.data, "/api/v1/campaigns", organizationId, (item) => item.id)
+const briefPages = useCursorCollection(briefsQuery.data, "/api/v1/content-briefs", organizationId, (item) => item.id)
+const productPages = useCursorCollection(productsQuery.data, "/api/v1/products", organizationId, (item) => item.id)
+const platformPages = useCursorCollection(platformsQuery.data, "/api/v1/platforms", organizationId, (item) => item.id)
+const assetPages = useCursorCollection(assetsQuery.data, "/api/v1/assets", organizationId, (item) => item.id)
+const jobPages = useCursorCollection(jobsQuery.data, "/api/v1/jobs", organizationId, (item) => item.job_id)
+const masterPages = useCursorCollection(masterQuery.data, "/api/v1/master-contents", organizationId, (item) => item.id)
+const briefs = briefPages.items
 const jobs = computed(() => {
-  const combined = [...(jobsQuery.data.value?.results ?? []), ...liveJobs.value]
+  const combined = [...jobPages.items.value, ...liveJobs.value]
   return [...new Map(combined.map((job) => [job.job_id, job])).values()]
 })
 const activeJobStatuses = new Set(["QUEUED", "RUNNING", "RETRY_QUEUED"])
@@ -51,16 +59,23 @@ function safeError(error: unknown): string {
   return "操作没有完成，请稍后重试。"
 }
 
+function queryError(error: unknown, label: string): string {
+  return error instanceof ApiError ? error.userMessage : `${label}没有加载成功，请重试。`
+}
+
 function upsertJob(job: Job): void {
   liveJobs.value = [job, ...liveJobs.value.filter((item) => item.job_id !== job.job_id)]
 }
 
 async function pollJob(id: string): Promise<void> {
+  if (disposed || !pollingJobs.has(id)) return
   try {
     const job = await getJob(id)
+    if (disposed || !pollingJobs.has(id)) return
     upsertJob(job)
     if (job.status === "SUCCEEDED") {
       await queryClient.invalidateQueries({ queryKey: contentQueryKeys.masterContents(organizationId.value, {}) })
+      if (disposed || !pollingJobs.has(id)) return
       stopPolling(id)
       return
     }
@@ -72,7 +87,11 @@ async function pollJob(id: string): Promise<void> {
     }, 2500)
     timers.add(timer)
     jobTimers.set(id, timer)
-  } catch (error) { stopPolling(id); actionError.value = safeError(error) }
+  } catch (error) {
+    if (disposed || !pollingJobs.has(id)) return
+    stopPolling(id)
+    actionError.value = safeError(error)
+  }
 }
 
 function stopPolling(id: string): void {
@@ -82,9 +101,16 @@ function stopPolling(id: string): void {
 }
 
 function beginPolling(id: string): void {
-  if (pollingJobs.has(id)) return
+  if (disposed || pollingJobs.has(id)) return
   pollingJobs.add(id)
   void pollJob(id)
+}
+
+async function refreshJob(id: string): Promise<void> {
+  const job = await getJob(id)
+  if (disposed) return
+  upsertJob(job)
+  if (activeJobStatuses.has(job.status)) beginPolling(job.job_id)
 }
 
 async function startGeneration(brief: ContentBrief): Promise<void> {
@@ -113,29 +139,14 @@ async function ready(brief: ContentBrief): Promise<void> {
 function openBriefEditor(brief: ContentBrief): void {
   if (brief.status !== "DRAFT" || !has("campaigns.manage")) return
   editingBrief.value = brief
-  editForm.value = {
-    target_country: brief.target_country, customer_type: brief.customer_type,
-    content_objective: brief.content_objective, cta: brief.cta,
-    landing_page_url: brief.landing_page_url, language: brief.language,
-  }
-}
-
-async function saveBrief(): Promise<void> {
-  if (!editingBrief.value || editingBrief.value.status !== "DRAFT" || !has("campaigns.manage")) return
-  try {
-    await patchBrief(editingBrief.value.id, editForm.value)
-    editingBrief.value = null
-    await queryClient.invalidateQueries({ queryKey: contentQueryKeys.briefs(organizationId.value) })
-    notice.value = "需求草稿已更新。"
-  } catch (error) { actionError.value = safeError(error) }
 }
 
 async function createBriefRevision(brief: ContentBrief): Promise<void> {
   if (brief.status !== "READY" || !has("campaigns.manage")) return
   try {
-    await reviseBrief(brief.id)
+    editingBrief.value = await reviseBrief(brief.id)
     await queryClient.invalidateQueries({ queryKey: contentQueryKeys.briefs(organizationId.value) })
-    notice.value = "已从可生成需求创建新的草稿版本。"
+    notice.value = "已从可生成需求创建新的草稿版本，请检查并保存。"
   } catch (error) { actionError.value = safeError(error) }
 }
 
@@ -150,13 +161,15 @@ async function jobAction(job: Job, action: "cancel" | "retry"): Promise<void> {
     else stopPolling(updated.job_id)
   } catch (error) {
     actionError.value = safeError(error)
-    if (error instanceof ApiError && error.status === 409) await pollJob(job.job_id)
+    if (error instanceof ApiError && error.status === 409) await refreshJob(job.job_id)
   }
 }
 
-async function created(): Promise<void> {
+async function saved(): Promise<void> {
+  const wasEditing = Boolean(editingBrief.value)
   wizardOpen.value = false
-  notice.value = "内容需求已创建，等待审核人员确认。"
+  editingBrief.value = null
+  notice.value = wasEditing ? "需求草稿已更新。" : "内容需求已创建，等待审核人员确认。"
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: contentQueryKeys.campaigns(organizationId.value) }),
     queryClient.invalidateQueries({ queryKey: contentQueryKeys.briefs(organizationId.value) }),
@@ -167,22 +180,29 @@ watch(jobs, (items) => {
   for (const job of items) if (activeJobStatuses.has(job.status)) beginPolling(job.job_id)
 }, { immediate: true })
 
-onBeforeUnmount(() => { for (const timer of timers) clearTimeout(timer); timers.clear(); jobTimers.clear(); pollingJobs.clear() })
+onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeout(timer); timers.clear(); jobTimers.clear(); pollingJobs.clear() })
 </script>
 
 <template>
   <main class="page-stack content-factory" aria-labelledby="factory-title">
     <header class="library-header"><div><p class="eyebrow">从需求到可审核内容</p><h1 id="factory-title">AI 内容工厂</h1><p>按“准备需求、提交审核、AI 生成、查看结果”四步完成内容生产。</p></div><button v-if="has('campaigns.manage')" class="primary-action" type="button" @click="wizardOpen = true">创建内容任务</button></header>
     <p v-if="notice" role="status" class="notice">{{ notice }}</p><p v-if="actionError" role="alert" class="form-alert">{{ actionError }}</p>
-    <section class="summary-grid" aria-label="当前工作摘要"><article><strong>{{ campaignsQuery.data.value?.results.length ?? 0 }}</strong><span>活动</span></article><article><strong>{{ briefs.length }}</strong><span>内容需求</span></article><article><strong>{{ jobs.length }}</strong><span>生成任务</span></article><article><strong>{{ masterQuery.data.value?.results.length ?? 0 }}</strong><span>生成结果</span></article></section>
+    <section class="query-errors" aria-label="数据加载问题">
+      <p v-if="campaignsQuery.isError.value" role="alert">{{ queryError(campaignsQuery.error.value, '活动') }} <button type="button" @click="campaignsQuery.refetch()">重新加载活动</button></p>
+      <p v-if="briefsQuery.isError.value" role="alert">{{ queryError(briefsQuery.error.value, '内容需求') }} <button type="button" @click="briefsQuery.refetch()">重新加载内容需求</button></p>
+      <p v-if="productsQuery.isError.value" role="alert">{{ queryError(productsQuery.error.value, '产品') }} <button type="button" @click="productsQuery.refetch()">重新加载产品</button></p>
+      <p v-if="platformsQuery.isError.value" role="alert">{{ queryError(platformsQuery.error.value, '平台') }} <button type="button" @click="platformsQuery.refetch()">重新加载平台</button></p>
+      <p v-if="has('assets.read') && assetsQuery.isError.value" role="alert">{{ queryError(assetsQuery.error.value, '素材') }} <button type="button" @click="assetsQuery.refetch()">重新加载素材</button></p>
+      <p v-if="has('jobs.read') && jobsQuery.isError.value" role="alert">{{ queryError(jobsQuery.error.value, '生成任务') }} <button type="button" @click="jobsQuery.refetch()">重新加载生成任务</button></p>
+      <p v-if="has('content.read') && masterQuery.isError.value" role="alert">{{ queryError(masterQuery.error.value, '生成结果') }} <button type="button" @click="masterQuery.refetch()">重新加载生成结果</button></p>
+    </section>
+    <section class="summary-grid" aria-label="当前工作摘要"><article><strong>{{ campaigns.items.value.length }}</strong><span>活动</span></article><article><strong>{{ briefs.length }}</strong><span>内容需求</span></article><article><strong>{{ jobs.length }}</strong><span>生成任务</span></article><article><strong>{{ masterPages.items.value.length }}</strong><span>生成结果</span><button v-if="masterPages.next.value" type="button" @click="masterPages.loadMore">加载更多生成结果</button><span v-if="masterPages.error.value" role="alert">{{ masterPages.error.value }} <button type="button" @click="masterPages.loadMore">重试</button></span></article></section>
 
-    <section aria-labelledby="briefs-title"><h2 id="briefs-title">内容需求</h2><p v-if="briefsQuery.isPending.value" role="status">正在加载内容需求…</p><div v-else-if="!briefs.length" class="state-panel"><h3>还没有内容需求</h3><p>从“创建内容任务”开始，向导会帮你准备完整信息。</p></div><div v-else class="card-grid"><article v-for="item in briefs" :key="item.id" class="workflow-card"><div class="card-heading"><h3>{{ campaignsQuery.data.value?.results.find(c => c.id === item.campaign_id)?.name || '内容需求' }}</h3><span class="status-chip">{{ item.status === 'READY' ? '可生成' : '需求草稿' }}</span></div><p>{{ item.target_country }} · {{ item.customer_type }} · {{ item.language }}</p><p v-if="item.status === 'DRAFT' && !has('campaigns.review')" class="muted">等待审核人员确认</p><div class="card-actions"><button v-if="item.status === 'DRAFT' && has('campaigns.manage')" type="button" @click="openBriefEditor(item)">编辑需求草稿</button><button v-if="item.status === 'DRAFT' && has('campaigns.review')" type="button" :disabled="actionId === item.id" @click="ready(item)">确认需求可生成</button><button v-if="item.status === 'READY' && has('campaigns.manage')" type="button" @click="createBriefRevision(item)">创建需求修订版</button><button v-if="item.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId)" @click="startGeneration(item)">开始AI生成</button></div></article></div></section>
+    <section aria-labelledby="briefs-title"><h2 id="briefs-title">内容需求</h2><p v-if="briefsQuery.isPending.value" role="status">正在加载内容需求…</p><div v-else-if="!briefs.length" class="state-panel"><h3>还没有内容需求</h3><p>从“创建内容任务”开始，向导会帮你准备完整信息。</p></div><div v-else class="card-grid"><article v-for="item in briefs" :key="item.id" class="workflow-card"><div class="card-heading"><h3>{{ campaigns.items.value.find(c => c.id === item.campaign_id)?.name || '内容需求' }}</h3><span class="status-chip">{{ item.status === 'READY' ? '可生成' : '需求草稿' }}</span></div><p>{{ item.target_country }} · {{ item.customer_type }} · {{ item.language }}</p><p v-if="item.status === 'DRAFT' && !has('campaigns.review')" class="muted">等待审核人员确认</p><div class="card-actions"><button v-if="item.status === 'DRAFT' && has('campaigns.manage')" type="button" @click="openBriefEditor(item)">编辑需求草稿</button><button v-if="item.status === 'DRAFT' && has('campaigns.review')" type="button" :disabled="actionId === item.id" @click="ready(item)">确认需求可生成</button><button v-if="item.status === 'READY' && has('campaigns.manage')" type="button" @click="createBriefRevision(item)">创建需求修订版</button><button v-if="item.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId)" @click="startGeneration(item)">开始AI生成</button></div></article></div><p v-if="briefPages.error.value" role="alert">{{ briefPages.error.value }} <button type="button" @click="briefPages.loadMore">重试</button></p><button v-else-if="briefPages.next.value" type="button" @click="briefPages.loadMore">加载更多内容需求</button></section>
 
-    <div v-if="editingBrief" class="dialog-backdrop"><form class="brief-editor" role="dialog" aria-modal="true" aria-labelledby="brief-editor-title" @submit.prevent="saveBrief"><h2 id="brief-editor-title">编辑需求草稿</h2><label>目标国家<input v-model="editForm.target_country" required></label><label>客户类型<input v-model="editForm.customer_type" required></label><label>内容目标<input v-model="editForm.content_objective" required></label><label>行动号召<input v-model="editForm.cta" required></label><label>落地页<input v-model="editForm.landing_page_url" type="url" required></label><label>语言<input v-model="editForm.language" required></label><div class="card-actions"><button type="button" @click="editingBrief = null">取消</button><button class="primary-action" type="submit">保存需求草稿</button></div></form></div>
+    <section aria-labelledby="jobs-title"><h2 id="jobs-title">生成任务</h2><div v-if="jobs.length" class="card-grid"><article v-for="job in jobs" :key="job.job_id" class="workflow-card"><div class="card-heading"><h3>任务 {{ job.job_id }}</h3><span class="status-chip">{{ job.status }}</span></div><p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p><p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p><p v-else-if="job.status === 'FAILED'" role="alert">{{ job.error?.message || '生成未完成，可以重试。' }}</p><div class="card-actions"><button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">取消任务</button><button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">重新尝试</button></div></article></div><p v-else class="muted">提交生成后，进度会显示在这里。</p><p v-if="jobPages.error.value" role="alert">{{ jobPages.error.value }} <button type="button" @click="jobPages.loadMore">重试</button></p><button v-else-if="jobPages.next.value" type="button" @click="jobPages.loadMore">加载更多生成任务</button></section>
 
-    <section aria-labelledby="jobs-title"><h2 id="jobs-title">生成任务</h2><div v-if="jobs.length" class="card-grid"><article v-for="job in jobs" :key="job.job_id" class="workflow-card"><div class="card-heading"><h3>任务 {{ job.job_id }}</h3><span class="status-chip">{{ job.status }}</span></div><p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p><p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p><p v-else-if="job.status === 'FAILED'" role="alert">{{ job.error?.message || '生成未完成，可以重试。' }}</p><div class="card-actions"><button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">取消任务</button><button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">重新尝试</button></div></article></div><p v-else class="muted">提交生成后，进度会显示在这里。</p></section>
-
-    <ContentBriefWizard v-if="wizardOpen" :campaigns="campaignsQuery.data.value?.results ?? []" :products="productsQuery.data.value?.results ?? []" :platforms="platformsQuery.data.value ?? []" :assets="assetsQuery.data.value?.results ?? []" @close="wizardOpen = false" @saved="created" />
+    <ContentBriefWizard v-if="wizardOpen || editingBrief" :brief="editingBrief" :campaigns="campaigns.items.value" :products="productPages.items.value" :platforms="platformPages.items.value" :assets="assetPages.items.value" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
   </main>
 </template>
 

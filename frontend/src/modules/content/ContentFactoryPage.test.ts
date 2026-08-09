@@ -1,5 +1,5 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
-import { render, screen, waitFor } from "@testing-library/vue"
+import { render, screen, waitFor, within } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
@@ -111,6 +111,55 @@ it("validates product/platform choices and respects the brief reviewer split", a
   expect(screen.getByRole("alert")).toHaveTextContent("请至少选择一个产品和一个平台")
 })
 
+it("loads one safe cursor page and selects products and assets from page two", async () => {
+  const secondProduct = { id: "product-2", name_zh: "第二页齿轮", name_en: "Page Two Gear", status: "ACTIVE" }
+  const secondAsset = { id: "asset-2", asset_type: "IMAGE", original_filename: "page-two.png", mime_type: "image/png", size_bytes: 10, language: "zh", status: "READY", tags: [], created_at: "" }
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/products") return new Response(JSON.stringify({ next: "/api/v1/products?cursor=two", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/products?cursor=two") return new Response(JSON.stringify({ next: null, previous: "/api/v1/products", results: [secondProduct] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/assets") return new Response(JSON.stringify({ next: "/api/v1/assets?cursor=two", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/assets?cursor=two") return new Response(JSON.stringify({ next: null, previous: "/api/v1/assets", results: [secondAsset] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read"])
+  await user.click(await screen.findByRole("button", { name: "创建内容任务" }))
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+
+  await user.click(await screen.findByRole("button", { name: "加载更多产品" }))
+  await user.click(screen.getByRole("button", { name: "加载更多素材" }))
+
+  expect(await screen.findByLabelText("第二页齿轮")).toBeInTheDocument()
+  expect(screen.getByText("page-two.png")).toBeInTheDocument()
+  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/products?cursor=two")).toHaveLength(1)
+  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/assets?cursor=two")).toHaveLength(1)
+  expect(screen.queryByRole("button", { name: "加载更多产品" })).not.toBeInTheDocument()
+})
+
+it("requires selling points, advantages, and keywords before confirmation", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(baseResponse(path)), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
+  const user = userEvent.setup()
+  renderPage(["campaigns.read", "campaigns.manage", "products.read"])
+  await user.click(await screen.findByRole("button", { name: "创建内容任务" }))
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+  await user.click(screen.getByLabelText("精密齿轮"))
+  await user.click(screen.getByLabelText("LinkedIn"))
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+  for (const [label, value] of [
+    ["目标国家（必填）", "德国"], ["客户类型（必填）", "采购"],
+    ["内容目标（必填）", "询盘"], ["行动号召（必填）", "联系"],
+    ["落地页（必填）", "https://example.com"], ["语言（必填）", "de"],
+  ]) await user.type(screen.getByLabelText(label), value)
+
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+
+  expect(screen.getByRole("alert")).toHaveTextContent("请检查需求信息中的必填项")
+  expect(screen.getByLabelText("卖点")).toHaveFocus()
+})
+
 it("starts generation only for READY briefs with content.manage and shows one job card", async () => {
   document.cookie = "csrftoken=csrf-value; path=/"
   const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
@@ -194,6 +243,36 @@ it("guards retry and refreshes a failed job after a conflict", async () => {
   expect(screen.getAllByRole("alert")).toHaveLength(2)
 })
 
+it("shows named product, platform, and job errors and recovers each query", async () => {
+  const attempts = new Map<string, number>()
+  const recoveredJob = { job_id: "job-recovered", type: "CONTENT_GENERATE", status: "SUCCEEDED", progress: 100, attempt: 1, max_attempts: 3, created_at: "", finished_at: "", error: null, result_reference: {} }
+  const fetchMock = vi.fn(async (path: string) => {
+    if (["/api/v1/products", "/api/v1/platforms", "/api/v1/jobs"].includes(path)) {
+      const attempt = (attempts.get(path) ?? 0) + 1
+      attempts.set(path, attempt)
+      if (attempt === 1) return new Response(JSON.stringify({ detail: "temporary" }), { status: 503, headers: { "Content-Type": "application/json" } })
+      if (path === "/api/v1/jobs") return new Response(JSON.stringify({ next: null, previous: null, results: [recoveredJob] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "jobs.read"])
+
+  await user.click(await screen.findByRole("button", { name: "重新加载产品" }))
+  await user.click(screen.getByRole("button", { name: "重新加载平台" }))
+  await user.click(screen.getByRole("button", { name: "重新加载生成任务" }))
+
+  expect(await screen.findByText("任务 job-recovered")).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "创建内容任务" }))
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+  expect(await screen.findByLabelText("精密齿轮")).toBeInTheDocument()
+  expect(screen.getByLabelText("LinkedIn")).toBeInTheDocument()
+  expect(attempts).toEqual(new Map([
+    ["/api/v1/products", 2], ["/api/v1/platforms", 2], ["/api/v1/jobs", 2],
+  ]))
+})
+
 it("cancels polling timers on job cancellation and page unmount", async () => {
   document.cookie = "csrftoken=csrf-value; path=/"
   const activeJob = { job_id: "job-cancel", type: "CONTENT_GENERATE", status: "RUNNING", progress: 25, attempt: 1, max_attempts: 3, created_at: "", finished_at: null, error: null, result_reference: null }
@@ -219,9 +298,32 @@ it("cancels polling timers on job cancellation and page unmount", async () => {
   view.unmount()
 })
 
+it("ignores an in-flight polling response after unmount without scheduling again", async () => {
+  const activeJob = { job_id: "job-deferred", type: "CONTENT_GENERATE", status: "RUNNING", progress: 25, attempt: 1, max_attempts: 3, created_at: "", finished_at: null, error: null, result_reference: null }
+  let resolveDetail!: (response: Response) => void
+  const detail = new Promise<Response>((resolve) => { resolveDetail = resolve })
+  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout")
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/jobs") return new Response(JSON.stringify({ next: null, previous: null, results: [activeJob] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/jobs/job-deferred") return detail
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const view = renderPage(["campaigns.read", "jobs.read"])
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/jobs/job-deferred", expect.anything()))
+
+  view.unmount()
+  resolveDetail(new Response(JSON.stringify(activeJob), { status: 200, headers: { "Content-Type": "application/json" } }))
+  await detail
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  expect(setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 2500)).toHaveLength(0)
+})
+
 it("edits a draft brief and creates a revision only with campaigns.manage", async () => {
   document.cookie = "csrftoken=csrf-value; path=/"
-  const draft = { ...brief(), id: "brief-draft" }
+  const conceptLinks = [{ role: "APPLICATION", concept_id: "concept-1" }]
+  const draft = { ...brief(), id: "brief-draft", concept_links: conceptLinks }
   const readyBrief = { ...brief("READY"), id: "brief-ready" }
   const writes: Array<{ path: string; method: string; body: unknown }> = []
   const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
@@ -238,11 +340,16 @@ it("edits a draft brief and creates a revision only with campaigns.manage", asyn
   })
   vi.stubGlobal("fetch", fetchMock)
   const user = userEvent.setup()
-  renderPage(["campaigns.read", "campaigns.manage"])
+  renderPage(["campaigns.read", "campaigns.manage", "products.read"])
   await user.click(await screen.findByRole("button", { name: /编辑需求草稿/ }))
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+  expect(screen.getByLabelText("精密齿轮")).toBeChecked()
+  expect(screen.getByLabelText("LinkedIn")).toBeChecked()
+  await user.click(screen.getByRole("button", { name: "下一步" }))
   const country = screen.getByLabelText(/目标国家/)
   await user.clear(country)
   await user.type(country, "法国")
+  await user.click(screen.getByRole("button", { name: "下一步" }))
   await user.click(screen.getByRole("button", { name: /保存需求草稿/ }))
   await user.click(await screen.findByRole("button", { name: /创建需求修订版/ }))
 
@@ -250,7 +357,31 @@ it("edits a draft brief and creates a revision only with campaigns.manage", asyn
     { path: "/api/v1/content-briefs/brief-draft", method: "PATCH", body: {
       target_country: "法国", customer_type: draft.customer_type, content_objective: draft.content_objective,
       cta: draft.cta, landing_page_url: draft.landing_page_url, language: draft.language,
+      prohibited_claims: draft.prohibited_claims, selling_points: draft.selling_points,
+      advantages: draft.advantages, keywords: draft.keywords,
+      product_ids: draft.product_ids, asset_ids: draft.asset_ids,
+      platform_ids: draft.platform_ids, concept_links: conceptLinks,
     } },
     { path: "/api/v1/content-briefs/brief-ready/revisions", method: "POST", body: {} },
   ]))
+  expect(screen.getByRole("dialog")).toHaveTextContent("编辑需求草稿")
+})
+
+it("traps focus in the draft editor, closes on Escape, and restores the opener", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(baseResponse(path, [brief()])), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
+  const user = userEvent.setup()
+  renderPage(["campaigns.read", "campaigns.manage"])
+  const opener = await screen.findByRole("button", { name: "编辑需求草稿" })
+  await user.click(opener)
+
+  const dialog = screen.getByRole("dialog")
+  expect(within(dialog).getByRole("heading", { name: "编辑需求草稿" })).toHaveFocus()
+  await user.tab({ shift: true })
+  expect(within(dialog).getByRole("button", { name: "下一步" })).toHaveFocus()
+  await user.keyboard("{Escape}")
+
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  expect(opener).toHaveFocus()
 })

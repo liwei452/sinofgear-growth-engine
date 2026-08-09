@@ -7,8 +7,9 @@ import { currentUserQueryOptions } from "../auth/auth"
 import ContentReviewDialog from "./ContentReviewDialog.vue"
 import {
   contentQueryKeys, listCampaigns, listMasterContents, listPlatformContents,
-  listPlatforms, type ContentFilters, type MasterContent, type PlatformContent,
+  listPlatformPage, type ContentFilters, type MasterContent, type PlatformContent,
 } from "./api"
+import { useCursorCollection } from "./useCursorCollection"
 
 type ReviewItem = MasterContent | PlatformContent
 const queryClient = useQueryClient()
@@ -38,9 +39,20 @@ const platformQuery = useQuery({
   queryFn: () => listPlatformContents(filters.value), enabled: computed(() => enabled.value && tab.value === "platform"),
 })
 const campaignsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.campaigns(organizationId.value)), queryFn: listCampaigns, enabled })
-const platformsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.platforms(organizationId.value)), queryFn: listPlatforms, enabled })
+const platformsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.platforms(organizationId.value)), queryFn: listPlatformPage, enabled })
+const campaignPages = useCursorCollection(campaignsQuery.data, "/api/v1/campaigns", organizationId, (item) => item.id)
+const platformOptions = useCursorCollection(platformsQuery.data, "/api/v1/platforms", organizationId, (item) => item.id)
+const masterPages = useCursorCollection(
+  masterQuery.data, "/api/v1/master-contents",
+  computed(() => `${organizationId.value}:${JSON.stringify(filters.value)}`), (item) => item.id,
+)
+const platformPages = useCursorCollection(
+  platformQuery.data, "/api/v1/platform-contents",
+  computed(() => `${organizationId.value}:${JSON.stringify(filters.value)}`), (item) => item.id,
+)
 const items = computed<ReviewItem[]>(() => tab.value === "master"
-  ? masterQuery.data.value?.results ?? [] : platformQuery.data.value?.results ?? [])
+  ? masterPages.items.value : platformPages.items.value)
+const activePages = computed(() => tab.value === "master" ? masterPages : platformPages)
 const pending = computed(() => tab.value === "master" ? masterQuery.isPending.value : platformQuery.isPending.value)
 const failed = computed(() => tab.value === "master" ? masterQuery.error.value : platformQuery.error.value)
 const statusLabels: Record<string, string> = {
@@ -48,10 +60,6 @@ const statusLabels: Record<string, string> = {
   PUBLISHED: "已发布", ARCHIVED: "已归档",
 }
 
-function isCurrentHead(item: ReviewItem): boolean {
-  return !items.value.some((candidate) => candidate.lineage_id === item.lineage_id
-    && candidate.previous_version_id === item.id)
-}
 function switchTab(next: "master" | "platform"): void {
   tab.value = next
   platform.value = ""
@@ -88,9 +96,10 @@ function safeError(): string {
     <header><p class="eyebrow">集中比较与推进内容</p><h1 id="reviews-title">审核中心</h1><p>查看普通字段，修改内容，并清楚地通过、驳回或归档当前版本。</p></header>
     <p v-if="notice" role="status" class="notice">{{ notice }}</p><p v-if="error" role="alert">{{ error }}</p>
     <div role="tablist" aria-label="内容类型" class="tabs"><button role="tab" type="button" :aria-selected="tab === 'master'" @click="switchTab('master')">主内容</button><button role="tab" type="button" :aria-selected="tab === 'platform'" @click="switchTab('platform')">平台版本</button></div>
-    <section class="filters" aria-label="审核筛选"><label>内容状态<select v-model="status" aria-label="内容状态"><option value="IN_REVIEW">待审核</option><option value="DRAFT">草稿</option><option value="APPROVED">已通过</option><option value="REJECTED">已驳回</option><option value="ARCHIVED">已归档</option><option value="">全部状态</option></select></label><label>活动<select v-model="campaign"><option value="">全部活动</option><option v-for="item in campaignsQuery.data.value?.results ?? []" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><label v-if="tab === 'platform'">平台<select v-model="platform"><option value="">全部平台</option><option v-for="item in platformsQuery.data.value ?? []" :key="item.id" :value="item.id">{{ item.name }}</option></select></label></section>
-    <p v-if="pending" role="status">正在加载审核队列…</p><section v-else-if="failed" class="state-panel"><h2>审核队列没有加载成功</h2><p>{{ safeError() }}</p><button type="button" @click="retry">重新加载</button></section><section v-else-if="!items.length" class="state-panel"><h2>当前没有符合条件的内容</h2><p>可以切换状态或内容类型查看其他项目。</p></section><section v-else class="review-grid"><article v-for="item in items" :key="item.id" class="review-card"><div class="card-heading"><div><p class="eyebrow">第 {{ item.version }} 版</p><h2>{{ item.payload.title }}</h2></div><span class="status-chip">{{ statusLabels[item.status] || item.status }}</span></div><p>{{ item.payload.body.slice(0, 140) }}{{ item.payload.body.length > 140 ? '…' : '' }}</p><p class="muted">来源：{{ tab === 'master' ? `需求 ${(item as MasterContent).brief_id} · 任务 ${(item as MasterContent).generation_job_id}` : `主内容 ${(item as PlatformContent).master_content_id}` }}</p><button type="button" @click="selected = item">查看详情</button></article></section>
-    <ContentReviewDialog v-if="selected" :item="selected" :kind="tab" :permissions="permissions" :current-head="isCurrentHead(selected)" :platforms="platformsQuery.data.value ?? []" @close="selected = null" @updated="updated" @platform-generated="platformGenerated" @conflict="refreshConflict" />
+    <section class="filters" aria-label="审核筛选"><label>内容状态<select v-model="status" aria-label="内容状态"><option value="IN_REVIEW">待审核</option><option value="DRAFT">草稿</option><option value="APPROVED">已通过</option><option value="REJECTED">已驳回</option><option value="ARCHIVED">已归档</option><option value="">全部状态</option></select></label><label>活动<select v-model="campaign"><option value="">全部活动</option><option v-for="item in campaignPages.items.value" :key="item.id" :value="item.id">{{ item.name }}</option></select><button v-if="campaignPages.next.value" type="button" :disabled="campaignPages.loading.value" @click="campaignPages.loadMore">加载更多活动</button><span v-if="campaignPages.error.value" role="alert">{{ campaignPages.error.value }} <button type="button" @click="campaignPages.loadMore">重试</button></span></label><label v-if="tab === 'platform'">平台<select v-model="platform"><option value="">全部平台</option><option v-for="item in platformOptions.items.value" :key="item.id" :value="item.id">{{ item.name }}</option></select><button v-if="platformOptions.next.value" type="button" :disabled="platformOptions.loading.value" @click="platformOptions.loadMore">加载更多平台</button></label></section>
+    <p v-if="pending" role="status">正在加载审核队列…</p><section v-else-if="failed" class="state-panel"><h2>审核队列没有加载成功</h2><p>{{ safeError() }}</p><button type="button" @click="retry">重新加载</button></section><section v-else-if="!items.length && !activePages.next.value" class="state-panel"><h2>当前没有符合条件的内容</h2><p>可以切换状态或内容类型查看其他项目。</p></section><section v-else-if="items.length" class="review-grid"><article v-for="item in items" :key="item.id" class="review-card"><div class="card-heading"><div><p class="eyebrow">第 {{ item.version }} 版</p><h2>{{ item.payload.title }}</h2></div><span class="status-chip">{{ statusLabels[item.status] || item.status }}</span></div><p>{{ item.payload.body.slice(0, 140) }}{{ item.payload.body.length > 140 ? '…' : '' }}</p><p class="muted">来源：{{ tab === 'master' ? `需求 ${(item as MasterContent).brief_id} · 任务 ${(item as MasterContent).generation_job_id}` : `主内容 ${(item as PlatformContent).master_content_id}` }}</p><button type="button" @click="selected = item">查看详情</button></article></section>
+    <p v-if="activePages.error.value" role="alert">{{ activePages.error.value }} <button type="button" @click="activePages.loadMore">重试</button></p><button v-else-if="activePages.next.value" type="button" :disabled="activePages.loading.value" @click="activePages.loadMore">{{ activePages.loading.value ? '正在加载…' : '加载更多待审内容' }}</button>
+    <ContentReviewDialog v-if="selected" :item="selected" :kind="tab" :permissions="permissions" :current-head="selected.is_current_head" :platforms="platformOptions.items.value" @close="selected = null" @updated="updated" @platform-generated="platformGenerated" @conflict="refreshConflict" />
   </main>
 </template>
 

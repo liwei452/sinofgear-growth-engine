@@ -12,17 +12,19 @@ const currentUser = (permissions: string[]): CurrentUser => ({
   membership: { id: "member-1", role: "CUSTOM", status: "ACTIVE", permissions },
 })
 const campaign = { id: "campaign-1", name: "德国获客", description: "", status: "ACTIVE", version: 1, product_ids: [], created_at: "", updated_at: "" }
-const master = (status = "IN_REVIEW") => ({
+const master = (status = "IN_REVIEW", isCurrentHead = true) => ({
   id: "master-1", brief_id: "brief-1", brief_version: 1, generation_job_id: "job-1", ai_run_id: "run-1",
   lineage_id: "lineage-1", previous_version_id: null, version: 1,
   payload: { title: "精密齿轮解决方案", body: "面向德国工业采购的可靠齿轮。", cta: "立即询价", concept_codes: ["HELICAL_GEAR"] },
   provenance: { ai_run_id: "run-1", internal: { token: "never-render" } }, status,
+  is_current_head: isCurrentHead,
   created_by_id: 1, created_at: "2026-08-09T00:00:00Z", updated_at: "2026-08-09T00:00:00Z",
 })
 const platformContent = (status = "DRAFT") => ({
   id: "platform-content-1", master_content_id: "master-1", master_version: 1, platform_id: "platform-1",
   lineage_id: "platform-lineage-1", previous_version_id: null, version: 1,
   payload: { ...master().payload, platform_code: "LINKEDIN" }, provenance: {}, status,
+  is_current_head: true,
   created_by_id: 1, created_at: "2026-08-09T00:00:00Z", updated_at: "2026-08-09T00:00:00Z",
 })
 const brief = {
@@ -189,4 +191,64 @@ it("hides review mutations when permission and status guards do not both pass", 
   expect(screen.queryByRole("button", { name: /^通过$/ })).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: /^驳回$/ })).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: /创建修改版/ })).not.toBeInTheDocument()
+})
+
+it("trusts the server current-head flag when a successor is outside the page", async () => {
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path.endsWith("/approve") && options?.method === "POST") {
+      throw new Error("stale content must not be approved")
+    }
+    return new Response(JSON.stringify(
+      path.startsWith("/api/v1/master-contents") ? page([master("IN_REVIEW", false)]) : common(path),
+    ), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["content.read", "content.review"])
+
+  await user.click(await screen.findByRole("button", { name: /详情/ }))
+
+  expect(screen.queryByRole("button", { name: /^通过$/ })).not.toBeInTheDocument()
+  expect(fetchMock).not.toHaveBeenCalledWith(expect.stringMatching(/\/approve$/), expect.anything())
+})
+
+it("loads and reviews an item from the second safe cursor page", async () => {
+  const second = { ...master(), id: "master-2", payload: { ...master().payload, title: "第二页待审内容" } }
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path.startsWith("/api/v1/master-contents?status=IN_REVIEW&cursor=two")) {
+      return new Response(JSON.stringify(page([second])), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path.startsWith("/api/v1/master-contents")) {
+      return new Response(JSON.stringify({ next: "/api/v1/master-contents?status=IN_REVIEW&cursor=two", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    return new Response(JSON.stringify(common(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["content.read", "content.review"])
+
+  await user.click(await screen.findByRole("button", { name: "加载更多待审内容" }))
+  await user.click(await screen.findByRole("button", { name: "查看详情" }))
+
+  expect(within(screen.getByRole("dialog")).getByRole("heading", { name: "第二页待审内容" })).toBeInTheDocument()
+})
+
+it("resets accumulated cursor pages when review filters change", async () => {
+  const second = { ...master(), id: "master-old-page-2", payload: { ...master().payload, title: "旧筛选第二页" } }
+  const filtered = { ...master("DRAFT"), id: "master-draft", payload: { ...master().payload, title: "草稿筛选结果" } }
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    if (path.includes("status=DRAFT")) return new Response(JSON.stringify(page([filtered])), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path.includes("cursor=two")) return new Response(JSON.stringify(page([second])), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path.startsWith("/api/v1/master-contents")) return new Response(JSON.stringify({ next: "/api/v1/master-contents?status=IN_REVIEW&cursor=two", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    return new Response(JSON.stringify(common(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  }))
+  const user = userEvent.setup()
+  renderPage(["content.read"])
+  await user.click(await screen.findByRole("button", { name: "加载更多待审内容" }))
+  expect(await screen.findByText("旧筛选第二页")).toBeInTheDocument()
+
+  await user.selectOptions(screen.getByLabelText("内容状态"), "DRAFT")
+
+  expect(await screen.findByText("草稿筛选结果")).toBeInTheDocument()
+  expect(screen.queryByText("旧筛选第二页")).not.toBeInTheDocument()
 })

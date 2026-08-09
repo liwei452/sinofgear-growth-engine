@@ -4,10 +4,10 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 
-from apps.content.models import content_writes
+from apps.content.models import MasterContent, content_writes
 from apps.content.services import (
     approve_content, create_generated_master, create_platform_content,
-    create_platform_revision,
+    create_master_revision, create_platform_revision,
 )
 from apps.identity.models import Membership, Organization, Role
 
@@ -110,6 +110,61 @@ def test_invalid_revision_payload_returns_controlled_400(content_provenance):
 
     assert response.status_code == 400
     assert set(response.json()) == {"errors"}
+
+
+def test_master_current_head_is_authoritative_across_filters_and_detail(
+    content_provenance,
+):
+    organization, actor, brief, job, run = content_provenance
+    source = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)
+    revision = create_master_revision(
+        source, actor=actor, payload={**source.payload, "title": "Current head"},
+    )
+    client = _client(organization, Role.Code.READ_ONLY)
+
+    filtered = client.get("/api/v1/master-contents?status=IN_REVIEW&page_size=1")
+
+    assert filtered.status_code == 200
+    assert filtered.json()["results"] == [{
+        **filtered.json()["results"][0], "is_current_head": False,
+    }]
+    assert filtered.json()["results"][0]["id"] == str(source.id)
+    assert client.get(
+        f"/api/v1/master-contents/{source.id}"
+    ).json()["is_current_head"] is False
+    assert client.get(
+        f"/api/v1/master-contents/{revision.id}"
+    ).json()["is_current_head"] is True
+
+
+def test_cross_organization_successor_does_not_change_current_head(
+    content_provenance,
+):
+    organization, actor, brief, job, run = content_provenance
+    source = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)
+    other = Organization.objects.create(name="Corrupt Other", slug="corrupt-other")
+    with content_writes():
+        MasterContent.objects.create(
+            organization=other,
+            brief=brief,
+            brief_version=source.brief_version,
+            generation_job=job,
+            ai_run=run,
+            lineage_id=source.lineage_id,
+            previous_version=source,
+            version=source.version + 1,
+            payload={**source.payload, "title": "Cross-org corruption"},
+            provenance=source.provenance,
+            status=MasterContent.Status.DRAFT,
+            created_by=actor,
+        )
+
+    response = _client(organization, Role.Code.READ_ONLY).get(
+        f"/api/v1/master-contents/{source.id}"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_current_head"] is True
 
 
 def test_platform_list_consistency_query_count_is_page_size_independent(

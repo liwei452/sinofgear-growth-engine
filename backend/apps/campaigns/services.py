@@ -10,10 +10,10 @@ from django.utils import timezone
 from apps.assets.models import AssetProductLink, MaterialAsset
 from apps.catalog.models import Product, ProductConceptLink
 from apps.catalog.services import ProductSnapshot, _snapshot_from_locked_product
+from apps.knowledge.graph import acquire_knowledge_graph_lock
 from apps.knowledge.models import (
     KnowledgeConcept,
     KnowledgeEvidence,
-    KnowledgeGraphLock,
     KnowledgeRelation,
 )
 from apps.knowledge.services import OntologyContextService, OntologySnapshot
@@ -434,7 +434,7 @@ def _lock_through_rows(through_model, source_model, source_ids):
 
 
 def _build_locked_ontology_snapshot(*, organization, concept_ids):
-    KnowledgeGraphLock.objects.select_for_update().get(pk=1)
+    acquire_knowledge_graph_lock()
     service = OntologyContextService(organization)
     discovered = service.build_snapshot(concept_ids=concept_ids, max_depth=2)
     locked_concept_ids = {item.concept_id for item in discovered.concept_versions}
@@ -489,7 +489,7 @@ def build_content_generation_input(brief_id: UUID) -> ContentGenerationInput:
         raise ValidationError("Campaign is not visible to the brief organization.")
     # Knowledge mutations acquire this singleton before concept/relation rows.
     # Match that order before product snapshotting locks concept rows.
-    KnowledgeGraphLock.objects.select_for_update().get(pk=1)
+    acquire_knowledge_graph_lock()
 
     product_links = list(
         brief.product_links.select_for_update(of=("self",)).order_by("product_id", "id")

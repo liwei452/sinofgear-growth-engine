@@ -49,9 +49,18 @@ def _test_fixture_writes() -> Iterator[None]:
 LIFECYCLE_FIELDS = frozenset({"status", "version", "suggested_by_ai_run_id"})
 
 
+def _acquire_snapshot_write_lock(model: type[models.Model]) -> None:
+    if not getattr(model, "affects_ontology_snapshot", False):
+        return
+    from .graph import acquire_knowledge_graph_lock
+
+    acquire_knowledge_graph_lock()
+
+
 class KnowledgeQuerySet(models.QuerySet):
     @transaction.atomic
     def update(self, **kwargs):
+        _acquire_snapshot_write_lock(self.model)
         mode = _write_mode.get()
         if mode == _WriteMode.SYSTEM_SEED:
             if self.filter(organization_id__isnull=False).exists():
@@ -85,7 +94,9 @@ class KnowledgeQuerySet(models.QuerySet):
         with _write_mode_context(_WriteMode.VALIDATED_BULK):
             return super().update(**kwargs)
 
+    @transaction.atomic
     def bulk_create(self, objs, **kwargs):
+        _acquire_snapshot_write_lock(self.model)
         objects = list(objs)
         mode = _write_mode.get()
         for instance in objects:
@@ -98,6 +109,7 @@ class KnowledgeQuerySet(models.QuerySet):
 
     @transaction.atomic
     def bulk_update(self, objs, fields, **kwargs):
+        _acquire_snapshot_write_lock(self.model)
         objects = list(objs)
         mode = _write_mode.get()
         field_names = {field.name if hasattr(field, "name") else str(field) for field in fields}
@@ -114,6 +126,7 @@ class KnowledgeQuerySet(models.QuerySet):
 
     @transaction.atomic
     def delete(self):
+        _acquire_snapshot_write_lock(self.model)
         objects = list(self)
         for instance in objects:
             instance._ensure_knowledge_not_referenced()
@@ -124,8 +137,62 @@ class KnowledgeManager(models.Manager.from_queryset(KnowledgeQuerySet)):
     pass
 
 
+class GraphAssociationQuerySet(models.QuerySet):
+    @staticmethod
+    def _acquire_lock() -> None:
+        from .graph import acquire_knowledge_graph_lock
+
+        acquire_knowledge_graph_lock()
+
+    @transaction.atomic
+    def update(self, **kwargs):
+        self._acquire_lock()
+        return super().update(**kwargs)
+
+    @transaction.atomic
+    def bulk_create(self, objs, **kwargs):
+        self._acquire_lock()
+        return super().bulk_create(objs, **kwargs)
+
+    @transaction.atomic
+    def bulk_update(self, objs, fields, **kwargs):
+        self._acquire_lock()
+        return super().bulk_update(objs, fields, **kwargs)
+
+    @transaction.atomic
+    def delete(self):
+        self._acquire_lock()
+        return super().delete()
+
+
+class GraphAssociationManager(models.Manager.from_queryset(GraphAssociationQuerySet)):
+    pass
+
+
+class GraphAssociationModel(models.Model):
+    objects = GraphAssociationManager()
+
+    class Meta:
+        abstract = True
+
+    @transaction.atomic
+    def save(self, *args, **kwargs) -> None:
+        from .graph import acquire_knowledge_graph_lock
+
+        acquire_knowledge_graph_lock()
+        super().save(*args, **kwargs)
+
+    @transaction.atomic
+    def delete(self, *args, **kwargs):
+        from .graph import acquire_knowledge_graph_lock
+
+        acquire_knowledge_graph_lock()
+        return super().delete(*args, **kwargs)
+
+
 class GuardedKnowledgeModel(models.Model):
     objects = KnowledgeManager()
+    affects_ontology_snapshot = False
 
     immutable_fields: frozenset[str] = frozenset()
     identity_fields: frozenset[str] = frozenset({"organization_id"})
@@ -223,7 +290,9 @@ class GuardedKnowledgeModel(models.Model):
         ):
             raise ValidationError("Knowledge lifecycle changes must use the audited review service.")
 
+    @transaction.atomic
     def save(self, *args, **kwargs) -> None:
+        _acquire_snapshot_write_lock(type(self))
         creating = self._state.adding
         self._prepare_knowledge_write()
         update_fields = kwargs.get("update_fields")
@@ -244,7 +313,9 @@ class GuardedKnowledgeModel(models.Model):
                 references,
             )
 
+    @transaction.atomic
     def delete(self, *args, **kwargs):
+        _acquire_snapshot_write_lock(type(self))
         self._ensure_knowledge_not_referenced()
         return super().delete(*args, **kwargs)
 

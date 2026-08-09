@@ -109,6 +109,9 @@ class KnowledgeReviewService:
     ):
         if action == ReviewAction.REJECT and not comment.strip():
             raise ValueError("Reject comment must not be empty.")
+        from .graph import acquire_knowledge_graph_lock
+
+        acquire_knowledge_graph_lock()
         model = type(instance)
         locked = model.objects.select_for_update().get(pk=instance.pk)
         self._ensure_visible(locked)

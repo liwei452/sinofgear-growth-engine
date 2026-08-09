@@ -5,7 +5,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 
-from .guards import GuardedKnowledgeModel
+from .guards import GraphAssociationModel, GuardedKnowledgeModel
 from .normalization import normalize_alias
 
 
@@ -29,6 +29,7 @@ class KnowledgeGraphLock(models.Model):
 
 
 class KnowledgeConcept(GuardedKnowledgeModel):
+    affects_ontology_snapshot = True
     class Scope(models.TextChoices):
         SYSTEM = "SYSTEM", "System"
         ORGANIZATION = "ORGANIZATION", "Organization"
@@ -66,11 +67,19 @@ class KnowledgeConcept(GuardedKnowledgeModel):
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="reviewed_knowledge_concepts"
     )
     reviewed_at = models.DateTimeField(null=True, blank=True)
-    evidence = models.ManyToManyField("KnowledgeEvidence", blank=True, related_name="concepts")
+    evidence = models.ManyToManyField(
+        "KnowledgeEvidence",
+        blank=True,
+        related_name="concepts",
+        through="KnowledgeConceptEvidence",
+        through_fields=("knowledgeconcept", "knowledgeevidence"),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        base_manager_name = "objects"
+        default_manager_name = "objects"
         ordering = ["code", "id"]
         constraints = [
             models.CheckConstraint(
@@ -114,6 +123,7 @@ class KnowledgeConcept(GuardedKnowledgeModel):
 
 
 class KnowledgeEvidence(GuardedKnowledgeModel):
+    affects_ontology_snapshot = True
     class EvidenceType(models.TextChoices):
         PRODUCT_DOCUMENT = "PRODUCT_DOCUMENT", "Product document"
         PUBLIC_SOURCE = "PUBLIC_SOURCE", "Public source"
@@ -146,6 +156,8 @@ class KnowledgeEvidence(GuardedKnowledgeModel):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        base_manager_name = "objects"
+        default_manager_name = "objects"
         ordering = ["created_at", "id"]
 
     immutable_fields = frozenset(
@@ -257,6 +269,7 @@ class KnowledgeAlias(GuardedKnowledgeModel):
 
 
 class KnowledgeRelation(GuardedKnowledgeModel):
+    affects_ontology_snapshot = True
     class Predicate(models.TextChoices):
         IS_A = "IS_A", "Is a"
         APPLIES_TO = "APPLIES_TO", "Applies to"
@@ -293,11 +306,19 @@ class KnowledgeRelation(GuardedKnowledgeModel):
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="reviewed_knowledge_relations"
     )
     reviewed_at = models.DateTimeField(null=True, blank=True)
-    evidence = models.ManyToManyField(KnowledgeEvidence, blank=True, related_name="relations")
+    evidence = models.ManyToManyField(
+        KnowledgeEvidence,
+        blank=True,
+        related_name="relations",
+        through="KnowledgeRelationEvidence",
+        through_fields=("knowledgerelation", "knowledgeevidence"),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        base_manager_name = "objects"
+        default_manager_name = "objects"
         ordering = ["subject_concept__code", "predicate", "object_concept__code", "id"]
         constraints = [
             models.UniqueConstraint(
@@ -337,9 +358,8 @@ class KnowledgeRelation(GuardedKnowledgeModel):
             object=self.object_concept,
         )
         if self.predicate == self.Predicate.IS_A:
-            from .graph import acquire_is_a_graph_lock, reject_is_a_cycle
+            from .graph import reject_is_a_cycle
 
-            acquire_is_a_graph_lock()
             reject_is_a_cycle(
                 subject=self.subject_concept,
                 object=self.object_concept,
@@ -365,3 +385,25 @@ class KnowledgeRelation(GuardedKnowledgeModel):
 
     def _knowledge_reference_objects(self) -> list[object]:
         return list(self.evidence.all())
+
+
+class KnowledgeConceptEvidence(GraphAssociationModel):
+    knowledgeconcept = models.ForeignKey(KnowledgeConcept, on_delete=models.CASCADE)
+    knowledgeevidence = models.ForeignKey(KnowledgeEvidence, on_delete=models.CASCADE)
+
+    class Meta:
+        db_table = "knowledge_knowledgeconcept_evidence"
+        base_manager_name = "objects"
+        default_manager_name = "objects"
+        unique_together = (("knowledgeconcept", "knowledgeevidence"),)
+
+
+class KnowledgeRelationEvidence(GraphAssociationModel):
+    knowledgerelation = models.ForeignKey(KnowledgeRelation, on_delete=models.CASCADE)
+    knowledgeevidence = models.ForeignKey(KnowledgeEvidence, on_delete=models.CASCADE)
+
+    class Meta:
+        db_table = "knowledge_knowledgerelation_evidence"
+        base_manager_name = "objects"
+        default_manager_name = "objects"
+        unique_together = (("knowledgerelation", "knowledgeevidence"),)

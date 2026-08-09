@@ -6,13 +6,14 @@ from .models import KnowledgeConcept, KnowledgeGraphLock, KnowledgeRelation, Kno
 from .relation_rules import RelationCycleError
 
 
-IS_A_GRAPH_LOCK_ID = 1
+KNOWLEDGE_GRAPH_LOCK_ID = 1
 
 
-def acquire_is_a_graph_lock() -> KnowledgeGraphLock:
-    return KnowledgeGraphLock.objects.select_for_update().get(pk=IS_A_GRAPH_LOCK_ID)
-
-
+def acquire_knowledge_graph_lock() -> KnowledgeGraphLock:
+    """Acquire the canonical lock before reading or mutating snapshot graph state."""
+    return KnowledgeGraphLock.objects.select_for_update().get(
+        pk=KNOWLEDGE_GRAPH_LOCK_ID
+    )
 def reject_is_a_cycle(
     *,
     subject: KnowledgeConcept,

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
 import KnowledgeConceptDialog from "./KnowledgeConceptDialog.vue"
+import ProductFormDialog from "../products/ProductFormDialog.vue"
 
 const saved = {
   id: "concept-1", scope: "ORGANIZATION", organization: "org-1", concept_type: "MATERIAL",
@@ -18,6 +19,42 @@ function renderDialog() {
 }
 
 afterEach(() => { vi.unstubAllGlobals(); document.cookie = "csrftoken=; Max-Age=0; path=/" })
+
+it("focuses its title, keeps focus inside, and closes on Escape", async () => {
+  const user = userEvent.setup()
+  const result = renderDialog()
+  const title = await screen.findByRole("heading", { name: "新增知识建议" })
+  await waitFor(() => expect(title).toHaveFocus())
+
+  const close = screen.getByRole("button", { name: "关闭" })
+  const submit = screen.getByRole("button", { name: "提交知识建议" })
+  close.focus()
+  await user.tab({ shift: true })
+  expect(submit).toHaveFocus()
+  await user.keyboard("{Escape}")
+  expect(result.emitted("close")).toHaveLength(1)
+})
+
+it("keeps the underlying dialog inert until a nested dialog unmounts", async () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const outer = render(ProductFormDialog, {
+    props: { concepts: [], organizationId: "org-1" },
+    global: { plugins: [[VueQueryPlugin, { queryClient }]] },
+  })
+  const outerTitle = await screen.findByRole("heading", { name: "新建产品" })
+  await waitFor(() => expect(outerTitle).toHaveFocus())
+  const outerBackdrop = screen.getByRole("dialog", { name: "新建产品" }).parentElement
+
+  const inner = renderDialog()
+  const innerTitle = await screen.findByRole("heading", { name: "新增知识建议" })
+  await waitFor(() => expect(innerTitle).toHaveFocus())
+  expect(outerBackdrop).toHaveAttribute("inert")
+
+  inner.unmount()
+  expect(outerBackdrop).not.toHaveAttribute("inert")
+  expect(outerTitle).toHaveFocus()
+  outer.unmount()
+})
 
 it("validates required fields, focuses the first error, and cancels without a request", async () => {
   const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock)

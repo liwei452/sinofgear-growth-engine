@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
+import type { KnowledgeConcept } from "../knowledge/api"
 import ProductFormDialog from "./ProductFormDialog.vue"
 
 const baseProduct = {
@@ -14,10 +15,10 @@ const baseProduct = {
   internal_notes: "", concept_links: [], created_at: "2026-08-09T00:00:00Z", updated_at: "2026-08-09T00:00:00Z",
 }
 
-function renderDialog(props: { productId?: string } = {}) {
+function renderDialog(props: { productId?: string; concepts?: KnowledgeConcept[] } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(ProductFormDialog, {
-    props: { concepts: [], ...props },
+    props: { concepts: [], organizationId: "org-1", ...props },
     global: { plugins: [[VueQueryPlugin, { queryClient }]] },
   })
 }
@@ -35,6 +36,42 @@ async function fillRequired(user: ReturnType<typeof userEvent.setup>) {
 afterEach(() => {
   vi.unstubAllGlobals()
   document.cookie = "csrftoken=; Max-Age=0; path=/"
+})
+
+it("focuses the title, traps Tab, closes on Escape, and restores the opener", async () => {
+  const opener = document.createElement("button")
+  opener.textContent = "打开产品"
+  document.body.appendChild(opener)
+  opener.focus()
+  const background = document.createElement("main")
+  background.className = "app-shell"
+  const drawer = document.createElement("aside")
+  drawer.setAttribute("inert", "")
+  background.appendChild(drawer)
+  document.body.appendChild(background)
+
+  const user = userEvent.setup()
+  const result = renderDialog()
+  const title = await screen.findByRole("heading", { name: "新建产品" })
+  await waitFor(() => expect(title).toHaveFocus())
+  expect(background).toHaveAttribute("inert")
+
+  const close = screen.getByRole("button", { name: "关闭" })
+  const save = screen.getByRole("button", { name: "保存产品" })
+  close.focus()
+  await user.tab({ shift: true })
+  expect(save).toHaveFocus()
+  await user.tab()
+  expect(close).toHaveFocus()
+
+  await user.keyboard("{Escape}")
+  expect(result.emitted("close")).toHaveLength(1)
+  result.unmount()
+  expect(background).not.toHaveAttribute("inert")
+  expect(drawer).toHaveAttribute("inert")
+  expect(opener).toHaveFocus()
+  opener.remove()
+  background.remove()
 })
 
 it("validates ranges and URL, focuses the first error, and cancels without submitting", async () => {
@@ -78,7 +115,10 @@ it("maps backend field errors, then creates and emits the real saved product", a
   expect(screen.getByLabelText("英文名称（必填）")).toHaveFocus()
   await user.click(screen.getByRole("button", { name: "保存产品" }))
 
-  await waitFor(() => expect(result.emitted("saved")?.[0]?.[0]).toMatchObject({ id: "product-1" }))
+  await waitFor(() => expect(result.emitted("saved")?.[0]?.[0]).toMatchObject({
+    product: { id: "product-1" },
+    etag: '"1"',
+  }))
   expect(fetchMock).toHaveBeenLastCalledWith(
     "/api/v1/products",
     expect.objectContaining({ method: "POST" }),
@@ -131,4 +171,29 @@ it("announces a friendly read-only state when edit is forbidden", async () => {
 
   await user.click(screen.getByRole("button", { name: "保存修改" }))
   expect(await screen.findByRole("alert")).toHaveTextContent("你暂时没有权限修改这个产品，可以继续查看最新信息。")
+})
+
+it("maps an approved INDUSTRY concept to the APPLICATION product role", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const industry: KnowledgeConcept = {
+    id: "industry-1", scope: "SYSTEM", organization: null, concept_type: "INDUSTRY",
+    code: "AUTOMOTIVE", label_zh: "汽车行业", label_en: "Automotive", description: "",
+    status: "APPROVED", version: 1, suggested_by_ai_run_id: null, evidence: [], created_by: null,
+    reviewed_by: 1, reviewed_at: null, created_at: "2026-08-09T00:00:00Z", updated_at: "2026-08-09T00:00:00Z",
+  }
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify(baseProduct), {
+    status: 201, headers: { "Content-Type": "application/json", ETag: '"1"' },
+  }))
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderDialog({ concepts: [industry] })
+  await fillRequired(user)
+
+  await user.selectOptions(screen.getByLabelText("应用标签"), "industry-1")
+  await user.click(screen.getByRole("button", { name: "保存产品" }))
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+  expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+    concept_links: [{ role: "APPLICATION", concept_id: "industry-1" }],
+  })
 })

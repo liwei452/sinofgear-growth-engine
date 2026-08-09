@@ -9,6 +9,11 @@ import LoginPage from "./LoginPage.vue"
 
 const Destination = defineComponent({ template: "<p>目标页面</p>" })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
+const authenticatedUser = {
+  user: { id: 1, username: "operator" },
+  organization: { id: "org-1", name: "示例组织", slug: "demo" },
+  membership: { id: "member-1", role: "OPERATOR", status: "ACTIVE", permissions: [] },
+}
 
 async function renderLogin(initialPath = "/login") {
   const history = createMemoryHistory()
@@ -52,9 +57,12 @@ it("shows a concise product promise and accessible login fields", async () => {
 it("disables submission and announces progress while login is pending", async () => {
   document.cookie = "csrftoken=csrf-value; path=/"
   let finish!: (response: Response) => void
-  vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise<Response>((resolve) => {
-    finish = resolve
-  })))
+  const pending = new Promise<Response>((resolve) => { finish = resolve })
+  vi.stubGlobal("fetch", vi.fn((path: string) => path === "/api/v1/auth/login"
+    ? pending
+    : Promise.resolve(new Response(JSON.stringify(authenticatedUser), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }))))
   await renderLogin()
   const user = await completeForm()
 
@@ -87,7 +95,11 @@ it.each([
   ["/login?redirect=//evil.example/steal", "/"],
 ])("returns only to a safe local destination from %s", async (initialPath, expected) => {
   document.cookie = "csrftoken=csrf-value; path=/"
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })))
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => path === "/api/v1/auth/login"
+    ? new Response(null, { status: 204 })
+    : new Response(JSON.stringify(authenticatedUser), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })))
   const { router } = await renderLogin(initialPath)
   const user = await completeForm()
 
@@ -95,4 +107,47 @@ it.each([
 
   expect(await screen.findByText("目标页面")).toBeInTheDocument()
   expect(router.currentRoute.value.fullPath).toBe(expected)
+})
+
+it("removes every previous-session query before login and seeds a freshly fetched identity", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const nextUser = {
+    user: { id: 2, username: "new-user" },
+    organization: { id: "org-b", name: "组织 B", slug: "org-b" },
+    membership: { id: "member-b", role: "CUSTOM", status: "ACTIVE", permissions: ["products.read"] },
+  }
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify(nextUser), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }))
+  vi.stubGlobal("fetch", fetchMock)
+  const { queryClient } = await renderLogin()
+  queryClient.setQueryData(["auth", "me"], { organization: { id: "org-a" } })
+  queryClient.setQueryData(["products", "org-a", "list"], { results: [{ id: "secret-a" }] })
+  queryClient.setQueryData(["knowledge", "org-a", "concepts"], [{ id: "secret-a" }])
+  const user = await completeForm()
+
+  await user.click(screen.getByRole("button", { name: "登录" }))
+
+  expect(await screen.findByText("目标页面")).toBeInTheDocument()
+  expect(queryClient.getQueryData(["products", "org-a", "list"])).toBeUndefined()
+  expect(queryClient.getQueryData(["knowledge", "org-a", "concepts"])).toBeUndefined()
+  expect(queryClient.getQueryData(["auth", "me"])).toEqual(nextUser)
+  expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+    "/api/v1/auth/login", "/api/v1/auth/me",
+  ])
+})
+
+it("clears previous-session queries before a failed direct re-login", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 401 })))
+  const { queryClient } = await renderLogin()
+  queryClient.setQueryData(["products", "org-a", "list"], { results: [{ id: "secret-a" }] })
+  const user = await completeForm()
+
+  await user.click(screen.getByRole("button", { name: "登录" }))
+
+  expect(await screen.findByRole("alert")).toBeInTheDocument()
+  expect(queryClient.getQueryData(["products", "org-a", "list"])).toBeUndefined()
 })

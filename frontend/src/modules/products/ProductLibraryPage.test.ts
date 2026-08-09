@@ -33,6 +33,10 @@ const concepts = [{
   suggested_by_ai_run_id: null, evidence: [], created_by: null, reviewed_by: 1, reviewed_at: null,
   created_at: "2026-08-09T00:00:00Z", updated_at: "2026-08-09T00:00:00Z",
 }]
+const industryConcept = {
+  ...concepts[0], id: "concept-industry", concept_type: "INDUSTRY", code: "AUTOMOTIVE",
+  label_zh: "汽车行业", label_en: "Automotive",
+}
 
 async function renderPage(permissions = ["products.read", "products.manage"]) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -47,6 +51,20 @@ async function renderPage(permissions = ["products.read", "products.manage"]) {
   })
   await router.isReady()
   return { ...result, queryClient }
+}
+
+async function renderPageWithClient(queryClient: QueryClient, currentUser: CurrentUser) {
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser)
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: "/products", component: ProductLibraryPage }],
+  })
+  await router.push("/products")
+  const result = render(ProductLibraryPage, {
+    global: { plugins: [[VueQueryPlugin, { queryClient }], router] },
+  })
+  await router.isReady()
+  return result
 }
 
 afterEach(() => {
@@ -115,6 +133,24 @@ it("filters by status and approved concept and follows only safe pagination", as
   )
 })
 
+it("uses approved INDUSTRY concepts as application filters", async () => {
+  const fetchMock = vi.fn(async (path: string) => new Response(JSON.stringify(
+    path === "/api/v1/knowledge/concepts"
+      ? { results: [industryConcept] }
+      : { next: null, previous: null, results: [product] },
+  ), { status: 200, headers: { "Content-Type": "application/json" } }))
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  await renderPage()
+  await screen.findByText("精密斜齿轮")
+  await screen.findByRole("option", { name: "汽车行业" })
+
+  await user.selectOptions(screen.getByLabelText("应用标签"), "AUTOMOTIVE")
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+    "/api/v1/products?application=AUTOMOTIVE", expect.anything(),
+  ))
+})
+
 it("shows an actionable empty state and hides write controls without permission", async () => {
   vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
     path === "/api/v1/knowledge/concepts"
@@ -159,4 +195,94 @@ it("shows a safe error and retries the list", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("服务暂时不可用，请稍后重试。")
   await user.click(screen.getByRole("button", { name: "重新加载产品" }))
   expect(await screen.findByText("还没有符合条件的产品")).toBeInTheDocument()
+})
+
+it("never renders a fresh product cache from another organization on the same query client", async () => {
+  let activeOrganization = "org-a"
+  const productFor = (organization: string) => ({
+    ...product,
+    id: `product-${organization}`,
+    organization,
+    name_zh: organization === "org-a" ? "组织 A 产品" : "组织 B 产品",
+  })
+  const fetchMock = vi.fn(async (path: string) => new Response(JSON.stringify(
+    path === "/api/v1/knowledge/concepts"
+      ? { results: [] }
+      : { next: null, previous: null, results: [productFor(activeOrganization)] },
+  ), { status: 200, headers: { "Content-Type": "application/json" } }))
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
+
+  const first = await renderPageWithClient(queryClient, {
+    ...userWith(["products.read"]), organization: { id: "org-a", name: "组织 A", slug: "a" },
+  })
+  expect(await screen.findByText("组织 A 产品")).toBeInTheDocument()
+  first.unmount()
+  activeOrganization = "org-b"
+
+  await renderPageWithClient(queryClient, {
+    ...userWith(["products.read"]), organization: { id: "org-b", name: "组织 B", slug: "b" },
+  })
+  expect(screen.queryByText("组织 A 产品")).not.toBeInTheDocument()
+  expect(await screen.findByText("组织 B 产品")).toBeInTheDocument()
+  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/products")).toHaveLength(2)
+})
+
+it("reopens an edited detail with the saved value and uses its new ETag on the next patch", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let savedProduct = { ...product, name_en: "Precision Helical Gear" }
+  let patchCount = 0
+  const patchEtags: string[] = []
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === "/api/v1/knowledge/concepts") {
+      return new Response(JSON.stringify({ results: [] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })
+    }
+    if (path === "/api/v1/products") {
+      return new Response(JSON.stringify({ next: null, previous: null, results: [savedProduct] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })
+    }
+    if (options?.method === "PATCH") {
+      patchCount += 1
+      patchEtags.push(new Headers(options.headers).get("If-Match") ?? "")
+      savedProduct = {
+        ...savedProduct,
+        name_en: patchCount === 1 ? "Saved Server Gear" : "Second Saved Gear",
+        version: patchCount + 1,
+      }
+      return new Response(JSON.stringify(savedProduct), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ETag: `"${patchCount + 1}"` },
+      })
+    }
+    return new Response(JSON.stringify(product), {
+      status: 200, headers: { "Content-Type": "application/json", ETag: '"1"' },
+    })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
+  const user = userEvent.setup()
+  await renderPageWithClient(queryClient, userWith(["products.read", "products.manage"]))
+  await screen.findByText("精密斜齿轮")
+
+  await user.click(screen.getByRole("button", { name: "编辑" }))
+  const nameInput = await screen.findByLabelText("英文名称（必填）")
+  await user.clear(nameInput)
+  await user.type(nameInput, "First local edit")
+  await user.click(screen.getByRole("button", { name: "保存修改" }))
+  await screen.findByText("已保存产品“精密斜齿轮”。")
+
+  await user.click(screen.getByRole("button", { name: "编辑" }))
+  expect(await screen.findByDisplayValue("Saved Server Gear")).toBeInTheDocument()
+  await user.clear(screen.getByLabelText("英文名称（必填）"))
+  await user.type(screen.getByLabelText("英文名称（必填）"), "Second local edit")
+  await user.click(screen.getByRole("button", { name: "保存修改" }))
+
+  await waitFor(() => expect(patchEtags).toEqual(['"1"', '"2"']))
 })

@@ -4,7 +4,7 @@ import { ref } from "vue"
 import { useRoute, useRouter } from "vue-router"
 
 import { safeRedirect } from "../../app/router"
-import { login } from "./auth"
+import { currentUserQueryOptions, login } from "./auth"
 
 const username = ref("")
 const password = ref("")
@@ -15,12 +15,15 @@ const queryClient = useQueryClient()
 
 const loginMutation = useMutation({
   mutationFn: login,
-  onMutate: () => { failure.value = "" },
+  onMutate: () => {
+    failure.value = ""
+    queryClient.removeQueries()
+  },
   onError: () => {
     failure.value = "用户名或密码不正确，请重试。"
   },
   onSuccess: async () => {
-    await queryClient.invalidateQueries({ queryKey: ["auth", "me"] })
+    await queryClient.fetchQuery(currentUserQueryOptions())
     await router.replace(safeRedirect(route.query.redirect))
   },
 })

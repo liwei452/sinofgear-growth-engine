@@ -35,6 +35,13 @@ function renderPage(permissions = ["knowledge.read", "knowledge.create", "knowle
   return render(KnowledgeLibraryPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 }
 
+function renderPageWithClient(queryClient: QueryClient, currentUser: CurrentUser) {
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser)
+  return render(KnowledgeLibraryPage, {
+    global: { plugins: [[VueQueryPlugin, { queryClient }]] },
+  })
+}
+
 afterEach(() => { vi.unstubAllGlobals(); document.cookie = "csrftoken=; Max-Age=0; path=/" })
 
 it("explains the library and renders real counts, evidence, bilingual labels, and statuses", async () => {
@@ -114,6 +121,14 @@ it("hides SYSTEM review without system permission and renders an actionable empt
   await user.type(screen.getAllByLabelText("搜索知识").at(-1)!, "不存在")
 })
 
+it("does not submit SYSTEM suggestions with organization-create permission alone", async () => {
+  vi.stubGlobal("fetch", mockLists([concept({ scope: "SYSTEM", organization: null })]))
+  renderPage(["knowledge.read", "knowledge.create"])
+
+  await screen.findByText("合金钢")
+  expect(screen.queryByRole("button", { name: "提交审核" })).not.toBeInTheDocument()
+})
+
 it("requires a rejection reason and sends it before refreshing the state", async () => {
   document.cookie = "csrftoken=csrf-value; path=/"
   const rejected = concept({ status: "REJECTED" })
@@ -145,4 +160,35 @@ it("shows a safe service error and retries all real lists", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("服务暂时不可用，请稍后重试")
   await user.click(screen.getByRole("button", { name: "重新加载知识库" }))
   expect(await screen.findByText("没有找到符合条件的知识")).toBeInTheDocument()
+})
+
+it("never renders a fresh knowledge cache from another organization on the same query client", async () => {
+  let activeOrganization = "org-a"
+  const fetchMock = vi.fn(async (path: string) => new Response(JSON.stringify({
+    results: path === "/api/v1/knowledge/concepts"
+      ? [concept({
+        id: `concept-${activeOrganization}`,
+        organization: activeOrganization,
+        label_zh: activeOrganization === "org-a" ? "组织 A 知识" : "组织 B 知识",
+      })]
+      : [],
+  }), { status: 200, headers: { "Content-Type": "application/json" } }))
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
+
+  const first = renderPageWithClient(queryClient, {
+    ...userWith(["knowledge.read"]), organization: { id: "org-a", name: "组织 A", slug: "a" },
+  })
+  expect(await screen.findByText("组织 A 知识")).toBeInTheDocument()
+  first.unmount()
+  activeOrganization = "org-b"
+
+  renderPageWithClient(queryClient, {
+    ...userWith(["knowledge.read"]), organization: { id: "org-b", name: "组织 B", slug: "b" },
+  })
+  expect(screen.queryByText("组织 A 知识")).not.toBeInTheDocument()
+  expect(await screen.findByText("组织 B 知识")).toBeInTheDocument()
+  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/knowledge/concepts")).toHaveLength(2)
 })

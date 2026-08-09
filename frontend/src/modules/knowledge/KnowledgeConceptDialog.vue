@@ -2,6 +2,7 @@
 import { nextTick, reactive, ref } from "vue"
 
 import { ApiError } from "../../api/client"
+import { useModalFocus } from "../../shared/composables/useModalFocus"
 import { createConcept, type ConceptInput, type ConceptType, type KnowledgeConcept } from "./api"
 
 const emit = defineEmits<{ close: []; saved: [concept: KnowledgeConcept] }>()
@@ -9,6 +10,16 @@ const form = reactive({ concept_type: "" as "" | ConceptType, code: "", label_zh
 const errors = reactive<Record<string, string>>({})
 const alert = ref("")
 const submitting = ref(false)
+const backdropElement = ref<HTMLElement | null>(null)
+const dialogElement = ref<HTMLElement | null>(null)
+const titleElement = ref<HTMLElement | null>(null)
+
+useModalFocus({
+  backdrop: backdropElement,
+  dialog: dialogElement,
+  initialFocus: titleElement,
+  close: () => emit("close"),
+})
 
 const types: Array<[ConceptType, string]> = [
   ["PRODUCT_TYPE", "产品类型"], ["PARAMETER", "参数"], ["MATERIAL", "材料"],
@@ -19,7 +30,7 @@ const types: Array<[ConceptType, string]> = [
 function clearErrors(): void { for (const field of Object.keys(errors)) delete errors[field] }
 async function focusFirst(): Promise<void> {
   await nextTick()
-  document.querySelector<HTMLElement>(`[data-field="${Object.keys(errors)[0]}"]`)?.focus()
+  dialogElement.value?.querySelector<HTMLElement>(`[data-field="${Object.keys(errors)[0]}"]`)?.focus()
 }
 function validate(): boolean {
   clearErrors(); alert.value = ""
@@ -54,26 +65,28 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <div class="dialog-backdrop" @click.self="emit('close')">
-    <section class="concept-dialog" role="dialog" aria-modal="true" aria-labelledby="concept-dialog-title">
-      <header><div><p class="eyebrow">组织知识建议</p><h2 id="concept-dialog-title">新增知识建议</h2></div><button type="button" aria-label="关闭" @click="emit('close')">×</button></header>
-      <p>建议会先进入待审核状态，不会直接改变系统知识。</p>
-      <form novalidate @submit.prevent="submit">
-        <p v-if="alert" role="alert" class="form-alert">{{ alert }}</p>
-        <label>知识类型（必填）
-          <select v-model="form.concept_type" aria-label="知识类型（必填）" data-field="concept_type"><option value="">请选择</option><option v-for="[value,label] in types" :key="value" :value="value">{{ label }}</option></select>
-          <span v-if="errors.concept_type" class="field-error">{{ errors.concept_type }}</span>
-        </label>
-        <label>编码（必填）<input v-model="form.code" aria-label="编码（必填）" data-field="code"><span v-if="errors.code" class="field-error">{{ errors.code }}</span></label>
-        <div class="name-grid">
-          <label>中文名称（必填）<input v-model="form.label_zh" aria-label="中文名称（必填）" data-field="label_zh"><span v-if="errors.label_zh" class="field-error">{{ errors.label_zh }}</span></label>
-          <label>英文名称（必填）<input v-model="form.label_en" aria-label="英文名称（必填）" data-field="label_en"><span v-if="errors.label_en" class="field-error">{{ errors.label_en }}</span></label>
-        </div>
-        <label>说明<textarea v-model="form.description" rows="4" /></label>
-        <footer><button type="button" @click="emit('close')">取消</button><button class="primary-action" type="submit" :disabled="submitting">{{ submitting ? "正在提交…" : "提交知识建议" }}</button></footer>
-      </form>
-    </section>
-  </div>
+  <Teleport to="body">
+    <div ref="backdropElement" class="dialog-backdrop" @click.self="emit('close')">
+      <section ref="dialogElement" class="concept-dialog" role="dialog" aria-modal="true" aria-labelledby="concept-dialog-title">
+        <header><div><p class="eyebrow">组织知识建议</p><h2 id="concept-dialog-title" ref="titleElement" tabindex="-1">新增知识建议</h2></div><button type="button" aria-label="关闭" @click="emit('close')">×</button></header>
+        <p>建议会先进入待审核状态，不会直接改变系统知识。</p>
+        <form novalidate @submit.prevent="submit">
+          <p v-if="alert" role="alert" class="form-alert">{{ alert }}</p>
+          <label>知识类型（必填）
+            <select v-model="form.concept_type" aria-label="知识类型（必填）" data-field="concept_type"><option value="">请选择</option><option v-for="[value,label] in types" :key="value" :value="value">{{ label }}</option></select>
+            <span v-if="errors.concept_type" class="field-error">{{ errors.concept_type }}</span>
+          </label>
+          <label>编码（必填）<input v-model="form.code" aria-label="编码（必填）" data-field="code"><span v-if="errors.code" class="field-error">{{ errors.code }}</span></label>
+          <div class="name-grid">
+            <label>中文名称（必填）<input v-model="form.label_zh" aria-label="中文名称（必填）" data-field="label_zh"><span v-if="errors.label_zh" class="field-error">{{ errors.label_zh }}</span></label>
+            <label>英文名称（必填）<input v-model="form.label_en" aria-label="英文名称（必填）" data-field="label_en"><span v-if="errors.label_en" class="field-error">{{ errors.label_en }}</span></label>
+          </div>
+          <label>说明<textarea v-model="form.description" rows="4" /></label>
+          <footer><button type="button" @click="emit('close')">取消</button><button class="primary-action" type="submit" :disabled="submitting">{{ submitting ? "正在提交…" : "提交知识建议" }}</button></footer>
+        </form>
+      </section>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>

@@ -58,7 +58,9 @@ it("uses stable query keys and preserves ETag for create, detail, and patch", as
     }))
   vi.stubGlobal("fetch", fetchMock)
 
-  expect(productQueryKeys.detail("product-1")).toEqual(["products", "detail", "product-1"])
+  expect(productQueryKeys.all("org-1")).toEqual(["products", "org-1"])
+  expect(productQueryKeys.lists("org-1")).toEqual(["products", "org-1", "list"])
+  expect(productQueryKeys.detail("org-1", "product-1")).toEqual(["products", "org-1", "detail", "product-1"])
   await expect(getProduct("product-1")).resolves.toMatchObject({ etag: '"2"' })
   await expect(createProduct({ name_en: "Helical Gear" } as never)).resolves.toMatchObject({ etag: '"1"' })
   await expect(patchProduct("product-1", { name_en: "Updated" }, '"2"')).resolves.toMatchObject({ etag: '"3"' })

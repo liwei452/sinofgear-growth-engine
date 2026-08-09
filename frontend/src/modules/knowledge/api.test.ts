@@ -62,7 +62,9 @@ it("creates organization suggestions and sends exact review actions", async () =
   }))
   vi.stubGlobal("fetch", fetchMock)
 
-  expect(knowledgeQueryKeys.concepts()).toEqual(["knowledge", "concepts"])
+  expect(knowledgeQueryKeys.all("org-1")).toEqual(["knowledge", "org-1"])
+  expect(knowledgeQueryKeys.concepts("org-1")).toEqual(["knowledge", "org-1", "concepts"])
+  expect(knowledgeQueryKeys.productConcepts("org-1")).toEqual(["knowledge", "org-1", "product-concepts"])
   await createConcept({
     scope: "ORGANIZATION", concept_type: "MATERIAL", code: "STEEL",
     label_zh: "钢", label_en: "Steel", description: "",

@@ -80,10 +80,12 @@ export type ProductPage = {
 }
 
 export const productQueryKeys = {
-  all: ["products"] as const,
-  lists: () => ["products", "list"] as const,
-  list: (filters: ProductFilters) => ["products", "list", filters] as const,
-  detail: (id: string) => ["products", "detail", id] as const,
+  all: (organizationId: string) => ["products", organizationId] as const,
+  lists: (organizationId: string) => ["products", organizationId, "list"] as const,
+  list: (organizationId: string, filters: ProductFilters) =>
+    ["products", organizationId, "list", filters] as const,
+  detail: (organizationId: string, id: string) =>
+    ["products", organizationId, "detail", id] as const,
 }
 
 function listUrl(filters: ProductFilters): string {

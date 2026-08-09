@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/vue-query"
 
 import { ApiError } from "../../api/client"
 import { currentUserQueryOptions } from "../auth/auth"
-import { listConcepts, type KnowledgeConcept } from "../knowledge/api"
+import { knowledgeQueryKeys, listConcepts, type KnowledgeConcept } from "../knowledge/api"
 import ProductFormDialog from "./ProductFormDialog.vue"
 import {
   getProductPage,
@@ -27,6 +27,7 @@ const pageUrl = ref<string | null>(null)
 const dialogOpen = ref(false)
 const selectedProductId = ref<string>()
 const savedMessage = ref("")
+const organizationId = computed(() => currentUserQuery.data.value?.organization.id ?? "")
 
 const filters = computed<ProductFilters>(() => ({
   ...(status.value ? { status: status.value } : {}),
@@ -36,15 +37,16 @@ const filters = computed<ProductFilters>(() => ({
 }))
 
 const productsQuery = useQuery({
-  queryKey: computed(() => [...productQueryKeys.list(filters.value), pageUrl.value]),
+  queryKey: computed(() => [...productQueryKeys.list(organizationId.value, filters.value), pageUrl.value]),
   queryFn: () => pageUrl.value
     ? getProductPage(pageUrl.value)
     : listProducts(filters.value),
+  enabled: computed(() => Boolean(organizationId.value)),
 })
 const conceptsQuery = useQuery({
-  queryKey: ["knowledge", "concepts", "product-filters"],
+  queryKey: computed(() => knowledgeQueryKeys.productConcepts(organizationId.value)),
   queryFn: listConcepts,
-  enabled: computed(() => productsQuery.isSuccess.value),
+  enabled: computed(() => Boolean(organizationId.value) && productsQuery.isSuccess.value),
 })
 
 const canManage = computed(() => currentUserQuery.data.value
@@ -53,6 +55,8 @@ const approvedConcepts = computed(() => (conceptsQuery.data.value ?? [])
   .filter((concept) => concept.status === "APPROVED"))
 const conceptsOf = (type: KnowledgeConcept["concept_type"]) => approvedConcepts.value
   .filter((concept) => concept.concept_type === type)
+const applicationConcepts = computed(() => approvedConcepts.value
+  .filter((concept) => concept.concept_type === "APPLICATION" || concept.concept_type === "INDUSTRY"))
 
 const statusLabels: Record<ProductStatus, string> = {
   DRAFT: "草稿",
@@ -81,10 +85,14 @@ function openProduct(product: Product): void {
   dialogOpen.value = true
 }
 
-async function productSaved(product: Product): Promise<void> {
+async function productSaved(result: { product: Product; etag: string }): Promise<void> {
   dialogOpen.value = false
-  savedMessage.value = `已保存产品“${product.name_zh || product.name_en}”。`
-  await queryClient.invalidateQueries({ queryKey: productQueryKeys.lists() })
+  queryClient.setQueryData(
+    productQueryKeys.detail(organizationId.value, result.product.id),
+    result,
+  )
+  savedMessage.value = `已保存产品“${result.product.name_zh || result.product.name_en}”。`
+  await queryClient.invalidateQueries({ queryKey: productQueryKeys.lists(organizationId.value) })
 }
 
 function errorMessage(error: unknown): string {
@@ -151,7 +159,7 @@ function conceptRoleLabel(role: ProductConceptRole): string {
         应用标签
         <select v-model="application" @change="resetPage">
           <option value="">全部应用</option>
-          <option v-for="concept in conceptsOf('APPLICATION')" :key="concept.id" :value="concept.code">
+          <option v-for="concept in applicationConcepts" :key="concept.id" :value="concept.code">
             {{ concept.label_zh || concept.label_en }}
           </option>
         </select>
@@ -220,6 +228,7 @@ function conceptRoleLabel(role: ProductConceptRole): string {
     <ProductFormDialog
       v-if="dialogOpen"
       :product-id="selectedProductId"
+      :organization-id="organizationId"
       :concepts="approvedConcepts"
       :read-only="!canManage"
       @close="dialogOpen = false"

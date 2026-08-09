@@ -93,11 +93,13 @@ type ListResponse<T> = { results: T[] }
 export type ReviewAction = "submit-review" | "approve" | "reject" | "deprecate"
 
 export const knowledgeQueryKeys = {
-  all: ["knowledge"] as const,
-  concepts: () => ["knowledge", "concepts"] as const,
-  aliases: () => ["knowledge", "aliases"] as const,
-  relations: () => ["knowledge", "relations"] as const,
-  evidence: () => ["knowledge", "evidence"] as const,
+  all: (organizationId: string) => ["knowledge", organizationId] as const,
+  concepts: (organizationId: string) => ["knowledge", organizationId, "concepts"] as const,
+  productConcepts: (organizationId: string) =>
+    ["knowledge", organizationId, "product-concepts"] as const,
+  aliases: (organizationId: string) => ["knowledge", organizationId, "aliases"] as const,
+  relations: (organizationId: string) => ["knowledge", organizationId, "relations"] as const,
+  evidence: (organizationId: string) => ["knowledge", organizationId, "evidence"] as const,
 }
 
 async function list<T>(path: string): Promise<T[]> {

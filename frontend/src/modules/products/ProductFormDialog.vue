@@ -3,6 +3,7 @@ import { computed, nextTick, reactive, ref, watch } from "vue"
 import { useQuery } from "@tanstack/vue-query"
 
 import { ApiError } from "../../api/client"
+import { useModalFocus } from "../../shared/composables/useModalFocus"
 import type { KnowledgeConcept } from "../knowledge/api"
 import {
   createProduct,
@@ -15,8 +16,15 @@ import {
   type ProductStatus,
 } from "./api"
 
-const props = defineProps<{ productId?: string; concepts: KnowledgeConcept[]; readOnly?: boolean }>()
-const emit = defineEmits<{ close: []; saved: [product: Product] }>()
+const props = defineProps<{
+  productId?: string
+  organizationId: string
+  concepts: KnowledgeConcept[]
+  readOnly?: boolean
+}>()
+type SavedProduct = { product: Product; etag: string }
+
+const emit = defineEmits<{ close: []; saved: [result: SavedProduct] }>()
 
 type FieldName = keyof ProductInput | "module_min" | "module_max" | "tooth_count_min" | "tooth_count_max" | "pressure_angle" | "moq"
 type FormState = {
@@ -56,11 +64,21 @@ const saving = ref(false)
 const forbidden = ref(false)
 const conflict = ref(false)
 const currentEtag = ref("")
+const backdropElement = ref<HTMLElement | null>(null)
+const dialogElement = ref<HTMLElement | null>(null)
+const titleElement = ref<HTMLElement | null>(null)
+
+useModalFocus({
+  backdrop: backdropElement,
+  dialog: dialogElement,
+  initialFocus: titleElement,
+  close: () => emit("close"),
+})
 
 const isEditing = computed(() => Boolean(props.productId))
 const isReadOnly = computed(() => Boolean(props.readOnly) || forbidden.value)
 const detailQuery = useQuery({
-  queryKey: computed(() => productQueryKeys.detail(props.productId ?? "new")),
+  queryKey: computed(() => productQueryKeys.detail(props.organizationId, props.productId ?? "new")),
   queryFn: () => getProduct(props.productId!),
   enabled: computed(() => Boolean(props.productId)),
 })
@@ -151,7 +169,7 @@ function validate(): boolean {
 async function focusFirstError(): Promise<void> {
   await nextTick()
   const first = Object.keys(errors)[0]
-  document.querySelector<HTMLElement>(`[data-field="${first}"]`)?.focus()
+  dialogElement.value?.querySelector<HTMLElement>(`[data-field="${first}"]`)?.focus()
 }
 
 const splitList = (value: string) => value.split(/[，,]/).map((item) => item.trim()).filter(Boolean)
@@ -190,7 +208,7 @@ async function submit(): Promise<void> {
       ? await patchProduct(props.productId, payload(), currentEtag.value)
       : await createProduct(payload())
     currentEtag.value = result.etag
-    emit("saved", result.product)
+    emit("saved", result)
   } catch (error) {
     if (error instanceof ApiError && error.status === 409) {
       conflict.value = true
@@ -219,7 +237,7 @@ async function reloadLatest(): Promise<void> {
 
 const roleForType: Partial<Record<KnowledgeConcept["concept_type"], ProductConceptRole>> = {
   PRODUCT_TYPE: "TYPE", MATERIAL: "MATERIAL", PROCESS: "PROCESS", STANDARD: "STANDARD",
-  APPLICATION: "APPLICATION", PARAMETER: "PARAMETER",
+  APPLICATION: "APPLICATION", INDUSTRY: "APPLICATION", PARAMETER: "PARAMETER",
 }
 const roleLabels: Record<ProductConceptRole, string> = {
   TYPE: "产品类型", MATERIAL: "材料", PROCESS: "工艺", STANDARD: "标准",
@@ -236,90 +254,92 @@ const groupedConcepts = computed(() => {
 </script>
 
 <template>
-  <div class="dialog-backdrop" @click.self="emit('close')">
-    <section class="product-dialog" role="dialog" aria-modal="true" aria-labelledby="product-dialog-title">
-      <header class="dialog-header">
-        <div>
-          <p class="eyebrow">{{ isEditing ? "产品详情" : "补充产品事实" }}</p>
-          <h2 id="product-dialog-title">{{ isEditing ? "查看和编辑产品" : "新建产品" }}</h2>
+  <Teleport to="body">
+    <div ref="backdropElement" class="dialog-backdrop" @click.self="emit('close')">
+      <section ref="dialogElement" class="product-dialog" role="dialog" aria-modal="true" aria-labelledby="product-dialog-title">
+        <header class="dialog-header">
+          <div>
+            <p class="eyebrow">{{ isEditing ? "产品详情" : "补充产品事实" }}</p>
+            <h2 id="product-dialog-title" ref="titleElement" tabindex="-1">{{ isEditing ? "查看和编辑产品" : "新建产品" }}</h2>
+          </div>
+          <button type="button" aria-label="关闭" @click="emit('close')">×</button>
+        </header>
+
+        <p v-if="detailQuery.isPending.value && isEditing" role="status">正在加载产品详情…</p>
+        <div v-else-if="detailQuery.isError.value" role="alert" class="form-alert">
+          产品详情没有加载成功，请关闭后重试。
         </div>
-        <button type="button" aria-label="关闭" @click="emit('close')">×</button>
-      </header>
-
-      <p v-if="detailQuery.isPending.value && isEditing" role="status">正在加载产品详情…</p>
-      <div v-else-if="detailQuery.isError.value" role="alert" class="form-alert">
-        产品详情没有加载成功，请关闭后重试。
-      </div>
-      <form v-else novalidate @submit.prevent="submit">
-        <div v-if="formAlert" role="alert" class="form-alert">
-          <p>{{ formAlert }}</p>
-          <button v-if="conflict" type="button" @click="reloadLatest">重新加载最新数据</button>
-        </div>
-
-        <fieldset :disabled="isReadOnly">
-          <legend>基本信息</legend>
-          <div class="form-grid">
-            <label>中文名称<input v-model="form.name_zh" data-field="name_zh"></label>
-            <label>英文名称（必填）
-              <input v-model="form.name_en" aria-label="英文名称（必填）" data-field="name_en" :aria-invalid="Boolean(errors.name_en)" :aria-describedby="errors.name_en ? 'error-name-en' : undefined">
-              <span v-if="errors.name_en" id="error-name-en" class="field-error">{{ errors.name_en }}</span>
-            </label>
-            <label>产品状态
-              <select v-model="form.status" data-field="status">
-                <option value="DRAFT">草稿</option><option value="ACTIVE">已启用</option><option value="ARCHIVED">已归档</option>
-              </select>
-            </label>
-            <label>最小起订量（必填）
-              <input v-model="form.moq" aria-label="最小起订量（必填）" data-field="moq" inputmode="numeric"><span v-if="errors.moq" class="field-error">{{ errors.moq }}</span>
-            </label>
-            <label>交期<input v-model="form.lead_time" data-field="lead_time"></label>
-            <label>落地页网址
-              <input v-model="form.landing_page_url" aria-label="落地页网址" data-field="landing_page_url" inputmode="url"><span v-if="errors.landing_page_url" class="field-error">{{ errors.landing_page_url }}</span>
-            </label>
+        <form v-else novalidate @submit.prevent="submit">
+          <div v-if="formAlert" role="alert" class="form-alert">
+            <p>{{ formAlert }}</p>
+            <button v-if="conflict" type="button" @click="reloadLatest">重新加载最新数据</button>
           </div>
-        </fieldset>
 
-        <fieldset :disabled="isReadOnly">
-          <legend>关键规格</legend>
-          <div class="form-grid specs-grid">
-            <label>最小模数（必填）<input v-model="form.module_min" aria-label="最小模数（必填）" data-field="module_min" inputmode="decimal"><span v-if="errors.module_min" class="field-error">{{ errors.module_min }}</span></label>
-            <label>最大模数（必填）<input v-model="form.module_max" aria-label="最大模数（必填）" data-field="module_max" inputmode="decimal"><span v-if="errors.module_max" class="field-error">{{ errors.module_max }}</span></label>
-            <label>最少齿数（必填）<input v-model="form.tooth_count_min" aria-label="最少齿数（必填）" data-field="tooth_count_min" inputmode="numeric"><span v-if="errors.tooth_count_min" class="field-error">{{ errors.tooth_count_min }}</span></label>
-            <label>最多齿数（必填）<input v-model="form.tooth_count_max" aria-label="最多齿数（必填）" data-field="tooth_count_max" inputmode="numeric"><span v-if="errors.tooth_count_max" class="field-error">{{ errors.tooth_count_max }}</span></label>
-            <label>压力角（必填）<input v-model="form.pressure_angle" aria-label="压力角（必填）" data-field="pressure_angle" inputmode="decimal"><span v-if="errors.pressure_angle" class="field-error">{{ errors.pressure_angle }}</span></label>
-            <label>精度等级<input v-model="form.accuracy_grade" data-field="accuracy_grade"></label>
-          </div>
-        </fieldset>
+          <fieldset :disabled="isReadOnly">
+            <legend>基本信息</legend>
+            <div class="form-grid">
+              <label>中文名称<input v-model="form.name_zh" data-field="name_zh"></label>
+              <label>英文名称（必填）
+                <input v-model="form.name_en" aria-label="英文名称（必填）" data-field="name_en" :aria-invalid="Boolean(errors.name_en)" :aria-describedby="errors.name_en ? 'error-name-en' : undefined">
+                <span v-if="errors.name_en" id="error-name-en" class="field-error">{{ errors.name_en }}</span>
+              </label>
+              <label>产品状态
+                <select v-model="form.status" data-field="status">
+                  <option value="DRAFT">草稿</option><option value="ACTIVE">已启用</option><option value="ARCHIVED">已归档</option>
+                </select>
+              </label>
+              <label>最小起订量（必填）
+                <input v-model="form.moq" aria-label="最小起订量（必填）" data-field="moq" inputmode="numeric"><span v-if="errors.moq" class="field-error">{{ errors.moq }}</span>
+              </label>
+              <label>交期<input v-model="form.lead_time" data-field="lead_time"></label>
+              <label>落地页网址
+                <input v-model="form.landing_page_url" aria-label="落地页网址" data-field="landing_page_url" inputmode="url"><span v-if="errors.landing_page_url" class="field-error">{{ errors.landing_page_url }}</span>
+              </label>
+            </div>
+          </fieldset>
 
-        <details open>
-          <summary>制造、检测与标签</summary>
-          <div class="form-grid detail-content">
-            <label>热处理<input v-model="form.heat_treatment" :disabled="isReadOnly" data-field="heat_treatment"></label>
-            <label>表面处理<input v-model="form.surface_treatment" :disabled="isReadOnly" data-field="surface_treatment"></label>
-            <label>制造能力（逗号分隔）<input v-model="form.manufacturing_capabilities" :disabled="isReadOnly" data-field="manufacturing_capabilities"></label>
-            <label>检测能力（逗号分隔）<input v-model="form.inspection_capabilities" :disabled="isReadOnly" data-field="inspection_capabilities"></label>
-            <label v-for="[role, choices] in groupedConcepts" :key="role">{{ roleLabels[role] }}标签
-              <select v-model="form.conceptSelections[role]" :disabled="isReadOnly">
-                <option value="">未选择</option>
-                <option v-for="concept in choices" :key="concept.id" :value="concept.id">{{ concept.label_zh || concept.label_en }}</option>
-              </select>
-            </label>
-          </div>
-        </details>
-        <details>
-          <summary>内部备注</summary>
-          <label class="detail-content">仅组织内部可见<textarea v-model="form.internal_notes" :disabled="isReadOnly" rows="3" data-field="internal_notes" /></label>
-        </details>
+          <fieldset :disabled="isReadOnly">
+            <legend>关键规格</legend>
+            <div class="form-grid specs-grid">
+              <label>最小模数（必填）<input v-model="form.module_min" aria-label="最小模数（必填）" data-field="module_min" inputmode="decimal"><span v-if="errors.module_min" class="field-error">{{ errors.module_min }}</span></label>
+              <label>最大模数（必填）<input v-model="form.module_max" aria-label="最大模数（必填）" data-field="module_max" inputmode="decimal"><span v-if="errors.module_max" class="field-error">{{ errors.module_max }}</span></label>
+              <label>最少齿数（必填）<input v-model="form.tooth_count_min" aria-label="最少齿数（必填）" data-field="tooth_count_min" inputmode="numeric"><span v-if="errors.tooth_count_min" class="field-error">{{ errors.tooth_count_min }}</span></label>
+              <label>最多齿数（必填）<input v-model="form.tooth_count_max" aria-label="最多齿数（必填）" data-field="tooth_count_max" inputmode="numeric"><span v-if="errors.tooth_count_max" class="field-error">{{ errors.tooth_count_max }}</span></label>
+              <label>压力角（必填）<input v-model="form.pressure_angle" aria-label="压力角（必填）" data-field="pressure_angle" inputmode="decimal"><span v-if="errors.pressure_angle" class="field-error">{{ errors.pressure_angle }}</span></label>
+              <label>精度等级<input v-model="form.accuracy_grade" data-field="accuracy_grade"></label>
+            </div>
+          </fieldset>
 
-        <footer class="dialog-actions">
-          <button type="button" @click="emit('close')">取消</button>
-          <button v-if="!isReadOnly" class="primary-action" type="submit" :disabled="saving">
-            {{ saving ? "正在保存…" : isEditing ? "保存修改" : "保存产品" }}
-          </button>
-        </footer>
-      </form>
-    </section>
-  </div>
+          <details open>
+            <summary>制造、检测与标签</summary>
+            <div class="form-grid detail-content">
+              <label>热处理<input v-model="form.heat_treatment" :disabled="isReadOnly" data-field="heat_treatment"></label>
+              <label>表面处理<input v-model="form.surface_treatment" :disabled="isReadOnly" data-field="surface_treatment"></label>
+              <label>制造能力（逗号分隔）<input v-model="form.manufacturing_capabilities" :disabled="isReadOnly" data-field="manufacturing_capabilities"></label>
+              <label>检测能力（逗号分隔）<input v-model="form.inspection_capabilities" :disabled="isReadOnly" data-field="inspection_capabilities"></label>
+              <label v-for="[role, choices] in groupedConcepts" :key="role">{{ roleLabels[role] }}标签
+                <select v-model="form.conceptSelections[role]" :disabled="isReadOnly">
+                  <option value="">未选择</option>
+                  <option v-for="concept in choices" :key="concept.id" :value="concept.id">{{ concept.label_zh || concept.label_en }}</option>
+                </select>
+              </label>
+            </div>
+          </details>
+          <details>
+            <summary>内部备注</summary>
+            <label class="detail-content">仅组织内部可见<textarea v-model="form.internal_notes" :disabled="isReadOnly" rows="3" data-field="internal_notes" /></label>
+          </details>
+
+          <footer class="dialog-actions">
+            <button type="button" @click="emit('close')">取消</button>
+            <button v-if="!isReadOnly" class="primary-action" type="submit" :disabled="saving">
+              {{ saving ? "正在保存…" : isEditing ? "保存修改" : "保存产品" }}
+            </button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>

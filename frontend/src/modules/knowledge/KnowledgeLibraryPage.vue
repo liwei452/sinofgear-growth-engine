@@ -22,10 +22,28 @@ import {
 
 const queryClient = useQueryClient()
 const currentUserQuery = useQuery(currentUserQueryOptions())
-const conceptsQuery = useQuery({ queryKey: knowledgeQueryKeys.concepts(), queryFn: listConcepts })
-const aliasesQuery = useQuery({ queryKey: knowledgeQueryKeys.aliases(), queryFn: listAliases })
-const relationsQuery = useQuery({ queryKey: knowledgeQueryKeys.relations(), queryFn: listRelations })
-const evidenceQuery = useQuery({ queryKey: knowledgeQueryKeys.evidence(), queryFn: listEvidence })
+const organizationId = computed(() => currentUserQuery.data.value?.organization.id ?? "")
+const queryEnabled = computed(() => Boolean(organizationId.value))
+const conceptsQuery = useQuery({
+  queryKey: computed(() => knowledgeQueryKeys.concepts(organizationId.value)),
+  queryFn: listConcepts,
+  enabled: queryEnabled,
+})
+const aliasesQuery = useQuery({
+  queryKey: computed(() => knowledgeQueryKeys.aliases(organizationId.value)),
+  queryFn: listAliases,
+  enabled: queryEnabled,
+})
+const relationsQuery = useQuery({
+  queryKey: computed(() => knowledgeQueryKeys.relations(organizationId.value)),
+  queryFn: listRelations,
+  enabled: queryEnabled,
+})
+const evidenceQuery = useQuery({
+  queryKey: computed(() => knowledgeQueryKeys.evidence(organizationId.value)),
+  queryFn: listEvidence,
+  enabled: queryEnabled,
+})
 
 const search = ref("")
 const status = ref<"" | KnowledgeStatus>("")
@@ -70,11 +88,23 @@ function canReview(concept: KnowledgeConcept): boolean {
     : has("knowledge.review_organization") || has("knowledge.manage_system")
 }
 
+function canSubmit(concept: KnowledgeConcept): boolean {
+  return has("knowledge.create")
+    && (concept.scope === "ORGANIZATION" || has("knowledge.manage_system"))
+}
+
 function canDeprecate(concept: KnowledgeConcept): boolean {
   return has("knowledge.deprecate") && (concept.scope === "ORGANIZATION" || has("knowledge.manage_system"))
 }
 
 async function runAction(concept: KnowledgeConcept, action: ReviewAction, comment = ""): Promise<void> {
+  const allowed = action === "submit-review" ? canSubmit(concept)
+    : action === "deprecate" ? canDeprecate(concept)
+      : canReview(concept)
+  if (!allowed) {
+    actionError.value = "你暂时没有权限执行此审核操作。"
+    return
+  }
   if (action === "reject" && !comment.trim()) {
     actionError.value = "请填写驳回原因。"
     return
@@ -84,7 +114,7 @@ async function runAction(concept: KnowledgeConcept, action: ReviewAction, commen
   notice.value = ""
   try {
     const updated = await reviewConcept(concept.id, action, comment.trim())
-    queryClient.setQueryData<KnowledgeConcept[]>(knowledgeQueryKeys.concepts(), (items = []) =>
+    queryClient.setQueryData<KnowledgeConcept[]>(knowledgeQueryKeys.concepts(organizationId.value), (items = []) =>
       items.map((item) => item.id === updated.id ? updated : item))
     const verb = action === "approve" ? "已通过" : action === "reject" ? "已驳回"
       : action === "deprecate" ? "已停用" : "已提交审核"
@@ -99,7 +129,7 @@ async function runAction(concept: KnowledgeConcept, action: ReviewAction, commen
 async function created(concept: KnowledgeConcept): Promise<void> {
   dialogOpen.value = false
   notice.value = `已提交“${concept.label_zh || concept.label_en}”，等待审核。`
-  await queryClient.invalidateQueries({ queryKey: knowledgeQueryKeys.concepts() })
+  await queryClient.invalidateQueries({ queryKey: knowledgeQueryKeys.concepts(organizationId.value) })
 }
 
 async function retryAll(): Promise<void> {
@@ -145,7 +175,7 @@ function errorMessage(error: unknown): string {
         <p class="concept-code">{{ concept.code }}</p><p>{{ concept.description || "暂无说明" }}</p>
         <dl><div><dt>类型</dt><dd>{{ typeLabels[concept.concept_type] }}</dd></div><div><dt>范围</dt><dd>{{ concept.scope === "SYSTEM" ? "系统" : "本组织" }}</dd></div><div><dt>依据</dt><dd>{{ concept.evidence.length }} 条证据</dd></div></dl>
         <div class="review-actions">
-          <button v-if="concept.status === 'SUGGESTED' && canCreate" type="button" :disabled="actionId === concept.id" @click="runAction(concept,'submit-review')">提交审核</button>
+          <button v-if="concept.status === 'SUGGESTED' && canSubmit(concept)" type="button" :disabled="actionId === concept.id" @click="runAction(concept,'submit-review')">提交审核</button>
           <template v-if="concept.status === 'SUGGESTED' && canReview(concept)">
             <button type="button" :disabled="actionId === concept.id" @click="runAction(concept,'approve')">通过</button>
             <button type="button" :disabled="actionId === concept.id" @click="rejectingId = concept.id; actionError = ''">驳回</button>

@@ -47,7 +47,7 @@ const pageTitle = computed(() => String(route.meta.title ?? "工作台"))
 const logoutMutation = useMutation({
   mutationFn: logout,
   onSuccess: async () => {
-    queryClient.removeQueries({ queryKey: ["auth", "me"] })
+    queryClient.removeQueries()
     await router.replace("/login")
   },
 })

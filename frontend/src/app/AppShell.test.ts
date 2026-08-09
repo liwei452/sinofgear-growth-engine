@@ -176,11 +176,15 @@ it("logs out through the API, clears the session, and returns to login", async (
   vi.stubGlobal("fetch", fetchMock)
   const user = userEvent.setup()
   const { queryClient } = await renderShell()
+  queryClient.setQueryData(["products", "org-1", "list"], { results: [{ id: "secret" }] })
+  queryClient.setQueryData(["knowledge", "org-1", "concepts"], [{ id: "secret" }])
 
   await user.click(screen.getByRole("button", { name: "退出登录" }))
 
   expect(await screen.findByText("登录页面")).toBeInTheDocument()
   expect(queryClient.getQueryData(["auth", "me"])).toBeUndefined()
+  expect(queryClient.getQueryData(["products", "org-1", "list"])).toBeUndefined()
+  expect(queryClient.getQueryData(["knowledge", "org-1", "concepts"])).toBeUndefined()
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/v1/auth/logout",
     expect.objectContaining({ method: "POST", credentials: "include" }),

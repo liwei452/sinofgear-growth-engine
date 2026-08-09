@@ -16,6 +16,9 @@ class PermissionCode(StrEnum):
     PRODUCTS_MANAGE = "products.manage"
     ASSETS_READ = "assets.read"
     ASSETS_MANAGE = "assets.manage"
+    CAMPAIGNS_READ = "campaigns.read"
+    CAMPAIGNS_MANAGE = "campaigns.manage"
+    CAMPAIGNS_REVIEW = "campaigns.review"
 
 
 class HasOrganizationPermission(BasePermission):
@@ -79,3 +82,15 @@ class CanReadAssets(HasOrganizationPermission):
 
 class CanManageAssets(HasOrganizationPermission):
     permission_code = PermissionCode.ASSETS_MANAGE
+
+
+class CanReadCampaigns(HasOrganizationPermission):
+    permission_code = PermissionCode.CAMPAIGNS_READ
+
+
+class CanManageCampaigns(HasOrganizationPermission):
+    permission_code = PermissionCode.CAMPAIGNS_MANAGE
+
+
+class CanReviewCampaigns(HasOrganizationPermission):
+    permission_code = PermissionCode.CAMPAIGNS_REVIEW

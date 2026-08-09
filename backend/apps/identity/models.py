@@ -62,6 +62,8 @@ class Role(models.Model):
                 PermissionCode.PRODUCTS_MANAGE,
                 PermissionCode.ASSETS_READ,
                 PermissionCode.ASSETS_MANAGE,
+                PermissionCode.CAMPAIGNS_READ,
+                PermissionCode.CAMPAIGNS_MANAGE,
             ),
         ),
         Code.REVIEWER: (
@@ -72,6 +74,8 @@ class Role(models.Model):
                 PermissionCode.KNOWLEDGE_REVIEW_ORGANIZATION,
                 PermissionCode.PRODUCTS_READ,
                 PermissionCode.ASSETS_READ,
+                PermissionCode.CAMPAIGNS_READ,
+                PermissionCode.CAMPAIGNS_REVIEW,
             ),
         ),
         Code.READ_ONLY: (
@@ -81,6 +85,7 @@ class Role(models.Model):
                 PermissionCode.KNOWLEDGE_READ,
                 PermissionCode.PRODUCTS_READ,
                 PermissionCode.ASSETS_READ,
+                PermissionCode.CAMPAIGNS_READ,
             ),
         ),
     }

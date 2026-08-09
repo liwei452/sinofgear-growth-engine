@@ -60,6 +60,8 @@ class Role(models.Model):
                 PermissionCode.KNOWLEDGE_CREATE,
                 PermissionCode.PRODUCTS_READ,
                 PermissionCode.PRODUCTS_MANAGE,
+                PermissionCode.ASSETS_READ,
+                PermissionCode.ASSETS_MANAGE,
             ),
         ),
         Code.REVIEWER: (
@@ -69,6 +71,7 @@ class Role(models.Model):
                 PermissionCode.KNOWLEDGE_READ,
                 PermissionCode.KNOWLEDGE_REVIEW_ORGANIZATION,
                 PermissionCode.PRODUCTS_READ,
+                PermissionCode.ASSETS_READ,
             ),
         ),
         Code.READ_ONLY: (
@@ -77,6 +80,7 @@ class Role(models.Model):
                 PermissionCode.MEMBERSHIPS_READ,
                 PermissionCode.KNOWLEDGE_READ,
                 PermissionCode.PRODUCTS_READ,
+                PermissionCode.ASSETS_READ,
             ),
         ),
     }

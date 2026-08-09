@@ -1,0 +1,267 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import connection
+from django.db.models import Prefetch
+from django.http import Http404
+from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
+from rest_framework import status
+from rest_framework.exceptions import NotFound
+from rest_framework.pagination import CursorPagination
+from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.request import Request
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.catalog.models import Product
+from apps.identity.permissions import CanManageAssets, CanReadAssets
+
+from .models import AssetProductLink, MaterialAsset
+from .serializers import (
+    AssetDownloadSerializer,
+    AssetErrorSerializer,
+    AssetFilterSerializer,
+    AssetListSerializer,
+    AssetProductLinkInputSerializer,
+    AssetUploadSerializer,
+    AssetValidationErrorSerializer,
+    MaterialAssetSerializer,
+)
+from .services import AssetUploadError, link_asset_to_product
+from .storage import get_object_storage
+
+
+FILTER_PARAMETERS = [
+    OpenApiParameter(
+        "type",
+        OpenApiTypes.STR,
+        enum=MaterialAsset.AssetType.values,
+        description="Exact asset type. May be supplied at most once; invalid values return 400.",
+    ),
+    OpenApiParameter(
+        "status",
+        OpenApiTypes.STR,
+        enum=MaterialAsset.Status.values,
+        description="Exact asset status. May be supplied at most once; invalid values return 400.",
+    ),
+    OpenApiParameter(
+        "product",
+        OpenApiTypes.UUID,
+        description="Organization-scoped product UUID. May be supplied at most once.",
+    ),
+    OpenApiParameter(
+        "tag",
+        OpenApiTypes.STR,
+        description="Exact case-sensitive tag. May be supplied at most once.",
+    ),
+    OpenApiParameter(
+        "cursor",
+        OpenApiTypes.STR,
+        description="Opaque stable cursor; generated links preserve all active filters.",
+    ),
+    OpenApiParameter(
+        "page_size",
+        OpenApiTypes.INT,
+        description="Page size from 1 to 50. Values above 50 are capped at 50.",
+    ),
+]
+ERROR_RESPONSES = {403: AssetErrorSerializer, 404: AssetErrorSerializer}
+
+
+def _error_values(error):
+    if isinstance(error, dict):
+        return {key: _error_values(value) for key, value in error.items()}
+    if isinstance(error, (list, tuple)):
+        return [_error_values(value) for value in error]
+    return str(error)
+
+
+def _validation_response(errors) -> Response:
+    if isinstance(errors, DjangoValidationError):
+        errors = (
+            errors.message_dict
+            if hasattr(errors, "message_dict")
+            else {"non_field_errors": errors.messages}
+        )
+    return Response(
+        {"errors": _error_values(errors)},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+def _safe_product_links(organization):
+    return AssetProductLink.objects.filter(
+        organization=organization,
+        asset__organization=organization,
+        product__organization=organization,
+    ).select_related("product")
+
+
+def _asset_queryset(organization):
+    return MaterialAsset.objects.filter(organization=organization).prefetch_related(
+        Prefetch(
+            "product_links",
+            queryset=_safe_product_links(organization),
+            to_attr="safe_product_links",
+        )
+    )
+
+
+def _get_asset(organization, asset_id) -> MaterialAsset:
+    try:
+        return _asset_queryset(organization).get(pk=asset_id)
+    except MaterialAsset.DoesNotExist as error:
+        raise Http404 from error
+
+
+class AssetCursorPagination(CursorPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 50
+    ordering = ("-created_at", "-id")
+
+
+class AssetListView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        return [(CanReadAssets if self.request.method == "GET" else CanManageAssets)()]
+
+    @extend_schema(
+        operation_id="assets_list",
+        parameters=FILTER_PARAMETERS,
+        responses={
+            200: AssetListSerializer,
+            400: AssetValidationErrorSerializer,
+            403: AssetErrorSerializer,
+        },
+    )
+    def get(self, request: Request) -> Response:
+        repeated = {
+            name: ["Provide this filter at most once."]
+            for name in ("type", "status", "product", "tag", "page_size", "cursor")
+            if len(request.query_params.getlist(name)) > 1
+        }
+        if repeated:
+            return _validation_response(repeated)
+        filters = AssetFilterSerializer(data=request.query_params)
+        if not filters.is_valid():
+            return _validation_response(filters.errors)
+        values = filters.validated_data
+        queryset = _asset_queryset(request.organization)
+        if "type" in values:
+            queryset = queryset.filter(asset_type=values["type"])
+        if "status" in values:
+            queryset = queryset.filter(status=values["status"])
+        if "product" in values:
+            queryset = queryset.filter(
+                product_links__organization=request.organization,
+                product_links__product_id=values["product"],
+                product_links__product__organization=request.organization,
+            )
+        if "tag" in values:
+            if connection.vendor == "sqlite":
+                tagged_ids = [
+                    asset_id
+                    for asset_id, tags in queryset.values_list("id", "tags")
+                    if values["tag"] in tags
+                ]
+                queryset = queryset.filter(pk__in=tagged_ids)
+            else:
+                queryset = queryset.filter(tags__contains=[values["tag"]])
+        queryset = queryset.distinct().order_by("-created_at", "-id")
+        paginator = AssetCursorPagination()
+        try:
+            page = paginator.paginate_queryset(queryset, request, view=self)
+        except NotFound:
+            return _validation_response({"cursor": ["Invalid or expired cursor."]})
+        return paginator.get_paginated_response(MaterialAssetSerializer(page, many=True).data)
+
+    @extend_schema(
+        operation_id="assets_create",
+        request=AssetUploadSerializer,
+        responses={
+            200: MaterialAssetSerializer,
+            201: MaterialAssetSerializer,
+            400: AssetValidationErrorSerializer,
+            403: AssetErrorSerializer,
+        },
+    )
+    def post(self, request: Request) -> Response:
+        serializer = AssetUploadSerializer(
+            data=request.data,
+            context={"organization": request.organization, "creator": request.user},
+        )
+        if not serializer.is_valid():
+            return _validation_response(serializer.errors)
+        try:
+            asset = serializer.save()
+        except (AssetUploadError, DjangoValidationError) as error:
+            return _validation_response({"file": [str(error)]})
+        was_created = getattr(asset, "_upload_created", True)
+        asset = _asset_queryset(request.organization).get(pk=asset.pk)
+        response_status = status.HTTP_201_CREATED if was_created else status.HTTP_200_OK
+        return Response(MaterialAssetSerializer(asset).data, status=response_status)
+
+
+class AssetDetailView(APIView):
+    permission_classes = [CanReadAssets]
+
+    @extend_schema(
+        operation_id="assets_retrieve",
+        responses={200: MaterialAssetSerializer, **ERROR_RESPONSES},
+    )
+    def get(self, request: Request, asset_id) -> Response:
+        return Response(MaterialAssetSerializer(_get_asset(request.organization, asset_id)).data)
+
+
+class AssetLinkProductView(APIView):
+    permission_classes = [CanManageAssets]
+
+    @extend_schema(
+        operation_id="assets_link_product",
+        request=AssetProductLinkInputSerializer,
+        responses={
+            200: MaterialAssetSerializer,
+            201: MaterialAssetSerializer,
+            400: AssetValidationErrorSerializer,
+            **ERROR_RESPONSES,
+        },
+    )
+    def post(self, request: Request, asset_id) -> Response:
+        asset = _get_asset(request.organization, asset_id)
+        serializer = AssetProductLinkInputSerializer(data=request.data)
+        if not serializer.is_valid():
+            return _validation_response(serializer.errors)
+        try:
+            product = Product.objects.get(
+                pk=serializer.validated_data["product_id"],
+                organization=request.organization,
+            )
+        except Product.DoesNotExist as error:
+            raise Http404 from error
+        try:
+            _, created = link_asset_to_product(asset=asset, product=product)
+        except DjangoValidationError as error:
+            return _validation_response(error)
+        refreshed = _asset_queryset(request.organization).get(pk=asset.pk)
+        return Response(
+            MaterialAssetSerializer(refreshed).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class AssetDownloadURLView(APIView):
+    permission_classes = [CanReadAssets]
+
+    @extend_schema(
+        operation_id="assets_download_url",
+        request=None,
+        responses={200: AssetDownloadSerializer, **ERROR_RESPONSES},
+    )
+    def post(self, request: Request, asset_id) -> Response:
+        asset = _get_asset(request.organization, asset_id)
+        expires_in = 300
+        url = get_object_storage().presigned_download_url(
+            asset.storage_key,
+            expires_in,
+        )
+        return Response({"url": url, "expires_in": expires_in})

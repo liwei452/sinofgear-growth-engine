@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "apps.audit.apps.AuditConfig",
     "apps.knowledge.apps.KnowledgeConfig",
     "apps.catalog.apps.CatalogConfig",
+    "apps.assets.apps.AssetsConfig",
 ]
 
 MIDDLEWARE = [
@@ -95,3 +96,14 @@ SPECTACULAR_SETTINGS = {
 
 CELERY_BROKER_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+
+OBJECT_STORAGE_BACKEND = os.environ.get("OBJECT_STORAGE_BACKEND", "minio")
+MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "localhost:9000")
+MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")
+MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "")
+MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "sinofgear-assets")
+MINIO_SECURE = os.environ.get("MINIO_SECURE", "false").lower() == "true"
+ASSET_MAX_UPLOAD_BYTES = int(os.environ.get("ASSET_MAX_UPLOAD_BYTES", str(250 * 1024 * 1024)))
+ASSET_SPOOL_MEMORY_BYTES = int(
+    os.environ.get("ASSET_SPOOL_MEMORY_BYTES", str(8 * 1024 * 1024))
+)

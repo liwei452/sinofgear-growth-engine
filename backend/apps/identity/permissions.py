@@ -14,6 +14,8 @@ class PermissionCode(StrEnum):
     KNOWLEDGE_DEPRECATE = "knowledge.deprecate"
     PRODUCTS_READ = "products.read"
     PRODUCTS_MANAGE = "products.manage"
+    ASSETS_READ = "assets.read"
+    ASSETS_MANAGE = "assets.manage"
 
 
 class HasOrganizationPermission(BasePermission):
@@ -69,3 +71,11 @@ class CanReadProducts(HasOrganizationPermission):
 
 class CanManageProducts(HasOrganizationPermission):
     permission_code = PermissionCode.PRODUCTS_MANAGE
+
+
+class CanReadAssets(HasOrganizationPermission):
+    permission_code = PermissionCode.ASSETS_READ
+
+
+class CanManageAssets(HasOrganizationPermission):
+    permission_code = PermissionCode.ASSETS_MANAGE

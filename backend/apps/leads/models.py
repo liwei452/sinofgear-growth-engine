@@ -437,6 +437,10 @@ class LeadCandidate(OrganizationScopedModel):
 
 
 class LeadInsight(ImmutableLeadHistory):
+    class Origin(models.TextChoices):
+        AI = "AI", "AI"
+        HUMAN_CORRECTION = "HUMAN_CORRECTION", "Human correction"
+
     class ScoreBand(models.TextChoices):
         HIGH = "HIGH", "High"
         WATCH = "WATCH", "Watch"
@@ -445,6 +449,24 @@ class LeadInsight(ImmutableLeadHistory):
 
     candidate = models.ForeignKey(LeadCandidate, on_delete=models.PROTECT, related_name="insights")
     ai_run = models.ForeignKey("ai.AIRun", on_delete=models.PROTECT, related_name="lead_insights")
+    origin = models.CharField(max_length=24, choices=Origin.choices, default=Origin.AI)
+    source_insight = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="human_corrections",
+    )
+    human_correction = models.JSONField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reviewed_lead_insights",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_reason = models.TextField(blank=True)
     version = models.PositiveIntegerField()
     intent_score = models.PositiveSmallIntegerField(validators=[MaxValueValidator(30)])
     company_fit_score = models.PositiveSmallIntegerField(validators=[MaxValueValidator(25)])
@@ -482,7 +504,11 @@ class LeadInsight(ImmutableLeadHistory):
         ordering = ["candidate_id", "version", "id"]
         constraints = [
             models.UniqueConstraint(fields=["candidate", "version"], name="leads_unique_insight_version"),
-            models.UniqueConstraint(fields=["ai_run"], name="leads_unique_insight_ai_run"),
+            models.UniqueConstraint(
+                fields=["ai_run"],
+                condition=models.Q(origin="AI"),
+                name="leads_unique_ai_origin_insight_run",
+            ),
             models.CheckConstraint(condition=models.Q(version__gte=1), name="leads_insight_version_positive"),
             models.CheckConstraint(
                 condition=models.Q(
@@ -565,6 +591,31 @@ class LeadInsight(ImmutableLeadHistory):
         errors: dict[str, str] = {}
         _related_organization_error(self, "candidate", errors)
         _related_organization_error(self, "ai_run", errors)
+        if self.source_insight_id:
+            _related_organization_error(self, "source_insight", errors)
+        if self.origin == self.Origin.AI:
+            if any(
+                (
+                    self.source_insight_id,
+                    self.human_correction is not None,
+                    self.reviewed_by_id,
+                    self.reviewed_at,
+                    self.review_reason,
+                )
+            ):
+                errors["origin"] = "AI insights cannot contain human correction metadata."
+        elif self.origin == self.Origin.HUMAN_CORRECTION:
+            if (
+                not self.source_insight_id
+                or not isinstance(self.human_correction, dict)
+                or not self.human_correction
+                or not self.reviewed_by_id
+                or self.reviewed_at is None
+                or not self.review_reason.strip()
+            ):
+                errors["origin"] = "Human corrections require source, reviewer, reason, and payload."
+            elif self.source_insight.candidate_id != self.candidate_id:
+                errors["source_insight"] = "Correction source must belong to this candidate."
         dimensions = ScoreDimensions(
             self.intent_score,
             self.company_fit_score,
@@ -606,7 +657,11 @@ class LeadCandidateEvidence(ImmutableLeadHistory):
         LeadCandidate, on_delete=models.PROTECT, related_name="evidence_links"
     )
     insight = models.ForeignKey(
-        LeadInsight, on_delete=models.PROTECT, related_name="evidence_links"
+        LeadInsight,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="evidence_links",
     )
     evidence = models.ForeignKey(
         "sources.SourceEvidence", on_delete=models.PROTECT, related_name="candidate_links"
@@ -620,7 +675,12 @@ class LeadCandidateEvidence(ImmutableLeadHistory):
         constraints = [
             models.UniqueConstraint(
                 fields=["insight", "evidence"], name="leads_unique_insight_evidence"
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["candidate", "evidence"],
+                condition=models.Q(insight__isnull=True),
+                name="leads_unique_candidate_selected_evidence",
+            ),
         ]
 
     def clean(self):
@@ -642,6 +702,108 @@ class LeadCandidateEvidence(ImmutableLeadHistory):
             ).first()
         if self.evidence_id and self.source_signal_id and evidence_signal_id != self.source_signal_id:
             errors["source_signal"] = "Source signal must be the evidence source signal."
+        if errors:
+            raise ValidationError(errors)
+
+
+class LeadAnalysisBinding(ImmutableLeadHistory):
+    job = models.OneToOneField(
+        "jobs.Job", on_delete=models.PROTECT, related_name="lead_analysis_binding"
+    )
+    candidate = models.ForeignKey(
+        LeadCandidate, on_delete=models.PROTECT, related_name="analysis_bindings"
+    )
+    prompt_version = models.ForeignKey(
+        "ai.PromptVersion",
+        on_delete=models.PROTECT,
+        related_name="lead_analysis_bindings",
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="requested_lead_analyses",
+    )
+
+    class Meta(ImmutableLeadHistory.Meta):
+        ordering = ["-created_at", "-id"]
+
+    def clean(self):
+        super().clean()
+        errors: dict[str, str] = {}
+        for field_name in ("job", "candidate"):
+            _related_organization_error(self, field_name, errors)
+        if self.job_id and self.job.type != "LEAD_ANALYZE":
+            errors["job"] = "Analysis binding requires a lead-analysis job."
+        if self.prompt_version_id and (
+            self.prompt_version.purpose != "LEAD_ANALYZE"
+            or self.prompt_version.status != "PUBLISHED"
+        ):
+            errors["prompt_version"] = "Analysis binding requires a published lead prompt."
+        if errors:
+            raise ValidationError(errors)
+
+
+class LeadReview(ImmutableLeadHistory):
+    class Action(models.TextChoices):
+        CONFIRM = "CONFIRM", "Confirm"
+        CORRECT = "CORRECT", "Correct"
+        DISMISS = "DISMISS", "Dismiss"
+        REOPEN = "REOPEN", "Reopen"
+        REQUEST_MORE_EVIDENCE = "REQUEST_MORE_EVIDENCE", "Request more evidence"
+
+    candidate = models.ForeignKey(
+        LeadCandidate, on_delete=models.PROTECT, related_name="reviews"
+    )
+    insight = models.ForeignKey(
+        LeadInsight,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reviews",
+    )
+    action = models.CharField(max_length=32, choices=Action.choices)
+    reason = models.TextField()
+    correction = models.JSONField(null=True, blank=True)
+    reviewer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="lead_reviews",
+    )
+    idempotency_key = models.CharField(max_length=128)
+    intent_hash = models.CharField(max_length=64)
+    ignore_fingerprint = models.CharField(max_length=64, blank=True)
+    candidate_status = models.CharField(max_length=24, choices=LeadCandidate.Status.choices)
+    candidate_version = models.PositiveIntegerField()
+
+    class Meta(ImmutableLeadHistory.Meta):
+        ordering = ["candidate_id", "created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "reviewer", "idempotency_key"],
+                name="leads_unique_review_idempotency",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(candidate_version__gte=1),
+                name="leads_review_candidate_version_positive",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        errors: dict[str, str] = {}
+        _related_organization_error(self, "candidate", errors)
+        if self.insight_id:
+            _related_organization_error(self, "insight", errors)
+            if self.insight.candidate_id != self.candidate_id:
+                errors["insight"] = "Review insight must belong to this candidate."
+        if not self.reason.strip():
+            errors["reason"] = "Review reason must not be blank."
+        if self.action == self.Action.CORRECT and not self.insight_id:
+            errors["insight"] = "Correction reviews require the appended insight."
+        if self.action != self.Action.CORRECT and self.correction is not None:
+            errors["correction"] = "Only correction reviews may store corrections."
+        if len(self.intent_hash) != 64:
+            errors["intent_hash"] = "Review intent hash is invalid."
         if errors:
             raise ValidationError(errors)
 

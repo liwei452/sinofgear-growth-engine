@@ -10,7 +10,13 @@ def test_phase_b1_domain_apps_are_registered_with_stage_appropriate_urls() -> No
     from apps.leads.urls import urlpatterns as lead_patterns
     from apps.sources.urls import urlpatterns as source_patterns
 
-    assert lead_patterns == []
+    assert [pattern.name for pattern in lead_patterns] == [
+        "lead-candidates",
+        "lead-candidate-detail",
+        "lead-candidate-analyze",
+        "lead-insights",
+        "lead-reviews",
+    ]
     assert [pattern.name for pattern in source_patterns] == [
         "monitoring-targets",
         "ingestion-batches",

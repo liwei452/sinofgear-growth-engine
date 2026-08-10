@@ -452,6 +452,29 @@ class EvidenceService:
             )
         return locked
 
+    @staticmethod
+    @transaction.atomic
+    def protect_confirmed(*, organization, evidence_ids):
+        """Promote selected organization evidence without weakening stronger protection."""
+        requested = {getattr(item, "pk", item) for item in evidence_ids}
+        if not requested:
+            raise ValidationError({"evidence": "At least one evidence record is required."})
+        rows = list(
+            SourceEvidence.objects.select_for_update()
+            .filter(organization=organization, pk__in=requested)
+            .order_by("pk")
+        )
+        if {row.pk for row in rows} != requested:
+            raise ValidationError(
+                {"evidence": "Evidence is unavailable for this organization."}
+            )
+        for row in rows:
+            if row.retention_class == SourceEvidence.RetentionClass.TRANSIENT_30D:
+                row.retention_class = SourceEvidence.RetentionClass.CONFIRMED
+                with evidence_service_writes():
+                    row.save(update_fields=["retention_class", "updated_at"])
+        return rows
+
 
 create = EvidenceService.create
 

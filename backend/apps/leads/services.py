@@ -2,21 +2,28 @@ import hashlib
 import hmac
 import json
 from contextlib import nullcontext
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
+from django.utils import timezone
 
-from apps.ai.models import AIRun
+from apps.ai.models import AIRun, PromptVersion
+from apps.common.security import scrub_secrets
 from apps.jobs.models import Job
+from apps.jobs.services import JobConflictError, JobService
 from apps.sources.models import SourceEvidence
+from apps.sources.services import EvidenceService
 
 from .models import (
     LeadCandidate,
     LeadCandidateEvidence,
+    LeadAnalysisBinding,
     LeadInsight,
     LeadInsightRequirement,
+    LeadReview,
     LeadVersionConflict,
     lead_analysis_lease_writes,
     lead_frozen_reference_writes,
@@ -27,6 +34,17 @@ from .scoring import EvidenceGates, ScoreDimensions, score_lead
 
 class LeadStateError(ValueError):
     pass
+
+
+class LeadIdempotencyConflictError(LeadStateError):
+    pass
+
+
+@dataclass(frozen=True)
+class LeadReviewResult:
+    review: LeadReview
+    candidate: LeadCandidate
+    insight: LeadInsight | None
 
 
 def _json_copy(value, field_name):
@@ -102,6 +120,49 @@ def canonical_lead_insight_output(payload) -> dict[str, object]:
 
 
 class LeadService:
+    @staticmethod
+    @transaction.atomic
+    def create_candidate(
+        *, organization, creator, company_name, company_domain, country_hint, evidence_ids
+    ):
+        requested = [getattr(item, "pk", item) for item in evidence_ids]
+        if not requested or len(requested) != len(set(requested)):
+            raise ValidationError(
+                {"evidence_ids": "Evidence IDs must be a non-empty unique list."}
+            )
+        evidence = list(
+            SourceEvidence.objects.select_for_update()
+            .select_related("source_signal")
+            .filter(organization=organization, pk__in=requested)
+            .order_by("pk")
+        )
+        if {row.pk for row in evidence} != set(requested):
+            raise ValidationError(
+                {"evidence_ids": "Evidence is unavailable for this organization."}
+            )
+        if not str(company_name).strip() and not str(company_domain).strip():
+            raise ValidationError(
+                {"company_name": "Provide a company name or public company domain."}
+            )
+        candidate = LeadCandidate.objects.create(
+            organization=organization,
+            source_signal=evidence[0].source_signal,
+            company_name=str(company_name).strip(),
+            company_domain=str(company_domain).strip(),
+            country_hint=str(country_hint).strip(),
+            created_by=creator,
+        )
+        with lead_history_writes():
+            for row in evidence:
+                LeadCandidateEvidence.objects.create(
+                    organization=organization,
+                    candidate=candidate,
+                    insight=None,
+                    evidence=row,
+                    source_signal=row.source_signal,
+                )
+        return candidate
+
     @staticmethod
     @transaction.atomic
     def begin_analysis(*, organization, candidate, expected_version=None):
@@ -769,7 +830,413 @@ class LeadService:
             )
 
 
+class LeadAnalysisService:
+    @staticmethod
+    def _matches_existing(job, binding, *, candidate_id, evidence_ids, expected_version):
+        snapshot = job.input_snapshot
+        return (
+            binding is not None
+            and str(binding.candidate_id) == str(candidate_id)
+            and isinstance(snapshot, dict)
+            and snapshot.get("lead_candidate_id") == str(candidate_id)
+            and snapshot.get("analysis_lease_version") == expected_version + 1
+            and sorted(row.get("id") for row in snapshot.get("evidence", []))
+            == sorted(str(item) for item in evidence_ids)
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def schedule(
+        *, organization, candidate, evidence_ids, expected_version, idempotency_key, actor
+    ):
+        from .tasks import execute_lead_analysis
+
+        candidate_id = getattr(candidate, "pk", candidate)
+        locked = LeadCandidate.objects.select_for_update().filter(
+            pk=candidate_id, organization=organization
+        ).first()
+        if locked is None:
+            raise ValidationError(
+                {"candidate": "Lead candidate is unavailable for this organization."}
+            )
+        requested_ids = [getattr(item, "pk", item) for item in evidence_ids]
+        existing = Job.objects.filter(
+            organization=organization,
+            type=Job.Type.LEAD_ANALYZE,
+            idempotency_key=idempotency_key,
+        ).first()
+        if existing is not None:
+            binding = LeadAnalysisBinding.objects.select_related("prompt_version").filter(
+                job=existing, organization=organization
+            ).first()
+            if not LeadAnalysisService._matches_existing(
+                existing,
+                binding,
+                candidate_id=candidate_id,
+                evidence_ids=requested_ids,
+                expected_version=expected_version,
+            ):
+                raise LeadIdempotencyConflictError(
+                    "Idempotency key already has a different lead-analysis request."
+                )
+            return existing, binding.prompt_version
+
+        if locked.version != expected_version:
+            raise LeadVersionConflict("Lead candidate version is stale.")
+        prompt = PromptVersion.objects.filter(
+            purpose="LEAD_ANALYZE", status=PromptVersion.Status.PUBLISHED
+        ).order_by("-version", "-id").first()
+        if prompt is None:
+            raise LeadStateError("Published lead-analysis prompt is unavailable.")
+        from .schemas import LEAD_ANALYSIS_OUTPUT_SCHEMA
+
+        if prompt.output_schema != LEAD_ANALYSIS_OUTPUT_SCHEMA:
+            raise LeadStateError(
+                "Published lead-analysis prompt has an incompatible output schema."
+            )
+        snapshot = build_analysis_snapshot(
+            candidate=locked,
+            evidence_ids=requested_ids,
+            actor=actor,
+        )
+        try:
+            job = JobService.create(
+                organization=organization,
+                job_type=Job.Type.LEAD_ANALYZE,
+                input_snapshot=snapshot,
+                idempotency_key=idempotency_key,
+                created_by=actor,
+            )
+        except JobConflictError as error:
+            raise LeadIdempotencyConflictError(str(error)) from error
+        if not getattr(job, "_service_created", False):
+            raise LeadIdempotencyConflictError(
+                "Idempotency key already has a different lead-analysis request."
+            )
+        with lead_history_writes():
+            LeadAnalysisBinding.objects.create(
+                organization=organization,
+                job=job,
+                candidate=locked,
+                prompt_version=prompt,
+                requested_by=actor,
+            )
+        transaction.on_commit(
+            lambda: execute_lead_analysis.delay(str(job.id), str(prompt.id))
+        )
+        return job, prompt
+
+
+class LeadReviewService:
+    _DIMENSIONS = {
+        "intent": ("intent_score", 30),
+        "company_fit": ("company_fit_score", 25),
+        "specificity": ("specificity_score", 20),
+        "capability_fit": ("capability_fit_score", 15),
+        "recency": ("recency_score", 10),
+    }
+    _GATES = {
+        "traceable_source": "traceable_source",
+        "explicit_need_or_company_match": "explicit_need_or_company_match",
+        "capability_evidence": "capability_evidence",
+        "audited_run": "audited_run",
+        "ontology_snapshot": "ontology_snapshot_complete",
+    }
+    _COMPANY_FIELDS = frozenset({"company_name", "company_domain", "country_hint"})
+
+    @staticmethod
+    def _canonical_intent(*, candidate_id, action, expected_version, correction, reason):
+        payload = {
+            "candidate_id": str(candidate_id),
+            "action": action,
+            "expected_version": expected_version,
+            "correction": scrub_secrets(correction),
+            "reason": " ".join(reason.strip().split()),
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return payload, hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _validate_correction(correction):
+        if not isinstance(correction, dict) or not correction:
+            raise ValidationError({"correction": "A non-empty correction is required."})
+        allowed = LeadReviewService._COMPANY_FIELDS | {
+            "dimension_overrides",
+            "gate_overrides",
+        }
+        unknown = set(correction) - allowed
+        if unknown:
+            raise ValidationError(
+                {"correction": f"Unknown correction fields: {', '.join(sorted(unknown))}."}
+            )
+        dimensions = correction.get("dimension_overrides", {})
+        gates = correction.get("gate_overrides", {})
+        if not isinstance(dimensions, dict) or set(dimensions) - set(
+            LeadReviewService._DIMENSIONS
+        ):
+            raise ValidationError({"correction": "Dimension overrides are invalid."})
+        reviewer_gate_overrides = {"explicit_need_or_company_match"}
+        if not isinstance(gates, dict) or set(gates) - reviewer_gate_overrides:
+            raise ValidationError({"correction": "Gate overrides are invalid."})
+        for name, value in dimensions.items():
+            maximum = LeadReviewService._DIMENSIONS[name][1]
+            if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= maximum:
+                raise ValidationError(
+                    {"correction": f"{name} must be between 0 and {maximum}."}
+                )
+        if any(not isinstance(value, bool) for value in gates.values()):
+            raise ValidationError({"correction": "Gate overrides must be booleans."})
+        cleaned = _json_copy(scrub_secrets(correction), "correction")
+        if len(json.dumps(cleaned, ensure_ascii=False)) > 16_000:
+            raise ValidationError({"correction": "Correction is too large."})
+        return cleaned
+
+    @staticmethod
+    def _corrected_insight(*, candidate, original, correction, reviewer, reason):
+        dimensions = {
+            name: getattr(original, field)
+            for name, (field, _maximum) in LeadReviewService._DIMENSIONS.items()
+        }
+        dimensions.update(correction.get("dimension_overrides", {}))
+        gates = {
+            name: getattr(original, field)
+            for name, field in LeadReviewService._GATES.items()
+        }
+        gates.update(correction.get("gate_overrides", {}))
+        scored = score_lead(ScoreDimensions(**dimensions), EvidenceGates(**gates))
+        now = timezone.now()
+        latest_version = (
+            LeadInsight.objects.filter(candidate=candidate)
+            .order_by("-version")
+            .values_list("version", flat=True)
+            .first()
+        )
+        frozen_bindings = original.ai_run.input_snapshot.get("capability_bindings")
+        frozen_context = (
+            lead_frozen_reference_writes(
+                organization_id=candidate.organization_id,
+                ontology_snapshot=original.ontology_snapshot,
+                capability_bindings=frozen_bindings,
+            )
+            if isinstance(frozen_bindings, list)
+            else nullcontext()
+        )
+        with lead_history_writes(), frozen_context:
+            insight = LeadInsight.objects.create(
+                organization=candidate.organization,
+                candidate=candidate,
+                ai_run=original.ai_run,
+                origin=LeadInsight.Origin.HUMAN_CORRECTION,
+                source_insight=original,
+                human_correction=correction,
+                reviewed_by=reviewer,
+                reviewed_at=now,
+                review_reason=reason,
+                version=(latest_version or 0) + 1,
+                intent_score=dimensions["intent"],
+                company_fit_score=dimensions["company_fit"],
+                specificity_score=dimensions["specificity"],
+                capability_fit_score=dimensions["capability_fit"],
+                recency_score=dimensions["recency"],
+                score=scored.total,
+                score_band=scored.band,
+                high_value_eligible=scored.high_value_eligible,
+                traceable_source=gates["traceable_source"],
+                explicit_need_or_company_match=gates[
+                    "explicit_need_or_company_match"
+                ],
+                capability_evidence=gates["capability_evidence"],
+                audited_run=gates["audited_run"],
+                ontology_snapshot_complete=gates["ontology_snapshot"],
+                explanation=_json_copy(original.explanation, "explanation"),
+                extracted_requirement_values=_json_copy(
+                    original.extracted_requirement_values,
+                    "extracted_requirement_values",
+                ),
+                evidence_confidence=original.evidence_confidence,
+                company_match_confidence=original.company_match_confidence,
+                ai_confidence=original.ai_confidence,
+                ontology_snapshot=_json_copy(
+                    original.ontology_snapshot, "ontology_snapshot"
+                ),
+            )
+            for link in original.evidence_links.select_related(
+                "evidence", "source_signal"
+            ):
+                LeadCandidateEvidence.objects.create(
+                    organization=candidate.organization,
+                    candidate=candidate,
+                    insight=insight,
+                    evidence=link.evidence,
+                    source_signal=link.source_signal,
+                )
+            for requirement in original.requirements.select_related(
+                "requirement_concept",
+                "capability_concept",
+                "capability_knowledge_evidence",
+                "source_evidence",
+            ):
+                LeadInsightRequirement.objects.create(
+                    organization=candidate.organization,
+                    insight=insight,
+                    requirement_concept=requirement.requirement_concept,
+                    capability_concept=requirement.capability_concept,
+                    capability_knowledge_evidence=(
+                        requirement.capability_knowledge_evidence
+                    ),
+                    source_evidence=requirement.source_evidence,
+                    extracted_value=requirement.extracted_value,
+                    unit=requirement.unit,
+                )
+        return insight
+
+    @staticmethod
+    @transaction.atomic
+    def apply(
+        *,
+        organization,
+        candidate,
+        action,
+        expected_version,
+        reason,
+        reviewer,
+        idempotency_key,
+        correction=None,
+    ):
+        if action in {"MERGE_COMPANY", "SPLIT_COMPANY"}:
+            raise ValidationError({"action": "This review action is reserved for B2."})
+        if action not in LeadReview.Action.values:
+            raise ValidationError({"action": "Unsupported B1 review action."})
+        normalized_reason = " ".join(str(reason).strip().split())
+        if not normalized_reason or len(normalized_reason) > 2000:
+            raise ValidationError({"reason": "Provide a reason up to 2000 characters."})
+        candidate_id = getattr(candidate, "pk", candidate)
+        intent, intent_hash = LeadReviewService._canonical_intent(
+            candidate_id=candidate_id,
+            action=action,
+            expected_version=expected_version,
+            correction=correction,
+            reason=normalized_reason,
+        )
+        existing = LeadReview.objects.select_related("candidate", "insight").filter(
+            organization=organization,
+            reviewer=reviewer,
+            idempotency_key=idempotency_key,
+        ).first()
+        if existing is not None:
+            if not hmac.compare_digest(existing.intent_hash, intent_hash):
+                raise LeadIdempotencyConflictError(
+                    "Idempotency key already has a different review intent."
+                )
+            return LeadReviewResult(existing, existing.candidate, existing.insight)
+
+        locked = LeadCandidate.objects.select_for_update().filter(
+            pk=candidate_id, organization=organization
+        ).first()
+        if locked is None:
+            raise ValidationError(
+                {"candidate": "Lead candidate is unavailable for this organization."}
+            )
+        if locked.version != expected_version:
+            raise LeadVersionConflict("Lead candidate version is stale.")
+        if locked.analysis_lease_token is not None:
+            raise LeadStateError(
+                "Lead candidate has an active analysis lease; manual review is disabled."
+            )
+
+        insight = locked.latest_insight
+        normalized_correction = None
+        ignore_fingerprint = ""
+        if action == LeadReview.Action.CORRECT:
+            if locked.status != LeadCandidate.Status.ANALYZED or insight is None:
+                raise LeadStateError("Only analyzed candidates can be corrected.")
+            normalized_correction = LeadReviewService._validate_correction(correction)
+            insight = LeadReviewService._corrected_insight(
+                candidate=locked,
+                original=insight,
+                correction=normalized_correction,
+                reviewer=reviewer,
+                reason=normalized_reason,
+            )
+            for field in LeadReviewService._COMPANY_FIELDS:
+                if field in normalized_correction:
+                    setattr(locked, field, str(normalized_correction[field]).strip())
+            locked.latest_insight = insight
+            locked.status = LeadCandidate.Status.REVIEWED
+        elif action == LeadReview.Action.CONFIRM:
+            if locked.status != LeadCandidate.Status.ANALYZED or insight is None:
+                raise LeadStateError("Only analyzed candidates can be confirmed.")
+            locked.status = LeadCandidate.Status.REVIEWED
+        elif action == LeadReview.Action.DISMISS:
+            if locked.status not in {
+                LeadCandidate.Status.ANALYZED,
+                LeadCandidate.Status.REVIEWED,
+            }:
+                raise LeadStateError("Only analyzed or reviewed candidates can be dismissed.")
+            locked.status = LeadCandidate.Status.DISMISSED
+            identity = (locked.company_domain or locked.company_name).strip().casefold()
+            ignore_fingerprint = hashlib.sha256(
+                f"{organization.id}:{identity}".encode()
+            ).hexdigest()
+        elif action == LeadReview.Action.REOPEN:
+            if locked.status != LeadCandidate.Status.DISMISSED:
+                raise LeadStateError("Only dismissed candidates can be reopened.")
+            locked.status = LeadCandidate.Status.DISCOVERED
+        else:
+            if locked.status not in {
+                LeadCandidate.Status.ANALYZED,
+                LeadCandidate.Status.REVIEWED,
+            }:
+                raise LeadStateError(
+                    "More evidence can be requested only after analysis or review."
+                )
+
+        locked.save(
+            update_fields=[
+                "company_name",
+                "company_domain",
+                "country_hint",
+                "latest_insight",
+                "status",
+                "updated_at",
+            ]
+        )
+        if action in {LeadReview.Action.CONFIRM, LeadReview.Action.CORRECT}:
+            linked_ids = set(
+                locked.evidence_links.values_list("evidence_id", flat=True)
+            )
+            if linked_ids:
+                EvidenceService.protect_confirmed(
+                    organization=organization, evidence_ids=linked_ids
+                )
+        try:
+            with transaction.atomic(), lead_history_writes():
+                review = LeadReview.objects.create(
+                    organization=organization,
+                    candidate=locked,
+                    insight=insight,
+                    action=action,
+                    reason=normalized_reason,
+                    correction=normalized_correction,
+                    reviewer=reviewer,
+                    idempotency_key=idempotency_key,
+                    intent_hash=intent_hash,
+                    ignore_fingerprint=ignore_fingerprint,
+                    candidate_status=locked.status,
+                    candidate_version=locked.version,
+                )
+        except IntegrityError as error:
+            raise LeadIdempotencyConflictError(
+                "Idempotency key was used concurrently for another review."
+            ) from error
+        return LeadReviewResult(review, locked, insight)
+
+
 __all__ = [
+    "LeadAnalysisService",
+    "LeadIdempotencyConflictError",
+    "LeadReviewResult",
+    "LeadReviewService",
     "LeadService",
     "LeadStateError",
     "LeadVersionConflict",

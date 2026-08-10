@@ -91,7 +91,13 @@ class AuditLog(ImmutableAuditModel):
     action = models.CharField(max_length=16, choices=ReviewAction.choices)
     status = models.CharField(max_length=32)
     object_version = models.PositiveIntegerField()
-    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="audit_logs")
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="audit_logs",
+    )
     comment = models.TextField(blank=True)
     before_metadata = models.JSONField(default=dict)
     after_metadata = models.JSONField(default=dict)

@@ -7,6 +7,36 @@ from .models import ApprovalRecord, AuditLog, approval_audit_writes
 
 
 @transaction.atomic
+def record_audit_event(
+    *,
+    organization: Organization,
+    object_type: str,
+    object_id,
+    action: str,
+    status: str,
+    object_version: int,
+    actor: AbstractBaseUser | None,
+    comment: str = "",
+    before_metadata: dict[str, object] | None = None,
+    after_metadata: dict[str, object] | None = None,
+) -> AuditLog:
+    """Append an audit-only event, including explicit system events without an actor."""
+    with approval_audit_writes():
+        return AuditLog.objects.create(
+            organization=organization,
+            object_type=object_type,
+            object_id=object_id,
+            action=action,
+            status=status,
+            object_version=object_version,
+            actor=actor,
+            comment=comment,
+            before_metadata=before_metadata or {},
+            after_metadata=after_metadata or {},
+        )
+
+
+@transaction.atomic
 def record_review_transition(
     *,
     organization: Organization,

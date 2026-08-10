@@ -4,15 +4,17 @@ import json
 from copy import deepcopy
 from contextlib import nullcontext
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType
 from typing import Mapping
 from urllib.parse import urlsplit, urlunsplit
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, IntegrityError, OperationalError, transaction
 from django.utils import timezone
 
 from apps.assets.models import MaterialAsset
+from apps.audit.services import record_audit_event
 from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService, StaleJobWorkerError
 
@@ -477,6 +479,322 @@ class EvidenceService:
 
 
 create = EvidenceService.create
+
+
+RETENTION_POLICY_VERSION = "SOURCE_EVIDENCE_RETENTION_V1"
+RETENTION_JOB_SCHEMA = "SOURCE_RETENTION_JOB_V1"
+RETENTION_AUDIT_ID_LIMIT = 100
+
+
+def retention_cleanup_job_snapshot(*, organization, cutoff) -> dict[str, str]:
+    if not isinstance(cutoff, datetime) or timezone.is_naive(cutoff):
+        raise ValueError("Retention cutoff must be a timezone-aware datetime.")
+    return {
+        "schema": RETENTION_JOB_SCHEMA,
+        "organization_id": str(organization.id),
+        "cutoff": cutoff.isoformat(),
+        "policy_version": RETENTION_POLICY_VERSION,
+    }
+
+
+@dataclass(frozen=True)
+class RetentionResult:
+    redacted: int = 0
+    deleted_text: int = 0
+    anonymized_actors: int = 0
+    protected: int = 0
+    failures: int = 0
+    no_op: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "redacted": self.redacted,
+            "deleted_text": self.deleted_text,
+            "anonymized_actors": self.anonymized_actors,
+            "protected": self.protected,
+            "failures": self.failures,
+            "no_op": self.no_op,
+        }
+
+
+class RetentionService:
+    _ACTIVE_JOB_STATUSES = frozenset(
+        {Job.Status.QUEUED, Job.Status.RUNNING, Job.Status.RETRY_QUEUED}
+    )
+    _PROTECTED_RETENTION_CLASSES = frozenset(
+        {
+            SourceEvidence.RetentionClass.CONFIRMED,
+            SourceEvidence.RetentionClass.HANDOFF_PROTECTED,
+        }
+    )
+
+    @staticmethod
+    def _authorize(*, organization, actor) -> None:
+        if actor is None:
+            return
+        from apps.identity.models import Membership
+        from apps.identity.permissions import PermissionCode
+        from apps.identity.services import get_active_membership, require_permission
+
+        try:
+            membership = get_active_membership(user=actor)
+        except Membership.DoesNotExist as error:
+            raise PermissionDenied("An active source-management membership is required.") from error
+        if membership.organization_id != organization.id:
+            raise PermissionDenied("An active source-management membership is required.")
+        require_permission(
+            membership=membership,
+            permission=PermissionCode.SOURCES_MANAGE,
+        )
+
+    @staticmethod
+    def _snapshot_evidence_ids(snapshot) -> set[str]:
+        if not isinstance(snapshot, dict):
+            return set()
+        raw_ids = snapshot.get("evidence_ids", [])
+        if not isinstance(raw_ids, list):
+            raw_ids = []
+        result = {
+            str(item)
+            for item in raw_ids
+            if isinstance(item, (str, int))
+        }
+        evidence = snapshot.get("evidence", [])
+        if isinstance(evidence, list):
+            result.update(
+                str(row["id"])
+                for row in evidence
+                if isinstance(row, dict) and row.get("id")
+            )
+        return result
+
+    @staticmethod
+    def _active_analysis_evidence_ids(*, organization) -> set[str]:
+        snapshots = Job.objects.filter(
+            organization=organization,
+            type=Job.Type.LEAD_ANALYZE,
+            status__in=RetentionService._ACTIVE_JOB_STATUSES,
+        ).values_list("input_snapshot", flat=True)
+        active_ids: set[str] = set()
+        for snapshot in snapshots:
+            active_ids.update(RetentionService._snapshot_evidence_ids(snapshot))
+        return active_ids
+
+    @staticmethod
+    def _validate_relationships(row: SourceEvidence, *, organization) -> None:
+        if row.source_signal.organization_id != organization.id:
+            raise ValidationError("Evidence source signal has inconsistent ownership.")
+        content = row.source_signal.source_content
+        if content is not None and content.organization_id != organization.id:
+            raise ValidationError("Evidence source content has inconsistent ownership.")
+        for field_name in ("screenshot_asset", "import_asset"):
+            asset = getattr(row, field_name)
+            if asset is not None and asset.organization_id != organization.id:
+                raise ValidationError(f"Evidence {field_name} has inconsistent ownership.")
+        for link in row.candidate_links.select_related(
+            "candidate", "source_signal"
+        ).order_by("pk"):
+            if (
+                link.organization_id != organization.id
+                or link.candidate.organization_id != organization.id
+                or link.source_signal_id != row.source_signal_id
+            ):
+                raise ValidationError("Evidence candidate history is inconsistent.")
+
+    @staticmethod
+    def _is_protected(row: SourceEvidence, *, active_ids: set[str]) -> bool:
+        if row.retention_class in RetentionService._PROTECTED_RETENTION_CLASSES:
+            return True
+        if str(row.id) in active_ids:
+            return True
+        links = row.candidate_links
+        if links.filter(candidate__status="REVIEWED").exists():
+            return True
+        if links.filter(candidate__reviews__action__in=["CONFIRM", "CORRECT"]).exists():
+            return True
+        if links.filter(
+            candidate__analysis_bindings__job__status__in=(
+                RetentionService._ACTIVE_JOB_STATUSES
+            )
+        ).exists():
+            return True
+        return False
+
+    @staticmethod
+    def _redact_locked(row: SourceEvidence, *, organization) -> tuple[int, int]:
+        deleted_text = int(bool(row.original_text)) + int(bool(row.translated_text))
+        row.original_text = ""
+        row.translated_text = ""
+        row.translated_language = ""
+        row.screenshot_asset = None
+        row.import_asset = None
+        row.availability = SourceEvidence.Availability.REDACTED_BY_RETENTION
+        with evidence_service_writes():
+            row.save(
+                update_fields=[
+                    "original_text",
+                    "translated_text",
+                    "translated_language",
+                    "screenshot_asset",
+                    "import_asset",
+                    "availability",
+                    "updated_at",
+                ]
+            )
+
+        content = row.source_signal.source_content
+        anonymized = 0
+        if content is not None and not SourceEvidence.objects.filter(
+            organization=organization,
+            source_signal__source_content=content,
+        ).exclude(
+            availability=SourceEvidence.Availability.REDACTED_BY_RETENTION
+        ).exists():
+            anonymized = int(bool(content.author_public_name))
+            content.author_public_name = ""
+            content.original_text = ""
+            content.save(
+                update_fields=["author_public_name", "original_text", "updated_at"]
+            )
+        return deleted_text, anonymized
+
+    @staticmethod
+    def cleanup(
+        *,
+        organization,
+        cutoff,
+        actor=None,
+    ) -> RetentionResult:
+        return RetentionService._cleanup(
+            organization=organization,
+            cutoff=cutoff,
+            actor=actor,
+        )
+
+    @staticmethod
+    def cleanup_owned(
+        *,
+        organization,
+        cutoff,
+        actor,
+        job_id,
+        claim_token,
+    ) -> RetentionResult:
+        return RetentionService._cleanup(
+            organization=organization,
+            cutoff=cutoff,
+            actor=actor,
+            job_id=job_id,
+            claim_token=claim_token,
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def _cleanup(
+        *,
+        organization,
+        cutoff,
+        actor,
+        job_id=None,
+        claim_token=None,
+    ) -> RetentionResult:
+        if not isinstance(cutoff, datetime) or timezone.is_naive(cutoff):
+            raise ValueError("Retention cutoff must be a timezone-aware datetime.")
+        RetentionService._authorize(organization=organization, actor=actor)
+        if (job_id is None) != (claim_token is None):
+            raise ValidationError("Retention worker ownership is incomplete.")
+        if job_id is not None:
+            owned_job = JobService._locked(job_id, organization=organization)
+            JobService._require_owner(owned_job, claim_token)
+            if owned_job.type != Job.Type.RETENTION_CLEANUP:
+                raise ValidationError("Retention worker owns the wrong job type.")
+
+        active_ids = RetentionService._active_analysis_evidence_ids(
+            organization=organization
+        )
+        candidate_ids = list(
+            SourceEvidence.objects.filter(
+                organization=organization,
+                captured_at__lte=cutoff,
+            )
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
+        counts = RetentionResult()
+        changed_ids: list[str] = []
+        failed_ids: list[str] = []
+
+        values = counts.as_dict()
+        for evidence_id in candidate_ids:
+            try:
+                with transaction.atomic():
+                    row = (
+                        SourceEvidence.objects.select_for_update()
+                        .select_related(
+                            "source_signal__source_content",
+                            "screenshot_asset",
+                            "import_asset",
+                        )
+                        .get(pk=evidence_id, organization=organization)
+                    )
+                    if row.captured_at >= cutoff:
+                        values["no_op"] += 1
+                        continue
+                    if (
+                        row.availability
+                        == SourceEvidence.Availability.REDACTED_BY_RETENTION
+                    ):
+                        values["no_op"] += 1
+                        continue
+                    RetentionService._validate_relationships(
+                        row, organization=organization
+                    )
+                    active_ids.update(
+                        RetentionService._active_analysis_evidence_ids(
+                            organization=organization
+                        )
+                    )
+                    if RetentionService._is_protected(row, active_ids=active_ids):
+                        values["protected"] += 1
+                        continue
+                    deleted_text, anonymized = RetentionService._redact_locked(
+                        row, organization=organization
+                    )
+                    values["redacted"] += 1
+                    values["deleted_text"] += deleted_text
+                    values["anonymized_actors"] += anonymized
+                    changed_ids.append(str(row.id))
+            except (DatabaseError, ValidationError):
+                values["failures"] += 1
+                failed_ids.append(str(evidence_id))
+
+        result = RetentionResult(**values)
+        if result.redacted or result.failures:
+            bounded_changed = changed_ids[:RETENTION_AUDIT_ID_LIMIT]
+            remaining = RETENTION_AUDIT_ID_LIMIT - len(bounded_changed)
+            bounded_failed = failed_ids[:remaining]
+            record_audit_event(
+                organization=organization,
+                object_type="sources.RetentionCleanup",
+                object_id=organization.id,
+                action="ARCHIVE",
+                status="COMPLETED_WITH_FAILURES" if result.failures else "COMPLETED",
+                object_version=1,
+                actor=actor,
+                comment="Expired transient source evidence retention cleanup.",
+                after_metadata={
+                    "policy_version": RETENTION_POLICY_VERSION,
+                    "cutoff": cutoff.isoformat(),
+                    "counts": result.as_dict(),
+                    "evidence_ids": bounded_changed,
+                    "failed_evidence_ids": bounded_failed,
+                    "references_truncated": (
+                        len(changed_ids) + len(failed_ids)
+                        > RETENTION_AUDIT_ID_LIMIT
+                    ),
+                },
+            )
+        return result
 
 
 SOURCE_IMPORT_JOB_SCHEMA = "SOURCE_IMPORT_JOB_V1"

@@ -7,6 +7,7 @@ from string import Formatter
 from uuid import UUID
 
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from jsonschema import ValidationError as JSONSchemaValidationError
 
 from apps.ai.models import AIRun, PromptVersion
@@ -235,19 +236,20 @@ def _recover_candidate(snapshot, *, organization_id, binding=None) -> None:
     )
 
 
-def _terminalize_preflight_failure(job) -> None:
-    if job.status not in {Job.Status.QUEUED, Job.Status.RETRY_QUEUED}:
-        return
+@transaction.atomic
+def _terminalize_preflight_failure(job_id) -> bool:
     claimed = JobService.claim(
         worker_id="lead-analysis-preflight",
-        job_id=job.id,
+        job_id=job_id,
     )
-    if claimed is not None:
-        JobService.fail(
-            claimed.id,
-            claim_token=claimed.claim_token,
-            error={"code": "job_error"},
-        )
+    if claimed is None:
+        return False
+    failed = JobService.fail(
+        claimed.id,
+        claim_token=claimed.claim_token,
+        error={"code": "job_error"},
+    )
+    return failed.status == Job.Status.FAILED
 
 
 def _bound_prompt(job, prompt_version_id):
@@ -330,12 +332,12 @@ def execute_lead_analysis_job(
             .filter(job_id=job.id)
             .first()
         )
-        _terminalize_preflight_failure(job)
-        _recover_candidate(
-            job.input_snapshot,
-            organization_id=job.organization_id,
-            binding=binding,
-        )
+        if _terminalize_preflight_failure(job.id):
+            _recover_candidate(
+                job.input_snapshot,
+                organization_id=job.organization_id,
+                binding=binding,
+            )
         raise
     if job.status == Job.Status.RETRY_QUEUED:
         LeadService.resume_analysis_retry(
@@ -371,12 +373,12 @@ def execute_lead_analysis_job(
     except StaleJobWorkerError:
         raise
     except GenerationPreflightError:
-        _terminalize_preflight_failure(job)
-        _recover_candidate(
-            job.input_snapshot,
-            organization_id=job.organization_id,
-            binding=binding,
-        )
+        if _terminalize_preflight_failure(job.id):
+            _recover_candidate(
+                job.input_snapshot,
+                organization_id=job.organization_id,
+                binding=binding,
+            )
         raise
     if run.status in {AIRun.Status.FAILED, AIRun.Status.CANCELED}:
         _recover_candidate(

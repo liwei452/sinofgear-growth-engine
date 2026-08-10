@@ -195,6 +195,114 @@ def test_worker_rejects_prompt_that_differs_from_durable_binding_without_provide
 
 
 @pytest.mark.django_db
+def test_prompt_mismatch_redelivery_does_not_steal_running_worker_candidate_lease(
+    candidate, evidence, approved_requirement, approved_capability, user
+):
+    _snapshot, _bound_prompt, job = _analysis_context(candidate, evidence, user)
+    other_prompt = PromptVersionService.create(
+        purpose="LEAD_ANALYZE",
+        code="running-mismatched-bound-prompt",
+        provider="must-not-run",
+        model="fake-v2",
+        template="{input_json}",
+        output_schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
+        status=PromptVersion.Status.PUBLISHED,
+        created_by=user,
+    )
+    claimed = JobService.claim(worker_id="legal-worker", job_id=job.id)
+    candidate.refresh_from_db()
+    lease_token = candidate.analysis_lease_token
+    candidate_version = candidate.version
+
+    with pytest.raises(GenerationPreflightError, match="bound prompt"):
+        execute_lead_analysis_job(job.id, other_prompt.id)
+
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    assert job.status == Job.Status.RUNNING
+    assert job.claim_token == claimed.claim_token
+    assert job.claimed_by == "legal-worker"
+    assert job.error is None
+    assert job.result_reference is None
+    assert candidate.status == LeadCandidate.Status.ANALYZING
+    assert candidate.analysis_lease_token == lease_token
+    assert candidate.version == candidate_version
+    assert not AIRun.objects.filter(job=job).exists()
+    assert not LeadInsight.objects.filter(candidate=candidate).exists()
+
+
+@pytest.mark.django_db
+def test_provider_mismatch_redelivery_does_not_steal_running_worker_candidate_lease(
+    candidate, evidence, approved_requirement, approved_capability, user
+):
+    _snapshot, prompt, job = _analysis_context(candidate, evidence, user)
+    claimed = JobService.claim(worker_id="legal-worker", job_id=job.id)
+    candidate.refresh_from_db()
+    lease_token = candidate.analysis_lease_token
+    candidate_version = candidate.version
+
+    with pytest.raises(GenerationPreflightError, match="provider"):
+        execute_lead_analysis_job(
+            job.id,
+            prompt.id,
+            provider_code="delayed-wrong-provider",
+        )
+
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    assert job.status == Job.Status.RUNNING
+    assert job.claim_token == claimed.claim_token
+    assert job.claimed_by == "legal-worker"
+    assert job.error is None
+    assert job.result_reference is None
+    assert candidate.status == LeadCandidate.Status.ANALYZING
+    assert candidate.analysis_lease_token == lease_token
+    assert candidate.version == candidate_version
+    assert not AIRun.objects.filter(job=job).exists()
+    assert not LeadInsight.objects.filter(candidate=candidate).exists()
+
+
+@pytest.mark.django_db
+def test_duplicate_terminal_preflight_redelivery_is_idempotent(
+    candidate, evidence, approved_requirement, approved_capability, user
+):
+    _snapshot, _bound_prompt, job = _analysis_context(candidate, evidence, user)
+    other_prompt = PromptVersionService.create(
+        purpose="LEAD_ANALYZE",
+        code="terminal-mismatched-bound-prompt",
+        provider="must-not-run",
+        model="fake-v2",
+        template="{input_json}",
+        output_schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
+        status=PromptVersion.Status.PUBLISHED,
+        created_by=user,
+    )
+
+    with pytest.raises(GenerationPreflightError, match="bound prompt"):
+        execute_lead_analysis_job(job.id, other_prompt.id)
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    failed_job_version = job.version
+    candidate_version = candidate.version
+    failed_at = job.finished_at
+
+    with pytest.raises(GenerationPreflightError, match="bound prompt"):
+        execute_lead_analysis_job(job.id, other_prompt.id)
+
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    assert job.status == Job.Status.FAILED
+    assert job.version == failed_job_version
+    assert job.finished_at == failed_at
+    assert job.result_reference is None
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None
+    assert candidate.version == candidate_version
+    assert not AIRun.objects.filter(job=job).exists()
+    assert not LeadInsight.objects.filter(candidate=candidate).exists()
+
+
+@pytest.mark.django_db
 def test_worker_rejects_tampered_binding_candidate_and_recovers_snapshot_owner(
     candidate,
     evidence,

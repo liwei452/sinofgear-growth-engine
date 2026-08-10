@@ -31,6 +31,13 @@ const canReadKnowledge = computed(() => has("knowledge.read"))
 const canReadJobs = computed(() => has("jobs.read"))
 const canReadContent = computed(() => has("content.read"))
 const canReadMemberships = computed(() => has("memberships.read"))
+const campaignManagementMembershipId = computed(() => currentUserQuery.data.value?.membership.id ?? "")
+let campaignManagementAuthorityGeneration = 0
+watch(
+  [organizationId, campaignManagementMembershipId, canManageCampaigns],
+  () => { campaignManagementAuthorityGeneration += 1 },
+  { flush: "sync" },
+)
 const wizardOpen = ref(false)
 const notice = ref("")
 const actionError = ref("")
@@ -141,11 +148,12 @@ function isActiveOrganization(scope: string): boolean {
   return !disposed && Boolean(scope) && organizationId.value === scope
 }
 
-function isActiveCampaignManagementSession(scope: string, membershipId: string): boolean {
+function isActiveCampaignManagementSession(scope: string, membershipId: string, authorityGeneration: number): boolean {
   return isActiveOrganization(scope)
     && Boolean(membershipId)
     && currentUserQuery.data.value?.membership.id === membershipId
     && canManageCampaigns.value
+    && campaignManagementAuthorityGeneration === authorityGeneration
 }
 
 async function pollJob(id: string, scope: string): Promise<void> {
@@ -240,16 +248,17 @@ function openBriefEditor(brief: ContentBrief): void {
 async function createBriefRevision(brief: ContentBrief): Promise<void> {
   if (brief.status !== "READY" || !has("campaigns.manage")) return
   const scope = organizationId.value
-  const membershipId = currentUserQuery.data.value?.membership.id ?? ""
+  const membershipId = campaignManagementMembershipId.value
+  const authorityGeneration = campaignManagementAuthorityGeneration
   try {
     const revision = await reviseBrief(brief.id)
-    if (!isActiveCampaignManagementSession(scope, membershipId)) return
+    if (!isActiveCampaignManagementSession(scope, membershipId, authorityGeneration)) return
     await queryClient.invalidateQueries({ queryKey: contentQueryKeys.briefs(scope) })
-    if (!isActiveCampaignManagementSession(scope, membershipId)) return
+    if (!isActiveCampaignManagementSession(scope, membershipId, authorityGeneration)) return
     editingBrief.value = revision
     notice.value = "已从可生成需求创建新的草稿版本，请检查并保存。"
   } catch (error) {
-    if (isActiveCampaignManagementSession(scope, membershipId)) actionError.value = safeError(error)
+    if (isActiveCampaignManagementSession(scope, membershipId, authorityGeneration)) actionError.value = safeError(error)
   }
 }
 

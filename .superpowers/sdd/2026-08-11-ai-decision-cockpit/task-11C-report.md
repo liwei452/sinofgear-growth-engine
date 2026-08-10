@@ -376,6 +376,7 @@ No backend, generated API/schema, dependency, E2E, project-plan, or task-ledger 
 - Environment only: the configured global Node/npm wrappers remain broken; direct project-tool verification with the bundled Node runtime is complete and green.
 - The advanced unfiltered lists still load through normal cursor pages. Linked records outside loaded pages therefore use explicit ID provenance placeholders rather than issuing unsupported per-record asset/concept requests.
 - M1 (unused transition component) and M2 (`aria-controls` for disclosure) remain intentionally deferred.
+
 - This requested bookkeeping append is intentionally left uncommitted, so commit `2c6cc27` and all source code remain unchanged; `task-11C-report.md` is the only tracked worktree modification.
 
 ## Fix Round 3
@@ -470,4 +471,45 @@ Result: exit 0; 150 modules transformed; production bundle built successfully.
 
 - Environment only: the configured global Node/npm wrappers remain broken; direct project-tool verification with the bundled Node runtime is complete and green.
 - The server may still have created the revision before permission revocation reached the client. The client intentionally discards that stale response; a later authorized brief refresh is the source of truth.
+- M1 (unused transition component) and M2 (`aria-controls` for disclosure) remain intentionally deferred.
+
+## Fix Round 4
+
+Requested commit: `fix: invalidate interrupted promotion authority`.
+
+Addressed the sole remaining Important finding from the Fix Round 3 re-review. M1 and M2 remain deferred as requested.
+
+### Monotonic campaign-management authority continuity
+
+- Added a monotonic campaign-management authority generation scoped to the mounted content-factory page.
+- A synchronous watcher advances the generation whenever the current organization ID, membership ID, or effective `campaigns.manage` value changes. Both revocation and restoration advance it, so returning to the original values cannot revive an interrupted request.
+- `createBriefRevision` captures the generation with its existing organization and membership values. Its completion guard now requires exact generation equality after the revision request, again after brief-query invalidation, and on the rejection path.
+- The authority watcher is registered during setup before any user-triggered revision can start and uses `flush: "sync"`. The organization and membership regressions perform away/back cache writes synchronously without yielding before response settlement, proving that coalesced final values cannot hide an interruption.
+
+### Fix Round 4 TDD evidence
+
+The focused lifecycle command was:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vitest/vitest.mjs run src/modules/content/ContentFactoryPage.test.ts --config vite.config.ts -t 'deferred revision' --reporter=dot
+```
+
+RED result: exit 1; 4 failed, 1 passed, and 25 skipped. Restored `campaigns.manage` allowed both stale success and stale rejection through, and synchronous organization and membership round trips allowed stale success to reopen the editor. The uninterrupted-authority success control passed.
+
+GREEN result after the generation guard: exit 0; 5 passed and 25 skipped. The full `ContentFactoryPage` suite also passed 30/30.
+
+### Fix Round 4 final verification
+
+- Focused promotion/content/wizard tests: 3 files, 47/47 passed.
+- Full frontend suite: 34 files, 307/307 passed.
+- Typecheck: exit 0, no diagnostics.
+- Lint: exit 0, no diagnostics.
+- Production build: exit 0; 150 modules transformed.
+- `git diff --check`: exit 0.
+- Backend, generated API/schema, dependencies, E2E, project-plan, and task-ledger files were not changed.
+
+### Fix Round 4 concerns
+
+- Environment only: the configured global Node/npm wrappers remain broken, so verification used the Codex-bundled Node runtime directly; no dependency was installed or changed.
+- The server may still create a revision before a client-side authority interruption. Its retired response stays inert, and a later authorized brief refresh remains the source of truth.
 - M1 (unused transition component) and M2 (`aria-controls` for disclosure) remain intentionally deferred.

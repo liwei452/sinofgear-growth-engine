@@ -619,7 +619,7 @@ it("edits a draft brief and creates a revision only with campaigns.manage", asyn
   expect(screen.getByRole("dialog")).toHaveTextContent("编辑需求草稿")
 })
 
-it("does not reopen a deferred revision after campaigns.manage is revoked", async () => {
+it("does not reopen a deferred revision after campaigns.manage is revoked and restored before success", async () => {
   document.cookie = "csrftoken=csrf-value; path=/"
   const readyBrief = { ...brief("READY"), id: "brief-deferred-revision" }
   const revision = { ...readyBrief, id: "brief-late-revision", status: "DRAFT", version: 2 }
@@ -642,6 +642,8 @@ it("does not reopen a deferred revision after campaigns.manage is revoked", asyn
   ))
   view.queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(["campaigns.read"]))
   await waitFor(() => expect(screen.queryByRole("button", { name: "创建需求修订版" })).not.toBeInTheDocument())
+  view.queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(permissions))
+  await screen.findByRole("button", { name: "创建需求修订版" })
 
   resolveRevision(new Response(JSON.stringify(revision), { status: 201, headers: { "Content-Type": "application/json" } }))
   await deferredRevision
@@ -650,11 +652,106 @@ it("does not reopen a deferred revision after campaigns.manage is revoked", asyn
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument())
   expect(screen.queryByText("已从可生成需求创建新的草稿版本，请检查并保存。")).not.toBeInTheDocument()
   expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+})
 
+it("does not show a deferred revision error after campaigns.manage is revoked and restored", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const readyBrief = { ...brief("READY"), id: "brief-deferred-error" }
+  let rejectRevision!: (reason?: unknown) => void
+  const deferredRevision = new Promise<Response>((_resolve, reject) => { rejectRevision = reject })
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === "/api/v1/content-briefs") return new Response(JSON.stringify({ next: null, previous: null, results: [readyBrief] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/content-briefs/brief-deferred-error/revisions" && options?.method === "POST") return deferredRevision
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const permissions = ["campaigns.read", "campaigns.manage"]
+  const view = renderPage(permissions, "advanced")
+  const user = userEvent.setup()
+
+  await user.click(await screen.findByRole("button", { name: "创建需求修订版" }))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+    "/api/v1/content-briefs/brief-deferred-error/revisions",
+    expect.objectContaining({ method: "POST" }),
+  ))
+  view.queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(["campaigns.read"]))
   view.queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(permissions))
   await screen.findByRole("button", { name: "创建需求修订版" })
+
+  rejectRevision(new Error("late revision failed"))
+  await expect(deferredRevision).rejects.toThrow("late revision failed")
+  await new Promise((resolve) => setTimeout(resolve, 0))
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   expect(screen.queryByText("已从可生成需求创建新的草稿版本，请检查并保存。")).not.toBeInTheDocument()
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+})
+
+it("opens a deferred revision when campaign management authority remains uninterrupted", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const readyBrief = { ...brief("READY"), id: "brief-uninterrupted-revision" }
+  const revision = { ...readyBrief, id: "brief-current-revision", status: "DRAFT", version: 2 }
+  let resolveRevision!: (response: Response) => void
+  const deferredRevision = new Promise<Response>((resolve) => { resolveRevision = resolve })
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === "/api/v1/content-briefs") return new Response(JSON.stringify({ next: null, previous: null, results: [readyBrief] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/content-briefs/brief-uninterrupted-revision/revisions" && options?.method === "POST") return deferredRevision
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["campaigns.read", "campaigns.manage"], "advanced")
+
+  await user.click(await screen.findByRole("button", { name: "创建需求修订版" }))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+    "/api/v1/content-briefs/brief-uninterrupted-revision/revisions",
+    expect.objectContaining({ method: "POST" }),
+  ))
+  resolveRevision(new Response(JSON.stringify(revision), { status: 201, headers: { "Content-Type": "application/json" } }))
+
+  expect(await screen.findByRole("dialog")).toHaveTextContent("编辑需求草稿")
+  expect(screen.getByText("已从可生成需求创建新的草稿版本，请检查并保存。")).toBeVisible()
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+})
+
+it.each([
+  ["organization", {
+    ...currentUser(["campaigns.read", "campaigns.manage"]),
+    organization: { id: "org-2", name: "另一组织", slug: "other" },
+  }],
+  ["membership", {
+    ...currentUser(["campaigns.read", "campaigns.manage"]),
+    membership: { ...currentUser(["campaigns.read", "campaigns.manage"]).membership, id: "member-2" },
+  }],
+])("does not reopen a deferred revision after a %s switch away and back", async (_authority, switchedUser) => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const permissions = ["campaigns.read", "campaigns.manage"]
+  const readyBrief = { ...brief("READY"), id: "brief-session-switch" }
+  const revision = { ...readyBrief, id: "brief-stale-session-revision", status: "DRAFT", version: 2 }
+  let resolveRevision!: (response: Response) => void
+  const deferredRevision = new Promise<Response>((resolve) => { resolveRevision = resolve })
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === "/api/v1/content-briefs") return new Response(JSON.stringify({ next: null, previous: null, results: [readyBrief] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/content-briefs/brief-session-switch/revisions" && options?.method === "POST") return deferredRevision
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const view = renderPage(permissions, "advanced")
+  const user = userEvent.setup()
+
+  await user.click(await screen.findByRole("button", { name: "创建需求修订版" }))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+    "/api/v1/content-briefs/brief-session-switch/revisions",
+    expect.objectContaining({ method: "POST" }),
+  ))
+  view.queryClient.setQueryData(currentUserQueryOptions().queryKey, switchedUser)
+  view.queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(permissions))
+  resolveRevision(new Response(JSON.stringify(revision), { status: 201, headers: { "Content-Type": "application/json" } }))
+  await deferredRevision
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  expect(screen.queryByText("已从可生成需求创建新的草稿版本，请检查并保存。")).not.toBeInTheDocument()
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
 })
 
 it("traps focus in the draft editor, closes on Escape, and restores the opener", async () => {

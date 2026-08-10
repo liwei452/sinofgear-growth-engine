@@ -24,6 +24,9 @@ _ingestion_row_service_write: ContextVar[bool] = ContextVar(
 _ingestion_batch_state_service_write: ContextVar[bool] = ContextVar(
     "source_ingestion_batch_state_service_write", default=False
 )
+_ingestion_batch_retention_service_write: ContextVar[bool] = ContextVar(
+    "source_ingestion_batch_retention_service_write", default=False
+)
 _evidence_trusted_asset_fields: ContextVar[dict[str, object] | None] = ContextVar(
     "source_evidence_trusted_asset_fields", default=None
 )
@@ -55,6 +58,15 @@ def _ingestion_batch_state_writes():
         yield
     finally:
         _ingestion_batch_state_service_write.reset(token)
+
+
+@contextmanager
+def _ingestion_batch_retention_writes():
+    token = _ingestion_batch_retention_service_write.set(True)
+    try:
+        yield
+    finally:
+        _ingestion_batch_retention_service_write.reset(token)
 
 
 @contextmanager
@@ -278,6 +290,25 @@ class IngestionBatchQuerySet(ValidatedSourceQuerySet):
         model_instance = self.model()
         for field_name, value in safe_values.items():
             self.model._meta.get_field(field_name).clean(value, model_instance)
+        if models.QuerySet.update(self, **safe_values) != 1:
+            raise self.model.DoesNotExist
+        return safe_values
+
+    def _service_redact_input_reference(self, *, input_reference):
+        """Narrow writer for irreversible retention tombstones on a locked batch."""
+        if not _ingestion_batch_retention_service_write.get():
+            raise ValidationError(
+                "Ingestion batch retention data may change only through its service."
+            )
+        safe_reference = sanitize_source_json(input_reference)
+        model_instance = self.model()
+        self.model._meta.get_field("input_reference").clean(
+            safe_reference, model_instance
+        )
+        safe_values = {
+            "input_reference": safe_reference,
+            "updated_at": timezone.now(),
+        }
         if models.QuerySet.update(self, **safe_values) != 1:
             raise self.model.DoesNotExist
         return safe_values

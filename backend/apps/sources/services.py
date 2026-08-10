@@ -3,7 +3,7 @@ import ipaddress
 import json
 from copy import deepcopy
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
 from typing import Mapping
@@ -14,7 +14,7 @@ from django.db import DatabaseError, IntegrityError, OperationalError, transacti
 from django.utils import timezone
 
 from apps.assets.models import MaterialAsset
-from apps.audit.services import record_audit_event
+from apps.audit.services import record_audit_event, record_system_audit_event
 from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService, StaleJobWorkerError
 
@@ -27,6 +27,7 @@ from .models import (
     SourceSignal,
     _EVIDENCE_TRUSTED_ASSET_CAPABILITY,
     _evidence_trusted_asset_writes,
+    _ingestion_batch_retention_writes,
     _ingestion_batch_state_writes,
     evidence_service_writes,
     ingestion_row_service_writes,
@@ -505,6 +506,9 @@ class RetentionResult:
     protected: int = 0
     failures: int = 0
     no_op: int = 0
+    protected_reasons: Mapping[str, int] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -521,10 +525,15 @@ class RetentionService:
     _ACTIVE_JOB_STATUSES = frozenset(
         {Job.Status.QUEUED, Job.Status.RUNNING, Job.Status.RETRY_QUEUED}
     )
-    _PROTECTED_RETENTION_CLASSES = frozenset(
+    _RAW_TEXT_KEYS = frozenset({"original_text", "translated_text", "text"})
+    _RAW_ACTOR_KEYS = frozenset(
+        {"author_name", "author_public_name", "author_handle", "handle"}
+    )
+    _RAW_ASSET_KEYS = frozenset({"screenshot_asset_id", "import_asset_id"})
+    _RETENTION_MARKER = MappingProxyType(
         {
-            SourceEvidence.RetentionClass.CONFIRMED,
-            SourceEvidence.RetentionClass.HANDOFF_PROTECTED,
+            "status": "REDACTED_BY_RETENTION",
+            "reason": "TRANSIENT_30D_EXPIRED",
         }
     )
 
@@ -570,15 +579,22 @@ class RetentionService:
 
     @staticmethod
     def _active_analysis_evidence_ids(*, organization) -> set[str]:
-        snapshots = Job.objects.filter(
+        from apps.ai.models import AIRun
+
+        job_snapshots = Job.objects.filter(
             organization=organization,
             type=Job.Type.LEAD_ANALYZE,
-            status__in=RetentionService._ACTIVE_JOB_STATUSES,
         ).values_list("input_snapshot", flat=True)
-        active_ids: set[str] = set()
-        for snapshot in snapshots:
-            active_ids.update(RetentionService._snapshot_evidence_ids(snapshot))
-        return active_ids
+        run_snapshots = AIRun.objects.filter(
+            organization=organization,
+            job__type=Job.Type.LEAD_ANALYZE,
+        ).values_list("input_snapshot", flat=True)
+        protected_ids: set[str] = set()
+        for snapshot in (*job_snapshots, *run_snapshots):
+            protected_ids.update(
+                RetentionService._snapshot_evidence_ids(snapshot)
+            )
+        return protected_ids
 
     @staticmethod
     def _validate_relationships(row: SourceEvidence, *, organization) -> None:
@@ -602,26 +618,106 @@ class RetentionService:
                 raise ValidationError("Evidence candidate history is inconsistent.")
 
     @staticmethod
-    def _is_protected(row: SourceEvidence, *, active_ids: set[str]) -> bool:
-        if row.retention_class in RetentionService._PROTECTED_RETENTION_CLASSES:
-            return True
+    def _protection_reason(
+        row: SourceEvidence, *, active_ids: set[str]
+    ) -> str | None:
+        if row.retention_class != SourceEvidence.RetentionClass.TRANSIENT_30D:
+            return "NON_TRANSIENT_RETENTION_CLASS"
         if str(row.id) in active_ids:
-            return True
+            return "IMMUTABLE_ANALYSIS_REFERENCE"
         links = row.candidate_links
-        if links.filter(candidate__status="REVIEWED").exists():
-            return True
+        if links.filter(
+            candidate__status__in=[
+                "REVIEWED",
+                "READY_FOR_HANDOFF",
+                "HANDED_OFF",
+            ]
+        ).exists():
+            return "REVIEW_OR_HANDOFF_STATE"
         if links.filter(candidate__reviews__action__in=["CONFIRM", "CORRECT"]).exists():
-            return True
+            return "HUMAN_REVIEW_HISTORY"
         if links.filter(
             candidate__analysis_bindings__job__status__in=(
                 RetentionService._ACTIVE_JOB_STATUSES
             )
         ).exists():
+            return "ACTIVE_ANALYSIS_BINDING"
+        return None
+
+    @staticmethod
+    def _has_shared_raw_copy_dependency(
+        row: SourceEvidence,
+        *,
+        organization,
+        ingestion_rows: list[IngestionRow],
+    ) -> bool:
+        content = row.source_signal.source_content
+        if content is not None and SourceEvidence.objects.filter(
+            organization=organization,
+            source_signal__source_content=content,
+        ).exclude(pk=row.pk).exclude(
+            availability=SourceEvidence.Availability.REDACTED_BY_RETENTION
+        ).exists():
+            return True
+        batch_ids = {ingestion_row.batch_id for ingestion_row in ingestion_rows}
+        if not batch_ids:
+            return False
+        if IngestionBatch.objects.filter(
+            organization=organization,
+            pk__in=batch_ids,
+            job__status__in=RetentionService._ACTIVE_JOB_STATUSES,
+        ).exists():
+            return True
+        linked_row_ids = {ingestion_row.pk for ingestion_row in ingestion_rows}
+        if IngestionRow.objects.filter(
+            organization=organization,
+            batch_id__in=batch_ids,
+        ).exclude(pk__in=linked_row_ids).exists():
             return True
         return False
 
     @staticmethod
-    def _redact_locked(row: SourceEvidence, *, organization) -> tuple[int, int]:
+    def _tombstone_raw_json(value) -> tuple[object, int, int]:
+        deleted_text = 0
+        anonymized = 0
+        if isinstance(value, dict):
+            result = {}
+            for key, item in value.items():
+                if key in RetentionService._RAW_TEXT_KEYS:
+                    deleted_text += int(bool(item))
+                    result[key] = ""
+                elif key in RetentionService._RAW_ACTOR_KEYS:
+                    anonymized += int(bool(item))
+                    result[key] = ""
+                elif key in RetentionService._RAW_ASSET_KEYS:
+                    result[key] = None
+                else:
+                    result[key], text_count, actor_count = (
+                        RetentionService._tombstone_raw_json(item)
+                    )
+                    deleted_text += text_count
+                    anonymized += actor_count
+            return result, deleted_text, anonymized
+        if isinstance(value, list):
+            result = []
+            for item in value:
+                redacted, text_count, actor_count = (
+                    RetentionService._tombstone_raw_json(item)
+                )
+                result.append(redacted)
+                deleted_text += text_count
+                anonymized += actor_count
+            return result, deleted_text, anonymized
+        return value, 0, 0
+
+    @staticmethod
+    def _redact_locked(
+        row: SourceEvidence,
+        *,
+        organization,
+        ingestion_rows: list[IngestionRow],
+        ingestion_batches: list[IngestionBatch],
+    ) -> tuple[int, int]:
         deleted_text = int(bool(row.original_text)) + int(bool(row.translated_text))
         row.original_text = ""
         row.translated_text = ""
@@ -651,11 +747,53 @@ class RetentionService:
             availability=SourceEvidence.Availability.REDACTED_BY_RETENTION
         ).exists():
             anonymized = int(bool(content.author_public_name))
+            deleted_text += int(bool(content.original_text))
             content.author_public_name = ""
             content.original_text = ""
             content.save(
                 update_fields=["author_public_name", "original_text", "updated_at"]
             )
+
+        for ingestion_row in ingestion_rows:
+            normalized_input, text_count, actor_count = (
+                RetentionService._tombstone_raw_json(
+                    deepcopy(ingestion_row.normalized_input)
+                )
+            )
+            normalized_input["retention"] = dict(
+                RetentionService._RETENTION_MARKER
+            )
+            ingestion_row.normalized_input = normalized_input
+            with ingestion_row_service_writes():
+                ingestion_row.save(
+                    update_fields=["normalized_input", "updated_at"]
+                )
+            deleted_text += text_count
+            anonymized += actor_count
+
+        rows_by_batch: dict[object, set[int]] = {}
+        for ingestion_row in ingestion_rows:
+            rows_by_batch.setdefault(ingestion_row.batch_id, set()).add(
+                ingestion_row.row_number
+            )
+        for batch in ingestion_batches:
+            input_reference = deepcopy(batch.input_reference)
+            redacted_reference, text_count, actor_count = (
+                RetentionService._tombstone_raw_json(input_reference)
+            )
+            redacted_reference["retention"] = {
+                **RetentionService._RETENTION_MARKER,
+                "redacted_row_numbers": sorted(rows_by_batch.get(batch.id, set())),
+            }
+            with _ingestion_batch_retention_writes():
+                IngestionBatch.objects.filter(
+                    pk=batch.pk,
+                    organization=organization,
+                )._service_redact_input_reference(
+                    input_reference=redacted_reference
+                )
+            deleted_text += text_count
+            anonymized += actor_count
         return deleted_text, anonymized
 
     @staticmethod
@@ -665,6 +803,10 @@ class RetentionService:
         cutoff,
         actor=None,
     ) -> RetentionResult:
+        if actor is None:
+            raise PermissionDenied(
+                "Actorless retention cleanup is restricted to the claimed system path."
+            )
         return RetentionService._cleanup(
             organization=organization,
             cutoff=cutoff,
@@ -701,6 +843,10 @@ class RetentionService:
         if not isinstance(cutoff, datetime) or timezone.is_naive(cutoff):
             raise ValueError("Retention cutoff must be a timezone-aware datetime.")
         RetentionService._authorize(organization=organization, actor=actor)
+        if actor is None and (job_id is None or claim_token is None):
+            raise PermissionDenied(
+                "Actorless retention cleanup requires a claimed retention job."
+            )
         if (job_id is None) != (claim_token is None):
             raise ValidationError("Retention worker ownership is incomplete.")
         if job_id is not None:
@@ -723,6 +869,7 @@ class RetentionService:
         counts = RetentionResult()
         changed_ids: list[str] = []
         failed_ids: list[str] = []
+        protected_reasons: dict[str, int] = {}
 
         values = counts.as_dict()
         for evidence_id in candidate_ids:
@@ -754,11 +901,50 @@ class RetentionService:
                             organization=organization
                         )
                     )
-                    if RetentionService._is_protected(row, active_ids=active_ids):
+                    protection_reason = RetentionService._protection_reason(
+                        row, active_ids=active_ids
+                    )
+                    if protection_reason is not None:
                         values["protected"] += 1
+                        protected_reasons[protection_reason] = (
+                            protected_reasons.get(protection_reason, 0) + 1
+                        )
+                        continue
+                    ingestion_rows = list(
+                        IngestionRow.objects.select_for_update()
+                        .filter(
+                            organization=organization,
+                            source_evidence=row,
+                        )
+                        .order_by("batch_id", "row_number", "pk")
+                    )
+                    batch_ids = sorted(
+                        {ingestion_row.batch_id for ingestion_row in ingestion_rows},
+                        key=str,
+                    )
+                    ingestion_batches = list(
+                        IngestionBatch.objects.select_for_update()
+                        .filter(organization=organization, pk__in=batch_ids)
+                        .order_by("pk")
+                    )
+                    if RetentionService._has_shared_raw_copy_dependency(
+                        row,
+                        organization=organization,
+                        ingestion_rows=ingestion_rows,
+                    ):
+                        values["protected"] += 1
+                        protected_reasons["SHARED_OR_ACTIVE_RAW_COPY"] = (
+                            protected_reasons.get(
+                                "SHARED_OR_ACTIVE_RAW_COPY", 0
+                            )
+                            + 1
+                        )
                         continue
                     deleted_text, anonymized = RetentionService._redact_locked(
-                        row, organization=organization
+                        row,
+                        organization=organization,
+                        ingestion_rows=ingestion_rows,
+                        ingestion_batches=ingestion_batches,
                     )
                     values["redacted"] += 1
                     values["deleted_text"] += deleted_text
@@ -768,24 +954,29 @@ class RetentionService:
                 values["failures"] += 1
                 failed_ids.append(str(evidence_id))
 
-        result = RetentionResult(**values)
+        result = RetentionResult(
+            **values,
+            protected_reasons=MappingProxyType(dict(sorted(protected_reasons.items()))),
+        )
         if result.redacted or result.failures:
             bounded_changed = changed_ids[:RETENTION_AUDIT_ID_LIMIT]
             remaining = RETENTION_AUDIT_ID_LIMIT - len(bounded_changed)
             bounded_failed = failed_ids[:remaining]
-            record_audit_event(
-                organization=organization,
-                object_type="sources.RetentionCleanup",
-                object_id=organization.id,
-                action="ARCHIVE",
-                status="COMPLETED_WITH_FAILURES" if result.failures else "COMPLETED",
-                object_version=1,
-                actor=actor,
-                comment="Expired transient source evidence retention cleanup.",
-                after_metadata={
+            audit_values = {
+                "organization": organization,
+                "object_type": "sources.RetentionCleanup",
+                "object_id": organization.id,
+                "action": "ARCHIVE",
+                "status": (
+                    "COMPLETED_WITH_FAILURES" if result.failures else "COMPLETED"
+                ),
+                "object_version": 1,
+                "comment": "Expired transient source evidence retention cleanup.",
+                "after_metadata": {
                     "policy_version": RETENTION_POLICY_VERSION,
                     "cutoff": cutoff.isoformat(),
                     "counts": result.as_dict(),
+                    "protected_reasons": dict(result.protected_reasons),
                     "evidence_ids": bounded_changed,
                     "failed_evidence_ids": bounded_failed,
                     "references_truncated": (
@@ -793,7 +984,21 @@ class RetentionService:
                         > RETENTION_AUDIT_ID_LIMIT
                     ),
                 },
-            )
+            }
+            if actor is None:
+                record_system_audit_event(
+                    **audit_values,
+                    job_id=job_id,
+                    claim_token=claim_token,
+                )
+            else:
+                from apps.identity.permissions import PermissionCode
+
+                record_audit_event(
+                    **audit_values,
+                    actor=actor,
+                    required_permission=PermissionCode.SOURCES_MANAGE,
+                )
         return result
 
 

@@ -1,10 +1,18 @@
 import uuid
 
 import pytest
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 
 from apps.audit.models import ApprovalRecord, AuditLog
-from apps.audit.services import record_review_transition
+from apps.audit.services import (
+    record_audit_event,
+    record_review_transition,
+    record_system_audit_event,
+)
+from apps.identity.permissions import PermissionCode
+from apps.jobs.models import Job
+from apps.jobs.services import JobService
 from apps.knowledge.models import KnowledgeConcept
 from apps.knowledge.services import OntologyContextService
 
@@ -93,3 +101,70 @@ def test_generic_audit_primitive_rejects_blank_rejection_before_writes(organizat
 
     assert not ApprovalRecord.objects.exists()
     assert not AuditLog.objects.exists()
+
+
+@pytest.mark.django_db
+def test_generic_audit_event_requires_authorized_human_actor(organizations, roles):
+    own, other = organizations
+    valid, _ = create_member_client(
+        organization=own,
+        role=roles["ADMINISTRATOR"],
+        username="audit-event-valid",
+    )
+    foreign, _ = create_member_client(
+        organization=other,
+        role=roles["ADMINISTRATOR"],
+        username="audit-event-foreign",
+    )
+    values = {
+        "organization": own,
+        "object_type": "sources.RetentionCleanup",
+        "object_id": uuid.uuid4(),
+        "action": "ARCHIVE",
+        "status": "COMPLETED",
+        "object_version": 1,
+        "required_permission": PermissionCode.SOURCES_MANAGE,
+    }
+
+    with pytest.raises(PermissionDenied):
+        record_audit_event(**values, actor=None)
+    with pytest.raises(PermissionDenied):
+        record_audit_event(**values, actor=foreign.user)
+
+    event = record_audit_event(**values, actor=valid.user)
+    assert event.organization == own
+    assert event.actor == valid.user
+    assert AuditLog.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_system_audit_event_requires_owned_retention_attempt(organizations):
+    own, other = organizations
+    job = JobService.create(
+        organization=own,
+        job_type=Job.Type.RETENTION_CLEANUP,
+        input_snapshot={"policy_version": "test"},
+        idempotency_key="system-audit-retention",
+        created_by=None,
+    )
+    claimed = JobService.claim(
+        worker_id="audit-test-worker",
+        job_id=job.id,
+        job_type=Job.Type.RETENTION_CLEANUP,
+    )
+    values = {
+        "job_id": job.id,
+        "claim_token": claimed.claim_token,
+        "object_type": "sources.RetentionCleanup",
+        "object_id": own.id,
+        "action": "ARCHIVE",
+        "status": "COMPLETED",
+        "object_version": 1,
+    }
+
+    with pytest.raises(PermissionDenied):
+        record_system_audit_event(organization=other, **values)
+
+    event = record_system_audit_event(organization=own, **values)
+    assert event.organization == own
+    assert event.actor is None

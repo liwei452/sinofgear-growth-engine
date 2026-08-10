@@ -1346,6 +1346,18 @@ def build_analysis_snapshot(*, candidate, evidence_ids, actor) -> dict[str, obje
         raise ValidationError(
             {"evidence_ids": "Every evidence record must be linked to this candidate and organization."}
         )
+    if any(
+        row.availability != SourceEvidence.Availability.AVAILABLE
+        or not row.original_text.strip()
+        for row in evidence_rows
+    ):
+        raise ValidationError(
+            {
+                "evidence_ids": (
+                    "Lead analysis requires available non-empty original evidence."
+                )
+            }
+        )
 
     visible = models.Q(organization__isnull=True) | models.Q(organization=organization)
     concept_ids = list(

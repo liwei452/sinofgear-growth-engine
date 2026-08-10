@@ -9,6 +9,7 @@ from apps.knowledge.models import KnowledgeConcept, KnowledgeStatus
 from apps.leads.models import LeadCandidate
 from apps.leads.schemas import lead_analysis_errors
 from apps.leads.services import build_analysis_snapshot
+from apps.sources.models import SourceEvidence, evidence_service_writes
 
 
 def _authorize(user, organization):
@@ -140,6 +141,40 @@ def test_snapshot_rejects_unlinked_or_foreign_evidence(
                 evidence_ids=[invalid_evidence.id],
                 actor=user,
             )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("availability", "original_text"),
+    [
+        (SourceEvidence.Availability.REDACTED_BY_RETENTION, "public text"),
+        (SourceEvidence.Availability.SOURCE_UNAVAILABLE, "public text"),
+        (SourceEvidence.Availability.AVAILABLE, "   "),
+    ],
+)
+def test_snapshot_rejects_unusable_evidence_before_analysis_lease(
+    candidate,
+    evidence,
+    user,
+    availability,
+    original_text,
+):
+    _authorize(user, candidate.organization)
+    with evidence_service_writes():
+        evidence.availability = availability
+        evidence.original_text = original_text
+        evidence.save(update_fields=["availability", "original_text", "updated_at"])
+
+    with pytest.raises(ValidationError, match="available non-empty"):
+        build_analysis_snapshot(
+            candidate=candidate,
+            evidence_ids=[evidence.id],
+            actor=user,
+        )
+
+    candidate.refresh_from_db()
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None
 
 
 @pytest.mark.django_db

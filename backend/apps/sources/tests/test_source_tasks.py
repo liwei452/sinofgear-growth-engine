@@ -303,7 +303,7 @@ def test_retention_worker_claims_redacts_and_persists_bounded_counts(
     assert job.result_reference == {
         "policy_version": "SOURCE_EVIDENCE_RETENTION_V1",
         "redacted": 1,
-        "deleted_text": 1,
+        "deleted_text": 2,
         "anonymized_actors": 0,
         "protected": 0,
         "failures": 0,

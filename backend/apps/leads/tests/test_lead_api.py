@@ -9,6 +9,7 @@ from apps.jobs.models import Job
 from apps.leads.models import LeadCandidate
 from apps.leads.schemas import LEAD_ANALYSIS_OUTPUT_SCHEMA
 from apps.leads.services import LeadService
+from apps.sources.models import SourceEvidence, evidence_service_writes
 
 
 pytestmark = pytest.mark.django_db
@@ -226,6 +227,43 @@ def test_analyze_rejects_incompatible_published_prompt_without_orphaning_lease(
     )
 
     assert response.status_code == 409
+    candidate.refresh_from_db()
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None
+    assert not Job.objects.filter(type=Job.Type.LEAD_ANALYZE).exists()
+
+
+def test_analyze_rejects_redacted_evidence_without_job_or_lease(
+    candidate, evidence, monkeypatch
+):
+    user, client = _operator(candidate.organization)
+    PromptVersionService.create(
+        purpose="LEAD_ANALYZE",
+        code="lead-api-redacted-evidence",
+        provider="fake",
+        model="fake-v1",
+        template="{input_json}",
+        output_schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
+        status=PromptVersion.Status.PUBLISHED,
+        created_by=user,
+    )
+    with evidence_service_writes():
+        evidence.availability = SourceEvidence.Availability.REDACTED_BY_RETENTION
+        evidence.original_text = ""
+        evidence.save(update_fields=["availability", "original_text", "updated_at"])
+    monkeypatch.setattr("apps.leads.tasks.execute_lead_analysis.delay", lambda *_: None)
+
+    response = client.post(
+        f"/api/v1/lead-candidates/{candidate.id}/analyze",
+        {
+            "expected_version": candidate.version,
+            "evidence_ids": [str(evidence.id)],
+            "idempotency_key": "redacted-evidence",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
     candidate.refresh_from_db()
     assert candidate.status == LeadCandidate.Status.DISCOVERED
     assert candidate.analysis_lease_token is None

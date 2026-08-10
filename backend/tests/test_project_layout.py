@@ -1,5 +1,18 @@
 from pathlib import Path
 
+from django.apps import apps
+
+
+def test_phase_b1_domain_apps_are_registered_with_empty_url_modules() -> None:
+    assert apps.get_app_config("sources").name == "apps.sources"
+    assert apps.get_app_config("leads").name == "apps.leads"
+
+    from apps.leads.urls import urlpatterns as lead_patterns
+    from apps.sources.urls import urlpatterns as source_patterns
+
+    assert lead_patterns == []
+    assert source_patterns == []
+
 
 def test_required_workspace_files_exist() -> None:
     root = Path(__file__).resolve().parents[2]

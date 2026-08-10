@@ -46,6 +46,8 @@ INSTALLED_APPS = [
     "apps.assets.apps.AssetsConfig",
     "apps.campaigns.apps.CampaignsConfig",
     "apps.jobs.apps.JobsConfig",
+    "apps.sources.apps.SourcesConfig",
+    "apps.leads.apps.LeadsConfig",
     "apps.ai.apps.AIConfig",
     "apps.content.apps.ContentConfig",
     "apps.publishing.apps.PublishingConfig",

@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.contrib.auth import get_user_model
 
 from apps.identity.models import Organization
 from apps.jobs.models import Job
@@ -46,6 +47,27 @@ def test_create_is_idempotent_per_organization_and_input(organizations):
 
     assert duplicate.pk == first.pk
     assert other_org.pk != first.pk
+
+
+@pytest.mark.django_db
+def test_source_import_job_is_idempotent(organizations):
+    user = get_user_model().objects.create_user(username="source-importer")
+    first = JobService.create(
+        organization=organizations[0],
+        job_type=Job.Type.SOURCE_IMPORT,
+        input_snapshot={"batch_id": "batch-1"},
+        idempotency_key="import-1",
+        created_by=user,
+    )
+    second = JobService.create(
+        organization=organizations[0],
+        job_type=Job.Type.SOURCE_IMPORT,
+        input_snapshot={"batch_id": "batch-1"},
+        idempotency_key="import-1",
+        created_by=user,
+    )
+
+    assert second.id == first.id
 
 
 @pytest.mark.django_db

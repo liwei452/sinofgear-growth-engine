@@ -64,6 +64,11 @@ class ProtectedJobModel(models.Model):
 class Job(ProtectedJobModel):
     class Type(models.TextChoices):
         CONTENT_GENERATE = "CONTENT_GENERATE", "Content generate"
+        SOURCE_IMPORT = "SOURCE_IMPORT", "Source import"
+        SOURCE_NORMALIZE = "SOURCE_NORMALIZE", "Source normalize"
+        EVIDENCE_EXTRACT = "EVIDENCE_EXTRACT", "Evidence extract"
+        LEAD_ANALYZE = "LEAD_ANALYZE", "Lead analyze"
+        RETENTION_CLEANUP = "RETENTION_CLEANUP", "Retention cleanup"
 
     class Status(models.TextChoices):
         QUEUED = "QUEUED", "Queued"

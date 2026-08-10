@@ -28,6 +28,12 @@ class PermissionCode(StrEnum):
     PUBLISHING_MANAGE = "publishing.manage"
     TRACKING_READ = "tracking.read"
     TRACKING_MANAGE = "tracking.manage"
+    SOURCES_READ = "sources.read"
+    SOURCES_MANAGE = "sources.manage"
+    LEADS_READ = "leads.read"
+    LEADS_ANALYZE = "leads.analyze"
+    LEADS_REVIEW = "leads.review"
+    LEADS_HANDOFF = "leads.handoff"
 
 
 class HasOrganizationPermission(BasePermission):
@@ -139,3 +145,27 @@ class CanReadTracking(HasOrganizationPermission):
 
 class CanManageTracking(HasOrganizationPermission):
     permission_code = PermissionCode.TRACKING_MANAGE
+
+
+class CanReadSources(HasOrganizationPermission):
+    permission_code = PermissionCode.SOURCES_READ
+
+
+class CanManageSources(HasOrganizationPermission):
+    permission_code = PermissionCode.SOURCES_MANAGE
+
+
+class CanReadLeads(HasOrganizationPermission):
+    permission_code = PermissionCode.LEADS_READ
+
+
+class CanAnalyzeLeads(HasOrganizationPermission):
+    permission_code = PermissionCode.LEADS_ANALYZE
+
+
+class CanReviewLeads(HasOrganizationPermission):
+    permission_code = PermissionCode.LEADS_REVIEW
+
+
+class CanHandoffLeads(HasOrganizationPermission):
+    permission_code = PermissionCode.LEADS_HANDOFF

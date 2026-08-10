@@ -152,7 +152,7 @@ class Migration(migrations.Migration):
                 ('normalized_input', models.JSONField()),
                 ('outcome', models.CharField(choices=[('ACCEPTED', 'Accepted'), ('DUPLICATE', 'Duplicate'), ('FAILED', 'Failed')], max_length=16)),
                 ('error', models.JSONField(blank=True, null=True)),
-                ('batch', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='rows', to='sources.ingestionbatch')),
+                ('batch', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='rows', to='sources.ingestionbatch')),
                 ('organization', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to='identity.organization')),
                 ('source_content', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='ingestion_rows', to='sources.sourcecontent')),
                 ('source_evidence', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='ingestion_rows', to='sources.sourceevidence')),

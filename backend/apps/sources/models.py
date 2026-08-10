@@ -5,6 +5,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models, transaction
+from django.db.models.deletion import ProtectedError
 from django.db.models.expressions import BaseExpression
 from django.utils import timezone
 
@@ -100,6 +101,7 @@ class ServiceWriteModel(OrganizationScopedModel):
 
     def save(self, *args, **kwargs):
         type(self)._require_service_write()
+        _require_organization_immutable(self)
         self.full_clean(validate_unique=False, validate_constraints=False)
         return super().save(*args, **kwargs)
 
@@ -112,6 +114,20 @@ SHA256_VALIDATOR = RegexValidator(
     r"^[0-9a-f]{64}$", "Content hash must be lowercase SHA-256."
 )
 
+SOURCE_SECRET_KEY_FRAGMENTS = frozenset(
+    {
+        "captcha",
+        "verificationcode",
+        "verifycode",
+        "onetimecode",
+        "onetimepassword",
+        "challengeanswer",
+    }
+)
+SOURCE_RAW_HEADER_KEYS = frozenset(
+    {"header", "headers", "httpheader", "httpheaders", "rawheader", "rawheaders"}
+)
+
 
 def _validate_related_organization(instance, field_name: str, errors: dict[str, str]) -> None:
     related_id = getattr(instance, f"{field_name}_id", None)
@@ -122,25 +138,35 @@ def _validate_related_organization(instance, field_name: str, errors: dict[str, 
         errors[field_name] = f"{field_name.replace('_', ' ').title()} must belong to the same organization."
 
 
-def _without_raw_headers(value):
+def _sanitize_source_json_tree(value):
     if isinstance(value, dict):
         cleaned = {}
         for key, item in value.items():
             normalized_key = "".join(character for character in str(key).casefold() if character.isalnum())
-            if normalized_key in {
-                "header",
-                "headers",
-                "httpheader",
-                "httpheaders",
-                "rawheader",
-                "rawheaders",
-            }:
+            if normalized_key in SOURCE_RAW_HEADER_KEYS or any(
+                fragment in normalized_key for fragment in SOURCE_SECRET_KEY_FRAGMENTS
+            ):
                 continue
-            cleaned[key] = _without_raw_headers(item)
+            cleaned[key] = _sanitize_source_json_tree(item)
         return cleaned
     if isinstance(value, list):
-        return [_without_raw_headers(item) for item in value]
+        return [_sanitize_source_json_tree(item) for item in value]
     return value
+
+
+def sanitize_source_json(value):
+    """Return a detached JSON tree with source credentials/challenges removed."""
+    return _sanitize_source_json_tree(scrub_secrets(value))
+
+
+def _require_organization_immutable(instance) -> None:
+    if instance._state.adding or not instance.pk:
+        return
+    persisted_organization_id = (
+        type(instance)._base_manager.only("organization_id").get(pk=instance.pk).organization_id
+    )
+    if instance.organization_id != persisted_organization_id:
+        raise ValidationError({"organization": "Organization is immutable after creation."})
 
 
 class ValidatedSourceQuerySet(models.QuerySet):
@@ -173,6 +199,14 @@ class ValidatedSourceQuerySet(models.QuerySet):
             row.save(update_fields=[*field_names, "updated_at"])
         return len(rows)
 
+    def delete(self):
+        if getattr(self.model, "deletion_protected", False):
+            protected = list(self)
+            if protected:
+                raise ProtectedError("Source ingestion history cannot be deleted.", protected)
+            return 0, {}
+        return super().delete()
+
 
 class ValidatedSourceManager(models.Manager.from_queryset(ValidatedSourceQuerySet)):
     pass
@@ -180,13 +214,20 @@ class ValidatedSourceManager(models.Manager.from_queryset(ValidatedSourceQuerySe
 
 class ValidatedOrganizationModel(OrganizationScopedModel):
     objects = ValidatedSourceManager()
+    deletion_protected = False
 
     class Meta:
         abstract = True
 
     def save(self, *args, **kwargs):
+        _require_organization_immutable(self)
         self.full_clean(validate_unique=False, validate_constraints=False)
         return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.deletion_protected:
+            raise ProtectedError("Source ingestion history cannot be deleted.", [self])
+        return super().delete(*args, **kwargs)
 
 
 class MonitoringTarget(ValidatedOrganizationModel):
@@ -231,6 +272,8 @@ class MonitoringTarget(ValidatedOrganizationModel):
 
     def clean(self) -> None:
         super().clean()
+        self.schedule = sanitize_source_json(self.schedule)
+        self.capability_snapshot = sanitize_source_json(self.capability_snapshot)
         if self.normalized_url:
             from .services import normalize_source_url
 
@@ -242,6 +285,8 @@ class MonitoringTarget(ValidatedOrganizationModel):
 
 
 class IngestionBatch(ValidatedOrganizationModel):
+    deletion_protected = True
+
     class SourceType(models.TextChoices):
         API = "API", "API"
         URL = "URL", "URL"
@@ -302,7 +347,8 @@ class IngestionBatch(ValidatedOrganizationModel):
 
     def clean(self) -> None:
         super().clean()
-        self.input_reference = _without_raw_headers(scrub_secrets(self.input_reference))
+        self.input_reference = sanitize_source_json(self.input_reference)
+        self.row_errors = sanitize_source_json(self.row_errors)
         errors: dict[str, str] = {}
         _validate_related_organization(self, "monitoring_target", errors)
         _validate_related_organization(self, "job", errors)
@@ -533,7 +579,7 @@ class IngestionRow(ServiceWriteModel):
     service_write_context = _ingestion_row_service_write
     service_write_error = "Ingestion rows may change only through their service."
 
-    batch = models.ForeignKey(IngestionBatch, on_delete=models.CASCADE, related_name="rows")
+    batch = models.ForeignKey(IngestionBatch, on_delete=models.PROTECT, related_name="rows")
     row_number = models.PositiveIntegerField()
     normalized_input = models.JSONField()
     outcome = models.CharField(max_length=16, choices=Outcome.choices)
@@ -572,6 +618,8 @@ class IngestionRow(ServiceWriteModel):
 
     def clean(self) -> None:
         super().clean()
+        self.normalized_input = sanitize_source_json(self.normalized_input)
+        self.error = sanitize_source_json(self.error)
         errors: dict[str, str] = {}
         for field_name in (
             "batch",

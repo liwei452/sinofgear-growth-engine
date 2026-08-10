@@ -8,6 +8,7 @@ from apps.sources.services import EvidenceService, evidence_fingerprint
 @pytest.mark.django_db
 def test_evidence_service_deduplicates_and_direct_update_is_rejected(signal, user):
     kwargs = dict(
+        organization=signal.organization,
         signal=signal,
         original_text="We need 200 replacement helical gears.",
         source_url="https://example.com/posts/42",
@@ -33,6 +34,7 @@ def test_evidence_service_deduplicates_and_direct_update_is_rejected(signal, use
 @pytest.mark.django_db
 def test_committed_evidence_rejects_all_ordinary_write_paths(signal, user):
     evidence = EvidenceService.create(
+        organization=signal.organization,
         signal=signal,
         original_text="Public request",
         source_url="https://example.com/request#comments",
@@ -57,6 +59,7 @@ def test_committed_evidence_rejects_all_ordinary_write_paths(signal, user):
 @pytest.mark.django_db
 def test_controlled_context_can_redact_without_exposing_ordinary_writes(signal, user):
     evidence = EvidenceService.create(
+        organization=signal.organization,
         signal=signal,
         original_text="Temporary public text",
         source_url="https://example.com/temp",

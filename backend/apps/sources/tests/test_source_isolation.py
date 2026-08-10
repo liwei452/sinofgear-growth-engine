@@ -86,6 +86,7 @@ def test_batch_and_row_reject_cross_organization_foreign_keys(
 def test_evidence_service_rejects_cross_organization_assets(signal, user, other_asset):
     with pytest.raises(ValidationError):
         EvidenceService.create(
+            organization=signal.organization,
             signal=signal,
             original_text="Public screenshot text",
             source_url="https://example.com/screenshot",

@@ -67,6 +67,7 @@ class EvidenceService:
     @transaction.atomic
     def create(
         *,
+        organization,
         signal,
         original_text,
         source_url,
@@ -79,20 +80,25 @@ class EvidenceService:
         evidence_type=None,
         language="",
     ):
+        signal_id = getattr(signal, "pk", None)
         try:
-            signal = SourceSignal.objects.select_for_update().get(pk=signal.pk)
-        except (AttributeError, SourceSignal.DoesNotExist) as error:
-            raise ValidationError({"signal": "Source signal must already exist."}) from error
-        screenshot_asset = EvidenceService._locked_asset(screenshot_asset, "screenshot_asset")
-        import_asset = EvidenceService._locked_asset(import_asset, "import_asset")
-        for field_name, asset in (
-            ("screenshot_asset", screenshot_asset),
-            ("import_asset", import_asset),
-        ):
-            if asset is not None and asset.organization_id != signal.organization_id:
-                raise ValidationError(
-                    {field_name: "Evidence assets must belong to the signal organization."}
-                )
+            signal = SourceSignal.objects.select_for_update().filter(
+                pk=signal_id, organization=organization
+            ).first()
+        except (TypeError, ValueError) as error:
+            raise ValidationError(
+                {"signal": "Source signal is unavailable for this organization."}
+            ) from error
+        if signal is None:
+            raise ValidationError(
+                {"signal": "Source signal is unavailable for this organization."}
+            )
+        screenshot_asset = EvidenceService._locked_asset(
+            screenshot_asset, "screenshot_asset", organization
+        )
+        import_asset = EvidenceService._locked_asset(
+            import_asset, "import_asset", organization
+        )
         normalized_url = normalize_source_url(source_url)
         fingerprint = evidence_fingerprint(
             original_text=original_text,
@@ -109,7 +115,7 @@ class EvidenceService:
             raise ValidationError({"collection_method": "Unsupported evidence collection method."})
         with evidence_service_writes():
             evidence, _ = SourceEvidence.objects.get_or_create(
-                organization=signal.organization,
+                organization=organization,
                 content_hash=fingerprint,
                 defaults={
                     "source_signal": signal,
@@ -129,13 +135,22 @@ class EvidenceService:
         return evidence
 
     @staticmethod
-    def _locked_asset(asset, field_name):
+    def _locked_asset(asset, field_name, organization):
         if asset is None:
             return None
         try:
-            return MaterialAsset.objects.select_for_update().get(pk=asset.pk)
-        except (AttributeError, MaterialAsset.DoesNotExist) as error:
-            raise ValidationError({field_name: "Evidence asset must already exist."}) from error
+            locked = MaterialAsset.objects.select_for_update().filter(
+                pk=getattr(asset, "pk", None), organization=organization
+            ).first()
+        except (TypeError, ValueError) as error:
+            raise ValidationError(
+                {field_name: "Evidence asset is unavailable for this organization."}
+            ) from error
+        if locked is None:
+            raise ValidationError(
+                {field_name: "Evidence asset is unavailable for this organization."}
+            )
+        return locked
 
 
 create = EvidenceService.create

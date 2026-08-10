@@ -22,6 +22,7 @@ useModalFocus({
 })
 
 const types: Array<[ConceptType, string]> = [
+  ["CAPABILITY", "能力"], ["REQUIREMENT", "需求"],
   ["PRODUCT_TYPE", "产品类型"], ["PARAMETER", "参数"], ["MATERIAL", "材料"],
   ["PROCESS", "工艺"], ["STANDARD", "标准"], ["APPLICATION", "应用"], ["INDUSTRY", "行业"],
   ["CUSTOMER_TYPE", "客户类型"], ["PURCHASE_INTENT", "采购意图"],

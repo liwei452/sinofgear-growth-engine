@@ -1,10 +1,15 @@
 import pytest
 from django.core.management import call_command
 
-from apps.knowledge.models import KnowledgeAlias, KnowledgeConcept, KnowledgeRelation
+from apps.knowledge.models import KnowledgeAlias, KnowledgeConcept, KnowledgeEvidence, KnowledgeRelation
 
 
 EXPECTED_CONCEPTS = {
+    ("CAPABILITY", "CAP-GEAR-GRINDING", "磨齿能力", "Gear grinding capability"),
+    ("CAPABILITY", "CAP-HEAT-TREATMENT", "热处理能力", "Heat treatment capability"),
+    ("REQUIREMENT", "REQ-DIN6", "DIN 6 精度要求", "DIN 6 accuracy required"),
+    ("REQUIREMENT", "REQ-SMALL-BATCH", "小批量要求", "Small-batch requirement"),
+    ("REQUIREMENT", "REQ-URGENT-REPLACEMENT", "紧急替换要求", "Urgent replacement requirement"),
     ("PRODUCT_TYPE", "SPUR_GEAR", "直齿轮", "Spur Gear"),
     ("PRODUCT_TYPE", "HELICAL_GEAR", "斜齿轮", "Helical Gear"),
     ("PRODUCT_TYPE", "BEVEL_GEAR", "锥齿轮", "Bevel Gear"),
@@ -106,6 +111,12 @@ def test_seed_is_idempotent_exact_and_preserves_organization_knowledge(organizat
     ) == EXPECTED_RELATIONS
     assert KnowledgeConcept.objects.get(code="PRIVATE_GEAR").organization == own
     assert not KnowledgeConcept.objects.filter(scope="SYSTEM").exclude(status="APPROVED", version=1).exists()
+    capability_codes = {"CAP-GEAR-GRINDING", "CAP-HEAT-TREATMENT"}
+    assert set(
+        KnowledgeConcept.objects.filter(code__in=capability_codes, evidence__status="APPROVED")
+        .values_list("code", flat=True)
+    ) == capability_codes
+    assert KnowledgeEvidence.objects.filter(organization__isnull=True, status="APPROVED").count() == 2
 
 
 @pytest.mark.django_db

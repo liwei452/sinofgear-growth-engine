@@ -78,6 +78,7 @@ const statusLabels: Record<KnowledgeStatus, string> = {
   SUGGESTED: "待审核", APPROVED: "已通过", REJECTED: "已驳回", DEPRECATED: "已停用",
 }
 const typeLabels: Record<ConceptType, string> = {
+  CAPABILITY: "能力", REQUIREMENT: "需求",
   PRODUCT_TYPE: "产品类型", PARAMETER: "参数", MATERIAL: "材料", PROCESS: "工艺", STANDARD: "标准",
   APPLICATION: "应用", INDUSTRY: "行业", CUSTOMER_TYPE: "客户类型", PURCHASE_INTENT: "采购意图",
 }

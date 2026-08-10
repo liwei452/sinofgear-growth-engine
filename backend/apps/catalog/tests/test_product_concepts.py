@@ -17,6 +17,7 @@ ROLE_TYPES = [
     (ProductConceptLink.Role.STANDARD, KnowledgeConcept.ConceptType.STANDARD),
     (ProductConceptLink.Role.APPLICATION, KnowledgeConcept.ConceptType.APPLICATION),
     (ProductConceptLink.Role.PARAMETER, KnowledgeConcept.ConceptType.PARAMETER),
+    (ProductConceptLink.Role.CAPABILITY, KnowledgeConcept.ConceptType.CAPABILITY),
 ]
 
 

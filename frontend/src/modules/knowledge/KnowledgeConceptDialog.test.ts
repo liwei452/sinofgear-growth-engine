@@ -6,6 +6,13 @@ import { afterEach, expect, it, vi } from "vitest"
 import KnowledgeConceptDialog from "./KnowledgeConceptDialog.vue"
 import ProductFormDialog from "../products/ProductFormDialog.vue"
 
+it("offers capability and requirement concept types", async () => {
+  renderDialog()
+
+  expect(screen.getByRole("option", { name: "能力" })).toHaveValue("CAPABILITY")
+  expect(screen.getByRole("option", { name: "需求" })).toHaveValue("REQUIREMENT")
+})
+
 const saved = {
   id: "concept-1", scope: "ORGANIZATION", organization: "org-1", concept_type: "MATERIAL",
   code: "ALLOY_STEEL", label_zh: "合金钢", label_en: "Alloy steel", description: "",

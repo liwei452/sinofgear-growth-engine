@@ -5,6 +5,7 @@ export type KnowledgeScope = "SYSTEM" | "ORGANIZATION"
 export type ConceptType =
   | "PRODUCT_TYPE" | "PARAMETER" | "MATERIAL" | "PROCESS" | "STANDARD"
   | "APPLICATION" | "INDUSTRY" | "CUSTOMER_TYPE" | "PURCHASE_INTENT"
+  | "CAPABILITY" | "REQUIREMENT"
 
 export type KnowledgeConcept = {
   id: string

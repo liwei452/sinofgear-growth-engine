@@ -8,6 +8,20 @@ import ProductLibraryPage from "../products/ProductLibraryPage.vue"
 import { knowledgeQueryKeys } from "./api"
 import KnowledgeLibraryPage from "./KnowledgeLibraryPage.vue"
 
+it("filters capability concepts using the typed Chinese label", async () => {
+  vi.stubGlobal("fetch", mockLists([
+    concept({ concept_type: "CAPABILITY", code: "CAP-GEAR-GRINDING", label_zh: "磨齿能力" }),
+  ]))
+  const user = userEvent.setup()
+  renderPage()
+
+  await screen.findByText("磨齿能力")
+  await user.selectOptions(screen.getByLabelText("类型"), "CAPABILITY")
+
+  expect(screen.getByText("能力", { selector: "dd" })).toBeInTheDocument()
+  expect(screen.getByText("CAP-GEAR-GRINDING")).toBeInTheDocument()
+})
+
 const userWith = (permissions: string[]): CurrentUser => ({
   user: { id: 1, username: "operator" },
   organization: { id: "org-1", name: "示例组织", slug: "demo" },

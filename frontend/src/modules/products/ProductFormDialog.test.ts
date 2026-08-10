@@ -6,6 +6,31 @@ import { afterEach, expect, it, vi } from "vitest"
 import type { KnowledgeConcept } from "../knowledge/api"
 import ProductFormDialog from "./ProductFormDialog.vue"
 
+it("maps an approved CAPABILITY concept to the manufacturing capability product role", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const capability: KnowledgeConcept = {
+    id: "capability-1", scope: "SYSTEM", organization: null, concept_type: "CAPABILITY",
+    code: "CAP-GEAR-GRINDING", label_zh: "磨齿能力", label_en: "Gear grinding capability", description: "",
+    status: "APPROVED", version: 1, suggested_by_ai_run_id: null, evidence: [], created_by: null,
+    reviewed_by: 1, reviewed_at: null, created_at: "2026-08-09T00:00:00Z", updated_at: "2026-08-09T00:00:00Z",
+  }
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify(baseProduct), {
+    status: 201, headers: { "Content-Type": "application/json", ETag: '"1"' },
+  }))
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderDialog({ concepts: [capability] })
+  await fillRequired(user)
+
+  await user.selectOptions(screen.getByLabelText("制造能力标签"), "capability-1")
+  await user.click(screen.getByRole("button", { name: "保存产品" }))
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+  expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+    concept_links: [{ role: "CAPABILITY", concept_id: "capability-1" }],
+  })
+})
+
 const baseProduct = {
   id: "product-1", organization: "org-1", name_zh: "斜齿轮", name_en: "Helical Gear",
   module_min: "0.5000", module_max: "8.0000", tooth_count_min: 8, tooth_count_max: 240,

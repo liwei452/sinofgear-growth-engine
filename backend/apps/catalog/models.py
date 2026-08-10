@@ -224,6 +224,7 @@ ROLE_CONCEPT_TYPES = {
         }
     ),
     "PARAMETER": frozenset({KnowledgeConcept.ConceptType.PARAMETER}),
+    "CAPABILITY": frozenset({KnowledgeConcept.ConceptType.CAPABILITY}),
 }
 
 LINK_IDENTITY_FIELDS = frozenset(
@@ -332,6 +333,7 @@ class ProductConceptLink(OrganizationScopedModel):
         STANDARD = "STANDARD", "Standard"
         APPLICATION = "APPLICATION", "Application"
         PARAMETER = "PARAMETER", "Parameter"
+        CAPABILITY = "CAPABILITY", "Capability"
 
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="concept_links")
     concept = models.ForeignKey(

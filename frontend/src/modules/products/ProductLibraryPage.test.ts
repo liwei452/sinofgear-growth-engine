@@ -7,6 +7,26 @@ import { afterEach, expect, it, vi } from "vitest"
 import { currentUserQueryOptions, type CurrentUser } from "../auth/auth"
 import ProductLibraryPage from "./ProductLibraryPage.vue"
 
+it("labels linked capability concepts as manufacturing capabilities", async () => {
+  const capabilityProduct = {
+    ...product,
+    concept_links: [{
+      id: "link-capability", role: "CAPABILITY", version: 1,
+      concept: { id: "capability-1", code: "CAP-GEAR-GRINDING", concept_type: "CAPABILITY", label_zh: "磨齿能力", label_en: "Gear grinding capability", version: 1 },
+    }],
+  }
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
+    path === "/api/v1/knowledge/concepts"
+      ? { results: [] }
+      : { next: null, previous: null, results: [capabilityProduct] },
+  ), { status: 200, headers: { "Content-Type": "application/json" } })))
+
+  await renderPage()
+
+  expect(await screen.findByText("磨齿能力")).toBeInTheDocument()
+  expect(screen.getByText(/制造能力/, { selector: ".visually-hidden" })).toBeInTheDocument()
+})
+
 const userWith = (permissions: string[]): CurrentUser => ({
   user: { id: 1, username: "operator" },
   organization: { id: "org-1", name: "示例组织", slug: "demo" },

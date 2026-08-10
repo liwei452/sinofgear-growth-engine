@@ -105,6 +105,7 @@ async function retryProducts(): Promise<void> {
 
 function conceptRoleLabel(role: ProductConceptRole): string {
   const labels: Record<ProductConceptRole, string> = {
+    CAPABILITY: "制造能力",
     TYPE: "类型", MATERIAL: "材料", PROCESS: "工艺", STANDARD: "标准",
     APPLICATION: "应用", PARAMETER: "参数",
   }

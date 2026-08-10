@@ -1,7 +1,7 @@
 import { ApiError, apiRequest, apiRequestWithMeta } from "../../api/client"
 
 export type ProductStatus = "DRAFT" | "ACTIVE" | "ARCHIVED"
-export type ProductConceptRole = "TYPE" | "MATERIAL" | "PROCESS" | "STANDARD" | "APPLICATION" | "PARAMETER"
+export type ProductConceptRole = "TYPE" | "MATERIAL" | "PROCESS" | "STANDARD" | "APPLICATION" | "PARAMETER" | "CAPABILITY"
 
 export type ProductConceptSummary = {
   id: string

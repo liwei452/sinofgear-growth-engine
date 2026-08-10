@@ -1,9 +1,12 @@
+import uuid
+
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from apps.knowledge.models import (
     KnowledgeAlias,
     KnowledgeConcept,
+    KnowledgeEvidence,
     KnowledgeGraphLock,
     KnowledgeRelation,
 )
@@ -11,6 +14,11 @@ from apps.knowledge.guards import _system_seed_writes
 
 
 CONCEPTS = (
+    ("CAPABILITY", "CAP-GEAR-GRINDING", "磨齿能力", "Gear grinding capability"),
+    ("CAPABILITY", "CAP-HEAT-TREATMENT", "热处理能力", "Heat treatment capability"),
+    ("REQUIREMENT", "REQ-DIN6", "DIN 6 精度要求", "DIN 6 accuracy required"),
+    ("REQUIREMENT", "REQ-SMALL-BATCH", "小批量要求", "Small-batch requirement"),
+    ("REQUIREMENT", "REQ-URGENT-REPLACEMENT", "紧急替换要求", "Urgent replacement requirement"),
     ("PRODUCT_TYPE", "SPUR_GEAR", "直齿轮", "Spur Gear"),
     ("PRODUCT_TYPE", "HELICAL_GEAR", "斜齿轮", "Helical Gear"),
     ("PRODUCT_TYPE", "BEVEL_GEAR", "锥齿轮", "Bevel Gear"),
@@ -63,6 +71,11 @@ RELATIONS = (
     ("HELICAL_GEAR", "COMPLIES_WITH", "DIN"),
 )
 
+CAPABILITY_EVIDENCE = (
+    ("CAP-GEAR-GRINDING", "Documented gear grinding manufacturing capability."),
+    ("CAP-HEAT-TREATMENT", "Documented heat treatment manufacturing capability."),
+)
+
 
 class Command(BaseCommand):
     help = "Seed the bounded approved Gear Manufacturing Ontology."
@@ -104,6 +117,27 @@ class Command(BaseCommand):
                     ]
                 )
             concepts[code] = concept
+        for capability_code, excerpt in CAPABILITY_EVIDENCE:
+            evidence, created = KnowledgeEvidence.objects.get_or_create(
+                organization=None,
+                source_object_type="seed_gear_ontology",
+                source_object_id=uuid.uuid5(uuid.NAMESPACE_URL, f"sinofgear:{capability_code}"),
+                defaults={
+                    "evidence_type": KnowledgeEvidence.EvidenceType.HUMAN_ENTRY,
+                    "excerpt": excerpt,
+                    "status": KnowledgeEvidence.Status.APPROVED,
+                    "version": 1,
+                    "suggested_by_ai_run_id": None,
+                },
+            )
+            if not created:
+                evidence.status = KnowledgeEvidence.Status.APPROVED
+                evidence.version = 1
+                evidence.suggested_by_ai_run_id = None
+                evidence.save(
+                    update_fields=["status", "version", "suggested_by_ai_run_id", "updated_at"]
+                )
+            concepts[capability_code].evidence.add(evidence)
         for code, language, alias, alias_type in ALIASES:
             concept = concepts[code]
             defaults = {

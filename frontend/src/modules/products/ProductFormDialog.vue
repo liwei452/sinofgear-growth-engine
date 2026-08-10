@@ -49,6 +49,7 @@ type FormState = {
 }
 
 const emptySelections = (): Record<ProductConceptRole, string> => ({
+  CAPABILITY: "",
   TYPE: "", MATERIAL: "", PROCESS: "", STANDARD: "", APPLICATION: "", PARAMETER: "",
 })
 const form = reactive<FormState>({
@@ -236,10 +237,12 @@ async function reloadLatest(): Promise<void> {
 }
 
 const roleForType: Partial<Record<KnowledgeConcept["concept_type"], ProductConceptRole>> = {
+  CAPABILITY: "CAPABILITY",
   PRODUCT_TYPE: "TYPE", MATERIAL: "MATERIAL", PROCESS: "PROCESS", STANDARD: "STANDARD",
   APPLICATION: "APPLICATION", INDUSTRY: "APPLICATION", PARAMETER: "PARAMETER",
 }
 const roleLabels: Record<ProductConceptRole, string> = {
+  CAPABILITY: "制造能力",
   TYPE: "产品类型", MATERIAL: "材料", PROCESS: "工艺", STANDARD: "标准",
   APPLICATION: "应用", PARAMETER: "参数",
 }

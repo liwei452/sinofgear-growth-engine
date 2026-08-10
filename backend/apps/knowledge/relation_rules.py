@@ -57,6 +57,24 @@ PREDICATE_TYPE_RULES = {
         frozenset({KnowledgeConcept.ConceptType.PRODUCT_TYPE}),
         frozenset({KnowledgeConcept.ConceptType.PARAMETER}),
     ),
+    KnowledgeRelation.Predicate.SATISFIES: PredicateTypeRule(
+        frozenset(
+            {
+                KnowledgeConcept.ConceptType.PRODUCT_TYPE,
+                KnowledgeConcept.ConceptType.CAPABILITY,
+            }
+        ),
+        frozenset({KnowledgeConcept.ConceptType.REQUIREMENT}),
+    ),
+    KnowledgeRelation.Predicate.HAS_REQUIREMENT: PredicateTypeRule(
+        frozenset(
+            {
+                KnowledgeConcept.ConceptType.INDUSTRY,
+                KnowledgeConcept.ConceptType.APPLICATION,
+            }
+        ),
+        frozenset({KnowledgeConcept.ConceptType.REQUIREMENT}),
+    ),
 }
 
 

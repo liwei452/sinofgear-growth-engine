@@ -44,6 +44,8 @@ class KnowledgeConcept(GuardedKnowledgeModel):
         INDUSTRY = "INDUSTRY", "Industry"
         CUSTOMER_TYPE = "CUSTOMER_TYPE", "Customer type"
         PURCHASE_INTENT = "PURCHASE_INTENT", "Purchase intent"
+        CAPABILITY = "CAPABILITY", "Capability"
+        REQUIREMENT = "REQUIREMENT", "Requirement"
 
     Status = KnowledgeStatus
 
@@ -279,6 +281,8 @@ class KnowledgeRelation(GuardedKnowledgeModel):
         RELEVANT_TO_CUSTOMER_TYPE = "RELEVANT_TO_CUSTOMER_TYPE", "Relevant to customer type"
         INDICATES_PURCHASE_INTENT = "INDICATES_PURCHASE_INTENT", "Indicates purchase intent"
         REQUIRES_PARAMETER = "REQUIRES_PARAMETER", "Requires parameter"
+        SATISFIES = "SATISFIES", "Satisfies"
+        HAS_REQUIREMENT = "HAS_REQUIREMENT", "Has requirement"
 
     Status = KnowledgeStatus
 

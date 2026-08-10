@@ -1,18 +1,24 @@
 from copy import deepcopy
 
 import pytest
+from django.utils import timezone
 
-from apps.ai.models import AIRun, PromptVersion
+from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
 from apps.ai.services import PromptVersionService
 from apps.identity.models import Membership, Role
 from apps.jobs.models import Job
 from apps.jobs.services import JobService, StaleJobWorkerError
 from apps.knowledge.guards import _test_fixture_writes
-from apps.knowledge.models import KnowledgeStatus
+from apps.knowledge.models import (
+    KnowledgeConcept,
+    KnowledgeConceptEvidence,
+    KnowledgeEvidence,
+    KnowledgeStatus,
+)
 from apps.leads.models import LeadCandidate, LeadInsight
 from apps.leads.orchestration import execute_lead_analysis_job
 from apps.leads.schemas import LEAD_ANALYSIS_OUTPUT_SCHEMA
-from apps.leads.services import build_analysis_snapshot
+from apps.leads.services import LeadService, LeadStateError, build_analysis_snapshot
 from integrations.ai.providers import provider_registry
 
 from .test_analysis_snapshot import _valid_output
@@ -374,3 +380,191 @@ def test_valid_repeated_capability_match_does_not_duplicate_requirement_history(
     insight = LeadInsight.objects.get(ai_run=run)
     assert run.status == AIRun.Status.SUCCEEDED
     assert insight.requirements.count() == 1
+
+
+@pytest.mark.django_db
+def test_old_failed_job_redelivery_cannot_release_new_analysis_lease(
+    candidate,
+    evidence,
+    approved_requirement,
+    approved_capability,
+    user,
+):
+    first_snapshot, prompt, first_job = _analysis_context(candidate, evidence, user)
+    invalid = _valid_output(snapshot=first_snapshot, evidence_id=evidence.id)
+    invalid["reasons"][0]["evidence_ids"] = []
+    provider_registry.register(
+        "lead-sequence", SequenceProvider([invalid, invalid]), replace=True
+    )
+    first_run = execute_lead_analysis_job(first_job.id, prompt.id)
+    assert first_run.status == AIRun.Status.FAILED
+
+    second_snapshot = build_analysis_snapshot(
+        candidate=candidate,
+        evidence_ids=[evidence.id],
+        actor=user,
+    )
+    second_job = JobService.create(
+        organization=candidate.organization,
+        job_type=Job.Type.LEAD_ANALYZE,
+        input_snapshot=second_snapshot,
+        idempotency_key=f"second-analysis-{candidate.id}",
+        created_by=user,
+    )
+    candidate.refresh_from_db()
+    second_lease = candidate.analysis_lease_token
+    second_version = candidate.version
+
+    duplicate = execute_lead_analysis_job(first_job.id, prompt.id)
+
+    candidate.refresh_from_db()
+    assert duplicate.id == first_run.id
+    assert second_job.status == Job.Status.QUEUED
+    assert candidate.status == LeadCandidate.Status.ANALYZING
+    assert candidate.analysis_lease_token == second_lease
+    assert candidate.version == second_version
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("terminal_status", [Job.Status.CANCELED, Job.Status.FAILED])
+def test_orphaned_running_airun_reconciles_without_provider_or_stale_recovery(
+    candidate,
+    evidence,
+    approved_requirement,
+    approved_capability,
+    user,
+    terminal_status,
+):
+    snapshot, prompt, job = _analysis_context(candidate, evidence, user)
+    output = _valid_output(snapshot=snapshot, evidence_id=evidence.id)
+    provider = SequenceProvider([output])
+    provider_registry.register("lead-sequence", provider, replace=True)
+    claimed = JobService.claim(worker_id="crashed-worker", job_id=job.id)
+    with ai_audit_writes():
+        run = AIRun.objects.create(
+            organization=job.organization,
+            job=job,
+            job_attempt=job.attempt,
+            prompt_version=prompt,
+            provider="lead-sequence",
+            model=prompt.model,
+            input_snapshot=job.input_snapshot,
+            status=AIRun.Status.RUNNING,
+            started_at=timezone.now(),
+        )
+    if terminal_status == Job.Status.CANCELED:
+        JobService.cancel(job.id)
+    else:
+        JobService.fail(
+            job.id,
+            claim_token=claimed.claim_token,
+            error={"code": "provider_error"},
+        )
+
+    duplicate = execute_lead_analysis_job(job.id, prompt.id)
+
+    candidate.refresh_from_db()
+    duplicate.refresh_from_db()
+    assert duplicate.id == run.id
+    assert duplicate.status == (
+        AIRun.Status.CANCELED
+        if terminal_status == Job.Status.CANCELED
+        else AIRun.Status.FAILED
+    )
+    assert duplicate.finished_at is not None
+    assert provider.calls == 0
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None
+
+
+@pytest.mark.django_db
+def test_cross_type_same_code_binds_requirement_and_capability_unambiguously(
+    candidate,
+    evidence,
+    user,
+):
+    Membership.objects.create(
+        user=user,
+        organization=candidate.organization,
+        role=Role.objects.create_operator(),
+    )
+    with _test_fixture_writes():
+        requirement = KnowledgeConcept.objects.create(
+            scope=KnowledgeConcept.Scope.ORGANIZATION,
+            organization=candidate.organization,
+            concept_type=KnowledgeConcept.ConceptType.REQUIREMENT,
+            code="SHARED_CODE",
+            label_zh="共享编码要求",
+            label_en="Shared-code requirement",
+            status=KnowledgeStatus.APPROVED,
+            created_by=user,
+        )
+        capability = KnowledgeConcept.objects.create(
+            scope=KnowledgeConcept.Scope.SYSTEM,
+            organization=None,
+            concept_type=KnowledgeConcept.ConceptType.CAPABILITY,
+            code="SHARED_CODE",
+            label_zh="共享编码能力",
+            label_en="Shared-code capability",
+            status=KnowledgeStatus.APPROVED,
+            created_by=user,
+        )
+        knowledge_evidence = KnowledgeEvidence.objects.create(
+            organization=None,
+            evidence_type=KnowledgeEvidence.EvidenceType.HUMAN_ENTRY,
+            excerpt="Evidence for the shared-code capability.",
+            status=KnowledgeStatus.APPROVED,
+            created_by=user,
+        )
+    KnowledgeConceptEvidence.objects.create(
+        knowledgeconcept=capability,
+        knowledgeevidence=knowledge_evidence,
+    )
+    snapshot = build_analysis_snapshot(
+        candidate=candidate,
+        evidence_ids=[evidence.id],
+        actor=user,
+    )
+    prompt = PromptVersionService.create(
+        purpose="LEAD_ANALYZE",
+        code="cross-type-code",
+        provider="lead-cross-type",
+        model="fake-lead-v1",
+        template="{input_json}",
+        output_schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
+        status=PromptVersion.Status.PUBLISHED,
+        created_by=user,
+    )
+    job = JobService.create(
+        organization=candidate.organization,
+        job_type=Job.Type.LEAD_ANALYZE,
+        input_snapshot=snapshot,
+        created_by=user,
+    )
+    output = _valid_output(snapshot=snapshot, evidence_id=evidence.id)
+    output["requirements"][0]["type"] = "SHARED_CODE"
+    output["capability_matches"][0] = {
+        "capability_code": "SHARED_CODE",
+        "knowledge_evidence_ids": [str(knowledge_evidence.id)],
+        "source_evidence_ids": [str(evidence.id)],
+    }
+    provider_registry.register(
+        "lead-cross-type", SequenceProvider([output]), replace=True
+    )
+
+    run = execute_lead_analysis_job(job.id, prompt.id)
+
+    link = LeadInsight.objects.get(ai_run=run).requirements.get()
+    assert link.requirement_concept_id == requirement.id
+    assert link.capability_concept_id == capability.id
+
+
+@pytest.mark.django_db
+def test_retry_cannot_claim_candidate_without_frozen_lease(candidate):
+    with pytest.raises(LeadStateError):
+        LeadService.resume_analysis_retry(
+            organization_id=candidate.organization_id,
+            candidate_id=candidate.id,
+            started_from=LeadCandidate.Status.DISCOVERED,
+            analysis_lease_token=None,
+        )

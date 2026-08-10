@@ -194,6 +194,41 @@ def _record_canceled_run(run: AIRun) -> AIRun:
     return run
 
 
+@transaction.atomic
+def _reconcile_orphaned_run(*, job_id, run_id) -> AIRun:
+    """Converge a crashed RUNNING audit row to its already-terminal Job."""
+    job = Job.objects.select_for_update().get(pk=job_id)
+    run = AIRun.objects.select_for_update().get(pk=run_id)
+    if (
+        run.status != AIRun.Status.RUNNING
+        or run.job_attempt != job.attempt
+    ):
+        return run
+    if job.status == Job.Status.CANCELED:
+        return _record_canceled_run(run)
+    if job.status == Job.Status.FAILED:
+        run.status = AIRun.Status.FAILED
+        run.output_json = None
+        run.confidence = None
+        run.provider_metadata = {}
+        run.error = normalize_persisted_error(
+            job.error or {"code": "provider_error"}
+        )
+        run.finished_at = job.finished_at or timezone.now()
+        with ai_audit_writes():
+            run.save(
+                update_fields=[
+                    "status",
+                    "output_json",
+                    "confidence",
+                    "provider_metadata",
+                    "error",
+                    "finished_at",
+                ]
+            )
+    return run
+
+
 def execute_generation_job(
     job_id, *, prompt_version_id, provider_code: str | None = None,
     worker_id="ai-worker", result_writer=None, input_validator=None,
@@ -210,6 +245,11 @@ def execute_generation_job(
             AIRun.Status.FAILED, AIRun.Status.CANCELED,
         }
     ):
+        if existing.status == AIRun.Status.RUNNING and job.status in {
+            Job.Status.CANCELED,
+            Job.Status.FAILED,
+        }:
+            return _reconcile_orphaned_run(job_id=job.id, run_id=existing.id)
         return existing
 
     try:

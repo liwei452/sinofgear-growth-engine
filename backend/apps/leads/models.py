@@ -21,6 +21,9 @@ _lead_history_write: ContextVar[bool] = ContextVar("lead_history_write", default
 _lead_frozen_references: ContextVar[dict | None] = ContextVar(
     "lead_frozen_references", default=None
 )
+_lead_analysis_lease_write: ContextVar[bool] = ContextVar(
+    "lead_analysis_lease_write", default=False
+)
 
 SPECIAL_USE_DOMAIN_SUFFIXES = frozenset(
     {
@@ -74,6 +77,15 @@ def lead_frozen_reference_writes(*, organization_id, ontology_snapshot, capabili
         yield
     finally:
         _lead_frozen_references.reset(token)
+
+
+@contextmanager
+def lead_analysis_lease_writes():
+    token = _lead_analysis_lease_write.set(True)
+    try:
+        yield
+    finally:
+        _lead_analysis_lease_write.reset(token)
 
 
 def normalize_company_domain(value: str) -> str:
@@ -264,6 +276,7 @@ class LeadCandidate(OrganizationScopedModel):
         blank=True,
         related_name="latest_for_candidates",
     )
+    analysis_lease_token = models.UUIDField(null=True, blank=True, editable=False)
     version = models.PositiveIntegerField(default=1)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -305,16 +318,35 @@ class LeadCandidate(OrganizationScopedModel):
                 errors["latest_insight"] = "Latest insight must belong to this candidate."
         if not self._state.adding and self.pk:
             persisted = type(self)._base_manager.filter(pk=self.pk).values(
-                "organization_id", "status", "version", "latest_insight_id"
+                "organization_id",
+                "status",
+                "version",
+                "latest_insight_id",
+                "analysis_lease_token",
             ).first()
             if persisted is not None:
                 if self.organization_id != persisted["organization_id"]:
                     errors["organization"] = "Organization is immutable after creation."
-                if self.status != persisted["status"] and self.status not in self.B1_TRANSITIONS.get(
-                    persisted["status"], frozenset()
+                recovery_transition = (
+                    _lead_analysis_lease_write.get()
+                    and persisted["status"] == self.Status.ANALYZING
+                    and self.status == self.Status.DISCOVERED
+                )
+                if (
+                    self.status != persisted["status"]
+                    and self.status
+                    not in self.B1_TRANSITIONS.get(persisted["status"], frozenset())
+                    and not recovery_transition
                 ):
                     errors["status"] = (
                         f"B1 cannot transition from {persisted['status']} to {self.status}."
+                    )
+                if (
+                    self.analysis_lease_token != persisted["analysis_lease_token"]
+                    and not _lead_analysis_lease_write.get()
+                ):
+                    errors["analysis_lease_token"] = (
+                        "Analysis lease is managed only by LeadService."
                     )
                 if self.version != persisted["version"]:
                     errors["version"] = "Candidate version is managed automatically."

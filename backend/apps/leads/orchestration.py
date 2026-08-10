@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 from string import Formatter
+from uuid import UUID
 
 from django.core.exceptions import ValidationError
 from jsonschema import ValidationError as JSONSchemaValidationError
@@ -50,6 +51,8 @@ def _validate_lead_input(snapshot: dict, *, organization_id) -> None:
         "organization_id",
         "lead_candidate_id",
         "candidate_status_at_start",
+        "analysis_lease_id",
+        "analysis_lease_version",
         "candidate",
         "evidence",
         "ontology_snapshot",
@@ -74,6 +77,22 @@ def _validate_lead_input(snapshot: dict, *, organization_id) -> None:
         raise GenerationPreflightError(
             "invalid_lead_analysis_input", "Frozen candidate fields are invalid."
         )
+    try:
+        UUID(str(frozen["analysis_lease_id"]))
+    except (TypeError, ValueError):
+        raise GenerationPreflightError(
+            "invalid_lead_analysis_input", "Frozen analysis lease is invalid."
+        ) from None
+    if (
+        frozen["candidate_status_at_start"]
+        not in {LeadCandidate.Status.DISCOVERED, LeadCandidate.Status.ANALYZED}
+        or not isinstance(frozen["analysis_lease_version"], int)
+        or isinstance(frozen["analysis_lease_version"], bool)
+        or frozen["analysis_lease_version"] < 1
+    ):
+        raise GenerationPreflightError(
+            "invalid_lead_analysis_input", "Frozen analysis lease metadata is invalid."
+        )
     candidate = LeadCandidate.objects.filter(
         pk=frozen["lead_candidate_id"],
         organization_id=organization_id,
@@ -84,6 +103,11 @@ def _validate_lead_input(snapshot: dict, *, organization_id) -> None:
     }:
         raise GenerationPreflightError(
             "lead_candidate_unavailable", "Lead candidate is unavailable for analysis."
+        )
+    if str(candidate.analysis_lease_token) != str(frozen["analysis_lease_id"]):
+        raise GenerationPreflightError(
+            "lead_analysis_lease_lost",
+            "Lead candidate is owned by another analysis.",
         )
     evidence_rows = frozen.get("evidence")
     if frozen_source_evidence_errors(evidence_rows, organization_id=organization_id):
@@ -184,6 +208,7 @@ def _recover_candidate(snapshot, *, organization_id) -> None:
         organization_id=organization_id,
         candidate_id=snapshot.get("lead_candidate_id"),
         started_from=snapshot.get("candidate_status_at_start"),
+        analysis_lease_token=snapshot.get("analysis_lease_id"),
     )
 
 
@@ -209,6 +234,7 @@ def execute_lead_analysis_job(
             organization_id=job.organization_id,
             candidate_id=job.input_snapshot.get("lead_candidate_id"),
             started_from=job.input_snapshot.get("candidate_status_at_start"),
+            analysis_lease_token=job.input_snapshot.get("analysis_lease_id"),
         )
 
     def result_writer(run, output):

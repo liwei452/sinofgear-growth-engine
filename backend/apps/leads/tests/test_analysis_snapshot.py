@@ -4,6 +4,8 @@ import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 
 from apps.identity.models import Membership, Role
+from apps.knowledge.guards import _test_fixture_writes
+from apps.knowledge.models import KnowledgeConcept, KnowledgeStatus
 from apps.leads.models import LeadCandidate
 from apps.leads.schemas import lead_analysis_errors
 from apps.leads.services import build_analysis_snapshot
@@ -184,3 +186,35 @@ def test_output_schema_and_frozen_references_are_strict(
     missing_fact_snapshot = deepcopy(snapshot)
     missing_fact_snapshot["candidate"]["company_domain"] = ""
     assert lead_analysis_errors(output, snapshot=missing_fact_snapshot)
+
+
+@pytest.mark.django_db
+def test_same_type_system_and_organization_code_is_rejected_before_analysis_lease(
+    candidate,
+    evidence,
+    approved_capability,
+    user,
+):
+    _authorize(user, candidate.organization)
+    with _test_fixture_writes():
+        KnowledgeConcept.objects.create(
+            scope=KnowledgeConcept.Scope.ORGANIZATION,
+            organization=candidate.organization,
+            concept_type=KnowledgeConcept.ConceptType.CAPABILITY,
+            code=approved_capability.code,
+            label_zh="组织级同码能力",
+            label_en="Organization duplicate capability",
+            status=KnowledgeStatus.APPROVED,
+            created_by=user,
+        )
+
+    with pytest.raises(ValidationError, match="Ambiguous approved CAPABILITY code"):
+        build_analysis_snapshot(
+            candidate=candidate,
+            evidence_ids=[evidence.id],
+            actor=user,
+        )
+
+    candidate.refresh_from_db()
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None

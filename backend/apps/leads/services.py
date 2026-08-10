@@ -3,10 +3,10 @@ import hmac
 import json
 from contextlib import nullcontext
 from decimal import Decimal, InvalidOperation
+from uuid import uuid4
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from django.utils import timezone
 
 from apps.ai.models import AIRun
 from apps.jobs.models import Job
@@ -18,6 +18,7 @@ from .models import (
     LeadInsight,
     LeadInsightRequirement,
     LeadVersionConflict,
+    lead_analysis_lease_writes,
     lead_frozen_reference_writes,
     lead_history_writes,
 )
@@ -103,6 +104,33 @@ def canonical_lead_insight_output(payload) -> dict[str, object]:
 class LeadService:
     @staticmethod
     @transaction.atomic
+    def begin_analysis(*, organization, candidate, expected_version=None):
+        candidate_id = candidate.pk if isinstance(candidate, LeadCandidate) else candidate
+        locked = LeadCandidate.objects.select_for_update().get(
+            pk=candidate_id,
+            organization=organization,
+        )
+        expected = locked.version if expected_version is None else expected_version
+        if locked.version != expected:
+            raise LeadVersionConflict("Lead candidate version is stale.")
+        if locked.analysis_lease_token is not None:
+            raise LeadStateError("Lead candidate already has an active analysis lease.")
+        if locked.status not in {
+            LeadCandidate.Status.DISCOVERED,
+            LeadCandidate.Status.ANALYZED,
+        }:
+            raise LeadStateError("Lead must be discovered or analyzed before analysis starts.")
+        if locked.status == LeadCandidate.Status.DISCOVERED:
+            locked.status = LeadCandidate.Status.ANALYZING
+        locked.analysis_lease_token = uuid4()
+        with lead_analysis_lease_writes():
+            locked.save(
+                update_fields=["status", "analysis_lease_token", "updated_at"]
+            )
+        return locked
+
+    @staticmethod
+    @transaction.atomic
     def transition(*, organization, candidate, to_status, expected_version=None):
         if to_status not in LeadCandidate.Status.values:
             raise LeadStateError("Lead status is invalid.")
@@ -139,12 +167,19 @@ class LeadService:
         locked_candidate = LeadCandidate.objects.select_for_update().get(
             pk=candidate_id, organization=organization
         )
+        run = AIRun.objects.select_related("job", "prompt_version").get(pk=ai_run.pk)
+        if audited_output is not None:
+            frozen_lease = run.input_snapshot.get("analysis_lease_id")
+            if (
+                not frozen_lease
+                or str(locked_candidate.analysis_lease_token) != str(frozen_lease)
+            ):
+                raise LeadStateError("Lead analysis lease is no longer owned by this run.")
         if locked_candidate.status not in {
             LeadCandidate.Status.ANALYZING,
             LeadCandidate.Status.ANALYZED,
         }:
             raise LeadStateError("Lead must be analyzing or analyzed before recording insight.")
-        run = AIRun.objects.select_related("job", "prompt_version").get(pk=ai_run.pk)
         if run.organization_id != locked_candidate.organization_id:
             raise ValidationError({"ai_run": "AI run must belong to the candidate organization."})
         if run.status != AIRun.Status.SUCCEEDED:
@@ -307,7 +342,14 @@ class LeadService:
         locked_candidate.latest_insight = insight
         if locked_candidate.status == LeadCandidate.Status.ANALYZING:
             locked_candidate.status = LeadCandidate.Status.ANALYZED
-        locked_candidate.save(update_fields=["latest_insight", "status", "updated_at"])
+        update_fields = ["latest_insight", "status", "updated_at"]
+        lease_context = nullcontext()
+        if audited_output is not None:
+            locked_candidate.analysis_lease_token = None
+            update_fields.append("analysis_lease_token")
+            lease_context = lead_analysis_lease_writes()
+        with lease_context:
+            locked_candidate.save(update_fields=update_fields)
         if isinstance(candidate, LeadCandidate):
             candidate.latest_insight = insight
             candidate.status = locked_candidate.status
@@ -334,11 +376,11 @@ class LeadService:
             ).order_by("pk")
         )
         evidence_by_id = {str(row.id): row for row in evidence}
-        concepts_by_code = {
-            row["code"]: row
+        concepts_by_identity = {
+            (row["concept_type"], row["code"]): row
             for row in frozen["ontology_snapshot"]["concept_versions"]
         }
-        concept_ids = [row["concept_id"] for row in concepts_by_code.values()]
+        concept_ids = [row["concept_id"] for row in concepts_by_identity.values()]
         current_concepts = {
             str(row.id): row for row in KnowledgeConcept.objects.filter(pk__in=concept_ids)
         }
@@ -361,7 +403,9 @@ class LeadService:
 
         requirements_by_key = {}
         for extracted in output["requirements"]:
-            frozen_requirement = concepts_by_code[extracted["type"]]
+            frozen_requirement = concepts_by_identity[
+                ("REQUIREMENT", extracted["type"])
+            ]
             requirement_concept = current_concepts[frozen_requirement["concept_id"]]
             for source_evidence_id in extracted["evidence_ids"]:
                 matches = sorted(
@@ -375,7 +419,9 @@ class LeadService:
                 capability_concept = None
                 capability_knowledge_evidence = None
                 if match is not None:
-                    frozen_capability = concepts_by_code[match["capability_code"]]
+                    frozen_capability = concepts_by_identity[
+                        ("CAPABILITY", match["capability_code"])
+                    ]
                     capability_concept = current_concepts[frozen_capability["concept_id"]]
                     capability_knowledge_evidence = knowledge_by_id[
                         match["knowledge_evidence_ids"][0]
@@ -449,43 +495,63 @@ class LeadService:
 
     @staticmethod
     @transaction.atomic
-    def recover_failed_analysis(*, organization_id, candidate_id, started_from):
-        if started_from != LeadCandidate.Status.DISCOVERED:
-            return
+    def recover_failed_analysis(
+        *, organization_id, candidate_id, started_from, analysis_lease_token
+    ):
         candidate = LeadCandidate.objects.select_for_update().filter(
             pk=candidate_id,
             organization_id=organization_id,
         ).first()
-        if candidate is None or candidate.status != LeadCandidate.Status.ANALYZING:
+        if (
+            candidate is None
+            or not analysis_lease_token
+            or str(candidate.analysis_lease_token) != str(analysis_lease_token)
+        ):
             return
-        models.QuerySet.update(
-            LeadCandidate.objects.filter(pk=candidate.pk, version=candidate.version),
-            status=LeadCandidate.Status.DISCOVERED,
-            version=candidate.version + 1,
-            updated_at=timezone.now(),
-        )
+        if (
+            started_from == LeadCandidate.Status.DISCOVERED
+            and candidate.status == LeadCandidate.Status.ANALYZING
+        ):
+            candidate.status = LeadCandidate.Status.DISCOVERED
+        elif started_from != LeadCandidate.Status.ANALYZED:
+            return
+        candidate.analysis_lease_token = None
+        with lead_analysis_lease_writes():
+            candidate.save(
+                update_fields=["status", "analysis_lease_token", "updated_at"]
+            )
 
     @staticmethod
     @transaction.atomic
-    def resume_analysis_retry(*, organization_id, candidate_id, started_from):
-        if started_from != LeadCandidate.Status.DISCOVERED:
-            return
+    def resume_analysis_retry(
+        *, organization_id, candidate_id, started_from, analysis_lease_token
+    ):
+        if not analysis_lease_token:
+            raise LeadStateError("Frozen analysis lease is required for retry.")
         candidate = LeadCandidate.objects.select_for_update().filter(
             pk=candidate_id,
             organization_id=organization_id,
         ).first()
         if candidate is None:
             raise LeadStateError("Lead candidate is unavailable for retry.")
-        if candidate.status == LeadCandidate.Status.ANALYZING:
+        if str(candidate.analysis_lease_token) == str(analysis_lease_token):
             return
-        if candidate.status != LeadCandidate.Status.DISCOVERED:
-            raise LeadStateError("Lead candidate is not recoverable for retry.")
-        LeadService.transition(
-            organization=candidate.organization,
-            candidate=candidate,
-            to_status=LeadCandidate.Status.ANALYZING,
-            expected_version=candidate.version,
+        if candidate.analysis_lease_token is not None:
+            raise LeadStateError("Lead candidate is owned by another analysis.")
+        expected_status = (
+            LeadCandidate.Status.DISCOVERED
+            if started_from == LeadCandidate.Status.DISCOVERED
+            else LeadCandidate.Status.ANALYZED
         )
+        if candidate.status != expected_status:
+            raise LeadStateError("Lead candidate is not recoverable for retry.")
+        if started_from == LeadCandidate.Status.DISCOVERED:
+            candidate.status = LeadCandidate.Status.ANALYZING
+        candidate.analysis_lease_token = analysis_lease_token
+        with lead_analysis_lease_writes():
+            candidate.save(
+                update_fields=["status", "analysis_lease_token", "updated_at"]
+            )
 
     @staticmethod
     def _validate_explanation(explanation, *, evidence_ids):
@@ -785,6 +851,19 @@ def build_analysis_snapshot(*, candidate, evidence_ids, actor) -> dict[str, obje
         organization=organization,
         concept_ids=concept_ids,
     )
+    seen_identities: dict[tuple[str, str], str] = {}
+    for row in ontology_snapshot["concept_versions"]:
+        identity = (row["concept_type"], row["code"])
+        if identity in seen_identities:
+            raise ValidationError(
+                {
+                    "ontology_snapshot": (
+                        f"Ambiguous approved {row['concept_type']} code '{row['code']}'. "
+                        "Rename or deprecate one visible definition before analysis."
+                    )
+                }
+            )
+        seen_identities[identity] = row["concept_id"]
     frozen_concept_ids = {
         row["concept_id"] for row in ontology_snapshot["concept_versions"]
     }
@@ -818,25 +897,20 @@ def build_analysis_snapshot(*, candidate, evidence_ids, actor) -> dict[str, obje
         )
     ]
 
-    if locked_candidate.status == LeadCandidate.Status.DISCOVERED:
-        locked_candidate = LeadService.transition(
-            organization=organization,
-            candidate=locked_candidate,
-            to_status=LeadCandidate.Status.ANALYZING,
-            expected_version=locked_candidate.version,
-        )
-    elif locked_candidate.status != LeadCandidate.Status.ANALYZED:
-        raise LeadStateError("Lead must be discovered or analyzed before analysis starts.")
+    started_from = locked_candidate.status
+    locked_candidate = LeadService.begin_analysis(
+        organization=organization,
+        candidate=locked_candidate,
+        expected_version=locked_candidate.version,
+    )
 
     snapshot = {
         "schema": "LEAD_ANALYSIS_INPUT_V1",
         "organization_id": str(organization.id),
         "lead_candidate_id": str(locked_candidate.id),
-        "candidate_status_at_start": (
-            LeadCandidate.Status.DISCOVERED
-            if locked_candidate.status == LeadCandidate.Status.ANALYZING
-            else locked_candidate.status
-        ),
+        "candidate_status_at_start": started_from,
+        "analysis_lease_id": str(locked_candidate.analysis_lease_token),
+        "analysis_lease_version": locked_candidate.version,
         "candidate": {
             "company_name": locked_candidate.company_name,
             "company_domain": locked_candidate.company_domain,

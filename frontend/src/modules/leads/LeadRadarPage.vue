@@ -1,17 +1,16 @@
 <script setup lang="ts">
 import { useQuery, useQueryClient } from "@tanstack/vue-query"
-import { computed, ref, shallowRef, watch } from "vue"
+import { computed, onUnmounted, ref, shallowRef, watch } from "vue"
 
-import { apiRequest } from "../../api/client"
 import { currentUserQueryOptions } from "../auth/auth"
 import {
   getLeadCandidate,
+  getLeadCandidatePage,
   leadKeys,
   listLeadCandidates,
   safeLeadPageUrl,
   type LeadCandidateDetail,
   type LeadCandidateList,
-  type LeadCandidatePage,
   type LeadFilters,
 } from "./api"
 import SourceImportDialog from "./SourceImportDialog.vue"
@@ -28,6 +27,10 @@ const importOpen = ref(false)
 const details = shallowRef<Record<string, LeadCandidateDetail>>({})
 const detailStates = shallowRef<Record<string, "loading" | "success" | "error">>({})
 let detailLoad = 0
+let activeScopeOrganization = ""
+// Enforce the API page contract at runtime; four workers hydrate its 50-item maximum without flooding the API.
+const maxLeadPageSize = 50
+const detailConcurrency = 4
 
 const organizationId = computed(() => currentUserQuery.data.value?.organization.id ?? "")
 const permissions = computed(() => currentUserQuery.data.value?.membership.permissions ?? [])
@@ -43,21 +46,40 @@ const hasFilters = computed(() => Boolean(
   scoreBand.value || reviewState.value || platform.value.trim() || country.value.trim(),
 ))
 
-async function getCursorPage(url: string): Promise<LeadCandidatePage> {
-  const safeUrl = safeLeadPageUrl(url)
-  if (!safeUrl) throw new Error("Unsafe lead cursor")
-  const page = await apiRequest<LeadCandidatePage>(safeUrl)
-  if (!page) throw new Error("Empty lead page")
-  return page
+function cancelLeadReads(organization: string): void {
+  if (!organization) return
+  void queryClient.cancelQueries({ queryKey: [...leadKeys.all(organization), "list"] })
+  cancelDetailReads(organization)
 }
+
+function cancelDetailReads(organization: string): void {
+  if (!organization) return
+  void queryClient.cancelQueries({ queryKey: [...leadKeys.all(organization), "detail"] })
+}
+
+watch(filters, () => { pageUrl.value = null }, { flush: "sync" })
+
+watch([organizationId, filters, pageUrl, canRead], ([currentOrganization, , , readable]) => {
+  detailLoad += 1
+  cancelLeadReads(activeScopeOrganization)
+  details.value = {}
+  detailStates.value = {}
+  activeScopeOrganization = readable ? currentOrganization : ""
+}, { flush: "sync", immediate: true })
 
 const leadsQuery = useQuery({
   queryKey: computed(() => [...leadKeys.list(organizationId.value, filters.value), pageUrl.value]),
-  queryFn: () => pageUrl.value ? getCursorPage(pageUrl.value) : listLeadCandidates(filters.value),
+  queryFn: ({ queryKey, signal }) => {
+    const requestFilters = queryKey[3] as LeadFilters
+    const cursor = queryKey[4]
+    return typeof cursor === "string"
+      ? getLeadCandidatePage(cursor, { signal })
+      : listLeadCandidates(requestFilters, { signal })
+  },
   enabled: computed(() => Boolean(organizationId.value) && canRead.value),
   retry: false,
 })
-const leads = computed(() => leadsQuery.data.value?.results ?? [])
+const leads = computed(() => (leadsQuery.data.value?.results ?? []).slice(0, maxLeadPageSize))
 const safeNext = computed(() => safeLeadPageUrl(leadsQuery.data.value?.next ?? null))
 const safePrevious = computed(() => safeLeadPageUrl(leadsQuery.data.value?.previous ?? null))
 const analyzingStatuses = new Set<LeadCandidateList["status"]>(["DISCOVERED", "ANALYZING"])
@@ -68,7 +90,9 @@ const onlyAnalyzing = computed(() => leads.value.length > 0
   && leads.value.every((candidate) => analyzingStatuses.has(candidate.status)))
 function evidenceGateResult(candidateId: string): boolean | null {
   if (detailStates.value[candidateId] !== "success") return null
-  const gates = Object.values(details.value[candidateId]?.latest_insight.gates ?? {})
+  const insight = details.value[candidateId]?.latest_insight
+  if (!insight) return null
+  const gates = Object.values(insight.gates ?? {})
   if (!gates.length || gates.some((gate) => typeof gate !== "boolean")) return null
   return gates.every(Boolean)
 }
@@ -77,6 +101,7 @@ const evidenceSummary = computed<number | string>(() => {
   const states = leads.value.map((candidate) => detailStates.value[candidate.id])
   if (states.some((state) => state === "loading" || !state)) return "核对中"
   if (states.some((state) => state === "error")) return "暂不可用"
+  if (leads.value.some((candidate) => !details.value[candidate.id]?.latest_insight)) return "等待分析"
   return leads.value.filter((candidate) => evidenceGateResult(candidate.id) === false).length
 })
 const summaries = computed(() => [
@@ -93,29 +118,41 @@ const summaries = computed(() => [
   { label: "已经处理", count: leads.value.filter((item) => handledStatuses.has(item.status)).length },
 ])
 
-watch([organizationId, leads], async ([currentOrganization, currentLeads]) => {
+watch([organizationId, leads, canRead], async ([currentOrganization, currentLeads, readable]) => {
   const token = ++detailLoad
+  cancelDetailReads(activeScopeOrganization)
   details.value = {}
   detailStates.value = Object.fromEntries(currentLeads.map((candidate) => [candidate.id, "loading"]))
-  if (!currentOrganization || !canRead.value || !currentLeads.length) return
-  await Promise.all(currentLeads.map(async (candidate) => {
-    try {
-      const candidateDetail = await queryClient.fetchQuery({
-        queryKey: leadKeys.detail(currentOrganization, candidate.id),
-        queryFn: () => getLeadCandidate(candidate.id),
-        retry: false,
-      })
-      if (token !== detailLoad || currentOrganization !== organizationId.value) return
-      details.value = { ...details.value, [candidate.id]: candidateDetail }
-      detailStates.value = { ...detailStates.value, [candidate.id]: "success" }
-    } catch {
-      if (token !== detailLoad || currentOrganization !== organizationId.value) return
-      detailStates.value = { ...detailStates.value, [candidate.id]: "error" }
+  if (!currentOrganization || !readable || !currentLeads.length) return
+  let nextCandidate = 0
+  async function hydrateDetails(): Promise<void> {
+    while (token === detailLoad && currentOrganization === organizationId.value) {
+      const candidate = currentLeads[nextCandidate]
+      nextCandidate += 1
+      if (!candidate) return
+      try {
+        const candidateDetail = await queryClient.fetchQuery({
+          queryKey: leadKeys.detail(currentOrganization, candidate.id),
+          queryFn: ({ signal }) => getLeadCandidate(candidate.id, { signal }),
+          retry: false,
+        })
+        if (token !== detailLoad || currentOrganization !== organizationId.value) return
+        details.value = { ...details.value, [candidate.id]: candidateDetail }
+        detailStates.value = { ...detailStates.value, [candidate.id]: "success" }
+      } catch {
+        if (token !== detailLoad || currentOrganization !== organizationId.value) return
+        detailStates.value = { ...detailStates.value, [candidate.id]: "error" }
+      }
     }
-  }))
+  }
+  const workerCount = Math.min(detailConcurrency, currentLeads.length)
+  await Promise.all(Array.from({ length: workerCount }, () => hydrateDetails()))
 }, { immediate: true })
 
-watch(filters, () => { pageUrl.value = null })
+onUnmounted(() => {
+  detailLoad += 1
+  cancelLeadReads(activeScopeOrganization)
+})
 
 function moveTo(url: string | null): void {
   const safeUrl = safeLeadPageUrl(url)
@@ -144,6 +181,7 @@ function evidenceLabel(candidate: LeadCandidateList): string {
   const state = detailStates.value[candidate.id]
   if (state === "loading" || !state) return "正在核对证据…"
   if (state === "error") return "证据状态暂时无法加载"
+  if (!details.value[candidate.id]?.latest_insight) return "等待分析证据"
   const gateResult = evidenceGateResult(candidate.id)
   if (gateResult === null) return "证据状态待确认"
   return gateResult ? "证据已达到判断门槛" : "证据还不够"
@@ -162,7 +200,9 @@ function explanation(candidateId: string): string {
   const state = detailStates.value[candidateId]
   if (state === "loading" || !state) return "正在读取 AI 理由…"
   if (state === "error") return "AI 理由暂时无法加载。"
-  const value = details.value[candidateId]?.latest_insight.explanation
+  const insight = details.value[candidateId]?.latest_insight
+  if (!insight) return "等待 AI 完成分析。"
+  const value = insight.explanation
   if (typeof value === "string" && value.trim()) return value.trim()
   if (value && typeof value === "object") {
     for (const key of ["summary", "reason", "text"]) {

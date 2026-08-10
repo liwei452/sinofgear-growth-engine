@@ -1,8 +1,11 @@
-import { ApiError, apiRequest } from "../../api/client"
+import { ApiError, apiRequest, type ApiRequestOptions } from "../../api/client"
 import type { components } from "../../api/generated/schema"
 
 export type LeadCandidateList = components["schemas"]["LeadCandidateList"]
-export type LeadCandidateDetail = components["schemas"]["LeadCandidateDetail"]
+type GeneratedLeadCandidateDetail = components["schemas"]["LeadCandidateDetail"]
+export type LeadCandidateDetail = Omit<GeneratedLeadCandidateDetail, "latest_insight"> & {
+  readonly latest_insight: GeneratedLeadCandidateDetail["latest_insight"] | null
+}
 export type LeadCandidatePage = components["schemas"]["LeadCandidatePage"]
 export type IngestionBatchCreate = components["schemas"]["IngestionBatchCreate"]
 export type IngestionAccepted = components["schemas"]["IngestionAccepted"]
@@ -23,6 +26,8 @@ export type LeadFilters = {
   created_before?: string
   page_size?: number
 }
+
+type LeadReadOptions = Pick<ApiRequestOptions, "signal">
 
 export type ImportDraft =
   | { mode: "URL"; sourceUrl: string; originalText: string; idempotencyKey: string }
@@ -339,12 +344,27 @@ function ingestionPayload(draft: ImportDraft): IngestionBatchCreate {
   }
 }
 
-export async function listLeadCandidates(filters: LeadFilters = {}): Promise<LeadCandidatePage> {
-  return required(await apiRequest<LeadCandidatePage>(queryUrl(leadPath, filters)))
+export async function listLeadCandidates(
+  filters: LeadFilters = {},
+  options: LeadReadOptions = {},
+): Promise<LeadCandidatePage> {
+  return required(await apiRequest<LeadCandidatePage>(queryUrl(leadPath, filters), options))
 }
 
-export async function getLeadCandidate(candidateId: string): Promise<LeadCandidateDetail> {
-  return required(await apiRequest<LeadCandidateDetail>(`${leadPath}/${encodeURIComponent(candidateId)}`))
+export async function getLeadCandidatePage(
+  pageUrl: string,
+  options: LeadReadOptions = {},
+): Promise<LeadCandidatePage> {
+  const safeUrl = safeLeadPageUrl(pageUrl)
+  if (!safeUrl) throw new ApiError(0, "Unsafe lead cursor.")
+  return required(await apiRequest<LeadCandidatePage>(safeUrl, options))
+}
+
+export async function getLeadCandidate(
+  candidateId: string,
+  options: LeadReadOptions = {},
+): Promise<LeadCandidateDetail> {
+  return required(await apiRequest<LeadCandidateDetail>(`${leadPath}/${encodeURIComponent(candidateId)}`, options))
 }
 
 export async function createIngestionBatch(draft: ImportDraft): Promise<IngestionAccepted> {

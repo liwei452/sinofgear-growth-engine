@@ -64,6 +64,16 @@ function list(results: unknown[], next: string | null = null, previous: string |
   return json({ next, previous, results })
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function renderPage(
   fetchMock: ReturnType<typeof vi.fn>,
   permissions = ["leads.read", "sources.manage"],
@@ -301,11 +311,14 @@ it("shows honest first-use, analyzing, and filtered-empty states", async () => {
   expect(await screen.findByRole("heading", { name: "还没有公开线索" })).toBeVisible()
   expect(screen.getByText("添加你指定范围内的公开内容，AI 才会开始筛选机会。")).toBeVisible()
 
-  renderPage(vi.fn(async (path: string) => path.includes("/lead-waiting")
-    ? json({ ...detail, id: "lead-waiting", status: "ANALYZING", evidence: [] })
+  const analyzing = renderPage(vi.fn(async (path: string) => path.includes("/lead-waiting")
+    ? json({ ...detail, id: "lead-waiting", status: "ANALYZING", evidence: [], latest_insight: null })
     : list([waitingLead])), ["leads.read"], "org-analyzing")
   expect(await screen.findByRole("heading", { name: "正在筛选公开线索" })).toBeVisible()
   expect(screen.getByRole("status")).toHaveTextContent("分析完成后，值得查看的机会会出现在这里")
+  await waitFor(() => expect(within(analyzing.container).getByText("需要补证据").closest("article"))
+    .toHaveTextContent("等待分析"))
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
 
   const filteredFetch = vi.fn(async () => list([]))
   renderPage(filteredFetch, ["leads.read"], "org-filter-empty")
@@ -314,6 +327,153 @@ it("shows honest first-use, analyzing, and filtered-empty states", async () => {
   await user.selectOptions(screen.getAllByLabelText("机会价值").at(-1)!, "HIGH")
   expect(await screen.findByRole("heading", { name: "当前筛选没有结果" })).toBeVisible()
   expect(screen.getAllByRole("button", { name: "清除筛选" }).at(-1)).toBeVisible()
+})
+
+it("renders pending analysis copy when one detail has no latest insight", async () => {
+  const pendingLead = { ...waitingLead, status: "DISCOVERED" as const }
+  renderPage(vi.fn(async (path: string) => {
+    if (path.includes("/lead-waiting")) {
+      return json({ ...detail, id: "lead-waiting", status: "DISCOVERED", evidence: [], latest_insight: null })
+    }
+    if (path.includes("/lead-high")) return json(detail)
+    return list([pendingLead, highLead])
+  }), ["leads.read"], "org-pending-insight")
+
+  expect(await screen.findByText("等待分析证据")).toBeVisible()
+  expect(screen.getByText("等待 AI 完成分析。")).toBeVisible()
+  expect(screen.getByText("需要补证据").closest("article")).toHaveTextContent("等待分析")
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+})
+
+it("cancels an obsolete filtered list and ignores its late result", async () => {
+  const firstList = deferred<Response>()
+  let initialSignal: AbortSignal | undefined
+  const fetchMock = vi.fn((path: string, options?: RequestInit) => {
+    if (path === "/api/v1/lead-candidates") {
+      initialSignal = options?.signal as AbortSignal | undefined
+      return firstList.promise
+    }
+    if (path === "/api/v1/lead-candidates?score_band=HIGH") return Promise.resolve(list([highLead]))
+    if (path.includes("/lead-high")) return Promise.resolve(json(detail))
+    return Promise.resolve(list([]))
+  })
+  renderPage(fetchMock, ["leads.read"], "org-filter-race")
+
+  await userEvent.selectOptions(screen.getByLabelText("机会价值"), "HIGH")
+  expect(await screen.findByText("ABC Packaging")).toBeVisible()
+  expect(initialSignal?.aborted).toBe(true)
+
+  firstList.resolve(list([waitingLead]))
+  await new Promise((resolve) => { setTimeout(resolve, 0) })
+  expect(screen.queryByText("profile.example")).not.toBeInTheDocument()
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+})
+
+it("cancels obsolete organization details and ignores their late result", async () => {
+  const oldDetail = deferred<Response>()
+  const oldLead = { ...highLead, id: "lead-old", company_name: "Old Organization Lead" }
+  const newLead = { ...highLead, id: "lead-new", company_name: "New Organization Lead" }
+  let oldDetailSignal: AbortSignal | undefined
+  let listCalls = 0
+  const fetchMock = vi.fn((path: string, options?: RequestInit) => {
+    if (path === "/api/v1/lead-candidates") {
+      listCalls += 1
+      return Promise.resolve(list(listCalls === 1 ? [oldLead] : [newLead]))
+    }
+    if (path.includes("/lead-old")) {
+      oldDetailSignal = options?.signal as AbortSignal | undefined
+      return oldDetail.promise
+    }
+    if (path.includes("/lead-new")) return Promise.resolve(json({ ...detail, id: "lead-new" }))
+    return Promise.resolve(list([]))
+  })
+  const view = renderPage(fetchMock, ["leads.read"], "org-old")
+  expect(await screen.findByText("Old Organization Lead")).toBeVisible()
+  await waitFor(() => expect(oldDetailSignal).toBeDefined())
+
+  view.queryClient.setQueryData(
+    currentUserQueryOptions().queryKey,
+    userWith(["leads.read"], "org-new"),
+  )
+
+  expect(await screen.findByText("New Organization Lead")).toBeVisible()
+  expect(oldDetailSignal?.aborted).toBe(true)
+  oldDetail.resolve(json({ ...detail, id: "lead-old", company: { name: "Obsolete Lead" } }))
+  await new Promise((resolve) => { setTimeout(resolve, 0) })
+  expect(screen.queryByText("Old Organization Lead")).not.toBeInTheDocument()
+  expect(screen.queryByText("Obsolete Lead")).not.toBeInTheDocument()
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+})
+
+it("limits a 50-row detail fan-out and aborts active work when unmounted", async () => {
+  const manyLeads = Array.from({ length: 50 }, (_, index) => ({
+    ...highLead,
+    id: `lead-${index}`,
+    company_name: `Company ${index}`,
+  }))
+  let activeDetails = 0
+  let maximumActiveDetails = 0
+  let abortedDetails = 0
+  let detailCalls = 0
+  const activeRequests: Array<{ resolve: (response: Response) => void }> = []
+  const fetchMock = vi.fn((path: string, options?: RequestInit) => {
+    if (path === "/api/v1/lead-candidates") return Promise.resolve(list(manyLeads))
+    detailCalls += 1
+    activeDetails += 1
+    maximumActiveDetails = Math.max(maximumActiveDetails, activeDetails)
+    const request = deferred<Response>()
+    activeRequests.push({ resolve: request.resolve })
+    const pending = request.promise.finally(() => { activeDetails -= 1 })
+    const signal = options?.signal as AbortSignal | undefined
+    signal?.addEventListener("abort", () => {
+      abortedDetails += 1
+      request.reject(new DOMException("Aborted", "AbortError"))
+    }, { once: true })
+    return pending
+  })
+  const view = renderPage(fetchMock, ["leads.read"], "org-concurrency")
+
+  await screen.findByText("Company 0")
+  await waitFor(() => expect(detailCalls).toBeGreaterThanOrEqual(4))
+  expect(maximumActiveDetails).toBeLessThanOrEqual(4)
+  activeRequests[0]?.resolve(json({ ...detail, id: "lead-0" }))
+  await waitFor(() => expect(detailCalls).toBe(5))
+  expect(maximumActiveDetails).toBeLessThanOrEqual(4)
+
+  view.unmount()
+  await waitFor(() => expect(abortedDetails).toBe(4))
+  expect(detailCalls).toBe(5)
+})
+
+it("caps an oversized runtime page at 50 hydrated opportunities", async () => {
+  const oversizedPage = Array.from({ length: 51 }, (_, index) => ({
+    ...highLead,
+    id: `oversized-${index}`,
+    company_name: `Oversized Company ${index}`,
+  }))
+  let activeDetails = 0
+  let maximumActiveDetails = 0
+  let detailCalls = 0
+  const fetchMock = vi.fn((path: string) => {
+    if (path === "/api/v1/lead-candidates") return Promise.resolve(list(oversizedPage))
+    detailCalls += 1
+    activeDetails += 1
+    maximumActiveDetails = Math.max(maximumActiveDetails, activeDetails)
+    const candidateId = path.split("/").at(-1)
+    return new Promise<Response>((resolve) => {
+      setTimeout(() => {
+        activeDetails -= 1
+        resolve(json({ ...detail, id: candidateId }))
+      }, 0)
+    })
+  })
+  renderPage(fetchMock, ["leads.read"], "org-oversized-page")
+
+  await waitFor(() => expect(detailCalls).toBe(50))
+  await waitFor(() => expect(activeDetails).toBe(0))
+  expect(maximumActiveDetails).toBeLessThanOrEqual(4)
+  expect(screen.getByText("Oversized Company 49")).toBeVisible()
+  expect(screen.queryByText("Oversized Company 50")).not.toBeInTheDocument()
 })
 
 it("announces loading and recovers from a plain-language error", async () => {

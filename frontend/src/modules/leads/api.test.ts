@@ -5,6 +5,8 @@ import {
   analyzeLeadCandidate,
   createIngestionBatch,
   createLeadReview,
+  getLeadCandidate,
+  getLeadCandidatePage,
   getJob,
   isActiveImportJob,
   listLeadCandidates,
@@ -112,6 +114,28 @@ it("builds encoded filters and rejects missing API response bodies", async () =>
     "/api/v1/lead-candidates?score_band=HIGH&country=United+States&minimum_score=80",
     expect.anything(),
   )
+})
+
+it("passes cancellation signals through lead list, cursor, and detail reads", async () => {
+  const controller = new AbortController()
+  const fetchMock = vi.fn(async (path: string) => path.includes("/lead-1")
+    ? jsonResponse({ id: "lead-1" })
+    : jsonResponse({ next: null, previous: null, results: [] }))
+  vi.stubGlobal("fetch", fetchMock)
+
+  await listLeadCandidates({}, { signal: controller.signal })
+  await getLeadCandidatePage("/api/v1/lead-candidates?cursor=next", { signal: controller.signal })
+  await getLeadCandidate("lead-1", { signal: controller.signal })
+
+  expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/lead-candidates", expect.objectContaining({
+    signal: controller.signal,
+  }))
+  expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/lead-candidates?cursor=next", expect.objectContaining({
+    signal: controller.signal,
+  }))
+  expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/v1/lead-candidates/lead-1", expect.objectContaining({
+    signal: controller.signal,
+  }))
 })
 
 it("returns row-indexed preview errors without network access", () => {

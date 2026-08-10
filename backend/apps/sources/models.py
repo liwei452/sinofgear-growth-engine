@@ -21,6 +21,13 @@ _evidence_service_write: ContextVar[bool] = ContextVar(
 _ingestion_row_service_write: ContextVar[bool] = ContextVar(
     "source_ingestion_row_service_write", default=False
 )
+_ingestion_batch_state_service_write: ContextVar[bool] = ContextVar(
+    "source_ingestion_batch_state_service_write", default=False
+)
+_evidence_trusted_asset_fields: ContextVar[dict[str, object] | None] = ContextVar(
+    "source_evidence_trusted_asset_fields", default=None
+)
+_EVIDENCE_TRUSTED_ASSET_CAPABILITY = object()
 
 
 @contextmanager
@@ -39,6 +46,26 @@ def ingestion_row_service_writes():
         yield
     finally:
         _ingestion_row_service_write.reset(token)
+
+
+@contextmanager
+def _ingestion_batch_state_writes():
+    token = _ingestion_batch_state_service_write.set(True)
+    try:
+        yield
+    finally:
+        _ingestion_batch_state_service_write.reset(token)
+
+
+@contextmanager
+def _evidence_trusted_asset_writes(*, _capability=None, **asset_fields):
+    if _capability is not _EVIDENCE_TRUSTED_ASSET_CAPABILITY:
+        raise ValidationError("Trusted evidence asset validation is service-internal.")
+    token = _evidence_trusted_asset_fields.set(asset_fields)
+    try:
+        yield
+    finally:
+        _evidence_trusted_asset_fields.reset(token)
 
 
 class ServiceWriteQuerySet(models.QuerySet):
@@ -102,8 +129,15 @@ class ServiceWriteModel(OrganizationScopedModel):
     def save(self, *args, **kwargs):
         type(self)._require_service_write()
         _require_organization_immutable(self)
-        self.full_clean(validate_unique=False, validate_constraints=False)
+        self.full_clean(
+            exclude=self._service_validation_exclusions(),
+            validate_unique=False,
+            validate_constraints=False,
+        )
         return super().save(*args, **kwargs)
+
+    def _service_validation_exclusions(self):
+        return set()
 
     def delete(self, *args, **kwargs):
         type(self)._require_service_write()
@@ -212,6 +246,47 @@ class ValidatedSourceManager(models.Manager.from_queryset(ValidatedSourceQuerySe
     pass
 
 
+class IngestionBatchQuerySet(ValidatedSourceQuerySet):
+    _MUTABLE_STATE_FIELDS = frozenset(
+        {
+            "status",
+            "received_count",
+            "accepted_count",
+            "duplicate_count",
+            "failed_count",
+            "row_errors",
+            "started_at",
+            "finished_at",
+            "updated_at",
+        }
+    )
+
+    def _service_update_state(self, **values):
+        if not _ingestion_batch_state_service_write.get():
+            raise ValidationError(
+                "Ingestion batch state may change only through its service."
+            )
+        unexpected = set(values) - self._MUTABLE_STATE_FIELDS
+        if unexpected:
+            raise ValidationError(
+                "Ingestion batch mutable state writer cannot change input identity."
+            )
+        safe_values = dict(values)
+        if "row_errors" in safe_values:
+            safe_values["row_errors"] = sanitize_source_json(safe_values["row_errors"])
+        safe_values["updated_at"] = safe_values.get("updated_at") or timezone.now()
+        model_instance = self.model()
+        for field_name, value in safe_values.items():
+            self.model._meta.get_field(field_name).clean(value, model_instance)
+        if models.QuerySet.update(self, **safe_values) != 1:
+            raise self.model.DoesNotExist
+        return safe_values
+
+
+class IngestionBatchManager(models.Manager.from_queryset(IngestionBatchQuerySet)):
+    pass
+
+
 class ValidatedOrganizationModel(OrganizationScopedModel):
     objects = ValidatedSourceManager()
     deletion_protected = False
@@ -286,6 +361,7 @@ class MonitoringTarget(ValidatedOrganizationModel):
 
 class IngestionBatch(ValidatedOrganizationModel):
     deletion_protected = True
+    objects = IngestionBatchManager()
 
     class SourceType(models.TextChoices):
         API = "API", "API"
@@ -621,6 +697,19 @@ class SourceEvidence(ServiceWriteModel):
         _validate_related_organization(self, "import_asset", errors)
         if errors:
             raise ValidationError(errors)
+
+    def _service_validation_exclusions(self):
+        trusted_fields = _evidence_trusted_asset_fields.get()
+        if trusted_fields is None:
+            return set()
+        for field_name, expected_asset in trusted_fields.items():
+            if field_name not in {"screenshot_asset", "import_asset"}:
+                raise ValidationError("Unsupported trusted evidence asset field.")
+            if getattr(self, field_name) is not expected_asset:
+                raise ValidationError(
+                    {field_name: "Trusted evidence asset identity changed before persistence."}
+                )
+        return set(trusted_fields)
 
 
 class IngestionRow(ServiceWriteModel):

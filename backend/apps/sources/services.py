@@ -2,6 +2,10 @@ import hashlib
 import ipaddress
 import json
 from copy import deepcopy
+from contextlib import nullcontext
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 from django.core.exceptions import ValidationError
@@ -19,6 +23,9 @@ from .models import (
     SourceContent,
     SourceEvidence,
     SourceSignal,
+    _EVIDENCE_TRUSTED_ASSET_CAPABILITY,
+    _evidence_trusted_asset_writes,
+    _ingestion_batch_state_writes,
     evidence_service_writes,
     ingestion_row_service_writes,
 )
@@ -67,6 +74,87 @@ def evidence_fingerprint(*, original_text: str, source_url: str, platform: str) 
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True)
+class _LockedAsset:
+    _instance: MaterialAsset
+    id: object
+    organization_id: object
+    status: str
+    asset_type: str
+
+    @classmethod
+    def capture(cls, asset: MaterialAsset):
+        return cls(
+            _instance=asset,
+            id=asset.id,
+            organization_id=asset.organization_id,
+            status=asset.status,
+            asset_type=asset.asset_type,
+        )
+
+    def resolve(self, *, organization, field_name, image_required=False):
+        asset = self._instance
+        unchanged = (
+            asset.id == self.id
+            and asset.organization_id == self.organization_id
+            and asset.status == self.status
+            and asset.asset_type == self.asset_type
+        )
+        valid = (
+            unchanged
+            and self.organization_id == organization.id
+            and self.status == MaterialAsset.Status.ACTIVE
+            and (
+                not image_required
+                or self.asset_type == MaterialAsset.AssetType.IMAGE
+            )
+        )
+        if not valid:
+            raise ValidationError(
+                {field_name: "Evidence asset is unavailable for this organization."}
+            )
+        return asset
+
+
+@dataclass(frozen=True)
+class _LockedIngestionResources:
+    monitoring_target: MonitoringTarget | None
+    assets: Mapping[str, _LockedAsset]
+    import_asset_id: str | None
+    screenshot_asset_ids: frozenset[str]
+
+    def screenshot_asset(self, asset_id, *, organization):
+        if asset_id is None:
+            return None
+        asset_key = str(asset_id)
+        locked = self.assets.get(asset_key)
+        if locked is None or asset_key not in self.screenshot_asset_ids:
+            raise ValidationError(
+                {"screenshot_asset": "Evidence asset is unavailable for this organization."}
+            )
+        return locked.resolve(
+            organization=organization,
+            field_name="screenshot_asset",
+            image_required=True,
+        )
+
+    def import_asset(self, *, organization):
+        if self.import_asset_id is None:
+            return None
+        locked = self.assets.get(self.import_asset_id)
+        if locked is None:
+            raise ValidationError(
+                {"import_asset": "Evidence asset is unavailable for this organization."}
+            )
+        return locked.resolve(
+            organization=organization,
+            field_name="import_asset",
+        )
+
+
+_INGESTION_LOCKED_ASSET_CAPABILITY = object()
+
+
 class EvidenceService:
     _EVIDENCE_TYPES = {
         SourceEvidence.CollectionMethod.API: SourceEvidence.EvidenceType.PUBLIC_METADATA,
@@ -94,25 +182,89 @@ class EvidenceService:
         evidence_type=None,
         language="",
     ):
-        signal_id = getattr(signal, "pk", None)
-        try:
-            signal = SourceSignal.objects.select_for_update().filter(
-                pk=signal_id, organization=organization
-            ).first()
-        except (TypeError, ValueError) as error:
-            raise ValidationError(
-                {"signal": "Source signal is unavailable for this organization."}
-            ) from error
-        if signal is None:
-            raise ValidationError(
-                {"signal": "Source signal is unavailable for this organization."}
-            )
+        signal = EvidenceService._locked_signal(signal, organization=organization)
         screenshot_asset = EvidenceService._locked_asset(
             screenshot_asset, "screenshot_asset", organization
         )
         import_asset = EvidenceService._locked_asset(
             import_asset, "import_asset", organization
         )
+        return EvidenceService._create_evidence(
+            organization=organization,
+            signal=signal,
+            original_text=original_text,
+            source_url=source_url,
+            platform=platform,
+            collection_method=collection_method,
+            public_published_at=public_published_at,
+            created_by=created_by,
+            screenshot_asset=screenshot_asset,
+            import_asset=import_asset,
+            evidence_type=evidence_type,
+            language=language,
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def _create_from_locked_ingestion_assets(
+        *,
+        _capability=None,
+        resources,
+        screenshot_asset_id,
+        organization,
+        signal,
+        original_text,
+        source_url,
+        platform,
+        collection_method,
+        public_published_at,
+        created_by,
+        evidence_type=None,
+        language="",
+    ):
+        if _capability is not _INGESTION_LOCKED_ASSET_CAPABILITY:
+            raise ValidationError(
+                "Only the ingestion service may use the trusted locked asset path."
+            )
+        signal = EvidenceService._locked_signal(signal, organization=organization)
+        screenshot_asset = resources.screenshot_asset(
+            screenshot_asset_id,
+            organization=organization,
+        )
+        import_asset = resources.import_asset(organization=organization)
+        return EvidenceService._create_evidence(
+            organization=organization,
+            signal=signal,
+            original_text=original_text,
+            source_url=source_url,
+            platform=platform,
+            collection_method=collection_method,
+            public_published_at=public_published_at,
+            created_by=created_by,
+            screenshot_asset=screenshot_asset,
+            import_asset=import_asset,
+            evidence_type=evidence_type,
+            language=language,
+            _trusted_asset_capability=_INGESTION_LOCKED_ASSET_CAPABILITY,
+        )
+
+    @staticmethod
+    def _create_evidence(
+        *,
+        organization,
+        signal,
+        original_text,
+        source_url,
+        platform,
+        collection_method,
+        public_published_at,
+        created_by,
+        screenshot_asset,
+        import_asset,
+        evidence_type=None,
+        language="",
+        _trusted_asset_capability=None,
+    ):
         normalized_url = normalize_source_url(source_url)
         fingerprint = evidence_fingerprint(
             original_text=original_text,
@@ -127,7 +279,26 @@ class EvidenceService:
         resolved_evidence_type = evidence_type or EvidenceService._EVIDENCE_TYPES.get(method)
         if resolved_evidence_type is None:
             raise ValidationError({"collection_method": "Unsupported evidence collection method."})
-        with evidence_service_writes():
+        trusted_asset_fields = {
+            field_name: asset
+            for field_name, asset in {
+                "screenshot_asset": screenshot_asset,
+                "import_asset": import_asset,
+            }.items()
+            if asset is not None
+        }
+        if (
+            _trusted_asset_capability is not None
+            and _trusted_asset_capability is not _INGESTION_LOCKED_ASSET_CAPABILITY
+        ):
+            raise ValidationError("Invalid trusted locked asset capability.")
+        asset_context = nullcontext()
+        if _trusted_asset_capability is _INGESTION_LOCKED_ASSET_CAPABILITY:
+            asset_context = _evidence_trusted_asset_writes(
+                _capability=_EVIDENCE_TRUSTED_ASSET_CAPABILITY,
+                **trusted_asset_fields,
+            )
+        with asset_context, evidence_service_writes():
             evidence, _ = SourceEvidence.objects.get_or_create(
                 organization=organization,
                 content_hash=fingerprint,
@@ -147,6 +318,23 @@ class EvidenceService:
                 },
             )
         return evidence
+
+    @staticmethod
+    def _locked_signal(signal, *, organization):
+        signal_id = getattr(signal, "pk", None)
+        try:
+            locked = SourceSignal.objects.select_for_update().filter(
+                pk=signal_id, organization=organization
+            ).first()
+        except (TypeError, ValueError) as error:
+            raise ValidationError(
+                {"signal": "Source signal is unavailable for this organization."}
+            ) from error
+        if locked is None:
+            raise ValidationError(
+                {"signal": "Source signal is unavailable for this organization."}
+            )
+        return locked
 
     @staticmethod
     def _locked_asset(asset, field_name, organization):
@@ -411,7 +599,7 @@ class IngestionService:
             raise StaleJobWorkerError("Ingestion batch is not bound to a source import job.")
         JobService._require_owner(job, claim_token)
 
-        preflight_error = IngestionService._preflight_error(
+        resources, preflight_error = IngestionService._preflight_resources(
             batch=batch,
             job=job,
             organization=organization,
@@ -424,10 +612,12 @@ class IngestionService:
             return batch
 
         now = timezone.now()
-        batch.status = IngestionBatch.Status.RUNNING
-        batch.started_at = batch.started_at or now
-        batch.finished_at = None
-        batch.save(update_fields=["status", "started_at", "finished_at", "updated_at"])
+        IngestionService._write_batch_state(
+            batch,
+            status=IngestionBatch.Status.RUNNING,
+            started_at=batch.started_at or now,
+            finished_at=None,
+        )
 
         try:
             parsed = import_result_from_reference(
@@ -456,6 +646,7 @@ class IngestionService:
                         batch=batch,
                         organization=organization,
                         row=row,
+                        resources=resources,
                     )
             except ValidationError as error:
                 IngestionService._persist_failed_row(
@@ -497,7 +688,7 @@ class IngestionService:
             )
 
     @staticmethod
-    def _persist_valid_row(*, batch, organization, row) -> None:
+    def _persist_valid_row(*, batch, organization, row, resources) -> None:
         normalized_input = _normalized_row_input(row)
         fingerprint = evidence_fingerprint(
             original_text=row.original_text,
@@ -525,20 +716,6 @@ class IngestionService:
                 )
             return
 
-        screenshot_asset = None
-        if row.screenshot_asset_id is not None:
-            screenshot_asset = MaterialAsset.objects.select_for_update().filter(
-                pk=row.screenshot_asset_id,
-                organization=organization,
-                asset_type=MaterialAsset.AssetType.IMAGE,
-                status=MaterialAsset.Status.ACTIVE,
-            ).first()
-            if screenshot_asset is None:
-                raise ValidationError(
-                    {"screenshot_asset": "Screenshot asset is unavailable for this organization."}
-                )
-
-        import_asset = IngestionService._import_asset(batch, organization=organization)
         source_content, _ = SourceContent.objects.get_or_create(
             organization=organization,
             platform=row.platform,
@@ -562,7 +739,10 @@ class IngestionService:
             external_id="",
             created_by=batch.created_by,
         )
-        evidence = EvidenceService.create(
+        evidence = EvidenceService._create_from_locked_ingestion_assets(
+            _capability=_INGESTION_LOCKED_ASSET_CAPABILITY,
+            resources=resources,
+            screenshot_asset_id=row.screenshot_asset_id,
             organization=organization,
             signal=signal,
             original_text=row.original_text,
@@ -571,8 +751,6 @@ class IngestionService:
             collection_method=batch.source_type,
             public_published_at=row.published_at,
             created_by=batch.created_by,
-            screenshot_asset=screenshot_asset,
-            import_asset=import_asset,
         )
         with ingestion_row_service_writes():
             IngestionRow.objects.create(
@@ -585,29 +763,6 @@ class IngestionService:
                 source_signal=signal,
                 source_evidence=evidence,
             )
-
-    @staticmethod
-    def _import_asset(batch, *, organization):
-        if batch.source_type not in {
-            IngestionBatch.SourceType.CSV,
-            IngestionBatch.SourceType.JSON,
-        }:
-            return None
-        if not isinstance(batch.input_reference, dict):
-            return None
-        asset_id = batch.input_reference.get("import_asset_id")
-        if not asset_id:
-            return None
-        asset = MaterialAsset.objects.select_for_update().filter(
-            pk=asset_id,
-            organization=organization,
-            status=MaterialAsset.Status.ACTIVE,
-        ).first()
-        if asset is None:
-            raise ValidationError(
-                {"import_asset": "Import asset is unavailable for this organization."}
-            )
-        return asset
 
     @staticmethod
     def _row_processing_error(error: ValidationError, *, row) -> dict[str, object]:
@@ -658,76 +813,109 @@ class IngestionService:
             status = IngestionBatch.Status.FAILED
         else:
             status = IngestionBatch.Status.SUCCEEDED
-        batch.status = status
-        batch.received_count = len(outcomes)
-        batch.accepted_count = accepted_count
-        batch.duplicate_count = duplicate_count
-        batch.failed_count = failed_count
-        batch.row_errors = row_errors
-        batch.finished_at = timezone.now()
-        batch.save(
-            update_fields=[
-                "status",
-                "received_count",
-                "accepted_count",
-                "duplicate_count",
-                "failed_count",
-                "row_errors",
-                "finished_at",
-                "updated_at",
-            ]
+        IngestionService._write_batch_state(
+            batch,
+            status=status,
+            received_count=len(outcomes),
+            accepted_count=accepted_count,
+            duplicate_count=duplicate_count,
+            failed_count=failed_count,
+            row_errors=row_errors,
+            finished_at=timezone.now(),
         )
 
     @staticmethod
-    def _preflight_error(*, batch, job, organization):
+    def _write_batch_state(batch, **values) -> None:
+        with _ingestion_batch_state_writes():
+            persisted = IngestionBatch.objects.filter(
+                pk=batch.pk,
+                organization_id=batch.organization_id,
+            )._service_update_state(**values)
+        for field_name, value in persisted.items():
+            setattr(batch, field_name, value)
+
+    @staticmethod
+    def _preflight_resources(*, batch, job, organization):
         from .importers import validate_prepared_import_reference
 
         if not source_import_job_matches_batch(job=job, batch=batch):
-            return dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
+            return None, dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
         try:
             validate_prepared_import_reference(
                 batch.input_reference,
                 source_type=batch.source_type,
             )
         except ValidationError:
-            return dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
+            return None, dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
 
-        if batch.monitoring_target_id and not MonitoringTarget.objects.filter(
-            pk=batch.monitoring_target_id,
-            organization=organization,
-            enabled=True,
-        ).exists():
-            return dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
+        locked_target = None
+        if batch.monitoring_target_id:
+            locked_target = (
+                MonitoringTarget.objects.select_for_update()
+                .filter(pk=batch.monitoring_target_id)
+                .first()
+            )
+            if (
+                locked_target is None
+                or locked_target.organization_id != organization.id
+                or not locked_target.enabled
+            ):
+                return None, dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
+            batch.monitoring_target = locked_target
 
         reference = batch.input_reference
-        import_asset_id = reference.get("import_asset_id")
-        screenshot_asset_ids = {
-            row["screenshot_asset_id"]
+        raw_import_asset_id = reference.get("import_asset_id")
+        import_asset_id = str(raw_import_asset_id) if raw_import_asset_id is not None else None
+        screenshot_asset_ids = frozenset(
+            str(row["screenshot_asset_id"])
             for row in reference["rows"]
             if row.get("screenshot_asset_id") is not None
-        }
+        )
         required_asset_ids = set(screenshot_asset_ids)
         if import_asset_id is not None:
             required_asset_ids.add(import_asset_id)
         if not required_asset_ids:
-            return None
+            return (
+                _LockedIngestionResources(
+                    monitoring_target=locked_target,
+                    assets=MappingProxyType({}),
+                    import_asset_id=None,
+                    screenshot_asset_ids=frozenset(),
+                ),
+                None,
+            )
 
-        active_assets = {
-            str(asset_id): asset_type
-            for asset_id, asset_type in MaterialAsset.objects.filter(
-                pk__in=required_asset_ids,
-                organization=organization,
-                status=MaterialAsset.Status.ACTIVE,
-            ).values_list("id", "asset_type")
+        locked_assets = {
+            str(asset.id): _LockedAsset.capture(asset)
+            for asset in MaterialAsset.objects.select_for_update()
+            .filter(pk__in=required_asset_ids)
+            .order_by("pk")
         }
-        if import_asset_id is not None and import_asset_id not in active_assets:
-            return dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
-        if any(
-            active_assets.get(screenshot_asset_id) != MaterialAsset.AssetType.IMAGE
-            for screenshot_asset_id in screenshot_asset_ids
-        ):
-            return dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
-        return None
+        if set(locked_assets) != required_asset_ids:
+            return None, dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
+        try:
+            if import_asset_id is not None:
+                locked_assets[import_asset_id].resolve(
+                    organization=organization,
+                    field_name="import_asset",
+                )
+            for screenshot_asset_id in screenshot_asset_ids:
+                locked_assets[screenshot_asset_id].resolve(
+                    organization=organization,
+                    field_name="screenshot_asset",
+                    image_required=True,
+                )
+        except ValidationError:
+            return None, dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
+        return (
+            _LockedIngestionResources(
+                monitoring_target=locked_target,
+                assets=MappingProxyType(locked_assets),
+                import_asset_id=import_asset_id,
+                screenshot_asset_ids=screenshot_asset_ids,
+            ),
+            None,
+        )
 
     @staticmethod
     def preflight_failed(batch) -> bool:

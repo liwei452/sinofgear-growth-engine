@@ -10,7 +10,13 @@ from apps.assets.models import MaterialAsset
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
 from apps.sources.importers import prepare_import_reference
-from apps.sources.models import IngestionBatch, SourceEvidence
+from apps.sources.models import (
+    IngestionBatch,
+    MonitoringTarget,
+    SourceContent,
+    SourceEvidence,
+    SourceSignal,
+)
 from apps.sources.services import IngestionService
 from apps.sources.tasks import execute_source_import
 
@@ -182,6 +188,60 @@ def test_worker_rejects_batch_identity_drift_before_running_or_creating_rows(
     result = execute_source_import(str(job.id), str(batch.id))
 
     _assert_preflight_failed(batch, result)
+
+
+@pytest.mark.django_db
+def test_worker_terminalizes_batch_with_database_corrupted_prepared_reference(
+    organization, user
+):
+    batch = make_batch(
+        organization=organization,
+        user=user,
+        key="worker-corrupt-reference",
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE sources_ingestionbatch SET input_reference = %s WHERE id = %s",
+            [json.dumps("corrupted raw reference"), batch.id.hex],
+        )
+
+    result = execute_source_import(str(batch.job_id), str(batch.id))
+
+    _assert_preflight_failed(batch, result)
+    assert SourceContent.objects.count() == 0
+    assert SourceSignal.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_worker_terminalizes_batch_with_database_corrupted_cross_org_target(
+    organization, other_organization, user, target
+):
+    foreign_target = MonitoringTarget.objects.create(
+        organization=other_organization,
+        target_type=MonitoringTarget.TargetType.POST,
+        collection_mode=MonitoringTarget.CollectionMode.MANUAL_URL,
+        platform="MANUAL",
+        normalized_url="https://foreign.test/source",
+        label="Foreign target",
+        created_by=user,
+    )
+    batch = make_batch(
+        organization=organization,
+        user=user,
+        key="worker-cross-org-target",
+        target=target,
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE sources_ingestionbatch SET monitoring_target_id = %s WHERE id = %s",
+            [foreign_target.id.hex, batch.id.hex],
+        )
+
+    result = execute_source_import(str(batch.job_id), str(batch.id))
+
+    _assert_preflight_failed(batch, result)
+    assert SourceContent.objects.count() == 0
+    assert SourceSignal.objects.count() == 0
 
 
 @pytest.mark.django_db

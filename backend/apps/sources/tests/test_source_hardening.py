@@ -17,7 +17,7 @@ from apps.sources.models import (
     ingestion_row_service_writes,
 )
 from apps.sources.importers import prepare_import_reference
-from apps.sources.services import EvidenceService
+from apps.sources.services import EvidenceService, IngestionService
 
 
 def _write_context(instance):
@@ -466,3 +466,39 @@ def test_bound_batch_input_identity_is_immutable_through_every_orm_write_path(
     batch.job = None
     with pytest.raises(ValidationError, match="input identity"):
         batch.save(update_fields=["job", "updated_at"])
+
+
+@pytest.mark.django_db
+def test_batch_state_bypass_is_service_guarded_and_rejects_identity_fields(
+    organization, other_organization, target, job
+):
+    batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.PASTE,
+        input_reference=_empty_reference(),
+        idempotency_key="state-bypass-guard",
+    )
+
+    with pytest.raises(ValidationError, match="service"):
+        IngestionBatch.objects.filter(pk=batch.pk)._service_update_state(
+            status=IngestionBatch.Status.FAILED
+        )
+    identity_changes = {
+        "organization_id": other_organization.id,
+        "source_type": IngestionBatch.SourceType.URL,
+        "input_reference": {"schema": "tampered"},
+        "idempotency_key": "tampered-state-key",
+        "monitoring_target_id": target.id,
+        "job_id": job.id,
+    }
+    for field_name, value in identity_changes.items():
+        with pytest.raises(ValidationError, match="mutable state"):
+            IngestionService._write_batch_state(
+                batch,
+                status=IngestionBatch.Status.FAILED,
+                **{field_name: value},
+            )
+
+    batch.refresh_from_db()
+    assert batch.status == IngestionBatch.Status.QUEUED
+    assert batch.input_reference == _empty_reference()

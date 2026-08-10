@@ -2,9 +2,10 @@ import uuid
 
 import pytest
 from django.contrib.auth import get_user_model
+from rest_framework.test import APIClient
 
 from apps.assets.models import MaterialAsset
-from apps.identity.models import Organization
+from apps.identity.models import Membership, Organization, Role
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
 from apps.sources.models import MonitoringTarget, SourceContent, SourceSignal
@@ -98,4 +99,52 @@ def job(organization, user):
         input_snapshot={"source": "manual"},
         idempotency_key="source-batch-job",
         created_by=user,
+    )
+
+
+@pytest.fixture
+def source_api_roles(db):
+    return {
+        role.code: role
+        for role in (
+            Role.objects.create_administrator(),
+            Role.objects.create_operator(),
+            Role.objects.create_reviewer(),
+            Role.objects.create_read_only(),
+        )
+    }
+
+
+def make_source_member_client(*, organization, role, username):
+    member = get_user_model().objects.create_user(username=username, password="password")
+    Membership.objects.create(user=member, organization=organization, role=role)
+    client = APIClient()
+    client.force_authenticate(member)
+    return member, client
+
+
+@pytest.fixture
+def operator_member_client(organization, source_api_roles):
+    return make_source_member_client(
+        organization=organization,
+        role=source_api_roles[Role.Code.OPERATOR],
+        username="source-operator",
+    )
+
+
+@pytest.fixture
+def read_only_member_client(organization, source_api_roles):
+    return make_source_member_client(
+        organization=organization,
+        role=source_api_roles[Role.Code.READ_ONLY],
+        username="source-read-only",
+    )
+
+
+@pytest.fixture
+def other_operator_member_client(other_organization, source_api_roles):
+    return make_source_member_client(
+        organization=other_organization,
+        role=source_api_roles[Role.Code.OPERATOR],
+        username="source-other-operator",
     )

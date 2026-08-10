@@ -3,6 +3,8 @@ from uuid import uuid4
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, InterfaceError
+
+from apps.assets.models import MaterialAsset
 from apps.jobs.services import JobService, StaleJobWorkerError
 from apps.sources.importers import prepare_import_reference
 from apps.sources.models import (
@@ -312,6 +314,39 @@ def test_cross_organization_import_asset_is_rejected_for_every_import_row(
         key="cross-org-import-asset",
         user=user,
     )
+    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+
+    result = IngestionService.run(
+        batch_id=batch.id,
+        organization=organization,
+        claim_token=claimed.claim_token,
+    )
+
+    assert result.status == IngestionBatch.Status.FAILED
+    assert result.rows.get().error["code"] == "IMPORT_ASSET_UNAVAILABLE"
+    assert SourceEvidence.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_import_asset_archived_after_batch_creation_is_rejected_by_worker(
+    organization, job, user, target, asset
+):
+    batch = make_batch(
+        organization=organization,
+        job=job,
+        target=target,
+        source_type=IngestionBatch.SourceType.JSON,
+        payload={
+            "import_asset_id": str(asset.id),
+            "rows": [
+                {"source_url": "https://e.test/archived", "original_text": "Need gear"}
+            ],
+        },
+        key="archived-import-asset",
+        user=user,
+    )
+    asset.status = MaterialAsset.Status.ARCHIVED
+    asset.save(update_fields=["status", "updated_at"])
     claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
 
     result = IngestionService.run(

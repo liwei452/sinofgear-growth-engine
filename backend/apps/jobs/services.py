@@ -78,20 +78,24 @@ class JobService:
         if existing:
             if existing.input_snapshot != frozen:
                 raise JobConflictError("Idempotency key already has different input.")
+            existing._service_created = False
             return existing
         try:
             with transaction.atomic(), job_service_writes():
-                return Job.objects.create(
+                created = Job.objects.create(
                     organization=organization, type=job_type,
                     input_snapshot=frozen, idempotency_key=key,
                     created_by=created_by, max_attempts=max_attempts,
                 )
+            created._service_created = True
+            return created
         except IntegrityError:
             existing = Job.objects.get(
                 organization=organization, type=job_type, idempotency_key=key
             )
             if existing.input_snapshot != frozen:
                 raise JobConflictError("Idempotency key already has different input.")
+            existing._service_created = False
             return existing
 
     @staticmethod

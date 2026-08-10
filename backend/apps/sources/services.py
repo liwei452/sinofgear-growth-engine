@@ -1,18 +1,20 @@
 import hashlib
 import ipaddress
+from copy import deepcopy
 from urllib.parse import urlsplit, urlunsplit
 
 from django.core.exceptions import ValidationError
-from django.db import DatabaseError, OperationalError, transaction
+from django.db import DatabaseError, IntegrityError, OperationalError, transaction
 from django.utils import timezone
 
 from apps.assets.models import MaterialAsset
 from apps.jobs.models import Job
-from apps.jobs.services import JobService, StaleJobWorkerError
+from apps.jobs.services import JobConflictError, JobService, StaleJobWorkerError
 
 from .models import (
     IngestionBatch,
     IngestionRow,
+    MonitoringTarget,
     SourceContent,
     SourceEvidence,
     SourceSignal,
@@ -165,6 +167,171 @@ class EvidenceService:
 
 
 create = EvidenceService.create
+
+
+class SourceIdempotencyConflictError(ValueError):
+    pass
+
+
+class SourceIngestionRequestService:
+    @staticmethod
+    @transaction.atomic
+    def create_or_reuse(
+        *,
+        organization,
+        creator,
+        source_type,
+        idempotency_key,
+        prepared_reference,
+        monitoring_target_id=None,
+        import_asset_id=None,
+    ):
+        from .tasks import execute_source_import
+
+        monitoring_target = SourceIngestionRequestService._target(
+            organization=organization, target_id=monitoring_target_id
+        )
+        import_asset = SourceIngestionRequestService._asset(
+            organization=organization, asset_id=import_asset_id
+        )
+        safe_reference = deepcopy(prepared_reference)
+        if import_asset is not None:
+            safe_reference["import_asset_id"] = str(import_asset.id)
+            from .importers import validate_prepared_import_reference
+
+            validate_prepared_import_reference(safe_reference, source_type=source_type)
+        request_snapshot = {
+            "source_type": source_type,
+            "monitoring_target_id": (
+                str(monitoring_target.id) if monitoring_target is not None else None
+            ),
+            "input_reference": safe_reference,
+        }
+        try:
+            with transaction.atomic():
+                batch = IngestionBatch.objects.create(
+                    organization=organization,
+                    source_type=source_type,
+                    monitoring_target=monitoring_target,
+                    input_reference=safe_reference,
+                    idempotency_key=idempotency_key,
+                    created_by=creator,
+                )
+        except IntegrityError:
+            batch = (
+                IngestionBatch.objects.select_for_update()
+                .filter(organization=organization, idempotency_key=idempotency_key)
+                .first()
+            )
+            if batch is None:
+                raise
+            if not SourceIngestionRequestService._same_request(
+                batch=batch,
+                source_type=source_type,
+                monitoring_target=monitoring_target,
+                safe_reference=safe_reference,
+            ):
+                raise SourceIdempotencyConflictError(
+                    "The idempotency key is already bound to a different prepared import."
+                )
+
+        if batch.job_id is not None:
+            job = Job.objects.get(pk=batch.job_id, organization=organization)
+            if not SourceIngestionRequestService._same_job(
+                job=job,
+                idempotency_key=idempotency_key,
+                request_snapshot=request_snapshot,
+            ):
+                raise SourceIdempotencyConflictError(
+                    "The idempotency key is already bound to a different prepared import."
+                )
+            return batch, job
+
+        try:
+            job = JobService.create(
+                organization=organization,
+                job_type=Job.Type.SOURCE_IMPORT,
+                input_snapshot=request_snapshot,
+                idempotency_key=idempotency_key,
+                created_by=creator,
+            )
+        except JobConflictError as error:
+            raise SourceIdempotencyConflictError(
+                "The idempotency key is already bound to a different prepared import."
+            ) from error
+        if not getattr(job, "_service_created", False):
+            raise SourceIdempotencyConflictError(
+                "The idempotency key is already bound to an incomplete import request."
+            )
+        batch.job = job
+        batch.save(update_fields=["job", "updated_at"])
+        if getattr(job, "_service_created", False) and job.status in {
+            Job.Status.QUEUED,
+            Job.Status.RETRY_QUEUED,
+        }:
+            job_id = str(job.id)
+            batch_id = str(batch.id)
+            transaction.on_commit(
+                lambda: execute_source_import.delay(job_id, batch_id)
+            )
+        return batch, job
+
+    @staticmethod
+    def _same_request(*, batch, source_type, monitoring_target, safe_reference):
+        return (
+            batch.source_type == source_type
+            and batch.monitoring_target_id
+            == (monitoring_target.id if monitoring_target is not None else None)
+            and batch.input_reference == safe_reference
+        )
+
+    @staticmethod
+    def _same_job(*, job, idempotency_key, request_snapshot):
+        return (
+            job.type == Job.Type.SOURCE_IMPORT
+            and job.idempotency_key == idempotency_key
+            and job.input_snapshot == request_snapshot
+        )
+
+    @staticmethod
+    def _target(*, organization, target_id):
+        if target_id is None:
+            return None
+        try:
+            target = (
+                MonitoringTarget.objects.select_for_update()
+                .filter(pk=target_id, organization=organization, enabled=True)
+                .first()
+            )
+        except (TypeError, ValueError):
+            target = None
+        if target is None:
+            raise ValidationError(
+                {"monitoring_target_id": "Monitoring target is unavailable for this organization."}
+            )
+        return target
+
+    @staticmethod
+    def _asset(*, organization, asset_id):
+        if asset_id is None:
+            return None
+        try:
+            asset = (
+                MaterialAsset.objects.select_for_update()
+                .filter(
+                    pk=asset_id,
+                    organization=organization,
+                    status=MaterialAsset.Status.ACTIVE,
+                )
+                .first()
+            )
+        except (TypeError, ValueError):
+            asset = None
+        if asset is None:
+            raise ValidationError(
+                {"import_asset_id": "Import asset is unavailable for this organization."}
+            )
+        return asset
 
 
 def _normalized_row_input(row) -> dict[str, object]:
@@ -395,7 +562,9 @@ class IngestionService:
         if not asset_id:
             return None
         asset = MaterialAsset.objects.select_for_update().filter(
-            pk=asset_id, organization=organization
+            pk=asset_id,
+            organization=organization,
+            status=MaterialAsset.Status.ACTIVE,
         ).first()
         if asset is None:
             raise ValidationError(

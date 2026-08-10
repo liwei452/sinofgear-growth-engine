@@ -62,7 +62,7 @@ const usableEvidence = computed(() => (detail.value?.evidence ?? []).filter((ite
   item.availability === "AVAILABLE" && item.original_text.trim().length > 0
 )))
 const reviewActions = computed(() => ([
-  { action: "CONFIRM" as const, label: "确认机会" },
+  { action: "CONFIRM" as const, label: "确认值得跟进" },
   { action: "CORRECT" as const, label: "纠正信息" },
   { action: "DISMISS" as const, label: "暂不跟进" },
   { action: "REOPEN" as const, label: "重新打开" },
@@ -215,7 +215,7 @@ function markCorrected(field: keyof CompanyCorrection): void {
 
 function confirmationLabel(action: ReviewAction): string {
   return ({
-    CONFIRM: "确认机会",
+    CONFIRM: "确认值得跟进",
     CORRECT: "确认纠正",
     DISMISS: "确认暂不跟进",
     REOPEN: "确认重新打开",
@@ -390,7 +390,7 @@ function valueLabel(band: string | undefined): string {
 
 function actionLabel(action: string): string {
   return ({
-    CONFIRM: "确认机会", CORRECT: "纠正信息", DISMISS: "暂不跟进", REOPEN: "重新打开",
+    CONFIRM: "确认值得跟进", CORRECT: "纠正信息", DISMISS: "暂不跟进", REOPEN: "重新打开",
     REQUEST_MORE_EVIDENCE: "请求更多证据",
   } as Record<string, string>)[action] ?? action
 }

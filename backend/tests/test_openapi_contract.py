@@ -18,6 +18,14 @@ RESOURCE_TAGS = {
     "/api/v1/short-links": "ShortLinks",
     "/api/v1/jobs": "Jobs",
     "/api/v1/auth": "Auth",
+    "/api/v1/monitoring-targets": "Sources",
+    "/api/v1/ingestion-batches": "Sources",
+    "/api/v1/source-evidences": "Sources",
+    "/api/v1/source-signals": "Sources",
+    "/api/v1/source-contents": "Sources",
+    "/api/v1/lead-candidates": "Leads",
+    "/api/v1/lead-insights": "Leads",
+    "/api/v1/lead-reviews": "Leads",
 }
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 MUTATION_METHODS = {"post", "put", "patch", "delete"}
@@ -34,6 +42,13 @@ PAGINATION_CONTRACTS = {
     ("/api/v1/publish-tasks", "page_size"): (1, 50),
     ("/api/v1/short-links", "page_size"): (1, 50),
     ("/api/v1/tracking-links", "page_size"): (1, 50),
+    ("/api/v1/monitoring-targets", "page_size"): (1, 50),
+    ("/api/v1/ingestion-batches", "page_size"): (1, 50),
+    ("/api/v1/source-evidences", "page_size"): (1, 50),
+    ("/api/v1/source-signals", "page_size"): (1, 50),
+    ("/api/v1/source-contents", "page_size"): (1, 50),
+    ("/api/v1/lead-candidates", "page_size"): (1, 50),
+    ("/api/v1/lead-insights", "page_size"): (1, 50),
     ("/api/v1/analytics/channel-summary", "limit"): (1, 100),
     ("/api/v1/analytics/channel-summary", "offset"): (0, None),
     ("/api/v1/analytics/channel-summary", "page_size"): (1, 100),
@@ -69,21 +84,33 @@ def openapi_schema() -> dict:
 def test_required_resources_have_explicit_tags(openapi_schema: dict) -> None:
     operations = list(_operations(openapi_schema))
     for prefix, expected_tag in RESOURCE_TAGS.items():
-        matching = [(path, method, operation) for path, method, operation in operations if path.startswith(prefix)]
+        matching = [
+            (path, method, operation)
+            for path, method, operation in operations
+            if path.startswith(prefix)
+        ]
         assert matching, f"No operations found for {prefix}"
         for path, method, operation in matching:
-            assert expected_tag in operation.get("tags", []), f"{method.upper()} {path} is not tagged {expected_tag}"
+            assert expected_tag in operation.get("tags", []), (
+                f"{method.upper()} {path} is not tagged {expected_tag}"
+            )
 
 
-def test_every_api_operation_has_a_non_default_resource_tag(openapi_schema: dict) -> None:
+def test_every_api_operation_has_a_non_default_resource_tag(
+    openapi_schema: dict,
+) -> None:
     for path, method, operation in _operations(openapi_schema):
         if not path.startswith("/api/v1/"):
             continue
         tags = operation.get("tags", [])
-        assert tags and tags != ["api"], f"{method.upper()} {path} still uses a generated default tag"
+        assert tags and tags != ["api"], (
+            f"{method.upper()} {path} still uses a generated default tag"
+        )
 
 
-def test_mutation_error_schemas_share_the_recoverable_envelope(openapi_schema: dict) -> None:
+def test_mutation_error_schemas_share_the_recoverable_envelope(
+    openapi_schema: dict,
+) -> None:
     for path, method, operation in _operations(openapi_schema):
         if not path.startswith("/api/v1/") or method not in MUTATION_METHODS:
             continue
@@ -92,7 +119,9 @@ def test_mutation_error_schemas_share_the_recoverable_envelope(openapi_schema: d
             for code, response in operation["responses"].items()
             if code.isdigit() and int(code) >= 400
         ]
-        assert error_responses, f"{method.upper()} {path} has no documented error response"
+        assert error_responses, (
+            f"{method.upper()} {path} has no documented error response"
+        )
         for response in error_responses:
             content = response.get("content", {}).get("application/json")
             assert content, f"{method.upper()} {path} has a non-JSON error contract"
@@ -107,7 +136,9 @@ def test_runtime_mutation_errors_match_the_recoverable_envelope() -> None:
     assert ERROR_FIELDS <= set(response.json())
 
 
-def test_generated_method_field_types_match_runtime_values(openapi_schema: dict) -> None:
+def test_generated_method_field_types_match_runtime_values(
+    openapi_schema: dict,
+) -> None:
     schemas = openapi_schema["components"]["schemas"]
     assert schemas["MasterContent"]["properties"]["is_current_head"] == {
         "type": "boolean",
@@ -123,7 +154,9 @@ def test_generated_method_field_types_match_runtime_values(openapi_schema: dict)
         assert schemas["AIRun"]["properties"][field]["nullable"] is True
 
 
-def test_manually_declared_pagination_bounds_match_runtime_contract(openapi_schema: dict) -> None:
+def test_manually_declared_pagination_bounds_match_runtime_contract(
+    openapi_schema: dict,
+) -> None:
     for (path, name), (minimum, maximum) in PAGINATION_CONTRACTS.items():
         parameters = openapi_schema["paths"][path]["get"].get("parameters", [])
         parameter = next((item for item in parameters if item["name"] == name), None)
@@ -139,8 +172,12 @@ def test_every_local_schema_reference_resolves(openapi_schema: dict) -> None:
     def visit(node) -> None:
         if isinstance(node, dict):
             reference = node.get("$ref")
-            if isinstance(reference, str) and reference.startswith("#/components/schemas/"):
-                assert reference.rsplit("/", 1)[-1] in schemas, f"Unresolved schema reference: {reference}"
+            if isinstance(reference, str) and reference.startswith(
+                "#/components/schemas/"
+            ):
+                assert reference.rsplit("/", 1)[-1] in schemas, (
+                    f"Unresolved schema reference: {reference}"
+                )
             for value in node.values():
                 visit(value)
         elif isinstance(node, list):

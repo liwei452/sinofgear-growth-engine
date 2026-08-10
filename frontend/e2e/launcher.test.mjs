@@ -6,6 +6,7 @@ import { test } from "node:test"
 
 import {
   assertOwnedRunRoot,
+  buildPhaseB1SeedCommands,
   buildE2EEnvironment,
   cleanupOwnedRun,
   generateOwnershipSecret,
@@ -14,6 +15,24 @@ import {
   spawnOwnedChild,
   stopOwnedChildTree,
 } from "./launcher.mjs"
+
+test("Phase B1 browser setup seeds two isolated organizations through the formal command", () => {
+  assert.deepEqual(buildPhaseB1SeedCommands(), [
+    [
+      "manage.py", "seed_phase_b1",
+      "--organization-slug", "phase-a-e2e-only",
+      "--username", "phasea_e2e_admin",
+    ],
+    [
+      "manage.py", "seed_phase_b1",
+      "--organization-slug", "phase-b1-e2e-foreign",
+      "--organization-name", "Phase B1 E2E Foreign",
+      "--username", "phaseb1_e2e_foreign",
+      "--password", "PhaseA-E2E-Only!",
+      "--create-demo-identity",
+    ],
+  ])
+})
 
 test("cleanup accepts only marked child-owned temporary roots", async () => {
   const temporaryRoot = join(process.cwd(), ".tmp-launcher-test")

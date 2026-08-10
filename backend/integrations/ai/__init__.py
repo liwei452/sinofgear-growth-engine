@@ -1,3 +1,13 @@
-from .providers import AIProvider, FakeAIProvider, provider_registry
+from .providers import (
+    AIProvider,
+    FakeAIProvider,
+    SchemaAwareFakeAIProvider,
+    provider_registry,
+)
 
-__all__ = ["AIProvider", "FakeAIProvider", "provider_registry"]
+__all__ = [
+    "AIProvider",
+    "FakeAIProvider",
+    "SchemaAwareFakeAIProvider",
+    "provider_registry",
+]

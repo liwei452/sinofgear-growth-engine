@@ -166,18 +166,18 @@ it("gates analyze, review, and handoff controls independently", async () => {
   const readOnly = renderDialog(["leads.read"])
   await screen.findByText("人工决定")
   expect(screen.queryByRole("button", { name: "重新分析" })).not.toBeInTheDocument()
-  expect(screen.queryByRole("button", { name: "确认机会" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "确认值得跟进" })).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "交给 CRM" })).not.toBeInTheDocument()
   readOnly.unmount()
 
   const analyze = renderDialog(["leads.read", "leads.analyze"])
   expect(await screen.findByRole("button", { name: "重新分析" })).toBeVisible()
-  expect(screen.queryByRole("button", { name: "确认机会" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "确认值得跟进" })).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "交给 CRM" })).not.toBeInTheDocument()
   analyze.unmount()
 
   const review = renderDialog(["leads.read", "leads.review"])
-  expect(await screen.findByRole("button", { name: "确认机会" })).toBeVisible()
+  expect(await screen.findByRole("button", { name: "确认值得跟进" })).toBeVisible()
   expect(screen.queryByRole("button", { name: "重新分析" })).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "交给 CRM" })).not.toBeInTheDocument()
   review.unmount()
@@ -208,14 +208,14 @@ it("removes cached evidence and audit immediately when read permission is withdr
 
 it("keeps typed review input visible but disables it when review permission is withdrawn", async () => {
   const view = renderDialog(["leads.read", "leads.review"])
-  await userEvent.click(await screen.findByRole("button", { name: "确认机会" }))
+  await userEvent.click(await screen.findByRole("button", { name: "确认值得跟进" }))
   await userEvent.type(screen.getByLabelText("处理原因"), "Keep this draft visible.")
 
   view.queryClient.setQueryData(currentUserQueryOptions().queryKey, userWith(["leads.read"]))
 
   expect(await screen.findByText("审核权限已撤销，当前处理内容不会提交。")).toBeVisible()
   expect(screen.getByLabelText("处理原因")).toHaveValue("Keep this draft visible.")
-  expect(screen.getByRole("button", { name: "确认机会" })).toBeDisabled()
+  expect(screen.getByRole("button", { name: "确认值得跟进" })).toBeDisabled()
 })
 
 it("shows unavailable evidence honestly and analyzes only usable evidence IDs", async () => {
@@ -374,11 +374,11 @@ it("preserves a stale review draft but blocks retry when refreshed actions remov
     })
   })
   renderDialog(["leads.read", "leads.review"], fetchMock)
-  await userEvent.click(await screen.findByRole("button", { name: "确认机会" }))
+  await userEvent.click(await screen.findByRole("button", { name: "确认值得跟进" }))
   await userEvent.type(screen.getByLabelText("处理原因"), "Preserve this decision draft.")
-  await userEvent.click(screen.getByRole("button", { name: "确认机会" }))
+  await userEvent.click(screen.getByRole("button", { name: "确认值得跟进" }))
 
-  expect(await screen.findByText("最新状态不再允许“确认机会”，请保留原因并取消后重新选择。")).toBeVisible()
+  expect(await screen.findByText("最新状态不再允许“确认值得跟进”，请保留原因并取消后重新选择。")).toBeVisible()
   expect(screen.getByLabelText("处理原因")).toHaveValue("Preserve this decision draft.")
   expect(screen.getByRole("button", { name: "按最新版本重新提交" })).toBeDisabled()
   await userEvent.click(screen.getByRole("button", { name: "按最新版本重新提交" }))
@@ -396,9 +396,9 @@ it("keeps a review draft but does not arm retry when the version-conflict refetc
     return detailReads === 1 ? json(detail) : json({ detail: "private failure" }, 500)
   })
   renderDialog(["leads.read", "leads.review"], fetchMock)
-  await userEvent.click(await screen.findByRole("button", { name: "确认机会" }))
+  await userEvent.click(await screen.findByRole("button", { name: "确认值得跟进" }))
   await userEvent.type(screen.getByLabelText("处理原因"), "Keep this after refetch failure.")
-  await userEvent.click(screen.getByRole("button", { name: "确认机会" }))
+  await userEvent.click(screen.getByRole("button", { name: "确认值得跟进" }))
 
   expect(await screen.findByText("最新机会版本没有加载成功，请重新加载后再提交。")).toBeVisible()
   expect(screen.getByLabelText("处理原因")).toHaveValue("Keep this after refetch failure.")
@@ -418,14 +418,14 @@ it.each([
     return json(detail)
   })
   renderDialog(["leads.read", "leads.review"], fetchMock)
-  await userEvent.click(await screen.findByRole("button", { name: "确认机会" }))
+  await userEvent.click(await screen.findByRole("button", { name: "确认值得跟进" }))
   await userEvent.type(screen.getByLabelText("处理原因"), "Retain classified conflict input.")
-  await userEvent.click(screen.getByRole("button", { name: "确认机会" }))
+  await userEvent.click(screen.getByRole("button", { name: "确认值得跟进" }))
 
   expect(await screen.findByText(`${conflictMessage} ${recovery}`)).toBeVisible()
   expect(screen.getByLabelText("处理原因")).toHaveValue("Retain classified conflict input.")
   expect(screen.queryByRole("button", { name: "按最新版本重新提交" })).not.toBeInTheDocument()
-  expect(screen.getByRole("button", { name: "确认机会" })).toBeDisabled()
+  expect(screen.getByRole("button", { name: "确认值得跟进" })).toBeDisabled()
   expect(detailReads).toBe(1)
 })
 
@@ -511,9 +511,9 @@ it("invalidates the organization queue, detail, and job scopes after a review", 
   const view = renderDialog(["leads.read", "leads.review"], fetchMock)
   const invalidations = vi.spyOn(view.queryClient, "invalidateQueries")
 
-  await userEvent.click(await screen.findByRole("button", { name: "确认机会" }))
+  await userEvent.click(await screen.findByRole("button", { name: "确认值得跟进" }))
   await userEvent.type(screen.getByLabelText("处理原因"), "Evidence is sufficient.")
-  await userEvent.click(screen.getByRole("button", { name: "确认机会" }))
+  await userEvent.click(screen.getByRole("button", { name: "确认值得跟进" }))
   await screen.findByText("处理结果已保存")
 
   expect(invalidations).toHaveBeenCalledWith({ queryKey: ["leads", "org-1", "list"] })
@@ -535,9 +535,9 @@ it.each(["close", "candidate", "organization"] as const)(
     })
     const view = renderDialog(["leads.read", "leads.review"], fetchMock)
     const invalidations = vi.spyOn(view.queryClient, "invalidateQueries")
-    await userEvent.click(await screen.findByRole("button", { name: "确认机会" }))
+    await userEvent.click(await screen.findByRole("button", { name: "确认值得跟进" }))
     await userEvent.type(screen.getByLabelText("处理原因"), "Late server-side review.")
-    await userEvent.click(screen.getByRole("button", { name: "确认机会" }))
+    await userEvent.click(screen.getByRole("button", { name: "确认值得跟进" }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/lead-reviews", expect.anything()))
 
     if (transition === "close") await view.rerender({ organizationId: "org-1", candidateId: "lead-1", open: false })

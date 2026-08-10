@@ -61,6 +61,24 @@ export function buildE2EEnvironment(runRoot, { apiOrigin, webOrigin, browser, ow
   }
 }
 
+export function buildPhaseB1SeedCommands() {
+  return [
+    [
+      "manage.py", "seed_phase_b1",
+      "--organization-slug", "phase-a-e2e-only",
+      "--username", "phasea_e2e_admin",
+    ],
+    [
+      "manage.py", "seed_phase_b1",
+      "--organization-slug", "phase-b1-e2e-foreign",
+      "--organization-name", "Phase B1 E2E Foreign",
+      "--username", "phaseb1_e2e_foreign",
+      "--password", "PhaseA-E2E-Only!",
+      "--create-demo-identity",
+    ],
+  ]
+}
+
 async function reservePort() {
   return await new Promise((resolvePort, reject) => {
     const server = createServer()
@@ -235,6 +253,11 @@ async function main() {
     await run(pythonExecutable(), ["manage.py", "seed_phase_a"], {
       cwd: backendDir, env: environment, children,
     })
+    for (const seedCommand of buildPhaseB1SeedCommands()) {
+      await run(pythonExecutable(), seedCommand, {
+        cwd: backendDir, env: environment, children,
+      })
+    }
     const backend = spawnOwnedChild(
       pythonExecutable(),
       ["manage.py", "runserver", `127.0.0.1:${apiPort}`, "--noreload"],

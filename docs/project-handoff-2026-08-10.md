@@ -227,3 +227,13 @@ Keyword
 - `docs/superpowers/specs/2026-08-10-lead-intelligence-domain-design.md`
 - `docs/superpowers/specs/2026-08-10-aieo-domain-design.md`
 - `docs/superpowers/specs/2026-08-10-ontology-extension-design.md`
+
+## 12. Phase B1 acceptance update (2026-08-11)
+
+Phase B1 public-signal intake and lead intelligence is now implemented and accepted. The authoritative operating and verification record is `docs/phase-b1-acceptance.md`.
+
+The completed boundary includes URL, screenshot, UTF-8 CSV, JSON, and paste intake; partial-success batches; immutable public evidence; deterministic low/watch/high evaluation; audited `LEAD_ANALYZE` execution; evidence-visible candidate review; organization isolation; retention redaction; an idempotent named-organization seed; atomic OpenAPI generation/checking; and a real browser journey through “确认值得跟进”.
+
+The offline evaluation baseline contains 100 bilingual industrial samples and reached explicit-need recall 1.00, high-value precision 1.00, and evidence-reference coverage 1.00. Final verification reached 1185 passed / 1 skipped on the backend, 308 passed on the frontend, and 7 passed in the browser suite. Docker configuration could not be parsed on this particular machine because the `docker` executable is not installed or available on `PATH`; this is an environment limitation, not a successful Compose check.
+
+The security and product boundary is unchanged: Phase B1 does not crawl protected platforms, collect private contacts, perform outreach, enrich companies, or hand data to a CRM. Company enrichment, outreach, and handoff remain Phase B2 work.

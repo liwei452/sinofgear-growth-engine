@@ -1,3 +1,5 @@
+import re
+import unicodedata
 from dataclasses import asdict, dataclass
 
 
@@ -35,11 +37,287 @@ class ScoreResult:
     high_value_eligible: bool
 
 
+@dataclass(frozen=True, slots=True)
+class PublicSignalEvaluation:
+    normalized_text: str
+    is_explicit_need: bool
+    company_match_confidence_class: str
+    company_match_confidence: float
+    intent_confidence: float
+    capability_confidence: float
+    dimensions: ScoreDimensions
+    gates: EvidenceGates
+    score: ScoreResult
+    evidence_spans: tuple[str, ...]
+
+
+_INDUSTRIAL_TERMS = (
+    "gear",
+    "gearbox",
+    "sprocket",
+    "shaft",
+    "rack and pinion",
+    "coupling",
+    "machining",
+    "heat treatment",
+    "齿轮",
+    "齿条",
+    "链轮",
+    "轴",
+    "减速箱",
+    "齿轮箱",
+    "蜗轮",
+    "蜗杆",
+    "联轴器",
+    "机械加工",
+    "热处理",
+    "磨齿",
+)
+_EXPLICIT_NEED_TERMS = (
+    "rfq",
+    "need",
+    "needs",
+    "seeking",
+    "require",
+    "requires",
+    "wanted",
+    "please quote",
+    "looking for",
+    "seeks",
+    "需要采购",
+    "急需",
+    "正在寻找",
+    "询价",
+    "要求定制",
+    "求购",
+    "需要",
+    "请报价",
+    "寻找",
+    "急需加工",
+)
+_VAGUE_NEED_TERMS = (
+    "may upgrade",
+    "exploring options",
+    "future",
+    "considering whether",
+    "could be",
+    "after the next budget",
+    "researching possible",
+    "no approved project",
+    "可能升级",
+    "只是了解",
+    "也许",
+    "还在研究",
+    "正在考虑",
+    "没有立项",
+    "可能会有",
+    "预算评审后",
+    "先了解",
+    "没有明确",
+)
+_ENGAGEMENT_TERMS = (
+    "excellent video",
+    "congratulations",
+    "thanks for sharing",
+    "looks impressive",
+    "enjoyed",
+    "拍得很好",
+    "祝贺",
+    "感谢分享",
+    "很棒",
+    "很有收获",
+)
+_ADVERTISEMENT_TERMS = (
+    "buy our",
+    "now offers",
+    "limited promotion",
+    "discover our",
+    "invite buyers",
+    "购买我们的",
+    "全球发货",
+    "限时促销",
+    "欢迎查看我们",
+    "诚邀买家",
+)
+_RECRUITMENT_TERMS = (
+    "senior gear design engineer",
+    "hiring",
+    "vacancy",
+    "recruiting apprentices",
+    "join our gearbox sales team",
+    "招聘",
+    "职位空缺",
+    "招收",
+    "加入我们的",
+)
+_JOB_SEEKER_TERMS = (
+    "position as",
+    "available for work",
+    "internship",
+    "my background",
+    "recent graduate",
+    "岗位",
+    "本人",
+    "实习",
+    "就业机会",
+    "毕业生求职",
+)
+_SUPPLIER_PITCH_TERMS = (
+    "we supply",
+    "approved vendor",
+    "distribution partners",
+    "contact us",
+    "as a heat-treatment supplier",
+    "overseas agents",
+    "供应商",
+    "经销伙伴",
+    "联系我们",
+    "服务贵司",
+    "代理商",
+)
+_ACADEMIC_TERMS = (
+    "student project",
+    "laboratory paper",
+    "thesis",
+    "university team",
+    "researchers measured",
+    "学生项目",
+    "实验室论文",
+    "毕业论文",
+    "大学团队",
+    "研究人员",
+)
+_COMPANY_PAGE_TERMS = (
+    " manufactures ",
+    "company profile",
+    "plant operates",
+    "serves packaging",
+    "corporate page",
+    "制造齿轮",
+    "公司简介",
+    "工厂拥有",
+    "服务于",
+    "企业页面",
+)
+_HIGH_COMPANY_TERMS = (
+    "factory",
+    "company",
+    "plant",
+    "oem",
+    "gmbh",
+    "corporate",
+    "our company",
+    "our factory",
+    "工厂",
+    "本厂",
+    "我司",
+    "公司",
+    "企业",
+    "制造商",
+    "生产线",
+)
+_MEDIUM_COMPANY_TERMS = ("we ", "our team", "team ", "我们", "团队")
+
+
+def _contains_term(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
+def _normalized_signal_text(text: str) -> str:
+    if not isinstance(text, str):
+        raise ValueError("public signal text must be a string")
+    normalized = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text)).strip()
+    if not normalized:
+        raise ValueError("public signal text must not be blank")
+    return normalized
+
+
+def evaluate_public_signal(text: str, *, language: str) -> PublicSignalEvaluation:
+    """Return an offline, conservative baseline for public industrial signals.
+
+    This deliberately recognizes explicit buying language and rejects common
+    recruitment, advertising, supplier-pitch, academic, and social-engagement
+    contexts. It is a deterministic quality baseline, not a replacement for the
+    audited lead-analysis orchestration.
+    """
+    if language not in {"en", "zh"}:
+        raise ValueError("language must be 'en' or 'zh'")
+    normalized = _normalized_signal_text(text)
+    folded = normalized.casefold()
+    industrial = _contains_term(folded, _INDUSTRIAL_TERMS)
+    organization_context = any(
+        _contains_term(folded, terms)
+        for terms in (
+            _ADVERTISEMENT_TERMS,
+            _RECRUITMENT_TERMS,
+            _SUPPLIER_PITCH_TERMS,
+            _COMPANY_PAGE_TERMS,
+        )
+    )
+    excluded = organization_context or any(
+        _contains_term(folded, terms)
+        for terms in (_ENGAGEMENT_TERMS, _JOB_SEEKER_TERMS, _ACADEMIC_TERMS)
+    )
+    explicit = (
+        industrial and not excluded and _contains_term(folded, _EXPLICIT_NEED_TERMS)
+    )
+    vague = (
+        industrial
+        and not excluded
+        and not explicit
+        and _contains_term(folded, _VAGUE_NEED_TERMS)
+    )
+
+    if organization_context or (
+        explicit and _contains_term(folded, _HIGH_COMPANY_TERMS)
+    ):
+        company_class, company_confidence = "HIGH", 0.9
+    elif explicit or (vague and _contains_term(folded, _MEDIUM_COMPANY_TERMS)):
+        company_class, company_confidence = "MEDIUM", 0.6
+    else:
+        company_class, company_confidence = "LOW", 0.25
+
+    if explicit:
+        dimensions = ScoreDimensions(28, 20, 18, 14, 9)
+        intent_confidence, capability_confidence = 0.95, 0.9
+    elif vague:
+        dimensions = ScoreDimensions(18, 15, 10, 10, 7)
+        intent_confidence, capability_confidence = 0.55, 0.6
+    else:
+        dimensions = ScoreDimensions(
+            2, {"HIGH": 8, "MEDIUM": 5, "LOW": 2}[company_class], 3, 5, 2
+        )
+        intent_confidence, capability_confidence = 0.1, 0.3
+    gates = EvidenceGates(
+        traceable_source=True,
+        explicit_need_or_company_match=explicit,
+        capability_evidence=explicit,
+        audited_run=False,
+        ontology_snapshot=False,
+    )
+    return PublicSignalEvaluation(
+        normalized_text=normalized,
+        is_explicit_need=explicit,
+        company_match_confidence_class=company_class,
+        company_match_confidence=company_confidence,
+        intent_confidence=intent_confidence,
+        capability_confidence=capability_confidence,
+        dimensions=dimensions,
+        gates=gates,
+        score=score_lead(dimensions, gates),
+        evidence_spans=(normalized,),
+    )
+
+
 def score_lead(dimensions: ScoreDimensions, gates: EvidenceGates) -> ScoreResult:
     values = asdict(dimensions)
     for name, value in values.items():
         maximum = WEIGHTS[name]
-        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= maximum:
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not 0 <= value <= maximum
+        ):
             raise ValueError(f"{name} must be between 0 and {maximum}")
 
     gate_values = asdict(gates)

@@ -178,6 +178,28 @@ it("matches backend row constraints in local previews", () => {
   })).toMatchObject({ validRows: 0, invalidRows: 1, messages: [{ row: null }] })
 })
 
+it("rejects calendar-invalid timestamps and accepts Django-compatible timezone boundaries", async () => {
+  expect(previewImport({
+    mode: "JSON",
+    text: JSON.stringify({ rows: [
+      { source_url: "https://example.test/leap", original_text: "Need gears", published_at: "2024-02-29T23:59:59.123456+14:00" },
+      { source_url: "https://example.test/offset", original_text: "Need gears", published_at: "2024-02-29 00:00:00-03:30" },
+      { source_url: "https://example.test/compact-offset", original_text: "Need gears", published_at: "2024-02-29T00:00:00+1430" },
+    ] }),
+    idempotencyKey: "valid-calendar-boundaries",
+  })).toMatchObject({ validRows: 3, invalidRows: 0 })
+
+  const fetchMock = vi.fn()
+  vi.stubGlobal("fetch", fetchMock)
+  const drafts = [
+    { mode: "CSV", text: "source_url,original_text,published_at\nhttps://example.test/csv,Need gears,2026-02-29T10:00:00Z", idempotencyKey: "bad-leap-day" },
+    { mode: "JSON", text: '{"rows":[{"source_url":"https://example.test/json","original_text":"Need gears","published_at":"2026-02-30T10:00:00Z"}]}', idempotencyKey: "bad-calendar-day" },
+  ] as const
+
+  for (const draft of drafts) await expect(createIngestionBatch(draft)).rejects.toThrow("invalid rows")
+  expect(fetchMock).not.toHaveBeenCalled()
+})
+
 it("sends expected versions and idempotency keys for analysis and review", async () => {
   document.cookie = "csrftoken=csrf-value; path=/"
   const fetchMock = vi.fn()

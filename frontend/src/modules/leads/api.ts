@@ -104,8 +104,22 @@ function isUuid(value: unknown): boolean {
 }
 
 function isIsoDateTime(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2}(?:[.,]\d{1,6})?)?(?:Z|[+-]\d{2}:?\d{2})?$/.test(value)) return false
-  return !Number.isNaN(Date.parse(value.replace(",", ".")))
+  const match = /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:[.,]\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?$/.exec(value)
+  if (!match) return false
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText = "0", timezone] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+  const second = Number(secondText)
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  if (!year || month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]) return false
+  if (hour > 23 || minute > 59 || second > 59) return false
+  if (!timezone || timezone === "Z") return true
+  const offset = timezone.slice(1).replace(":", "")
+  return Number(offset.slice(0, 2)) <= 23 && Number(offset.slice(2)) <= 59
 }
 
 function validateRow(raw: unknown, row: number, screenshotRequired = false): ImportPreviewMessage | null {

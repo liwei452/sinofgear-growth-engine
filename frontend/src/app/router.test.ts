@@ -4,7 +4,7 @@ import { defineComponent, h } from "vue"
 import { createMemoryHistory, RouterView } from "vue-router"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import PromotionTransitionPage from "../modules/promotion/PromotionTransitionPage.vue"
+import PromotionPage from "../modules/content/PromotionPage.vue"
 import { createAppRouter, safeRedirect } from "./router"
 
 const Login = defineComponent({ name: "LoginStub", template: "<p>登录页面</p>" })
@@ -14,7 +14,7 @@ const Products = defineComponent({ name: "ProductsStub", template: "<p>真实产
 const Knowledge = defineComponent({ name: "KnowledgeStub", template: "<p>真实知识库</p>" })
 const ContentFactory = defineComponent({ name: "ContentFactoryStub", template: "<p>真实内容工厂</p>" })
 const Reviews = defineComponent({ name: "ReviewsStub", template: "<p>真实审核中心</p>" })
-const Promotion = PromotionTransitionPage
+const Promotion = PromotionPage
 const Assets = defineComponent({ name: "AssetsStub", template: "<p>真实素材库</p>" })
 const PublishingCalendar = defineComponent({ name: "PublishingStub", template: "<p>真实发布日历</p>" })
 const PlatformAccounts = defineComponent({ name: "AccountsStub", template: "<p>真实平台账户</p>" })
@@ -110,30 +110,38 @@ describe("protected routing", () => {
     expect(appRouter.currentRoute.value.meta.title).toBe("客户机会")
   })
 
-  it("mounts the production promotion transition and links authorized users to the content factory", async () => {
+  it("mounts the production beginner promotion experience", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: ["campaigns.read"] } })
+    client.setQueryData(["auth", "me"], { user: {}, organization: { id: "org-1" }, membership: { permissions: ["campaigns.read", "campaigns.manage", "products.read"] } })
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
+      path === "/api/v1/products"
+        ? { next: null, previous: null, results: [{ id: "product-1", name_zh: "精密齿轮", name_en: "Precision Gear", status: "ACTIVE" }] }
+        : path === "/api/v1/platforms"
+          ? { results: [{ id: "platform-1", code: "LINKEDIN", name: "LinkedIn", capabilities: ["PUBLISH"] }] }
+          : { next: null, previous: null, results: [] },
+    ), { status: 200, headers: { "Content-Type": "application/json" } })))
     const appRouter = router(client)
     render(Root, { global: { plugins: [[VueQueryPlugin, { queryClient: client }], appRouter] } })
 
     await appRouter.push("/promotion")
-    expect(await screen.findByRole("heading", { name: "推广" })).toBeInTheDocument()
-    expect(screen.getByText("推广工作区正在准备中")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "前往 AI 内容工厂" })).toHaveAttribute("href", "/content-factory")
-    expect(screen.queryByRole("link", { name: "查看下一步建议" })).not.toBeInTheDocument()
+    expect(await screen.findByRole("heading", { name: "你今天想推广什么？" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "让 AI 给我方案" })).toBeInTheDocument()
     expect(appRouter.currentRoute.value.meta.title).toBe("推广")
   })
 
-  it("explains the promotion transition without offering an unauthorized content-factory action", async () => {
+  it("explains missing promotion permission without offering an unauthorized action", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: [] } })
+    client.setQueryData(["auth", "me"], { user: {}, organization: { id: "org-1" }, membership: { permissions: [] } })
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ results: [] }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })))
     const appRouter = router(client)
     render(Root, { global: { plugins: [[VueQueryPlugin, { queryClient: client }], appRouter] } })
 
     await appRouter.push("/promotion")
 
-    expect(await screen.findByText("你当前没有使用内容工厂的权限；如需开展推广，请联系管理员。")).toBeInTheDocument()
-    expect(screen.queryByRole("link", { name: "前往 AI 内容工厂" })).not.toBeInTheDocument()
+    expect(await screen.findByText("你当前没有创建推广方案的权限，请联系管理员。")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "让 AI 给我方案" })).not.toBeInTheDocument()
   })
 
   it("mounts the real company profile route", async () => {

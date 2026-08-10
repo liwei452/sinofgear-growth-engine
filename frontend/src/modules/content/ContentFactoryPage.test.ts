@@ -42,15 +42,26 @@ function baseResponse(path: string, activeBriefs: unknown[] = []) {
   return { results: [] }
 }
 
-function renderPage(permissions: string[]) {
+function renderPage(permissions: string[], experience?: "ordinary" | "advanced") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(permissions))
-  return render(ContentFactoryPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+  return render(ContentFactoryPage, { props: { experience }, global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 }
 
 afterEach(() => {
   vi.unstubAllGlobals()
   document.cookie = "csrftoken=; Max-Age=0; path=/"
+})
+
+it("keeps the existing professional page available in advanced mode", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(baseResponse(path)), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "jobs.read"], "advanced")
+
+  expect(await screen.findByRole("heading", { name: "内容需求" })).toBeVisible()
+  expect(screen.getByRole("heading", { name: "生成任务" })).toBeVisible()
+  expect(screen.getByRole("button", { name: "创建内容任务" })).toBeVisible()
 })
 
 it("guides a beginner through campaign creation and sends the exact brief payload", async () => {
@@ -337,6 +348,40 @@ it("ignores an in-flight polling response after unmount without scheduling again
   await new Promise((resolve) => setTimeout(resolve, 0))
 
   expect(setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 2500)).toHaveLength(0)
+})
+
+it("ignores an in-flight job response after the organization changes", async () => {
+  const activeJob = { job_id: "job-old-organization", type: "CONTENT_GENERATE", status: "RUNNING", progress: 25, attempt: 1, max_attempts: 3, created_at: "", finished_at: null, error: null, result_reference: null }
+  let resolveDetail!: (response: Response) => void
+  const detail = new Promise<Response>((resolve) => { resolveDetail = resolve })
+  let jobLists = 0
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/jobs") {
+      jobLists += 1
+      return new Response(JSON.stringify({ next: null, previous: null, results: jobLists === 1 ? [activeJob] : [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/jobs/job-old-organization") return detail
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const key = currentUserQueryOptions().queryKey
+  queryClient.setQueryData(key, currentUser(["campaigns.read", "jobs.read"]))
+  render(ContentFactoryPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/jobs/job-old-organization", expect.anything()))
+
+  queryClient.setQueryData(key, {
+    ...currentUser(["campaigns.read", "jobs.read"]),
+    organization: { id: "org-2", name: "另一组织", slug: "other" },
+  })
+  await waitFor(() => expect(jobLists).toBe(2))
+  resolveDetail(new Response(JSON.stringify({ ...activeJob, status: "SUCCEEDED", progress: 100 }), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  }))
+  await detail
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  expect(screen.queryByText("任务 job-old-organization")).not.toBeInTheDocument()
 })
 
 it("edits a draft brief and creates a revision only with campaigns.manage", async () => {

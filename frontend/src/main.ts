@@ -15,7 +15,7 @@ const router = createAppRouter(queryClient, {
     Login: LoginPage,
     Shell: AppShell,
     Dashboard: DashboardPage,
-    Promotion: defineAsyncComponent(() => import("./modules/promotion/PromotionTransitionPage.vue")),
+    Promotion: defineAsyncComponent(() => import("./modules/content/PromotionPage.vue")),
     Products: defineAsyncComponent(() => import("./modules/products/ProductLibraryPage.vue")),
     Knowledge: defineAsyncComponent(() => import("./modules/knowledge/KnowledgeLibraryPage.vue")),
     ContentFactory: defineAsyncComponent(() => import("./modules/content/ContentFactoryPage.vue")),

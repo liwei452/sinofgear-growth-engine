@@ -1,14 +1,14 @@
 from copy import deepcopy
 
 import pytest
-from django.db import models
+from django.db import connection, models
 from django.utils import timezone
 
 from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
 from apps.ai.orchestration import GenerationPreflightError
 from apps.ai.services import PromptVersionService
 from apps.identity.models import Membership, Role
-from apps.jobs.models import Job
+from apps.jobs.models import Job, JobAttempt
 from apps.jobs.services import JobService, StaleJobWorkerError
 from apps.knowledge.guards import _test_fixture_writes
 from apps.knowledge.models import (
@@ -25,7 +25,12 @@ from apps.leads.models import (
 )
 from apps.leads.orchestration import execute_lead_analysis_job
 from apps.leads.schemas import LEAD_ANALYSIS_OUTPUT_SCHEMA
-from apps.leads.services import LeadService, LeadStateError, build_analysis_snapshot
+from apps.leads.services import (
+    LeadService,
+    LeadStateError,
+    build_analysis_snapshot,
+    lead_analysis_attempt_lease,
+)
 from integrations.ai.providers import provider_registry
 
 from .test_analysis_snapshot import _valid_output
@@ -41,6 +46,16 @@ class SequenceProvider:
         output = self.outputs[self.calls]
         self.calls += 1
         return deepcopy(output)
+
+
+class RaisingProvider:
+    def __init__(self):
+        self.calls = 0
+
+    def generate(self, *, prompt, schema):
+        del prompt, schema
+        self.calls += 1
+        raise RuntimeError("provider secret must not escape")
 
 
 class CancelingLeadProvider:
@@ -67,8 +82,37 @@ class ReclaimingLeadProvider:
             claim_token=job.claim_token,
             error={"code": "provider_error"},
         )
-        JobService.retry(job.id)
+        retried = JobService.retry(job.id)
+        LeadService.resume_analysis_retry(
+            organization_id=retried.organization_id,
+            candidate_id=retried.input_snapshot["lead_candidate_id"],
+            started_from=retried.input_snapshot["candidate_status_at_start"],
+            analysis_lease_token=lead_analysis_attempt_lease(
+                retried.id,
+                retried.attempt,
+            ),
+        )
         JobService.claim(worker_id="replacement-worker", job_id=job.id)
+        return deepcopy(self.output)
+
+
+class OldRecoveryDuringRetryProvider:
+    def __init__(self, candidate, old_snapshot, output):
+        self.candidate = candidate
+        self.old_snapshot = old_snapshot
+        self.output = output
+        self.retry_lease = None
+
+    def generate(self, *, prompt, schema):
+        del prompt, schema
+        self.candidate.refresh_from_db()
+        self.retry_lease = self.candidate.analysis_lease_token
+        LeadService.recover_failed_analysis(
+            organization_id=self.candidate.organization_id,
+            candidate_id=self.candidate.id,
+            started_from=self.old_snapshot["candidate_status_at_start"],
+            analysis_lease_token=self.old_snapshot["analysis_lease_id"],
+        )
         return deepcopy(self.output)
 
 
@@ -303,6 +347,50 @@ def test_duplicate_terminal_preflight_redelivery_is_idempotent(
 
 
 @pytest.mark.django_db
+def test_preflight_failure_and_candidate_recovery_rollback_together(
+    candidate,
+    evidence,
+    approved_requirement,
+    approved_capability,
+    user,
+    monkeypatch,
+):
+    _snapshot, _bound_prompt, job = _analysis_context(candidate, evidence, user)
+    other_prompt = PromptVersionService.create(
+        purpose="LEAD_ANALYZE",
+        code="atomic-preflight-mismatch",
+        provider="must-not-run",
+        model="fake-v2",
+        template="{input_json}",
+        output_schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
+        status=PromptVersion.Status.PUBLISHED,
+        created_by=user,
+    )
+
+    def fail_recovery(**kwargs):
+        del kwargs
+        assert connection.in_atomic_block
+        assert Job.objects.get(pk=job.id).status == Job.Status.FAILED
+        raise RuntimeError("recovery barrier")
+
+    monkeypatch.setattr(LeadService, "recover_failed_analysis", fail_recovery)
+
+    with pytest.raises(RuntimeError, match="recovery barrier"):
+        execute_lead_analysis_job(job.id, other_prompt.id)
+
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    assert job.status == Job.Status.QUEUED
+    assert job.claim_token is None
+    assert job.error is None
+    assert job.result_reference is None
+    assert not JobAttempt.objects.filter(job=job).exists()
+    assert candidate.status == LeadCandidate.Status.ANALYZING
+    assert candidate.analysis_lease_token is not None
+    assert not AIRun.objects.filter(job=job).exists()
+
+
+@pytest.mark.django_db
 def test_worker_rejects_tampered_binding_candidate_and_recovers_snapshot_owner(
     candidate,
     evidence,
@@ -436,6 +524,155 @@ def test_double_invalid_output_fails_without_insight_and_restores_candidate(
 
 
 @pytest.mark.django_db
+def test_provider_exception_fails_atomically_and_scrubs_internal_error(
+    candidate,
+    evidence,
+    approved_requirement,
+    approved_capability,
+    user,
+):
+    _snapshot, prompt, job = _analysis_context(candidate, evidence, user)
+    provider = RaisingProvider()
+    provider_registry.register("lead-sequence", provider, replace=True)
+
+    run = execute_lead_analysis_job(job.id, prompt.id)
+
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    attempt = JobAttempt.objects.get(job=job)
+    assert provider.calls == 1
+    assert run.status == AIRun.Status.FAILED
+    assert run.error == {
+        "code": "provider_error",
+        "message": "AI provider generation failed.",
+    }
+    assert job.status == Job.Status.FAILED
+    assert job.error == run.error
+    assert attempt.status == JobAttempt.Status.FAILED
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None
+    assert not LeadInsight.objects.filter(candidate=candidate).exists()
+
+
+@pytest.mark.django_db
+def test_result_writer_failure_fails_atomically_and_recovers_candidate(
+    candidate,
+    evidence,
+    approved_requirement,
+    approved_capability,
+    user,
+    monkeypatch,
+):
+    snapshot, prompt, job = _analysis_context(candidate, evidence, user)
+    output = _valid_output(snapshot=snapshot, evidence_id=evidence.id)
+    provider_registry.register(
+        "lead-sequence", SequenceProvider([output]), replace=True
+    )
+
+    def fail_result_writer(*, run, output):
+        del run, output
+        raise RuntimeError("database secret must not escape")
+
+    monkeypatch.setattr(LeadService, "record_analysis_output", fail_result_writer)
+
+    run = execute_lead_analysis_job(job.id, prompt.id)
+
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    attempt = JobAttempt.objects.get(job=job)
+    assert run.status == AIRun.Status.FAILED
+    assert run.error == {
+        "code": "content_finalize_failed",
+        "message": "Generated content could not be finalized.",
+    }
+    assert job.status == Job.Status.FAILED
+    assert job.error == run.error
+    assert attempt.status == JobAttempt.Status.FAILED
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None
+    assert not LeadInsight.objects.filter(candidate=candidate).exists()
+
+
+@pytest.mark.django_db
+def test_provider_failure_and_candidate_recovery_rollback_together(
+    candidate,
+    evidence,
+    approved_requirement,
+    approved_capability,
+    user,
+    monkeypatch,
+):
+    snapshot, prompt, job = _analysis_context(candidate, evidence, user)
+    invalid = _valid_output(snapshot=snapshot, evidence_id=evidence.id)
+    invalid["reasons"][0]["evidence_ids"] = []
+    provider_registry.register(
+        "lead-sequence", SequenceProvider([invalid, invalid]), replace=True
+    )
+
+    def fail_recovery(**kwargs):
+        del kwargs
+        assert connection.in_atomic_block
+        assert Job.objects.get(pk=job.id).status == Job.Status.FAILED
+        assert AIRun.objects.get(job=job).status == AIRun.Status.FAILED
+        raise RuntimeError("recovery barrier")
+
+    monkeypatch.setattr(LeadService, "recover_failed_analysis", fail_recovery)
+
+    with pytest.raises(RuntimeError, match="recovery barrier"):
+        execute_lead_analysis_job(job.id, prompt.id)
+
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    run = AIRun.objects.get(job=job)
+    attempt = JobAttempt.objects.get(job=job)
+    assert job.status == Job.Status.RUNNING
+    assert job.claim_token == attempt.claim_token
+    assert job.error is None
+    assert job.result_reference is None
+    assert attempt.status == JobAttempt.Status.RUNNING
+    assert run.status == AIRun.Status.RUNNING
+    assert run.error is None
+    assert candidate.status == LeadCandidate.Status.ANALYZING
+    assert str(candidate.analysis_lease_token) == snapshot["analysis_lease_id"]
+    assert not LeadInsight.objects.filter(candidate=candidate).exists()
+
+
+@pytest.mark.django_db
+def test_cancel_and_candidate_recovery_rollback_together(
+    candidate,
+    evidence,
+    approved_requirement,
+    approved_capability,
+    user,
+    monkeypatch,
+):
+    snapshot, _prompt, job = _analysis_context(candidate, evidence, user)
+    claimed = JobService.claim(worker_id="legal-worker", job_id=job.id)
+
+    def fail_recovery(**kwargs):
+        del kwargs
+        assert connection.in_atomic_block
+        assert Job.objects.get(pk=job.id).status == Job.Status.CANCELED
+        raise RuntimeError("recovery barrier")
+
+    monkeypatch.setattr(LeadService, "recover_failed_analysis", fail_recovery)
+
+    with pytest.raises(RuntimeError, match="recovery barrier"):
+        JobService.cancel(job.id)
+
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    attempt = JobAttempt.objects.get(job=job)
+    assert job.status == Job.Status.RUNNING
+    assert job.claim_token == claimed.claim_token
+    assert job.error is None
+    assert job.result_reference is None
+    assert attempt.status == JobAttempt.Status.RUNNING
+    assert candidate.status == LeadCandidate.Status.ANALYZING
+    assert str(candidate.analysis_lease_token) == snapshot["analysis_lease_id"]
+
+
+@pytest.mark.django_db
 def test_canceled_worker_cannot_finalize_insight_and_restores_candidate(
     candidate,
     evidence,
@@ -506,6 +743,46 @@ def test_deliberate_job_retry_creates_new_airun_and_eventual_insight(
     assert second.job_attempt == 2
     assert candidate.status == LeadCandidate.Status.ANALYZED
     assert list(candidate.insights.values_list("version", flat=True)) == [1]
+
+
+@pytest.mark.django_db
+def test_retry_uses_fresh_lease_and_old_failure_cannot_release_it(
+    candidate,
+    evidence,
+    approved_requirement,
+    approved_capability,
+    user,
+):
+    first_snapshot, prompt, job = _analysis_context(candidate, evidence, user)
+    valid = _valid_output(snapshot=first_snapshot, evidence_id=evidence.id)
+    invalid = deepcopy(valid)
+    invalid["reasons"][0]["evidence_ids"] = []
+    first_provider = SequenceProvider([invalid, invalid])
+    provider_registry.register("lead-sequence", first_provider, replace=True)
+    first = execute_lead_analysis_job(job.id, prompt.id)
+    assert first.status == AIRun.Status.FAILED
+
+    JobService.retry(job.id)
+    retry_provider = OldRecoveryDuringRetryProvider(
+        candidate,
+        first_snapshot,
+        valid,
+    )
+    provider_registry.register("lead-sequence", retry_provider, replace=True)
+    second = execute_lead_analysis_job(job.id, prompt.id)
+
+    candidate.refresh_from_db()
+    assert first_provider.calls == 2
+    assert retry_provider.retry_lease is not None
+    assert str(retry_provider.retry_lease) != first_snapshot["analysis_lease_id"]
+    assert second.status == AIRun.Status.SUCCEEDED
+    assert second.job_attempt == 2
+    assert str(second.input_snapshot["analysis_lease_id"]) == str(
+        retry_provider.retry_lease
+    )
+    assert candidate.status == LeadCandidate.Status.ANALYZED
+    assert candidate.analysis_lease_token is None
+    assert candidate.insights.count() == 1
 
 
 @pytest.mark.django_db

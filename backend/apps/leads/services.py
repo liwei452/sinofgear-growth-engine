@@ -4,7 +4,7 @@ import json
 from contextlib import nullcontext
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from uuid import uuid4
+from uuid import uuid4, uuid5
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, models, transaction
@@ -38,6 +38,10 @@ class LeadStateError(ValueError):
 
 class LeadIdempotencyConflictError(LeadStateError):
     pass
+
+
+def lead_analysis_attempt_lease(job_id, attempt):
+    return uuid5(job_id, f"lead-analysis-attempt:{attempt}")
 
 
 @dataclass(frozen=True)
@@ -602,7 +606,7 @@ class LeadService:
         if candidate is None:
             raise LeadStateError("Lead candidate is unavailable for retry.")
         if str(candidate.analysis_lease_token) == str(analysis_lease_token):
-            return
+            return candidate
         if candidate.analysis_lease_token is not None:
             raise LeadStateError("Lead candidate is owned by another analysis.")
         expected_status = (
@@ -618,6 +622,7 @@ class LeadService:
             candidate.save(
                 update_fields=["status", "analysis_lease_token", "updated_at"]
             )
+        return candidate
 
     @staticmethod
     def _validate_explanation(explanation, *, evidence_ids):
@@ -642,7 +647,23 @@ class LeadService:
         from .schemas import frozen_source_evidence_errors
 
         frozen = run.input_snapshot
-        if not isinstance(frozen, dict) or run.job.input_snapshot != frozen:
+        bound = run.job.input_snapshot
+        input_is_bound = isinstance(frozen, dict) and bound == frozen
+        if isinstance(frozen, dict) and run.job_attempt > 1:
+            expected = json.loads(json.dumps(bound))
+            expected["analysis_lease_id"] = str(
+                lead_analysis_attempt_lease(run.job_id, run.job_attempt)
+            )
+            retry_version = frozen.get("analysis_lease_version")
+            expected["analysis_lease_version"] = retry_version
+            expected["integrity_sha256"] = frozen.get("integrity_sha256")
+            input_is_bound = (
+                isinstance(retry_version, int)
+                and not isinstance(retry_version, bool)
+                and retry_version > bound.get("analysis_lease_version", 0)
+                and expected == frozen
+            )
+        if not input_is_bound:
             raise ValidationError({"ai_run": "AI run is not bound to its immutable job input."})
         if (
             frozen.get("organization_id") != str(candidate.organization_id)

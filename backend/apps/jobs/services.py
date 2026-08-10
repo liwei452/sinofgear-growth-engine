@@ -34,6 +34,19 @@ TRANSITIONS = {
     Job.Status.CANCELED: frozenset(),
 }
 
+_terminal_handlers = {}
+
+
+def register_job_terminal_handler(job_type: str, handler) -> None:
+    """Register an in-transaction terminal side-effect for one job type."""
+    _terminal_handlers[job_type] = handler
+
+
+def _run_terminal_handler(job: Job) -> None:
+    handler = _terminal_handlers.get(job.type)
+    if handler is not None:
+        handler(job)
+
 
 def _json_copy(value):
     try:
@@ -188,6 +201,7 @@ class JobService:
         job.version += 1
         JobService._save(job, ["status", "error", "result_reference", "finished_at", "claim_token", "version", "updated_at"])
         JobService._finish_attempt(claim_token, JobAttempt.Status.FAILED, now, error=normalized)
+        _run_terminal_handler(job)
         return job
 
     @staticmethod
@@ -227,6 +241,7 @@ class JobService:
         JobService._save(job, ["status", "finished_at", "result_reference", "claim_token", "version", "updated_at"])
         if token:
             JobService._finish_attempt(token, JobAttempt.Status.CANCELED, now)
+        _run_terminal_handler(job)
         return job
 
     @staticmethod

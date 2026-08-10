@@ -101,7 +101,9 @@ def _render_prompt(template: str, snapshot: dict) -> str:
 
 
 @transaction.atomic
-def _create_run(*, job: Job, prompt: PromptVersion, provider: str) -> AIRun:
+def _create_run(
+    *, job: Job, prompt: PromptVersion, provider: str, input_snapshot=None
+) -> AIRun:
     existing = AIRun.objects.filter(job=job, job_attempt=job.attempt).first()
     if existing:
         return existing
@@ -114,7 +116,9 @@ def _create_run(*, job: Job, prompt: PromptVersion, provider: str) -> AIRun:
                 prompt_version=prompt,
                 provider=provider,
                 model=prompt.model,
-                input_snapshot=scrub_secrets(job.input_snapshot),
+                input_snapshot=scrub_secrets(
+                    job.input_snapshot if input_snapshot is None else input_snapshot
+                ),
                 status=AIRun.Status.RUNNING,
                 started_at=timezone.now(),
             )
@@ -234,6 +238,7 @@ def execute_generation_job(
     worker_id="ai-worker", result_writer=None, input_validator=None,
     prompt_renderer=None, output_validator=None, invalid_output_retries=0,
     invalid_output_message="Provider output did not match the required schema.",
+    input_snapshot=None,
 ) -> AIRun:
     job = Job.objects.get(pk=job_id)
     existing = AIRun.objects.filter(job_id=job_id).order_by("-job_attempt").first()
@@ -277,7 +282,9 @@ def execute_generation_job(
         raise GenerationPreflightError(
             "provider_not_available", "AI provider is not available."
         )
-    snapshot = scrub_secrets(job.input_snapshot)
+    snapshot = scrub_secrets(
+        job.input_snapshot if input_snapshot is None else input_snapshot
+    )
     if input_validator is None:
         _validate_generation_input(snapshot, organization_id=job.organization_id)
     else:
@@ -307,7 +314,12 @@ def execute_generation_job(
         raise JobConflictError(f"Job in status {job.status} cannot be claimed.")
     token = claimed.claim_token
     try:
-        run = _create_run(job=claimed, prompt=prompt, provider=provider_name)
+        run = _create_run(
+            job=claimed,
+            prompt=prompt,
+            provider=provider_name,
+            input_snapshot=snapshot,
+        )
     except Exception as exc:
         JobService.fail(
             claimed.id,

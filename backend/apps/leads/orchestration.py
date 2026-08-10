@@ -28,7 +28,7 @@ from .schemas import (
     frozen_source_evidence_errors,
     lead_analysis_errors,
 )
-from .services import LeadService
+from .services import LeadService, LeadStateError, lead_analysis_attempt_lease
 
 
 def _snapshot_digest(snapshot_without_digest: dict[str, object]) -> str:
@@ -236,6 +236,69 @@ def _recover_candidate(snapshot, *, organization_id, binding=None) -> None:
     )
 
 
+def _retry_lease_token(job: Job):
+    return lead_analysis_attempt_lease(job.id, job.attempt)
+
+
+def _attempt_recovery_snapshot(job: Job) -> dict:
+    snapshot = (
+        json.loads(json.dumps(job.input_snapshot))
+        if isinstance(job.input_snapshot, dict)
+        else {}
+    )
+    if job.attempt > 1:
+        snapshot["analysis_lease_id"] = str(_retry_lease_token(job))
+    return snapshot
+
+
+def _retry_input_snapshot(job: Job, *, candidate_version: int) -> dict:
+    snapshot = json.loads(json.dumps(job.input_snapshot))
+    snapshot["analysis_lease_id"] = str(_retry_lease_token(job))
+    snapshot["analysis_lease_version"] = candidate_version
+    unsigned = dict(snapshot)
+    unsigned.pop("integrity_sha256", None)
+    snapshot["integrity_sha256"] = _snapshot_digest(unsigned)
+    return snapshot
+
+
+@transaction.atomic
+def _prepare_retry_input(job_id, *, binding) -> dict:
+    job = Job.objects.select_for_update().get(pk=job_id)
+    if job.status != Job.Status.RETRY_QUEUED or job.attempt < 2:
+        raise GenerationPreflightError(
+            "lead_retry_unavailable",
+            "Lead-analysis retry is no longer available.",
+        )
+    lease_token = _retry_lease_token(job)
+    try:
+        candidate = LeadService.resume_analysis_retry(
+            organization_id=job.organization_id,
+            candidate_id=binding.candidate_id,
+            started_from=job.input_snapshot.get("candidate_status_at_start"),
+            analysis_lease_token=lease_token,
+        )
+    except LeadStateError as error:
+        raise GenerationPreflightError(
+            "lead_retry_unavailable",
+            "Lead-analysis retry is no longer available.",
+        ) from error
+    return _retry_input_snapshot(job, candidate_version=candidate.version)
+
+
+def recover_terminal_lead_job(job: Job) -> None:
+    """Recover the lease while JobService still owns the terminal transaction."""
+    binding = (
+        LeadAnalysisBinding.objects.select_related("job", "candidate")
+        .filter(job_id=job.id)
+        .first()
+    )
+    _recover_candidate(
+        _attempt_recovery_snapshot(job),
+        organization_id=job.organization_id,
+        binding=binding,
+    )
+
+
 @transaction.atomic
 def _terminalize_preflight_failure(job_id) -> bool:
     claimed = JobService.claim(
@@ -319,6 +382,7 @@ def execute_lead_analysis_job(
             "job_type_mismatch", "Job is not a lead-analysis job."
         )
     binding = None
+    attempt_snapshot = None
     try:
         binding, prompt = _bound_prompt(job, prompt_version_id)
         if provider_code is not None and provider_code.strip().lower() != prompt.provider.lower():
@@ -326,26 +390,11 @@ def execute_lead_analysis_job(
                 "lead_provider_binding_mismatch",
                 "Requested provider does not match the durable bound prompt.",
             )
+        if job.status == Job.Status.RETRY_QUEUED:
+            attempt_snapshot = _prepare_retry_input(job.id, binding=binding)
     except GenerationPreflightError:
-        binding = (
-            LeadAnalysisBinding.objects.select_related("job", "candidate")
-            .filter(job_id=job.id)
-            .first()
-        )
-        if _terminalize_preflight_failure(job.id):
-            _recover_candidate(
-                job.input_snapshot,
-                organization_id=job.organization_id,
-                binding=binding,
-            )
+        _terminalize_preflight_failure(job.id)
         raise
-    if job.status == Job.Status.RETRY_QUEUED:
-        LeadService.resume_analysis_retry(
-            organization_id=job.organization_id,
-            candidate_id=job.input_snapshot.get("lead_candidate_id"),
-            started_from=job.input_snapshot.get("candidate_status_at_start"),
-            analysis_lease_token=job.input_snapshot.get("analysis_lease_id"),
-        )
 
     def result_writer(run, output):
         insight = LeadService.record_analysis_output(run=run, output=output)
@@ -369,24 +418,14 @@ def execute_lead_analysis_job(
             invalid_output_message=(
                 "Provider output did not match the required lead-analysis schema."
             ),
+            input_snapshot=attempt_snapshot,
         )
     except StaleJobWorkerError:
         raise
     except GenerationPreflightError:
-        if _terminalize_preflight_failure(job.id):
-            _recover_candidate(
-                job.input_snapshot,
-                organization_id=job.organization_id,
-                binding=binding,
-            )
+        _terminalize_preflight_failure(job.id)
         raise
-    if run.status in {AIRun.Status.FAILED, AIRun.Status.CANCELED}:
-        _recover_candidate(
-            job.input_snapshot,
-            organization_id=job.organization_id,
-            binding=binding,
-        )
     return run
 
 
-__all__ = ["execute_lead_analysis_job"]
+__all__ = ["execute_lead_analysis_job", "recover_terminal_lead_job"]

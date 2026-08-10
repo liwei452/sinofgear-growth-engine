@@ -281,7 +281,7 @@ Commit: `feat: add evidence first opportunity review`
 
 **Interfaces:**
 - Consumes: existing current-user identity/permissions, Task 10A lead/job queries, existing product/knowledge/asset query functions, and existing content/analytics routes.
-- Produces: ordinary navigation with five entries, local `sinofgear-navigation-mode-v1` preference (`ordinary | advanced`), `/company-profile`, and a resilient decision inbox.
+- Produces: ordinary navigation with five entries, local `sinofgear-navigation-mode-v1` preference (`ordinary | advanced`), `/promotion`, `/company-profile`, and a resilient decision inbox.
 
 - [ ] **Step 1: Write failing ordinary/advanced navigation tests**
 
@@ -313,7 +313,7 @@ Expected: FAIL because ordinary navigation, decision inbox, and company profile 
 
 - [ ] **Step 4: Implement the ordinary shell and advanced disclosure**
 
-Map ordinary routes: `今天 → /`, `推广 → /content-factory`, `客户机会 → /lead-radar`, `效果 → /analytics`, `公司资料 → /company-profile`. Preserve every existing route in advanced mode. Read the mode once from local storage with defensive parsing, default to ordinary, persist only `ordinary` or `advanced`, and keep mobile focus trapping/close behavior intact.
+Map ordinary routes: `今天 → /`, `推广 → /promotion`, `客户机会 → /lead-radar`, `效果 → /analytics`, `公司资料 → /company-profile`. Preserve every existing route in advanced mode. Read the mode once from local storage with defensive parsing, default to ordinary, persist only `ordinary` or `advanced`, and keep mobile focus trapping/close behavior intact.
 
 - [ ] **Step 5: Implement resilient home and company-profile facades**
 
@@ -331,11 +331,68 @@ Run: `cd frontend && npm run typecheck && npm run lint && npm run build`
 
 Commit: `feat: add AI decision cockpit navigation`
 
-Record Tasks 10 and 11 complete in the SDD progress ledger only after independent review of Tasks 10A, 10B, 10C, 11A, and 11B.
+Do not mark the parent Task 11 complete yet; Task 11C must also pass independent review.
 
 ---
 
-### Task 11C: Cockpit browser acceptance
+### Task 11C: Beginner promotion experience
+
+**Files:**
+- Create: `frontend/src/modules/content/PromotionPage.vue`
+- Create: `frontend/src/modules/content/PromotionPage.test.ts`
+- Modify: `frontend/src/modules/content/ContentFactoryPage.vue`
+- Modify: `frontend/src/modules/content/ContentFactoryPage.test.ts`
+- Modify: `frontend/src/app/router.ts`
+- Modify: `frontend/src/app/router.test.ts`
+- Modify: `frontend/src/main.ts`
+
+**Interfaces:**
+- Consumes: the existing content factory queries, `ContentBriefWizard`, content permissions, generation jobs, and `/content-factory` advanced route.
+- Produces: `/promotion` ordinary route and `ContentFactoryPage` prop `experience?: "ordinary" | "advanced"`, defaulting to `advanced` for backward compatibility.
+
+- [ ] **Step 1: Write failing beginner-promotion tests**
+
+```ts
+it("starts with the user's goal instead of internal content objects", async () => {
+  render(PromotionPage, { global: testApp() })
+  expect(await screen.findByRole("heading", { name: "你今天想推广什么？" })).toBeVisible()
+  expect(screen.getByRole("button", { name: "让 AI 给我方案" })).toBeVisible()
+  expect(screen.queryByRole("heading", { name: "内容需求" })).not.toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "查看高级记录" })).toBeVisible()
+})
+
+it("keeps the existing professional page available in advanced mode", async () => {
+  render(ContentFactoryPage, { props: { experience: "advanced" }, global: testApp() })
+  expect(await screen.findByRole("heading", { name: "内容需求" })).toBeVisible()
+  expect(screen.getByRole("heading", { name: "生成任务" })).toBeVisible()
+})
+```
+
+- [ ] **Step 2: Run focused tests and verify RED**
+
+Run: `cd frontend && node node_modules/vitest/vitest.mjs --run src/modules/content/PromotionPage.test.ts src/modules/content/ContentFactoryPage.test.ts src/app/router.test.ts`
+
+Expected: FAIL because `PromotionPage` and the `experience` contract are absent.
+
+- [ ] **Step 3: Add the ordinary wrapper and progressive content-factory mode**
+
+`PromotionPage` renders `ContentFactoryPage experience="ordinary"`. In ordinary mode the first screen says `你今天想推广什么？`, summarizes available products/material readiness, and offers `让 AI 给我方案`, which opens the existing tested wizard. Translate the workflow into three visible stages: `选择推广目标`, `确认 AI 方案`, `批准后执行`. Do not expose Campaign, ContentBrief, or raw Job names in the initial view.
+
+- [ ] **Step 4: Put professional records behind explicit disclosure without deleting them**
+
+The `查看高级记录` control reveals the existing campaigns, content briefs, generation jobs, and management actions. The existing `/content-factory` route keeps `experience="advanced"` and renders those sections by default, preserving administrator workflows and tests. Job status in ordinary mode uses plain-language labels and recovery actions.
+
+- [ ] **Step 5: Verify and commit**
+
+Run: `cd frontend && node node_modules/vitest/vitest.mjs --run src/modules/content/PromotionPage.test.ts src/modules/content/ContentFactoryPage.test.ts src/app/router.test.ts src/app/AppShell.test.ts`
+
+Run: `cd frontend && npm run typecheck && npm run lint && npm run build`
+
+Commit: `feat: add beginner promotion experience`
+
+---
+
+### Task 11D: Cockpit browser acceptance
 
 **Files:**
 - Create: `frontend/e2e/ai-decision-cockpit.spec.ts`
@@ -343,7 +400,7 @@ Record Tasks 10 and 11 complete in the SDD progress ledger only after independen
 - Modify: `docs/phase-b1-acceptance.md` if it exists after parent Task 12 work starts
 
 **Interfaces:**
-- Consumes: Tasks 10A through 11B and the existing E2E launcher/seed conventions.
+- Consumes: Tasks 10A through 11C and the existing E2E launcher/seed conventions.
 - Produces: browser evidence for the beginner journey before the broader parent Task 12 acceptance gate.
 
 - [ ] **Step 1: Write the browser flow**
@@ -376,3 +433,5 @@ Run the repository's existing E2E launcher command, followed by:
 - [ ] **Step 4: Commit**
 
 Commit: `test: cover beginner decision cockpit flow`
+
+Record parent Tasks 10 and 11 complete in the SDD progress ledger only after independent review of Tasks 10A, 10B, 10C, 11A, 11B, 11C, and 11D.

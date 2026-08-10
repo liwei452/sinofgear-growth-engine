@@ -354,7 +354,7 @@ function selectCandidate(candidateId: string): void {
       </article>
     </section>
 
-    <nav v-if="leads.length && !onlyAnalyzing" class="pagination" aria-label="客户机会分页">
+    <nav v-if="leads.length" class="pagination" aria-label="客户机会分页">
       <button type="button" :disabled="!safePrevious" @click="moveTo(safePrevious)">上一页</button>
       <button type="button" :disabled="!safeNext" @click="moveTo(safeNext)">下一页</button>
     </nav>

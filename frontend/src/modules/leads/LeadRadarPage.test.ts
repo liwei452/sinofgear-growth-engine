@@ -263,6 +263,34 @@ it("maps plain-language filters, resets pagination, and follows only safe cursor
   await waitFor(() => expect(within(unsafe.container).getByRole("button", { name: "下一页" })).toBeDisabled())
 })
 
+it("keeps safe cursor pagination available when the current page only has pending analyses", async () => {
+  const next = "/api/v1/lead-candidates?cursor=pending-next"
+  const pendingLead = { ...waitingLead, status: "DISCOVERED" as const }
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === next) return list([highLead])
+    if (path.includes("/lead-high")) return json(detail)
+    if (/\/api\/v1\/lead-candidates\/[^?]+/.test(path)) {
+      return json({
+        ...detail,
+        id: path.split("/").at(-1),
+        status: "DISCOVERED",
+        evidence: [],
+        latest_insight: null,
+      })
+    }
+    return list([waitingLead, pendingLead], next)
+  })
+  renderPage(fetchMock, ["leads.read"], "org-pending-pagination")
+
+  expect(await screen.findByRole("heading", { name: "正在筛选公开线索" })).toBeVisible()
+  const nextButton = screen.getByRole("button", { name: "下一页" })
+  expect(nextButton).toBeEnabled()
+  await userEvent.click(nextButton)
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(next, expect.anything()))
+  expect(await screen.findByText("ABC Packaging")).toBeVisible()
+})
+
 it("keeps every organization query key scoped and refreshes the active filtered queue after import", async () => {
   const fetchMock = vi.fn(async (path: string) => {
     if (path === "/api/v1/ingestion-batches") {

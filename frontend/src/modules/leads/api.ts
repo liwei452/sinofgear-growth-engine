@@ -104,7 +104,7 @@ function isUuid(value: unknown): boolean {
 }
 
 function isIsoDateTime(value: string): boolean {
-  const match = /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:[.,]\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?$/.exec(value)
+  const match = /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:[.,]\d{1,6})?)?(Z|[+-]\d{2}(?::?\d{2})?)?$/.exec(value)
   if (!match) return false
   const [, yearText, monthText, dayText, hourText, minuteText, secondText = "0", timezone] = match
   const year = Number(yearText)

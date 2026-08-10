@@ -15,7 +15,9 @@ SinofGear Growth Engine 是面向齿轮及机械制造外贸企业的 AI 社媒�
 - Phase A 最终代码提交：`7865358 fix: close phase a review round two`
 - 此后只增加了本换机交接文档，未修改产品代码。
 - 工作区：干净，无未提交源码
-- Git 远程仓库：未配置。代码目前只保存在本机，换机前必须复制备份文件。
+- Git 远程仓库：`https://github.com/liwei452/sinofgear-growth-engine.git`。
+- 当前分支已跟踪：`origin/feature/phase-a`。
+- GitHub 是换机恢复主路径；Git bundle 和源码 ZIP 继续作为离线备份。
 
 ## 3. 已完成的 Phase A
 
@@ -56,7 +58,7 @@ SinofGear Growth Engine 是面向齿轮及机械制造外贸企业的 AI 社媒�
 
 ## 5. 换机时必须带走的文件
 
-建议复制到移动硬盘或可信云盘：
+代码已经上传 GitHub。仍建议将以下离线文件复制到移动硬盘或可信云盘：
 
 1. `sinofgear-growth-engine-2026-08-10.bundle`：完整 Git 提交历史，推荐使用；
 2. `sinofgear-growth-engine-source-2026-08-10.zip`：最终提交的纯源码快照；
@@ -73,7 +75,20 @@ SinofGear Growth Engine 是面向齿轮及机械制造外贸企业的 AI 社媒�
 
 ## 6. 新电脑恢复方法
 
-### 推荐：从 Git bundle 恢复
+### 推荐：从 GitHub 恢复
+
+安装 Git 后，在 PowerShell 执行：
+
+```powershell
+git clone "https://github.com/liwei452/sinofgear-growth-engine.git"
+cd sinofgear-growth-engine
+git switch feature/phase-a
+git log --oneline -5
+```
+
+如果 GitHub 暂时无法连接，再使用下方 Git bundle 离线恢复。
+
+### 离线备用：从 Git bundle 恢复
 
 安装 Git 后，在 PowerShell 执行：
 
@@ -207,4 +222,8 @@ Keyword
 - `README.md`
 - `docs/architecture.md`
 - `docs/phase-a-acceptance.md`
-- `docs/superpowers/plans/2026-08-08-sinofgear-phase-a.md`
+- `docs/superpowers/plans/2026-08-10-phase-a-review-round-2.md`
+- `docs/superpowers/plans/2026-08-09-task-14-product-knowledge-libraries.md`
+- `docs/superpowers/specs/2026-08-10-lead-intelligence-domain-design.md`
+- `docs/superpowers/specs/2026-08-10-aieo-domain-design.md`
+- `docs/superpowers/specs/2026-08-10-ontology-extension-design.md`

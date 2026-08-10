@@ -18,7 +18,10 @@ from .models import AIRun, PromptVersion, ai_audit_writes
 
 MAX_PROMPT_CHARS = 50_000
 MAX_OUTPUT_BYTES = 1_000_000
-JOB_PROMPT_PURPOSES = {Job.Type.CONTENT_GENERATE: "CONTENT_GENERATE"}
+JOB_PROMPT_PURPOSES = {
+    Job.Type.CONTENT_GENERATE: "CONTENT_GENERATE",
+    Job.Type.LEAD_ANALYZE: "LEAD_ANALYZE",
+}
 
 
 class GenerationError(ValueError):
@@ -193,7 +196,9 @@ def _record_canceled_run(run: AIRun) -> AIRun:
 
 def execute_generation_job(
     job_id, *, prompt_version_id, provider_code: str | None = None,
-    worker_id="ai-worker", result_writer=None,
+    worker_id="ai-worker", result_writer=None, input_validator=None,
+    prompt_renderer=None, output_validator=None, invalid_output_retries=0,
+    invalid_output_message="Provider output did not match the required schema.",
 ) -> AIRun:
     job = Job.objects.get(pk=job_id)
     existing = AIRun.objects.filter(job_id=job_id).order_by("-job_attempt").first()
@@ -233,15 +238,22 @@ def execute_generation_job(
             "provider_not_available", "AI provider is not available."
         )
     snapshot = scrub_secrets(job.input_snapshot)
-    _validate_generation_input(snapshot, organization_id=job.organization_id)
+    if input_validator is None:
+        _validate_generation_input(snapshot, organization_id=job.organization_id)
+    else:
+        input_validator(snapshot, organization_id=job.organization_id)
     try:
-        rendered = _render_prompt(prompt.template, snapshot)
+        rendered = (
+            _render_prompt(prompt.template, snapshot)
+            if prompt_renderer is None
+            else prompt_renderer(prompt.template, snapshot)
+        )
     except GenerationError as exc:
         raise GenerationPreflightError(exc.code, str(exc)) from exc
     try:
         output_validator_class = validator_for(prompt.output_schema)
         output_validator_class.check_schema(prompt.output_schema)
-        output_validator = output_validator_class(prompt.output_schema)
+        schema_validator = output_validator_class(prompt.output_schema)
     except Exception as exc:
         raise GenerationPreflightError(
             "invalid_prompt_schema", "Prompt output schema is invalid."
@@ -267,37 +279,51 @@ def execute_generation_job(
         ) from exc
     if run.status != AIRun.Status.RUNNING:
         return run
-    try:
-        output = scrub_secrets(provider.generate(prompt=rendered, schema=prompt.output_schema))
-        if not isinstance(output, dict):
-            raise GenerationError("invalid_provider_output", "Provider output must be an object.")
-        encoded = json.dumps(output, sort_keys=True, separators=(",", ":")).encode()
-        if len(encoded) > MAX_OUTPUT_BYTES:
-            raise GenerationError("output_too_large", "Provider output exceeds the size limit.")
-        output_validator.validate(output)
-    except GenerationError as exc:
-        error = {"code": exc.code, "message": str(exc)}
-    except JSONSchemaValidationError:
-        error = {
-            "code": "invalid_provider_output",
-            "message": "Provider output did not match the required schema.",
-        }
-    except Exception:
-        error = {"code": "provider_error", "message": "AI provider generation failed."}
-    else:
+    error = None
+    output = None
+    for invalid_attempt in range(invalid_output_retries + 1):
         try:
-            return _record_success(
-                run.id,
-                job_id=claimed.id,
-                claim_token=token,
-                output=output,
-                result_writer=result_writer,
-            )
-        except Exception:
+            output = scrub_secrets(provider.generate(prompt=rendered, schema=prompt.output_schema))
+            if not isinstance(output, dict):
+                raise GenerationError("invalid_provider_output", "Provider output must be an object.")
+            encoded = json.dumps(output, sort_keys=True, separators=(",", ":")).encode()
+            if len(encoded) > MAX_OUTPUT_BYTES:
+                raise GenerationError("output_too_large", "Provider output exceeds the size limit.")
+            schema_validator.validate(output)
+            if output_validator is not None:
+                output_validator(output, snapshot=snapshot)
+        except GenerationError as exc:
+            error = {"code": exc.code, "message": str(exc)}
+        except JSONSchemaValidationError:
             error = {
-                "code": "content_finalize_failed",
-                "message": "Generated content could not be finalized.",
+                "code": "invalid_provider_output",
+                "message": invalid_output_message,
             }
+        except Exception:
+            error = {"code": "provider_error", "message": "AI provider generation failed."}
+        else:
+            try:
+                return _record_success(
+                    run.id,
+                    job_id=claimed.id,
+                    claim_token=token,
+                    output=output,
+                    result_writer=result_writer,
+                )
+            except Exception:
+                error = {
+                    "code": "content_finalize_failed",
+                    "message": "Generated content could not be finalized.",
+                }
+            break
+        if (
+            error.get("code") != "invalid_provider_output"
+            or invalid_attempt >= invalid_output_retries
+        ):
+            break
+        current = Job.objects.filter(pk=claimed.id).values("status", "claim_token").first()
+        if current is None or current["status"] != Job.Status.RUNNING or current["claim_token"] != token:
+            break
     return _record_failure(
         run.id, job_id=claimed.id, claim_token=token, error=error
     )

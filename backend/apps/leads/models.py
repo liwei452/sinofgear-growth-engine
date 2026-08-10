@@ -18,6 +18,9 @@ from .scoring import EvidenceGates, ScoreDimensions, score_lead
 
 
 _lead_history_write: ContextVar[bool] = ContextVar("lead_history_write", default=False)
+_lead_frozen_references: ContextVar[dict | None] = ContextVar(
+    "lead_frozen_references", default=None
+)
 
 SPECIAL_USE_DOMAIN_SUFFIXES = frozenset(
     {
@@ -46,6 +49,31 @@ def lead_history_writes():
         yield
     finally:
         _lead_history_write.reset(token)
+
+
+@contextmanager
+def lead_frozen_reference_writes(*, organization_id, ontology_snapshot, capability_bindings):
+    """Allow immutable insight links already approved in a verified frozen snapshot."""
+    references = {
+        "organization_id": str(organization_id),
+        "concept_types": {
+            str(row["concept_id"]): row["concept_type"]
+            for row in ontology_snapshot.get("concept_versions", [])
+            if isinstance(row, dict) and row.get("status") == "APPROVED"
+        },
+        "capability_evidence": {
+            str(row["capability_concept_id"]): {
+                str(item) for item in row.get("knowledge_evidence_ids", [])
+            }
+            for row in capability_bindings
+            if isinstance(row, dict) and row.get("capability_concept_id")
+        },
+    }
+    token = _lead_frozen_references.set(references)
+    try:
+        yield
+    finally:
+        _lead_frozen_references.reset(token)
 
 
 def normalize_company_domain(value: str) -> str:
@@ -601,6 +629,7 @@ class LeadInsightRequirement(ImmutableLeadHistory):
         if self.insight_id and self.source_evidence_id:
             if not self.insight.evidence_links.filter(evidence_id=self.source_evidence_id).exists():
                 errors["source_evidence"] = "Requirement evidence must be linked to this insight."
+        frozen_references = _lead_frozen_references.get()
         for field_name, expected_type in (
             ("requirement_concept", KnowledgeConcept.ConceptType.REQUIREMENT),
             ("capability_concept", KnowledgeConcept.ConceptType.CAPABILITY),
@@ -612,7 +641,22 @@ class LeadInsightRequirement(ImmutableLeadHistory):
             if concept is None:
                 errors[field_name] = f"{field_name.replace('_', ' ').title()} does not exist."
                 continue
-            if concept.status != KnowledgeStatus.APPROVED or concept.concept_type != expected_type:
+            frozen_type = (
+                frozen_references["concept_types"].get(str(concept_id))
+                if frozen_references is not None
+                else None
+            )
+            if frozen_references is not None and (
+                frozen_references["organization_id"] != str(self.organization_id)
+                or frozen_type != expected_type
+            ):
+                errors[field_name] = (
+                    f"{field_name.replace('_', ' ').title()} is not approved in the frozen ontology."
+                )
+            elif frozen_references is None and (
+                concept.status != KnowledgeStatus.APPROVED
+                or concept.concept_type != expected_type
+            ):
                 errors[field_name] = f"{field_name.replace('_', ' ').title()} must be an approved {expected_type}."
             elif concept.organization_id not in {None, self.organization_id}:
                 errors[field_name] = f"{field_name.replace('_', ' ').title()} is not visible to this organization."
@@ -622,7 +666,15 @@ class LeadInsightRequirement(ImmutableLeadHistory):
             ).first()
             if knowledge_evidence is None:
                 errors["capability_knowledge_evidence"] = "Capability knowledge evidence does not exist."
-            elif knowledge_evidence.status != KnowledgeStatus.APPROVED:
+            elif frozen_references is not None and str(
+                self.capability_knowledge_evidence_id
+            ) not in frozen_references["capability_evidence"].get(
+                str(self.capability_concept_id), set()
+            ):
+                errors["capability_knowledge_evidence"] = (
+                    "Capability knowledge evidence is not approved for the frozen capability."
+                )
+            elif frozen_references is None and knowledge_evidence.status != KnowledgeStatus.APPROVED:
                 errors["capability_knowledge_evidence"] = "Capability knowledge evidence must be approved."
             elif knowledge_evidence.organization_id not in {None, self.organization_id}:
                 errors["capability_knowledge_evidence"] = (
@@ -632,7 +684,7 @@ class LeadInsightRequirement(ImmutableLeadHistory):
                 errors["capability_knowledge_evidence"] = (
                     "Capability knowledge evidence requires a capability concept."
                 )
-            elif not KnowledgeConcept.objects.filter(
+            elif frozen_references is None and not KnowledgeConcept.objects.filter(
                 pk=self.capability_concept_id,
                 evidence=self.capability_knowledge_evidence_id,
             ).exists():

@@ -3,7 +3,11 @@ import json
 import pytest
 from django.core.exceptions import ValidationError
 
-from apps.sources.importers import parse_import, prepare_import_reference
+from apps.sources.importers import (
+    import_result_from_reference,
+    parse_import,
+    prepare_import_reference,
+)
 
 
 @pytest.mark.parametrize(
@@ -170,7 +174,7 @@ def test_safe_reference_whitelists_json_rows_without_redacting_public_comment_te
 
     reference = prepare_import_reference(raw_document, source_type="JSON")
 
-    assert set(reference) == {"schema", "rows", "errors"}
+    assert set(reference) == {"schema", "source_type", "rows", "errors"}
     assert set(reference["rows"][0]) == {
         "platform",
         "source_url",
@@ -190,6 +194,53 @@ def test_safe_reference_whitelists_json_rows_without_redacting_public_comment_te
     assert "session=private" not in persisted_shape
     assert "X-Secret" not in persisted_shape
     assert raw_document not in persisted_shape
+
+
+@pytest.mark.parametrize(
+    ("source_type", "payload"),
+    [
+        ("URL", {"source_url": "https://e.test/url", "original_text": "URL"}),
+        (
+            "SCREENSHOT",
+            {
+                "source_url": "https://e.test/shot",
+                "original_text": "Screenshot",
+                "screenshot_asset_id": "00000000-0000-0000-0000-000000000001",
+            },
+        ),
+        ("CSV", "source_url,original_text\nhttps://e.test/csv,CSV"),
+        ("JSON", {"rows": [{"source_url": "https://e.test/json", "original_text": "JSON"}]}),
+        ("PASTE", {"text": "https://e.test/paste\tPaste"}),
+    ],
+)
+def test_all_prepared_modes_round_trip_their_canonical_source_type(source_type, payload):
+    reference = prepare_import_reference(payload, source_type=source_type.lower())
+
+    assert reference["source_type"] == source_type
+    result = import_result_from_reference(reference, source_type=source_type)
+    assert len(result.rows) == 1
+
+
+@pytest.mark.parametrize("relabelled_type", ["URL", "CSV", "JSON"])
+def test_prepared_paste_reference_cannot_be_parsed_as_another_source_type(
+    relabelled_type,
+):
+    reference = prepare_import_reference(
+        {"text": "https://e.test/paste\tPaste"}, source_type="PASTE"
+    )
+
+    with pytest.raises(ValidationError, match="source type"):
+        import_result_from_reference(reference, source_type=relabelled_type)
+
+
+def test_persisted_source_type_is_not_case_normalized_during_validation():
+    reference = prepare_import_reference(
+        {"text": "https://e.test/paste\tPaste"}, source_type="PASTE"
+    )
+    reference["source_type"] = "paste"
+
+    with pytest.raises(ValidationError, match="source type"):
+        import_result_from_reference(reference, source_type="PASTE")
 
 
 def test_original_text_over_20_000_characters_is_a_row_error():

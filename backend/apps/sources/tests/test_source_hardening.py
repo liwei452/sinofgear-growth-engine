@@ -366,3 +366,42 @@ def test_raw_csv_columns_and_paste_document_are_not_persisted(organization):
     assert paste_batch.input_reference["rows"][0]["original_text"] == (
         "Customer mentioned cookie dimensions."
     )
+
+
+@pytest.mark.django_db
+def test_prepared_source_type_binding_is_enforced_on_every_batch_write_path(organization):
+    paste_reference = prepare_import_reference(
+        {"text": "https://e.test/paste\tPaste"}, source_type="PASTE"
+    )
+    mismatch = {
+        "organization": organization,
+        "source_type": IngestionBatch.SourceType.URL,
+        "input_reference": paste_reference,
+    }
+    with pytest.raises(ValidationError, match="source type"):
+        IngestionBatch.objects.create(idempotency_key="type-create", **mismatch)
+    with pytest.raises(ValidationError, match="source type"):
+        IngestionBatch.objects.bulk_create(
+            [IngestionBatch(idempotency_key="type-bulk-create", **mismatch)]
+        )
+
+    batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.PASTE,
+        input_reference=paste_reference,
+        idempotency_key="type-correct",
+    )
+    batch.source_type = IngestionBatch.SourceType.URL
+    with pytest.raises(ValidationError, match="source type"):
+        batch.save()
+    batch.refresh_from_db()
+    with pytest.raises(ValidationError, match="source type"):
+        IngestionBatch.objects.filter(pk=batch.pk).update(
+            source_type=IngestionBatch.SourceType.CSV
+        )
+    batch.refresh_from_db()
+    batch.source_type = IngestionBatch.SourceType.JSON
+    with pytest.raises(ValidationError, match="source type"):
+        IngestionBatch.objects.bulk_update([batch], ["source_type"])
+    batch.refresh_from_db()
+    assert batch.source_type == IngestionBatch.SourceType.PASTE

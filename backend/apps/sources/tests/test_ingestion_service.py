@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, InterfaceError
 from apps.jobs.services import JobService, StaleJobWorkerError
 from apps.sources.importers import prepare_import_reference
@@ -445,3 +446,66 @@ def test_connection_database_error_propagates_instead_of_becoming_a_row_failure(
     batch.refresh_from_db()
     assert batch.status == IngestionBatch.Status.QUEUED
     assert batch.rows.count() == 0
+
+
+@pytest.mark.django_db
+def test_correct_paste_type_succeeds_with_matching_evidence_provenance(
+    organization, job, user, target
+):
+    batch = make_batch(
+        organization=organization,
+        job=job,
+        target=target,
+        source_type=IngestionBatch.SourceType.PASTE,
+        payload={"text": "https://e.test/paste\tNeed gear"},
+        key="paste-provenance",
+        user=user,
+    )
+    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+
+    result = IngestionService.run(
+        batch_id=batch.id,
+        organization=organization,
+        claim_token=claimed.claim_token,
+    )
+
+    evidence = result.rows.get().source_evidence
+    assert result.status == IngestionBatch.Status.SUCCEEDED
+    assert evidence.collection_method == SourceEvidence.CollectionMethod.PASTE
+    assert evidence.evidence_type == SourceEvidence.EvidenceType.PUBLIC_TEXT
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("relabelled_type", ["URL", "CSV", "JSON"])
+def test_ingestion_rejects_database_relabelled_prepared_reference(
+    organization, job, user, target, relabelled_type
+):
+    from django.db import connection
+
+    batch = make_batch(
+        organization=organization,
+        job=job,
+        target=target,
+        source_type=IngestionBatch.SourceType.PASTE,
+        payload={"text": "https://e.test/paste\tNeed gear"},
+        key=f"relabel-{relabelled_type}",
+        user=user,
+    )
+    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE sources_ingestionbatch SET source_type = %s WHERE id = %s",
+            [relabelled_type, batch.id.hex],
+        )
+
+    with pytest.raises(ValidationError, match="source type"):
+        IngestionService.run(
+            batch_id=batch.id,
+            organization=organization,
+            claim_token=claimed.claim_token,
+        )
+
+    batch.refresh_from_db()
+    assert batch.status == IngestionBatch.Status.QUEUED
+    assert batch.rows.count() == 0
+    assert SourceEvidence.objects.count() == 0

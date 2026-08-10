@@ -9,13 +9,21 @@ from uuid import UUID
 from django.core.exceptions import ValidationError
 from django.utils.dateparse import parse_datetime
 
-from .models import SourceSignal
+from .models import IngestionBatch, SourceSignal
 from .services import normalize_source_url
 
 
 MAX_IMPORT_ROWS = 10_000
 MAX_ORIGINAL_TEXT_CHARS = 20_000
-SUPPORTED_SOURCE_TYPES = frozenset({"URL", "SCREENSHOT", "CSV", "JSON", "PASTE"})
+SUPPORTED_SOURCE_TYPES = frozenset(
+    {
+        IngestionBatch.SourceType.URL,
+        IngestionBatch.SourceType.SCREENSHOT,
+        IngestionBatch.SourceType.CSV,
+        IngestionBatch.SourceType.JSON,
+        IngestionBatch.SourceType.PASTE,
+    }
+)
 PREPARED_IMPORT_SCHEMA = "GUIDED_IMPORT_V1"
 PREPARED_ROW_FIELDS = frozenset(
     {
@@ -376,6 +384,7 @@ def prepare_import_reference(payload: object, source_type: str) -> dict[str, obj
         result = ImportResult(rows=[], errors=[_serialized_batch_error(error)])
     reference: dict[str, object] = {
         "schema": PREPARED_IMPORT_SCHEMA,
+        "source_type": normalized_source_type,
         "rows": [_serialized_row(row) for row in result.rows],
         "errors": [dict(error) for error in result.errors],
     }
@@ -390,7 +399,7 @@ def validate_prepared_import_reference(reference: object, *, source_type: str) -
         raise ValidationError(
             {"input_reference": "Guided imports require a prepared input reference."}
         )
-    allowed_top_level = {"schema", "rows", "errors", "import_asset_id"}
+    allowed_top_level = {"schema", "source_type", "rows", "errors", "import_asset_id"}
     if (
         set(reference) - allowed_top_level
         or reference.get("schema") != PREPARED_IMPORT_SCHEMA
@@ -399,6 +408,17 @@ def validate_prepared_import_reference(reference: object, *, source_type: str) -
     ):
         raise ValidationError(
             {"input_reference": "Guided imports require a prepared input reference."}
+        )
+    if (
+        source_type not in SUPPORTED_SOURCE_TYPES
+        or reference.get("source_type") != source_type
+    ):
+        raise ValidationError(
+            {
+                "input_reference": (
+                    "Prepared import source type must exactly match the batch source type."
+                )
+            }
         )
     if len(reference["rows"]) > MAX_IMPORT_ROWS:
         raise ValidationError(
@@ -426,7 +446,7 @@ def validate_prepared_import_reference(reference: object, *, source_type: str) -
         parsed, parse_error = _parse_row(
             row,
             row_number=row_number,
-            source_type=str(source_type).strip().upper(),
+            source_type=source_type,
         )
         if parsed is None or parse_error is not None:
             raise ValidationError(
@@ -468,7 +488,7 @@ def import_result_from_reference(reference: object, source_type: str) -> ImportR
         row, error = _parse_row(
             raw,
             row_number=raw["row_number"],
-            source_type=str(source_type).strip().upper(),
+            source_type=source_type,
         )
         if error is not None or row is None:
             raise ValidationError(

@@ -252,6 +252,50 @@ def test_preflight_acquires_target_and_complete_asset_locks_inside_transaction(
 
 
 @pytest.mark.django_db
+def test_direct_preflight_scopes_foreign_asset_lock_to_organization(
+    organization, user, other_asset
+):
+    batch = make_batch(
+        organization=organization,
+        job=None,
+        source_type=IngestionBatch.SourceType.JSON,
+        payload={
+            "rows": [
+                {
+                    "source_url": "https://e.test/direct-foreign-lock",
+                    "original_text": "Need gear",
+                    "screenshot_asset_id": str(other_asset.id),
+                }
+            ]
+        },
+        key="direct-foreign-asset-lock",
+        user=user,
+    )
+
+    with transaction.atomic(), CaptureQueriesContext(connection) as queries:
+        locked_batch = IngestionBatch.objects.select_for_update().get(pk=batch.pk)
+        resources, error = IngestionService._preflight_resources(
+            batch=locked_batch,
+            job=batch.job,
+            organization=organization,
+        )
+
+    asset_queries = [
+        query["sql"]
+        for query in queries.captured_queries
+        if "assets_materialasset" in query["sql"].lower()
+    ]
+    assert len(asset_queries) == 1
+    assert "organization_id" in asset_queries[0].lower().split(" where ", 1)[1]
+    assert resources is None
+    assert error == {
+        "row": None,
+        "code": "SOURCE_IMPORT_PREFLIGHT_FAILED",
+        "recovery_action": "Review the source import configuration and retry.",
+    }
+
+
+@pytest.mark.django_db
 def test_asset_backed_import_locks_organization_asset_then_batch(
     organization, user, target, asset, monkeypatch
 ):

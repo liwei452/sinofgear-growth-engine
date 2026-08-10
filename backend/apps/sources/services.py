@@ -1649,6 +1649,12 @@ class SourceIngestionRequestService:
         SourceIngestionRequestService._reject_retained_asset_reuse(
             organization=organization,
             requested_asset_ids=set(requested_assets),
+            requested_screenshot_asset_ids={
+                str(row["screenshot_asset_id"])
+                for row in safe_reference.get("rows", [])
+                if isinstance(row, dict)
+                and row.get("screenshot_asset_id") not in (None, "")
+            },
         )
         retained_evidence_by_row = (
             SourceIngestionRequestService._redacted_evidence_by_row(
@@ -1792,9 +1798,27 @@ class SourceIngestionRequestService:
             )
 
     @staticmethod
-    def _reject_retained_asset_reuse(*, organization, requested_asset_ids):
+    def _reject_retained_asset_reuse(
+        *,
+        organization,
+        requested_asset_ids,
+        requested_screenshot_asset_ids,
+    ):
         if not requested_asset_ids:
             return
+        if requested_screenshot_asset_ids and IngestionRow.objects.filter(
+            organization=organization,
+            request_screenshot_identity_unproven=True,
+        ).exists():
+            raise ValidationError(
+                {
+                    "payload": (
+                        "Historical retained screenshot identity is unresolved. "
+                        "An administrator reconciliation or a new clean organization "
+                        "state is required before attaching screenshots."
+                    )
+                }
+            )
         retained = SourceEvidence.Availability.REDACTED_BY_RETENTION
         screenshot_reused = IngestionRow.objects.filter(
             organization=organization,
@@ -1947,7 +1971,10 @@ class IngestionService:
             {
                 str(asset.id): _LockedAsset.capture(asset)
                 for asset in MaterialAsset.objects.select_for_update()
-                .filter(pk__in=required_asset_ids)
+                .filter(
+                    organization=organization,
+                    pk__in=required_asset_ids,
+                )
                 .order_by("pk")
             }
         )
@@ -2343,7 +2370,10 @@ class IngestionService:
                 {
                     str(asset.id): _LockedAsset.capture(asset)
                     for asset in MaterialAsset.objects.select_for_update()
-                    .filter(pk__in=required_asset_ids)
+                    .filter(
+                        organization=organization,
+                        pk__in=required_asset_ids,
+                    )
                     .order_by("pk")
                 }
             )

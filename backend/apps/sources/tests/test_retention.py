@@ -16,7 +16,7 @@ from apps.ai.services import PromptVersionService
 from apps.assets.models import MaterialAsset
 from apps.audit.models import AuditLog
 from apps.identity.models import Membership, Organization, Role
-from apps.jobs.models import Job
+from apps.jobs.models import Job, JobAttempt
 from apps.jobs.services import JobService
 from apps.leads.models import LeadCandidate, LeadReview, lead_history_writes
 from apps.leads.services import LeadService
@@ -1863,6 +1863,136 @@ def test_original_key_reuses_tombstoned_screenshot_batch_but_new_key_without_ass
     assert safe_batch.input_reference["retention"]["reason"] == (
         "TRANSIENT_30D_EXPIRED"
     )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_unresolved_retained_screenshot_identity_fails_closed_before_new_request_persists(
+    organization, user, monkeypatch
+):
+    from apps.sources import tasks
+
+    dispatched = []
+    monkeypatch.setattr(
+        tasks.execute_source_import,
+        "delay",
+        lambda *args: dispatched.append(args),
+    )
+    screenshot = _asset(
+        organization=organization,
+        user=user,
+        marker="unresolved-admission-screen",
+    )
+    original_reference = prepare_import_reference(
+        {
+            "rows": [
+                {
+                    "source_url": "https://example.com/posts/unresolved-admission",
+                    "original_text": "Original request",
+                    "screenshot_asset_id": str(screenshot.id),
+                }
+            ]
+        },
+        source_type=IngestionBatch.SourceType.JSON,
+    )
+    original_batch, original_job = SourceIngestionRequestService.create_or_reuse(
+        organization=organization,
+        creator=user,
+        source_type=IngestionBatch.SourceType.JSON,
+        idempotency_key="unresolved-original-request",
+        prepared_reference=original_reference,
+    )
+    assert dispatched == [(str(original_job.id), str(original_batch.id))]
+    dispatched.clear()
+
+    unresolved_reference = prepare_import_reference(
+        {
+            "rows": [
+                {
+                    "source_url": "https://example.com/posts/unresolved-history",
+                    "original_text": "Retained history",
+                }
+            ]
+        },
+        source_type=IngestionBatch.SourceType.JSON,
+    )
+    unresolved_batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.JSON,
+        input_reference=unresolved_reference,
+        idempotency_key="unresolved-history",
+        created_by=user,
+    )
+    with ingestion_row_service_writes():
+        IngestionRow.objects.create(
+            organization=organization,
+            batch=unresolved_batch,
+            row_number=1,
+            normalized_input={
+                "screenshot_asset_id": None,
+                "retention": {"status": "REDACTED_BY_RETENTION"},
+            },
+            request_screenshot_identity_unproven=True,
+            outcome=IngestionRow.Outcome.DUPLICATE,
+        )
+
+    reused_batch, reused_job = SourceIngestionRequestService.create_or_reuse(
+        organization=organization,
+        creator=user,
+        source_type=IngestionBatch.SourceType.JSON,
+        idempotency_key="unresolved-original-request",
+        prepared_reference=original_reference,
+    )
+    assert reused_batch.id == original_batch.id
+    assert reused_job.id == original_job.id
+
+    changed_reference = prepare_import_reference(
+        {
+            "rows": [
+                {
+                    "source_url": "https://example.com/posts/unresolved-admission",
+                    "original_text": "Changed request",
+                    "screenshot_asset_id": str(screenshot.id),
+                }
+            ]
+        },
+        source_type=IngestionBatch.SourceType.JSON,
+    )
+    with pytest.raises(SourceIdempotencyConflictError):
+        SourceIngestionRequestService.create_or_reuse(
+            organization=organization,
+            creator=user,
+            source_type=IngestionBatch.SourceType.JSON,
+            idempotency_key="unresolved-original-request",
+            prepared_reference=changed_reference,
+        )
+
+    counts_before = (
+        IngestionBatch.objects.count(),
+        IngestionRow.objects.count(),
+        Job.objects.count(),
+        JobAttempt.objects.count(),
+        SourceContent.objects.count(),
+        SourceSignal.objects.count(),
+        SourceEvidence.objects.count(),
+    )
+    with pytest.raises(ValidationError, match="administrator reconciliation"):
+        SourceIngestionRequestService.create_or_reuse(
+            organization=organization,
+            creator=user,
+            source_type=IngestionBatch.SourceType.JSON,
+            idempotency_key="unresolved-new-request",
+            prepared_reference=changed_reference,
+        )
+    assert counts_before == (
+        IngestionBatch.objects.count(),
+        IngestionRow.objects.count(),
+        Job.objects.count(),
+        JobAttempt.objects.count(),
+        SourceContent.objects.count(),
+        SourceSignal.objects.count(),
+        SourceEvidence.objects.count(),
+    )
+    assert dispatched == []
 
 
 @pytest.mark.django_db

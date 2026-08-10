@@ -527,4 +527,5 @@ def test_worker_preflight_resolves_screenshot_references_in_one_bounded_query(
         if "assets_materialasset" in query["sql"].lower()
     ]
     assert len(asset_queries) == 1
+    assert "organization_id" in asset_queries[0].lower().split(" where ", 1)[1]
     _assert_preflight_failed(batch, result)

@@ -52,11 +52,7 @@ def backfill_screenshot_identity(apps, schema_editor):
                             )
                             break
         tombstoned = isinstance(normalized.get("retention"), dict)
-        unproven = bool(
-            asset_id is None
-            and tombstoned
-            and row.batch.source_type == "SCREENSHOT"
-        )
+        unproven = bool(asset_id is None and tombstoned)
         row_model.objects.filter(pk=row.pk).update(
             request_screenshot_asset_id=asset_id,
             request_screenshot_identity_unproven=unproven,

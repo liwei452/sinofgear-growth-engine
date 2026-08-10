@@ -150,6 +150,54 @@ def test_screenshot_identity_migration_backfills_and_fails_closed():
             },
             outcome="DUPLICATE",
         )
+        unknown_json_batch = batch_model.objects.create(
+            organization=organization,
+            source_type="JSON",
+            input_reference={"rows": []},
+            idempotency_key="migration-unknown-json-screenshot",
+            prepared_reference_sha256="d" * 64,
+        )
+        unknown_json = row_model.objects.create(
+            organization=organization,
+            batch=unknown_json_batch,
+            row_number=1,
+            normalized_input={
+                "screenshot_asset_id": None,
+                "retention": {"status": "REDACTED_BY_RETENTION"},
+            },
+            outcome="DUPLICATE",
+        )
+        unknown_csv_batch = batch_model.objects.create(
+            organization=organization,
+            source_type="CSV",
+            input_reference={"rows": []},
+            idempotency_key="migration-unknown-csv-screenshot",
+            prepared_reference_sha256="e" * 64,
+        )
+        unknown_csv = row_model.objects.create(
+            organization=organization,
+            batch=unknown_csv_batch,
+            row_number=1,
+            normalized_input={
+                "screenshot_asset_id": None,
+                "retention": {"status": "REDACTED_BY_RETENTION"},
+            },
+            outcome="DUPLICATE",
+        )
+        known_no_screenshot_batch = batch_model.objects.create(
+            organization=organization,
+            source_type="JSON",
+            input_reference={"rows": []},
+            idempotency_key="migration-known-no-screenshot",
+            prepared_reference_sha256="f" * 64,
+        )
+        known_no_screenshot = row_model.objects.create(
+            organization=organization,
+            batch=known_no_screenshot_batch,
+            row_number=1,
+            normalized_input={"screenshot_asset_id": None},
+            outcome="FAILED",
+        )
         snapshot_job = job_model.objects.create(
             organization=organization,
             type="SOURCE_IMPORT",
@@ -192,11 +240,20 @@ def test_screenshot_identity_migration_backfills_and_fails_closed():
 
         proven = migrated.objects.get(pk=proven.pk)
         unknown = migrated.objects.get(pk=unknown.pk)
+        unknown_json = migrated.objects.get(pk=unknown_json.pk)
+        unknown_csv = migrated.objects.get(pk=unknown_csv.pk)
+        known_no_screenshot = migrated.objects.get(pk=known_no_screenshot.pk)
         snapshot_row = migrated.objects.get(pk=snapshot_row.pk)
         assert proven.request_screenshot_asset_id == screenshot_id
         assert not proven.request_screenshot_identity_unproven
         assert unknown.request_screenshot_asset_id is None
         assert unknown.request_screenshot_identity_unproven
+        assert unknown_json.request_screenshot_asset_id is None
+        assert unknown_json.request_screenshot_identity_unproven
+        assert unknown_csv.request_screenshot_asset_id is None
+        assert unknown_csv.request_screenshot_identity_unproven
+        assert known_no_screenshot.request_screenshot_asset_id is None
+        assert not known_no_screenshot.request_screenshot_identity_unproven
         assert snapshot_row.request_screenshot_asset_id == snapshot_screenshot_id
         assert not snapshot_row.request_screenshot_identity_unproven
     finally:

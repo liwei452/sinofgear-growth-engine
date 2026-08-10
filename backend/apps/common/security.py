@@ -39,6 +39,7 @@ _CONTROLLED_ERROR_MESSAGES = {
     "ai_run_start_failed": "AI audit run could not start.",
     "job_canceled": "Job was canceled.",
     "content_finalize_failed": "Generated content could not be finalized.",
+    "SOURCE_IMPORT_FAILED": "Public source import failed.",
 }
 
 

@@ -4,10 +4,21 @@ from urllib.parse import urlsplit, urlunsplit
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.utils import timezone
 
 from apps.assets.models import MaterialAsset
+from apps.jobs.models import Job
+from apps.jobs.services import JobService, StaleJobWorkerError
 
-from .models import SourceEvidence, SourceSignal, evidence_service_writes
+from .models import (
+    IngestionBatch,
+    IngestionRow,
+    SourceContent,
+    SourceEvidence,
+    SourceSignal,
+    evidence_service_writes,
+    ingestion_row_service_writes,
+)
 
 
 def normalize_source_url(url: str) -> str:
@@ -154,3 +165,291 @@ class EvidenceService:
 
 
 create = EvidenceService.create
+
+
+def _normalized_row_input(row) -> dict[str, object]:
+    return {
+        "platform": row.platform,
+        "source_url": row.source_url,
+        "signal_type": row.signal_type,
+        "original_text": row.original_text,
+        "author_name": row.author_name,
+        "published_at": row.published_at.isoformat() if row.published_at else None,
+        "screenshot_asset_id": str(row.screenshot_asset_id) if row.screenshot_asset_id else None,
+    }
+
+
+def _validation_message(error: ValidationError) -> str:
+    if hasattr(error, "message_dict"):
+        values = error.message_dict.values()
+        return " ".join(str(message) for messages in values for message in messages)
+    return " ".join(error.messages)
+
+
+def _batch_parse_error(error: ValidationError) -> dict[str, object]:
+    details = error.error_dict.get("rows", []) if hasattr(error, "error_dict") else []
+    detail = details[0] if details else None
+    return {
+        "row": None,
+        "code": getattr(detail, "code", None) or "IMPORT_PAYLOAD_INVALID",
+        "recovery_action": _validation_message(error),
+    }
+
+
+class IngestionService:
+    @staticmethod
+    @transaction.atomic
+    def run(*, batch_id, organization, claim_token) -> IngestionBatch:
+        from .importers import parse_import
+
+        batch = (
+            IngestionBatch.objects.select_for_update()
+            .filter(pk=batch_id, organization=organization)
+            .first()
+        )
+        if batch is None:
+            raise IngestionBatch.DoesNotExist
+        if batch.job_id is None:
+            raise StaleJobWorkerError("Ingestion batch is not bound to an owned job.")
+        job = (
+            Job.objects.select_for_update()
+            .filter(pk=batch.job_id, organization=organization)
+            .first()
+        )
+        if job is None or job.type != Job.Type.SOURCE_IMPORT:
+            raise StaleJobWorkerError("Ingestion batch is not bound to a source import job.")
+        JobService._require_owner(job, claim_token)
+
+        now = timezone.now()
+        batch.status = IngestionBatch.Status.RUNNING
+        batch.started_at = batch.started_at or now
+        batch.finished_at = None
+        batch.save(update_fields=["status", "started_at", "finished_at", "updated_at"])
+
+        try:
+            parsed = parse_import(batch.input_reference, source_type=batch.source_type)
+        except ValidationError as error:
+            batch_error = _batch_parse_error(error)
+            IngestionService._finish_batch(batch, batch_errors=[batch_error])
+            return batch
+
+        for error in parsed.errors:
+            IngestionService._persist_parse_error(
+                batch=batch,
+                organization=organization,
+                error=error,
+            )
+        for row in parsed.rows:
+            if IngestionRow.objects.filter(batch=batch, row_number=row.row_number).exists():
+                continue
+            try:
+                with transaction.atomic():
+                    IngestionService._persist_valid_row(
+                        batch=batch,
+                        organization=organization,
+                        row=row,
+                    )
+            except ValidationError as error:
+                IngestionService._persist_failed_row(
+                    batch=batch,
+                    organization=organization,
+                    row=row,
+                    error=IngestionService._row_processing_error(error, row=row),
+                )
+
+        IngestionService._finish_batch(batch)
+        return batch
+
+    @staticmethod
+    def _persist_parse_error(*, batch, organization, error) -> None:
+        row_number = int(error["row"])
+        if IngestionRow.objects.filter(batch=batch, row_number=row_number).exists():
+            return
+        with ingestion_row_service_writes():
+            IngestionRow.objects.create(
+                organization=organization,
+                batch=batch,
+                row_number=row_number,
+                normalized_input={"row_number": row_number},
+                outcome=IngestionRow.Outcome.FAILED,
+                error=error,
+            )
+
+    @staticmethod
+    def _persist_valid_row(*, batch, organization, row) -> None:
+        normalized_input = _normalized_row_input(row)
+        fingerprint = evidence_fingerprint(
+            original_text=row.original_text,
+            source_url=row.source_url,
+            platform=row.platform,
+        )
+        existing_evidence = (
+            SourceEvidence.objects.select_related(
+                "source_signal", "source_signal__source_content"
+            )
+            .filter(organization=organization, content_hash=fingerprint)
+            .first()
+        )
+        if existing_evidence is not None:
+            with ingestion_row_service_writes():
+                IngestionRow.objects.create(
+                    organization=organization,
+                    batch=batch,
+                    row_number=row.row_number,
+                    normalized_input=normalized_input,
+                    outcome=IngestionRow.Outcome.DUPLICATE,
+                    source_content=existing_evidence.source_signal.source_content,
+                    source_signal=existing_evidence.source_signal,
+                    source_evidence=existing_evidence,
+                )
+            return
+
+        screenshot_asset = None
+        if row.screenshot_asset_id is not None:
+            screenshot_asset = MaterialAsset.objects.select_for_update().filter(
+                pk=row.screenshot_asset_id,
+                organization=organization,
+                asset_type=MaterialAsset.AssetType.IMAGE,
+            ).first()
+            if screenshot_asset is None:
+                raise ValidationError(
+                    {"screenshot_asset": "Screenshot asset is unavailable for this organization."}
+                )
+
+        import_asset = IngestionService._import_asset(batch, organization=organization)
+        source_content, _ = SourceContent.objects.get_or_create(
+            organization=organization,
+            platform=row.platform,
+            external_id="",
+            content_hash=fingerprint,
+            canonical_url=row.source_url,
+            defaults={
+                "monitoring_target": batch.monitoring_target,
+                "author_public_name": row.author_name,
+                "original_text": row.original_text,
+                "public_published_at": row.published_at,
+                "created_by": batch.created_by,
+            },
+        )
+        signal = SourceSignal.objects.create(
+            organization=organization,
+            monitoring_target=batch.monitoring_target,
+            source_content=source_content,
+            signal_type=row.signal_type,
+            platform=row.platform,
+            external_id="",
+            created_by=batch.created_by,
+        )
+        evidence = EvidenceService.create(
+            organization=organization,
+            signal=signal,
+            original_text=row.original_text,
+            source_url=row.source_url,
+            platform=row.platform,
+            collection_method=batch.source_type,
+            public_published_at=row.published_at,
+            created_by=batch.created_by,
+            screenshot_asset=screenshot_asset,
+            import_asset=import_asset,
+        )
+        with ingestion_row_service_writes():
+            IngestionRow.objects.create(
+                organization=organization,
+                batch=batch,
+                row_number=row.row_number,
+                normalized_input=normalized_input,
+                outcome=IngestionRow.Outcome.ACCEPTED,
+                source_content=source_content,
+                source_signal=signal,
+                source_evidence=evidence,
+            )
+
+    @staticmethod
+    def _import_asset(batch, *, organization):
+        if batch.source_type not in {
+            IngestionBatch.SourceType.CSV,
+            IngestionBatch.SourceType.JSON,
+        }:
+            return None
+        if not isinstance(batch.input_reference, dict):
+            return None
+        asset_id = batch.input_reference.get("import_asset_id")
+        if not asset_id:
+            return None
+        asset = MaterialAsset.objects.select_for_update().filter(
+            pk=asset_id, organization=organization
+        ).first()
+        if asset is None:
+            raise ValidationError(
+                {"import_asset": "Import asset is unavailable for this organization."}
+            )
+        return asset
+
+    @staticmethod
+    def _row_processing_error(error: ValidationError, *, row) -> dict[str, object]:
+        if hasattr(error, "error_dict") and "screenshot_asset" in error.error_dict:
+            code = "SCREENSHOT_ASSET_UNAVAILABLE"
+            recovery = "Attach a screenshot asset owned by this organization and re-import this row."
+        elif hasattr(error, "error_dict") and "import_asset" in error.error_dict:
+            code = "IMPORT_ASSET_UNAVAILABLE"
+            recovery = "Attach an import asset owned by this organization and re-import this row."
+        else:
+            code = "ROW_INGESTION_INVALID"
+            recovery = _validation_message(error)
+        return {"row": row.row_number, "code": code, "recovery_action": recovery}
+
+    @staticmethod
+    def _persist_failed_row(*, batch, organization, row, error) -> None:
+        if IngestionRow.objects.filter(batch=batch, row_number=row.row_number).exists():
+            return
+        with ingestion_row_service_writes():
+            IngestionRow.objects.create(
+                organization=organization,
+                batch=batch,
+                row_number=row.row_number,
+                normalized_input=_normalized_row_input(row),
+                outcome=IngestionRow.Outcome.FAILED,
+                error=error,
+            )
+
+    @staticmethod
+    def _finish_batch(batch, *, batch_errors=None) -> None:
+        outcomes = list(batch.rows.values_list("outcome", "error"))
+        accepted_count = sum(
+            outcome == IngestionRow.Outcome.ACCEPTED for outcome, _error in outcomes
+        )
+        duplicate_count = sum(
+            outcome == IngestionRow.Outcome.DUPLICATE for outcome, _error in outcomes
+        )
+        failed_count = sum(
+            outcome == IngestionRow.Outcome.FAILED for outcome, _error in outcomes
+        )
+        row_errors = [error for outcome, error in outcomes if outcome == IngestionRow.Outcome.FAILED]
+        if batch_errors:
+            row_errors.extend(batch_errors)
+        successful_count = accepted_count + duplicate_count
+        if failed_count and successful_count:
+            status = IngestionBatch.Status.PARTIAL_SUCCESS
+        elif failed_count or batch_errors or not outcomes:
+            status = IngestionBatch.Status.FAILED
+        else:
+            status = IngestionBatch.Status.SUCCEEDED
+        batch.status = status
+        batch.received_count = len(outcomes)
+        batch.accepted_count = accepted_count
+        batch.duplicate_count = duplicate_count
+        batch.failed_count = failed_count
+        batch.row_errors = row_errors
+        batch.finished_at = timezone.now()
+        batch.save(
+            update_fields=[
+                "status",
+                "received_count",
+                "accepted_count",
+                "duplicate_count",
+                "failed_count",
+                "row_errors",
+                "finished_at",
+                "updated_at",
+            ]
+        )

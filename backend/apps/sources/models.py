@@ -350,6 +350,7 @@ class IngestionBatch(ValidatedOrganizationModel):
         self.input_reference = sanitize_source_json(self.input_reference)
         self.row_errors = sanitize_source_json(self.row_errors)
         errors: dict[str, str] = {}
+        self._validate_bound_input_identity(errors)
         if isinstance(self.input_reference, (str, bytes)):
             errors["input_reference"] = (
                 "Ingestion batches require a prepared structured input reference."
@@ -367,6 +368,45 @@ class IngestionBatch(ValidatedOrganizationModel):
         _validate_related_organization(self, "job", errors)
         if errors:
             raise ValidationError(errors)
+
+    def _validate_bound_input_identity(self, errors: dict[str, str]) -> None:
+        if self._state.adding or not self.pk:
+            return
+        persisted = (
+            type(self)._base_manager.filter(pk=self.pk)
+            .values(
+                "source_type",
+                "input_reference",
+                "idempotency_key",
+                "monitoring_target_id",
+                "job_id",
+            )
+            .first()
+        )
+        if persisted is None:
+            return
+        identity_fields = (
+            "source_type",
+            "input_reference",
+            "idempotency_key",
+            "monitoring_target_id",
+        )
+        identity_changed = any(
+            getattr(self, field_name) != persisted[field_name]
+            for field_name in identity_fields
+        )
+        binding_changed = (
+            persisted["job_id"] is not None and self.job_id != persisted["job_id"]
+        )
+        binding_with_changed_input = (
+            persisted["job_id"] is None
+            and self.job_id is not None
+            and identity_changed
+        )
+        if (
+            persisted["job_id"] is not None and identity_changed
+        ) or binding_changed or binding_with_changed_input:
+            errors["job"] = "Bound ingestion batch input identity is immutable."
 
 
 class SourceContent(ValidatedOrganizationModel):

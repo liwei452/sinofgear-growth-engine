@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -92,6 +93,21 @@ def test_create_monitoring_target_and_list_are_organization_scoped(
     assert [row["id"] for row in listed.json()["results"]] == [created.json()["id"]]
 
 
+@pytest.mark.parametrize(
+    "path",
+    ["/api/v1/monitoring-targets", "/api/v1/ingestion-batches"],
+)
+def test_source_mutation_validation_errors_render_recovery_envelope(
+    path, operator_member_client
+):
+    _member, client = operator_member_client
+
+    response = client.post(path, {}, format="json")
+
+    assert response.status_code == 400
+    assert set(response.json()) >= {"code", "message", "recovery_action"}
+
+
 def test_create_paste_batch_returns_202_job_reference_and_persists_only_prepared_input(
     operator_member_client, monkeypatch, django_capture_on_commit_callbacks
 ):
@@ -128,6 +144,24 @@ def test_create_paste_batch_returns_202_job_reference_and_persists_only_prepared
         {"batch": batch.input_reference, "job": batch.job.input_snapshot}, sort_keys=True
     )
     assert "raw-secret" not in persisted
+    prepared_digest = hashlib.sha256(
+        json.dumps(
+            batch.input_reference,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    assert batch.job.input_snapshot == {
+        "schema": "SOURCE_IMPORT_JOB_V1",
+        "ingestion_batch_id": str(batch.id),
+        "source_type": "PASTE",
+        "monitoring_target_id": None,
+        "prepared_reference_sha256": prepared_digest,
+        "import_asset_id": None,
+        "batch_idempotency_key": "paste-20260810-1",
+    }
+    assert "input_reference" not in batch.job.input_snapshot
+    assert "rows" not in json.dumps(batch.job.input_snapshot, sort_keys=True)
     assert queued == [(str(batch.job_id), str(batch.id))]
 
 

@@ -14,20 +14,44 @@ from apps.sources.models import (
     SourceEvidence,
     SourceSignal,
 )
-from apps.sources.services import IngestionService
+from apps.sources.services import IngestionService, source_import_job_snapshot
 
 
 def make_batch(*, organization, job, source_type, payload, key, user, target=None):
     input_reference = prepare_import_reference(payload, source_type=source_type)
-    return IngestionBatch.objects.create(
+    batch = IngestionBatch.objects.create(
         organization=organization,
-        job=job,
         monitoring_target=target,
         source_type=source_type,
         input_reference=input_reference,
         idempotency_key=key,
         created_by=user,
     )
+    bound_job = JobService.create(
+        organization=organization,
+        job_type="SOURCE_IMPORT",
+        input_snapshot=source_import_job_snapshot(batch),
+        idempotency_key=key,
+        created_by=user,
+    )
+    batch.job = bound_job
+    batch.save(update_fields=["job", "updated_at"])
+    return batch
+
+
+def assert_preflight_failure(result):
+    assert result.status == IngestionBatch.Status.FAILED
+    assert result.started_at is None
+    assert result.received_count == 0
+    assert result.rows.count() == 0
+    assert result.row_errors == [
+        {
+            "row": None,
+            "code": "SOURCE_IMPORT_PREFLIGHT_FAILED",
+            "recovery_action": "Review the source import configuration and retry.",
+        }
+    ]
+    assert SourceEvidence.objects.count() == 0
 
 
 @pytest.mark.django_db
@@ -49,7 +73,7 @@ def test_ingestion_partial_success_persists_each_row_and_recomputes_statistics(
         key="partial-csv",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
 
     result = IngestionService.run(
         batch_id=batch.id,
@@ -87,7 +111,7 @@ def test_same_batch_retry_does_not_recount_or_recreate_records(
         key="retry-url",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
     kwargs = {
         "batch_id": batch.id,
         "organization": organization,
@@ -126,7 +150,7 @@ def test_json_text_payload_ingests_without_assuming_an_inline_asset_reference(
         key="json-text",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
 
     result = IngestionService.run(
         batch_id=batch.id,
@@ -156,7 +180,7 @@ def test_second_identical_row_is_a_duplicate_without_new_domain_records(
         key="duplicate-json",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
 
     result = IngestionService.run(
         batch_id=batch.id,
@@ -187,7 +211,7 @@ def test_stale_token_cannot_change_batch_rows_or_evidence(
         key="stale-token",
         user=user,
     )
-    JobService.claim(worker_id="test-worker", job_id=job.id)
+    JobService.claim(worker_id="test-worker", job_id=batch.job_id)
 
     with pytest.raises(StaleJobWorkerError):
         IngestionService.run(
@@ -216,7 +240,7 @@ def test_batch_organization_mismatch_is_rejected_before_any_write(
         key="wrong-org",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
 
     with pytest.raises(IngestionBatch.DoesNotExist):
         IngestionService.run(
@@ -229,7 +253,7 @@ def test_batch_organization_mismatch_is_rejected_before_any_write(
 
 
 @pytest.mark.django_db
-def test_cross_organization_screenshot_asset_becomes_a_failed_row(
+def test_cross_organization_screenshot_asset_fails_preflight_without_rows(
     organization, job, user, target, other_asset
 ):
     batch = make_batch(
@@ -245,7 +269,7 @@ def test_cross_organization_screenshot_asset_becomes_a_failed_row(
         key="cross-org-shot",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
 
     result = IngestionService.run(
         batch_id=batch.id,
@@ -253,16 +277,11 @@ def test_cross_organization_screenshot_asset_becomes_a_failed_row(
         claim_token=claimed.claim_token,
     )
 
-    assert result.status == IngestionBatch.Status.FAILED
-    assert (result.received_count, result.accepted_count, result.failed_count) == (1, 0, 1)
-    row = result.rows.get()
-    assert row.outcome == IngestionRow.Outcome.FAILED
-    assert row.error["code"] == "SCREENSHOT_ASSET_UNAVAILABLE"
-    assert SourceEvidence.objects.count() == 0
+    assert_preflight_failure(result)
 
 
 @pytest.mark.django_db
-def test_row_savepoint_preserves_owned_asset_neighbor_when_another_asset_is_rejected(
+def test_preflight_rejects_all_rows_when_any_screenshot_asset_is_foreign(
     organization, job, user, target, asset, other_asset
 ):
     batch = make_batch(
@@ -280,7 +299,7 @@ def test_row_savepoint_preserves_owned_asset_neighbor_when_another_asset_is_reje
         key="asset-savepoints",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
 
     result = IngestionService.run(
         batch_id=batch.id,
@@ -288,14 +307,9 @@ def test_row_savepoint_preserves_owned_asset_neighbor_when_another_asset_is_reje
         claim_token=claimed.claim_token,
     )
 
-    assert result.status == IngestionBatch.Status.PARTIAL_SUCCESS
-    assert (result.accepted_count, result.failed_count) == (1, 1)
-    accepted, failed = result.rows.all()
-    assert accepted.source_evidence.screenshot_asset_id == asset.id
-    assert failed.error["code"] == "SCREENSHOT_ASSET_UNAVAILABLE"
-    assert SourceContent.objects.count() == 1
-    assert SourceSignal.objects.count() == 1
-    assert SourceEvidence.objects.count() == 1
+    assert_preflight_failure(result)
+    assert SourceContent.objects.count() == 0
+    assert SourceSignal.objects.count() == 0
 
 
 @pytest.mark.django_db
@@ -314,7 +328,7 @@ def test_cross_organization_import_asset_is_rejected_for_every_import_row(
         key="cross-org-import-asset",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
 
     result = IngestionService.run(
         batch_id=batch.id,
@@ -322,9 +336,7 @@ def test_cross_organization_import_asset_is_rejected_for_every_import_row(
         claim_token=claimed.claim_token,
     )
 
-    assert result.status == IngestionBatch.Status.FAILED
-    assert result.rows.get().error["code"] == "IMPORT_ASSET_UNAVAILABLE"
-    assert SourceEvidence.objects.count() == 0
+    assert_preflight_failure(result)
 
 
 @pytest.mark.django_db
@@ -347,7 +359,7 @@ def test_import_asset_archived_after_batch_creation_is_rejected_by_worker(
     )
     asset.status = MaterialAsset.Status.ARCHIVED
     asset.save(update_fields=["status", "updated_at"])
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
 
     result = IngestionService.run(
         batch_id=batch.id,
@@ -355,9 +367,7 @@ def test_import_asset_archived_after_batch_creation_is_rejected_by_worker(
         claim_token=claimed.claim_token,
     )
 
-    assert result.status == IngestionBatch.Status.FAILED
-    assert result.rows.get().error["code"] == "IMPORT_ASSET_UNAVAILABLE"
-    assert SourceEvidence.objects.count() == 0
+    assert_preflight_failure(result)
 
 
 @pytest.mark.django_db
@@ -377,7 +387,7 @@ def test_batch_level_row_limit_failure_is_persisted_without_rows(
         key="too-many",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
 
     result = IngestionService.run(
         batch_id=batch.id,
@@ -410,7 +420,7 @@ def test_integrity_error_isolated_to_middle_row_and_retry_uses_persisted_outcome
         key="integrity-savepoint",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
     original = IngestionService._persist_valid_row
 
     def fail_middle(*, batch, organization, row):
@@ -464,7 +474,7 @@ def test_connection_database_error_propagates_instead_of_becoming_a_row_failure(
         key="connection-error",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
 
     def fail_connection(**_kwargs):
         raise InterfaceError("simulated lost connection")
@@ -496,7 +506,7 @@ def test_correct_paste_type_succeeds_with_matching_evidence_provenance(
         key="paste-provenance",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
 
     result = IngestionService.run(
         batch_id=batch.id,
@@ -526,7 +536,7 @@ def test_ingestion_rejects_database_relabelled_prepared_reference(
         key=f"relabel-{relabelled_type}",
         user=user,
     )
-    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    claimed = JobService.claim(worker_id="test-worker", job_id=batch.job_id)
     with connection.cursor() as cursor:
         cursor.execute(
             "UPDATE sources_ingestionbatch SET source_type = %s WHERE id = %s",

@@ -22,11 +22,21 @@ def execute_source_import(job_id: str, batch_id: str):
             organization=job.organization,
             claim_token=claim_token,
         )
-        JobService.succeed(
-            job.id,
-            claim_token=claim_token,
-            result_reference={"ingestion_batch_id": str(batch.id)},
-        )
+        if IngestionService.preflight_failed(batch):
+            JobService.fail(
+                job.id,
+                claim_token=claim_token,
+                error={
+                    "code": "SOURCE_IMPORT_FAILED",
+                    "message": "Public source import failed.",
+                },
+            )
+        else:
+            JobService.succeed(
+                job.id,
+                claim_token=claim_token,
+                result_reference={"ingestion_batch_id": str(batch.id)},
+            )
     except Exception:
         try:
             JobService.fail(

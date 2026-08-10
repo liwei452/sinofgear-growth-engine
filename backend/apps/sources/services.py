@@ -1,5 +1,6 @@
 import hashlib
 import ipaddress
+import json
 from copy import deepcopy
 from urllib.parse import urlsplit, urlunsplit
 
@@ -169,6 +170,47 @@ class EvidenceService:
 create = EvidenceService.create
 
 
+SOURCE_IMPORT_JOB_SCHEMA = "SOURCE_IMPORT_JOB_V1"
+SOURCE_IMPORT_PREFLIGHT_ERROR = {
+    "row": None,
+    "code": "SOURCE_IMPORT_PREFLIGHT_FAILED",
+    "recovery_action": "Review the source import configuration and retry.",
+}
+
+
+def prepared_reference_digest(reference) -> str:
+    encoded = json.dumps(
+        reference,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def source_import_job_snapshot(batch: IngestionBatch) -> dict[str, object]:
+    reference = batch.input_reference if isinstance(batch.input_reference, dict) else {}
+    return {
+        "schema": SOURCE_IMPORT_JOB_SCHEMA,
+        "ingestion_batch_id": str(batch.id),
+        "source_type": batch.source_type,
+        "monitoring_target_id": (
+            str(batch.monitoring_target_id) if batch.monitoring_target_id else None
+        ),
+        "prepared_reference_sha256": prepared_reference_digest(batch.input_reference),
+        "import_asset_id": reference.get("import_asset_id"),
+        "batch_idempotency_key": batch.idempotency_key,
+    }
+
+
+def source_import_job_matches_batch(*, job: Job, batch: IngestionBatch) -> bool:
+    return (
+        job.type == Job.Type.SOURCE_IMPORT
+        and job.organization_id == batch.organization_id
+        and job.idempotency_key == batch.idempotency_key
+        and job.input_snapshot == source_import_job_snapshot(batch)
+    )
+
+
 class SourceIdempotencyConflictError(ValueError):
     pass
 
@@ -200,13 +242,6 @@ class SourceIngestionRequestService:
             from .importers import validate_prepared_import_reference
 
             validate_prepared_import_reference(safe_reference, source_type=source_type)
-        request_snapshot = {
-            "source_type": source_type,
-            "monitoring_target_id": (
-                str(monitoring_target.id) if monitoring_target is not None else None
-            ),
-            "input_reference": safe_reference,
-        }
         try:
             with transaction.atomic():
                 batch = IngestionBatch.objects.create(
@@ -237,16 +272,13 @@ class SourceIngestionRequestService:
 
         if batch.job_id is not None:
             job = Job.objects.get(pk=batch.job_id, organization=organization)
-            if not SourceIngestionRequestService._same_job(
-                job=job,
-                idempotency_key=idempotency_key,
-                request_snapshot=request_snapshot,
-            ):
+            if not source_import_job_matches_batch(job=job, batch=batch):
                 raise SourceIdempotencyConflictError(
                     "The idempotency key is already bound to a different prepared import."
                 )
             return batch, job
 
+        request_snapshot = source_import_job_snapshot(batch)
         try:
             job = JobService.create(
                 organization=organization,
@@ -283,14 +315,6 @@ class SourceIngestionRequestService:
             and batch.monitoring_target_id
             == (monitoring_target.id if monitoring_target is not None else None)
             and batch.input_reference == safe_reference
-        )
-
-    @staticmethod
-    def _same_job(*, job, idempotency_key, request_snapshot):
-        return (
-            job.type == Job.Type.SOURCE_IMPORT
-            and job.idempotency_key == idempotency_key
-            and job.input_snapshot == request_snapshot
         )
 
     @staticmethod
@@ -386,6 +410,18 @@ class IngestionService:
         if job is None or job.type != Job.Type.SOURCE_IMPORT:
             raise StaleJobWorkerError("Ingestion batch is not bound to a source import job.")
         JobService._require_owner(job, claim_token)
+
+        preflight_error = IngestionService._preflight_error(
+            batch=batch,
+            job=job,
+            organization=organization,
+        )
+        if preflight_error is not None:
+            IngestionService._finish_batch(
+                batch,
+                batch_errors=[preflight_error],
+            )
+            return batch
 
         now = timezone.now()
         batch.status = IngestionBatch.Status.RUNNING
@@ -495,6 +531,7 @@ class IngestionService:
                 pk=row.screenshot_asset_id,
                 organization=organization,
                 asset_type=MaterialAsset.AssetType.IMAGE,
+                status=MaterialAsset.Status.ACTIVE,
             ).first()
             if screenshot_asset is None:
                 raise ValidationError(
@@ -639,4 +676,63 @@ class IngestionService:
                 "finished_at",
                 "updated_at",
             ]
+        )
+
+    @staticmethod
+    def _preflight_error(*, batch, job, organization):
+        from .importers import validate_prepared_import_reference
+
+        if not source_import_job_matches_batch(job=job, batch=batch):
+            return dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
+        try:
+            validate_prepared_import_reference(
+                batch.input_reference,
+                source_type=batch.source_type,
+            )
+        except ValidationError:
+            return dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
+
+        if batch.monitoring_target_id and not MonitoringTarget.objects.filter(
+            pk=batch.monitoring_target_id,
+            organization=organization,
+            enabled=True,
+        ).exists():
+            return dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
+
+        reference = batch.input_reference
+        import_asset_id = reference.get("import_asset_id")
+        screenshot_asset_ids = {
+            row["screenshot_asset_id"]
+            for row in reference["rows"]
+            if row.get("screenshot_asset_id") is not None
+        }
+        required_asset_ids = set(screenshot_asset_ids)
+        if import_asset_id is not None:
+            required_asset_ids.add(import_asset_id)
+        if not required_asset_ids:
+            return None
+
+        active_assets = {
+            str(asset_id): asset_type
+            for asset_id, asset_type in MaterialAsset.objects.filter(
+                pk__in=required_asset_ids,
+                organization=organization,
+                status=MaterialAsset.Status.ACTIVE,
+            ).values_list("id", "asset_type")
+        }
+        if import_asset_id is not None and import_asset_id not in active_assets:
+            return dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
+        if any(
+            active_assets.get(screenshot_asset_id) != MaterialAsset.AssetType.IMAGE
+            for screenshot_asset_id in screenshot_asset_ids
+        ):
+            return dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
+        return None
+
+    @staticmethod
+    def preflight_failed(batch) -> bool:
+        return any(
+            error.get("code") == SOURCE_IMPORT_PREFLIGHT_ERROR["code"]
+            for error in batch.row_errors
+            if isinstance(error, dict)
         )

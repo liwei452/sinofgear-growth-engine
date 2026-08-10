@@ -32,6 +32,7 @@ from .serializers import (
     SourceErrorSerializer,
     SourceEvidenceListSerializer,
     SourceEvidenceSerializer,
+    SourceMutationErrorSerializer,
     SourceSignalListSerializer,
     SourceSignalSerializer,
     SourceValidationErrorSerializer,
@@ -133,8 +134,8 @@ class MonitoringTargetListView(OrganizationListView):
         request=MonitoringTargetCreateSerializer,
         responses={
             201: MonitoringTargetSerializer,
-            400: SourceValidationErrorSerializer,
-            403: SourceErrorSerializer,
+            400: SourceMutationErrorSerializer,
+            403: SourceMutationErrorSerializer,
         },
     )
     def post(self, request):
@@ -180,9 +181,9 @@ class IngestionBatchListView(OrganizationListView):
         request=IngestionBatchCreateSerializer,
         responses={
             202: IngestionAcceptedSerializer,
-            400: SourceValidationErrorSerializer,
-            403: SourceErrorSerializer,
-            409: SourceErrorSerializer,
+            400: SourceMutationErrorSerializer,
+            403: SourceMutationErrorSerializer,
+            409: SourceMutationErrorSerializer,
         },
     )
     def post(self, request):

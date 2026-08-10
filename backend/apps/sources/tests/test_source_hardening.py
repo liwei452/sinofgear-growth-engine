@@ -1,4 +1,5 @@
 import json
+import hashlib
 from contextlib import nullcontext
 from copy import deepcopy
 
@@ -6,6 +7,8 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db.models.deletion import ProtectedError
 
+from apps.jobs.models import Job
+from apps.jobs.services import JobService
 from apps.sources.models import (
     IngestionBatch,
     IngestionRow,
@@ -405,3 +408,61 @@ def test_prepared_source_type_binding_is_enforced_on_every_batch_write_path(orga
         IngestionBatch.objects.bulk_update([batch], ["source_type"])
     batch.refresh_from_db()
     assert batch.source_type == IngestionBatch.SourceType.PASTE
+
+
+@pytest.mark.django_db
+def test_bound_batch_input_identity_is_immutable_through_every_orm_write_path(
+    organization, user, target
+):
+    reference = prepare_import_reference(
+        {"text": "https://e.test/bound\tPublic"}, source_type="PASTE"
+    )
+    batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.PASTE,
+        input_reference=reference,
+        idempotency_key="bound-identity",
+        monitoring_target=target,
+        created_by=user,
+    )
+    digest = hashlib.sha256(
+        json.dumps(reference, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.SOURCE_IMPORT,
+        input_snapshot={
+            "schema": "SOURCE_IMPORT_JOB_V1",
+            "ingestion_batch_id": str(batch.id),
+            "source_type": "PASTE",
+            "monitoring_target_id": str(target.id),
+            "prepared_reference_sha256": digest,
+            "import_asset_id": None,
+            "batch_idempotency_key": "bound-identity",
+        },
+        idempotency_key="bound-identity",
+        created_by=user,
+    )
+    batch.job = job
+    batch.save(update_fields=["job", "updated_at"])
+
+    batch.idempotency_key = "bound-instance-change"
+    with pytest.raises(ValidationError, match="input identity"):
+        batch.save(update_fields=["idempotency_key", "updated_at"])
+
+    with pytest.raises(ValidationError, match="input identity"):
+        IngestionBatch.objects.filter(pk=batch.pk).update(
+            idempotency_key="bound-queryset-change"
+        )
+
+    batch.refresh_from_db()
+    batch.input_reference = prepare_import_reference(
+        {"text": "https://e.test/other\tOther"}, source_type="PASTE"
+    )
+    with pytest.raises(ValidationError, match="input identity"):
+        IngestionBatch.objects.bulk_update([batch], ["input_reference"])
+
+    batch.refresh_from_db()
+    batch.job = None
+    with pytest.raises(ValidationError, match="input identity"):
+        batch.save(update_fields=["job", "updated_at"])

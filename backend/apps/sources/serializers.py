@@ -275,6 +275,14 @@ class SourceValidationErrorSerializer(serializers.Serializer):
     recovery_action = serializers.CharField()
 
 
+class SourceMutationErrorSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    message = serializers.CharField()
+    recovery_action = serializers.CharField()
+    detail = serializers.CharField(required=False)
+    errors = serializers.DictField(required=False)
+
+
 class SourceErrorSerializer(serializers.Serializer):
     code = serializers.CharField(required=False)
     detail = serializers.CharField(required=False)

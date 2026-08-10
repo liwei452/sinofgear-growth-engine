@@ -1,33 +1,102 @@
-import pytest
+import hashlib
+import json
+from uuid import uuid4
 
+import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+
+from apps.assets.models import MaterialAsset
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
 from apps.sources.importers import prepare_import_reference
-from apps.sources.models import IngestionBatch
+from apps.sources.models import IngestionBatch, SourceEvidence
 from apps.sources.services import IngestionService
 from apps.sources.tasks import execute_source_import
 
 
-def make_batch(*, organization, job, user, key="worker-batch"):
-    return IngestionBatch.objects.create(
-        organization=organization,
-        job=job,
-        source_type=IngestionBatch.SourceType.URL,
-        input_reference=prepare_import_reference(
-            {
-                "source_url": "https://e.test/worker",
-                "original_text": "Need replacement gear",
-            },
-            source_type="URL",
+def _snapshot(batch):
+    digest = hashlib.sha256(
+        json.dumps(
+            batch.input_reference,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema": "SOURCE_IMPORT_JOB_V1",
+        "ingestion_batch_id": str(batch.id),
+        "source_type": batch.source_type,
+        "monitoring_target_id": (
+            str(batch.monitoring_target_id) if batch.monitoring_target_id else None
         ),
+        "prepared_reference_sha256": digest,
+        "import_asset_id": batch.input_reference.get("import_asset_id"),
+        "batch_idempotency_key": batch.idempotency_key,
+    }
+
+
+def make_batch(
+    *,
+    organization,
+    user,
+    key="worker-batch",
+    source_type=IngestionBatch.SourceType.URL,
+    payload=None,
+    target=None,
+):
+    if payload is None:
+        payload = {
+            "source_url": "https://e.test/worker",
+            "original_text": "Need replacement gear",
+        }
+    batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=source_type,
+        input_reference=prepare_import_reference(payload, source_type=source_type),
+        idempotency_key=key,
+        monitoring_target=target,
+        created_by=user,
+    )
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.SOURCE_IMPORT,
+        input_snapshot=_snapshot(batch),
         idempotency_key=key,
         created_by=user,
     )
+    batch.job = job
+    batch.save(update_fields=["job", "updated_at"])
+    return batch
+
+
+def _assert_preflight_failed(batch, result):
+    job = batch.job
+    job.refresh_from_db()
+    batch.refresh_from_db()
+    assert result == {"ingestion_batch_id": str(batch.id), "status": "FAILED"}
+    assert job.status == Job.Status.FAILED
+    assert job.error == {
+        "code": "SOURCE_IMPORT_FAILED",
+        "message": "Public source import failed.",
+    }
+    assert batch.status == IngestionBatch.Status.FAILED
+    assert batch.started_at is None
+    assert batch.rows.count() == 0
+    assert SourceEvidence.objects.count() == 0
+    assert batch.row_errors == [
+        {
+            "row": None,
+            "code": "SOURCE_IMPORT_PREFLIGHT_FAILED",
+            "recovery_action": "Review the source import configuration and retry.",
+        }
+    ]
 
 
 @pytest.mark.django_db
 def test_worker_claims_runs_and_succeeds_job(organization, job, user):
-    batch = make_batch(organization=organization, job=job, user=user)
+    batch = make_batch(organization=organization, user=user)
+    job = batch.job
 
     result = execute_source_import(str(job.id), str(batch.id))
 
@@ -43,7 +112,8 @@ def test_worker_claims_runs_and_succeeds_job(organization, job, user):
 def test_worker_failure_marks_owned_job_failed_and_reraises(
     organization, job, user, monkeypatch
 ):
-    batch = make_batch(organization=organization, job=job, user=user, key="worker-failure")
+    batch = make_batch(organization=organization, user=user, key="worker-failure")
+    job = batch.job
 
     def fail_run(**_kwargs):
         raise RuntimeError("database unavailable")
@@ -65,7 +135,8 @@ def test_worker_failure_marks_owned_job_failed_and_reraises(
 def test_worker_does_not_mask_original_failure_when_claim_becomes_stale(
     organization, job, user, monkeypatch
 ):
-    batch = make_batch(organization=organization, job=job, user=user, key="worker-stale")
+    batch = make_batch(organization=organization, user=user, key="worker-stale")
+    job = batch.job
 
     def cancel_then_fail(**_kwargs):
         JobService.cancel(job.id, organization=organization)
@@ -82,7 +153,8 @@ def test_worker_does_not_mask_original_failure_when_claim_becomes_stale(
 
 @pytest.mark.django_db
 def test_worker_without_a_claimable_job_leaves_state_unchanged(organization, job, user):
-    batch = make_batch(organization=organization, job=job, user=user, key="worker-unchanged")
+    batch = make_batch(organization=organization, user=user, key="worker-unchanged")
+    job = batch.job
     claimed = JobService.claim(worker_id="another-worker", job_id=job.id)
 
     result = execute_source_import(str(job.id), str(batch.id))
@@ -93,3 +165,130 @@ def test_worker_without_a_claimable_job_leaves_state_unchanged(organization, job
     assert job.status == Job.Status.RUNNING
     assert job.claim_token == claimed.claim_token
     assert batch.status == IngestionBatch.Status.QUEUED
+
+
+@pytest.mark.django_db
+def test_worker_rejects_batch_identity_drift_before_running_or_creating_rows(
+    organization, user
+):
+    batch = make_batch(organization=organization, user=user, key="worker-drift")
+    job = batch.job
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE sources_ingestionbatch SET idempotency_key = %s WHERE id = %s",
+            ["worker-drift-tampered", batch.id.hex],
+        )
+
+    result = execute_source_import(str(job.id), str(batch.id))
+
+    _assert_preflight_failed(batch, result)
+
+
+@pytest.mark.django_db
+def test_worker_preflight_rejects_target_disabled_after_queue(
+    organization, user, target
+):
+    batch = make_batch(
+        organization=organization,
+        user=user,
+        key="worker-disabled-target",
+        target=target,
+    )
+    target.enabled = False
+    target.save(update_fields=["enabled", "updated_at"])
+
+    result = execute_source_import(str(batch.job_id), str(batch.id))
+
+    _assert_preflight_failed(batch, result)
+
+
+@pytest.mark.django_db
+def test_worker_preflight_checks_archived_import_asset_even_with_no_rows(
+    organization, user, asset
+):
+    batch = make_batch(
+        organization=organization,
+        user=user,
+        key="worker-empty-archived-import",
+        source_type=IngestionBatch.SourceType.PASTE,
+        payload={"text": "", "import_asset_id": str(asset.id)},
+    )
+    asset.status = MaterialAsset.Status.ARCHIVED
+    asset.save(update_fields=["status", "updated_at"])
+
+    result = execute_source_import(str(batch.job_id), str(batch.id))
+
+    _assert_preflight_failed(batch, result)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("asset_state", ["archived", "foreign", "missing"])
+def test_worker_preflight_rejects_every_unavailable_screenshot_before_rows(
+    asset_state, organization, user, asset, other_asset
+):
+    screenshot_id = asset.id
+    if asset_state == "foreign":
+        screenshot_id = other_asset.id
+    elif asset_state == "missing":
+        screenshot_id = uuid4()
+    batch = make_batch(
+        organization=organization,
+        user=user,
+        key=f"worker-screenshot-{asset_state}",
+        source_type=IngestionBatch.SourceType.SCREENSHOT,
+        payload={
+            "source_url": f"https://e.test/screenshot/{asset_state}",
+            "original_text": "Need gear",
+            "screenshot_asset_id": str(screenshot_id),
+        },
+    )
+    if asset_state == "archived":
+        asset.status = MaterialAsset.Status.ARCHIVED
+        asset.save(update_fields=["status", "updated_at"])
+
+    result = execute_source_import(str(batch.job_id), str(batch.id))
+
+    _assert_preflight_failed(batch, result)
+
+
+@pytest.mark.django_db
+def test_worker_preflight_resolves_screenshot_references_in_one_bounded_query(
+    organization, user, asset, other_asset
+):
+    missing_id = uuid4()
+    batch = make_batch(
+        organization=organization,
+        user=user,
+        key="worker-screenshot-bounded",
+        source_type=IngestionBatch.SourceType.JSON,
+        payload={
+            "rows": [
+                {
+                    "source_url": "https://e.test/screenshot/owned",
+                    "original_text": "Owned",
+                    "screenshot_asset_id": str(asset.id),
+                },
+                {
+                    "source_url": "https://e.test/screenshot/foreign",
+                    "original_text": "Foreign",
+                    "screenshot_asset_id": str(other_asset.id),
+                },
+                {
+                    "source_url": "https://e.test/screenshot/missing",
+                    "original_text": "Missing",
+                    "screenshot_asset_id": str(missing_id),
+                },
+            ]
+        },
+    )
+
+    with CaptureQueriesContext(connection) as queries:
+        result = execute_source_import(str(batch.job_id), str(batch.id))
+
+    asset_queries = [
+        query["sql"]
+        for query in queries.captured_queries
+        if "assets_materialasset" in query["sql"].lower()
+    ]
+    assert len(asset_queries) == 1
+    _assert_preflight_failed(batch, result)

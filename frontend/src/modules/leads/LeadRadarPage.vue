@@ -229,7 +229,6 @@ function statusLabel(status: LeadCandidateList["status"]): string {
 }
 
 async function importCompleted(): Promise<void> {
-  importOpen.value = false
   pageUrl.value = null
   await queryClient.invalidateQueries({ queryKey: leadKeys.all(organizationId.value) })
 }
@@ -324,7 +323,7 @@ function selectCandidate(candidateId: string): void {
         添加公开线索
       </button>
     </section>
-    <section v-else class="opportunity-list" aria-label="客户机会列表" aria-live="polite">
+    <section v-if="canRead && leads.length" class="opportunity-list" aria-label="客户机会列表" aria-live="polite">
       <article v-for="candidate in leads" :key="candidate.id" class="opportunity-card">
         <div class="opportunity-heading">
           <div>

@@ -187,7 +187,8 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   expect(briefPayload.concept_links.map(link => link.role).sort()).toEqual([
     "MANUFACTURING_PROCESS", "PRODUCT_TYPE", "STANDARD", "TARGET_INDUSTRY",
   ])
-  const briefCard = page.locator(".workflow-card").filter({ hasText: campaignName })
+  const briefCard = page.locator('section[aria-labelledby="briefs-title"] .workflow-card')
+    .filter({ hasText: campaignName })
   await expect(briefCard).toContainText("需求草稿")
 
   await logout(page)

@@ -112,9 +112,9 @@ describe("protected routing", () => {
 
   it("mounts the production beginner promotion experience", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: { id: "org-1" }, membership: { permissions: ["campaigns.read", "campaigns.manage", "products.read"] } })
+    client.setQueryData(["auth", "me"], { user: {}, organization: { id: "org-1" }, membership: { permissions: ["campaigns.read", "campaigns.manage", "products.read", "memberships.read"] } })
     vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
-      path === "/api/v1/products"
+      path === "/api/v1/products?status=ACTIVE"
         ? { next: null, previous: null, results: [{ id: "product-1", name_zh: "精密齿轮", name_en: "Precision Gear", status: "ACTIVE" }] }
         : path === "/api/v1/platforms"
           ? { results: [{ id: "platform-1", code: "LINKEDIN", name: "LinkedIn", capabilities: ["PUBLISH"] }] }

@@ -25,7 +25,8 @@ export type BriefConcept = {
   id: string; code: string
   concept_type: "PRODUCT_TYPE" | "PARAMETER" | "MATERIAL" | "PROCESS" | "STANDARD"
     | "APPLICATION" | "INDUSTRY" | "CUSTOMER_TYPE" | "PURCHASE_INTENT"
-  label_zh: string; label_en: string; status: "APPROVED"
+  label_zh: string; label_en: string
+  status: "SUGGESTED" | "APPROVED" | "REJECTED" | "DEPRECATED"
 }
 export type Asset = {
   id: string; asset_type: string; original_filename: string; mime_type: string

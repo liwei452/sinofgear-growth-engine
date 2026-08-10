@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { currentUserQueryOptions, type CurrentUser } from "../auth/auth"
+import { contentQueryKeys } from "./api"
 import ContentFactoryPage from "./ContentFactoryPage.vue"
 
 const currentUser = (permissions: string[]): CurrentUser => ({
@@ -25,9 +26,9 @@ const brief = (status = "DRAFT") => ({
 function baseResponse(path: string, activeBriefs: unknown[] = []) {
   if (path === "/api/v1/campaigns") return { next: null, previous: null, results: [campaign] }
   if (path === "/api/v1/content-briefs") return { next: null, previous: null, results: activeBriefs }
-  if (path === "/api/v1/products") return { next: null, previous: null, results: [{ id: "product-1", name_zh: "精密齿轮", name_en: "Precision Gear", status: "ACTIVE" }] }
+  if (path === "/api/v1/products?status=ACTIVE") return { next: null, previous: null, results: [{ id: "product-1", name_zh: "精密齿轮", name_en: "Precision Gear", status: "ACTIVE" }] }
   if (path === "/api/v1/platforms") return { results: [{ id: "platform-1", code: "LINKEDIN", name: "LinkedIn", capabilities: ["PUBLISH"] }] }
-  if (path === "/api/v1/assets") return { next: null, previous: null, results: [] }
+  if (path === "/api/v1/assets?status=ACTIVE") return { next: null, previous: null, results: [] }
   if (path === "/api/v1/jobs") return { next: null, previous: null, results: [] }
   if (path === "/api/v1/master-contents") return { next: null, previous: null, results: [] }
   if (path === "/api/v1/knowledge/concepts?status=APPROVED&page_size=50") return {
@@ -45,7 +46,8 @@ function baseResponse(path: string, activeBriefs: unknown[] = []) {
 function renderPage(permissions: string[], experience?: "ordinary" | "advanced") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(permissions))
-  return render(ContentFactoryPage, { props: { experience }, global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+  const view = render(ContentFactoryPage, { props: { experience }, global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+  return Object.assign(view, { queryClient })
 }
 
 afterEach(() => {
@@ -80,7 +82,7 @@ it("guides a beginner through campaign creation and sends the exact brief payloa
   })
   vi.stubGlobal("fetch", fetchMock)
   const user = userEvent.setup()
-  renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read", "jobs.read", "knowledge.read"])
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read", "jobs.read", "knowledge.read", "memberships.read"])
   await screen.findByRole("heading", { name: "AI 内容工厂" })
   await user.click(screen.getByRole("button", { name: "创建内容任务" }))
 
@@ -132,7 +134,7 @@ it("validates product/platform choices and respects the brief reviewer split", a
     status: 200, headers: { "Content-Type": "application/json" },
   })))
   const user = userEvent.setup()
-  renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read"])
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read", "memberships.read"])
   await screen.findByText("等待审核人员确认")
   expect(screen.queryByRole("button", { name: "确认需求可生成" })).not.toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "创建内容任务" }))
@@ -143,17 +145,17 @@ it("validates product/platform choices and respects the brief reviewer split", a
 
 it("loads one safe cursor page and selects products and assets from page two", async () => {
   const secondProduct = { id: "product-2", name_zh: "第二页齿轮", name_en: "Page Two Gear", status: "ACTIVE" }
-  const secondAsset = { id: "asset-2", asset_type: "IMAGE", original_filename: "page-two.png", mime_type: "image/png", size_bytes: 10, language: "zh", status: "READY", tags: [], created_at: "" }
+  const secondAsset = { id: "asset-2", asset_type: "IMAGE", original_filename: "page-two.png", mime_type: "image/png", size_bytes: 10, language: "zh", status: "ACTIVE", tags: [], created_at: "" }
   const fetchMock = vi.fn(async (path: string) => {
-    if (path === "/api/v1/products") return new Response(JSON.stringify({ next: "/api/v1/products?cursor=two", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
-    if (path === "/api/v1/products?cursor=two") return new Response(JSON.stringify({ next: null, previous: "/api/v1/products", results: [secondProduct] }), { status: 200, headers: { "Content-Type": "application/json" } })
-    if (path === "/api/v1/assets") return new Response(JSON.stringify({ next: "/api/v1/assets?cursor=two", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
-    if (path === "/api/v1/assets?cursor=two") return new Response(JSON.stringify({ next: null, previous: "/api/v1/assets", results: [secondAsset] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/products?status=ACTIVE") return new Response(JSON.stringify({ next: "/api/v1/products?status=ACTIVE&cursor=two", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/products?status=ACTIVE&cursor=two") return new Response(JSON.stringify({ next: null, previous: "/api/v1/products?status=ACTIVE", results: [secondProduct] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/assets?status=ACTIVE") return new Response(JSON.stringify({ next: "/api/v1/assets?status=ACTIVE&cursor=two", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/assets?status=ACTIVE&cursor=two") return new Response(JSON.stringify({ next: null, previous: "/api/v1/assets?status=ACTIVE", results: [secondAsset] }), { status: 200, headers: { "Content-Type": "application/json" } })
     return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
   })
   vi.stubGlobal("fetch", fetchMock)
   const user = userEvent.setup()
-  renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read"])
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read", "memberships.read"])
   await user.click(await screen.findByRole("button", { name: "创建内容任务" }))
   await user.click(screen.getByRole("button", { name: "下一步" }))
 
@@ -162,8 +164,8 @@ it("loads one safe cursor page and selects products and assets from page two", a
 
   expect(await screen.findByLabelText("第二页齿轮")).toBeInTheDocument()
   expect(screen.getByText("page-two.png")).toBeInTheDocument()
-  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/products?cursor=two")).toHaveLength(1)
-  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/assets?cursor=two")).toHaveLength(1)
+  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/products?status=ACTIVE&cursor=two")).toHaveLength(1)
+  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/assets?status=ACTIVE&cursor=two")).toHaveLength(1)
   expect(screen.queryByRole("button", { name: "加载更多产品" })).not.toBeInTheDocument()
 })
 
@@ -172,7 +174,7 @@ it("requires selling points, advantages, and keywords before confirmation", asyn
     status: 200, headers: { "Content-Type": "application/json" },
   })))
   const user = userEvent.setup()
-  renderPage(["campaigns.read", "campaigns.manage", "products.read"])
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "memberships.read"])
   await user.click(await screen.findByRole("button", { name: "创建内容任务" }))
   await user.click(screen.getByRole("button", { name: "下一步" }))
   await user.click(screen.getByLabelText("精密齿轮"))
@@ -277,7 +279,7 @@ it("shows named product, platform, and job errors and recovers each query", asyn
   const attempts = new Map<string, number>()
   const recoveredJob = { job_id: "job-recovered", type: "CONTENT_GENERATE", status: "SUCCEEDED", progress: 100, attempt: 1, max_attempts: 3, created_at: "", finished_at: "", error: null, result_reference: {} }
   const fetchMock = vi.fn(async (path: string) => {
-    if (["/api/v1/products", "/api/v1/platforms", "/api/v1/jobs"].includes(path)) {
+    if (["/api/v1/products?status=ACTIVE", "/api/v1/platforms", "/api/v1/jobs"].includes(path)) {
       const attempt = (attempts.get(path) ?? 0) + 1
       attempts.set(path, attempt)
       if (attempt === 1) return new Response(JSON.stringify({ detail: "temporary" }), { status: 503, headers: { "Content-Type": "application/json" } })
@@ -287,11 +289,11 @@ it("shows named product, platform, and job errors and recovers each query", asyn
   })
   vi.stubGlobal("fetch", fetchMock)
   const user = userEvent.setup()
-  renderPage(["campaigns.read", "campaigns.manage", "products.read", "jobs.read"])
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "jobs.read", "memberships.read"])
 
   await user.click(await screen.findByRole("button", { name: "重新加载产品" }))
   await user.click(screen.getByRole("button", { name: "重新加载平台" }))
-  await user.click(screen.getByRole("button", { name: "重新加载生成任务" }))
+  await user.click(screen.getByRole("button", { name: "重新加载生成记录" }))
 
   expect(await screen.findByText("任务 job-recovered")).toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "创建内容任务" }))
@@ -299,7 +301,7 @@ it("shows named product, platform, and job errors and recovers each query", asyn
   expect(await screen.findByLabelText("精密齿轮")).toBeInTheDocument()
   expect(screen.getByLabelText("LinkedIn")).toBeInTheDocument()
   expect(attempts).toEqual(new Map([
-    ["/api/v1/products", 2], ["/api/v1/platforms", 2], ["/api/v1/jobs", 2],
+    ["/api/v1/products?status=ACTIVE", 2], ["/api/v1/platforms", 2], ["/api/v1/jobs", 2],
   ]))
 })
 
@@ -347,6 +349,56 @@ it("ignores an in-flight polling response after unmount without scheduling again
   await detail
   await new Promise((resolve) => setTimeout(resolve, 0))
 
+  expect(setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 2500)).toHaveLength(0)
+})
+
+it("clears protected campaign, job, and content data when permissions are revoked live", async () => {
+  const activeJob = { job_id: "job-private", type: "CONTENT_GENERATE", status: "SUCCEEDED", progress: 100, attempt: 1, max_attempts: 3, created_at: "", finished_at: "", error: null, result_reference: {} }
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/jobs") return new Response(JSON.stringify({ next: null, previous: null, results: [activeJob] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/master-contents") return new Response(JSON.stringify({ next: null, previous: null, results: [{ id: "master-private" }] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    return new Response(JSON.stringify(baseResponse(path, [brief()])), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const view = renderPage(["campaigns.read", "campaigns.manage", "jobs.read", "content.read"], "advanced")
+  const cancelQueries = vi.spyOn(view.queryClient, "cancelQueries")
+
+  expect(await screen.findByText("任务 job-private")).toBeVisible()
+  expect(screen.getAllByText(campaign.name)).toHaveLength(2)
+  expect(screen.queryByText("master-private")).not.toBeInTheDocument()
+
+  view.queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(["campaigns.manage"]))
+
+  await waitFor(() => {
+    expect(screen.queryByText("任务 job-private")).not.toBeInTheDocument()
+    expect(screen.queryByText(campaign.name)).not.toBeInTheDocument()
+  })
+  expect(within(screen.getByLabelText("当前工作摘要")).getAllByText("0")).toHaveLength(4)
+  expect(cancelQueries).toHaveBeenCalledWith({ queryKey: contentQueryKeys.campaigns("org-1") })
+  expect(cancelQueries).toHaveBeenCalledWith({ queryKey: contentQueryKeys.briefs("org-1") })
+  expect(cancelQueries).toHaveBeenCalledWith({ queryKey: contentQueryKeys.jobs("org-1") })
+  expect(cancelQueries).toHaveBeenCalledWith({ queryKey: contentQueryKeys.masterContents("org-1", {}) })
+})
+
+it("stops an in-flight job poll and ignores its response when jobs.read is revoked", async () => {
+  const activeJob = { job_id: "job-revoked", type: "CONTENT_GENERATE", status: "RUNNING", progress: 25, attempt: 1, max_attempts: 3, created_at: "", finished_at: null, error: null, result_reference: null }
+  let resolveDetail!: (response: Response) => void
+  const detail = new Promise<Response>((resolve) => { resolveDetail = resolve })
+  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout")
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/jobs") return new Response(JSON.stringify({ next: null, previous: null, results: [activeJob] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/jobs/job-revoked") return detail
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const view = renderPage(["campaigns.read", "jobs.read"], "advanced")
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/jobs/job-revoked", expect.anything()))
+  view.queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(["campaigns.read"]))
+  resolveDetail(new Response(JSON.stringify({ ...activeJob, status: "SUCCEEDED", progress: 100 }), { status: 200, headers: { "Content-Type": "application/json" } }))
+  await detail
+
+  await waitFor(() => expect(screen.queryByText("任务 job-revoked")).not.toBeInTheDocument())
   expect(setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 2500)).toHaveLength(0)
 })
 
@@ -404,7 +456,7 @@ it("edits a draft brief and creates a revision only with campaigns.manage", asyn
   })
   vi.stubGlobal("fetch", fetchMock)
   const user = userEvent.setup()
-  renderPage(["campaigns.read", "campaigns.manage", "products.read"])
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "memberships.read"])
   await user.click(await screen.findByRole("button", { name: /编辑需求草稿/ }))
   await user.click(screen.getByRole("button", { name: "下一步" }))
   expect(screen.getByLabelText("精密齿轮")).toBeChecked()

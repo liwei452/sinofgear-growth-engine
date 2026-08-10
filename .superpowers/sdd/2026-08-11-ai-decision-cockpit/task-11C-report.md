@@ -159,3 +159,62 @@ Task 11D E2E was not added or run.
 - Environment only: the configured global Node/npm wrappers are broken as described above. Direct project-tool verification is complete and green; repository code does not need a workaround.
 - The old `PromotionTransitionPage.vue` is now unused but was intentionally left untouched to keep Task 11C scoped and avoid an unrelated deletion.
 - No backend, generated schema, dependency, or E2E changes were made.
+
+## Fix Round 1
+
+Addressed review findings C1 and I1-I4. M1 and M2 remain deferred as requested.
+
+### C1 — live permission revocation
+
+- Added permission-derived campaign, brief, job, and generated-content views so cached protected records disappear synchronously when read permissions are revoked while the page remains mounted.
+- On revocation, the page cancels and removes the affected organization-scoped queries, resets cursor collections, closes editors that could retain protected data, clears live job state, and stops all job polling timers.
+- In-flight job-detail responses now re-check both disclosure state and current permission before mutating UI or scheduling another poll.
+- Added tests for mounted live revocation and revocation during an unresolved poll.
+
+### I1 — evidence-based readiness
+
+- Product and asset requests now use `status=ACTIVE`, with filter-aligned organization query keys.
+- The page boundary independently filters products/assets to `ACTIVE`, so an over-broad backend response cannot enter readiness counts or the wizard.
+- Readiness uses explicit `已加载 N 项` wording and states that counts cover loaded pages only.
+- An empty first product page with a safe next cursor blocks proposal entry and exposes `加载更多产品资料`; the action becomes available only after an eligible product has actually loaded.
+- Added mixed-status, empty-first-page, and multi-page coverage.
+
+### I2 — platform permission and meaning
+
+- Platform definitions are requested only with `memberships.read`.
+- Missing permission blocks proposal entry with an explicit explanation and makes no platform request.
+- UI copy now identifies these records as system-supported platform definitions and does not imply an account connection.
+- Live membership-read revocation clears the platform collection and closes an open wizard.
+
+### I3 — disclosed job observation and controlled recovery
+
+- Ordinary mode does not request the jobs list or begin polling until `查看高级记录` is opened.
+- Closing disclosure stops polls and clears live job state; advanced mode retains the existing always-visible behavior.
+- Job list, polling, action, and generation errors are contained inside the advanced job section. Ordinary users receive controlled Chinese recovery text and `重新加载生成记录`; backend error details are not exposed.
+
+### I4 — approved knowledge boundary
+
+- The frontend response type now represents all backend concept statuses.
+- Only `APPROVED` concepts are counted and passed into the brief wizard, even when the response contains suggested, rejected, or deprecated records.
+
+### TDD evidence
+
+- C1 RED: both live-revocation tests failed because cached campaign/job records remained visible and an in-flight poll could repopulate the revoked job.
+- C1 GREEN: 2/2 targeted tests passed after cancellation, clearing, gating, and post-await checks.
+- I1/I2 RED: 3/3 targeted tests failed on unfiltered request paths, dishonest empty-page behavior, and unconditional platform loading.
+- I1/I2 GREEN: 3/3 targeted tests passed after ACTIVE filters, loaded-page copy, explicit load-more gating, and membership permission enforcement.
+- I4 RED/GREEN: the mixed-status response initially counted 2 concepts; after boundary filtering the test passed with exactly 1 approved concept.
+- I3 RED/GREEN: the hidden ordinary page initially fetched `/api/v1/jobs`; after disclosure-gated observation, the test passed with zero hidden requests and controlled disclosed recovery.
+
+### Fix Round 1 verification
+
+The configured npm/node shims still target a removed runtime, so the verified Codex runtime Node executable was used directly; no dependency was installed or changed.
+
+- Focused content tests: 17/17 passed.
+- Focused promotion tests: 10/10 passed.
+- Full frontend suite: 34 files, 291/291 tests passed.
+- Typecheck: exit 0, no diagnostics.
+- Lint: exit 0, no diagnostics.
+- Production build: exit 0, 150 modules transformed.
+- `git diff --check`: exit 0.
+- Backend, generated schema, dependencies, E2E, plan, and ledger were not changed.

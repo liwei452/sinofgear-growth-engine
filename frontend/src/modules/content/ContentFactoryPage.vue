@@ -5,9 +5,10 @@ import { useQuery, useQueryClient } from "@tanstack/vue-query"
 import { ApiError } from "../../api/client"
 import { currentUserQueryOptions } from "../auth/auth"
 import { listProducts, productQueryKeys } from "../products/api"
+import { assetKeys, listAssets } from "../assets/api"
 import ContentBriefWizard from "./ContentBriefWizard.vue"
 import {
-  cancelJob, contentQueryKeys, generateMaster, getJob, listAssets, listBriefs,
+  cancelJob, contentQueryKeys, generateMaster, getJob, listBriefs,
   listApprovedBriefConcepts, listCampaigns, listJobs, listMasterContents, listPlatformPage, markBriefReady,
   retryJob, reviseBrief, type ContentBrief, type Job,
 } from "./api"
@@ -22,9 +23,14 @@ const organizationId = computed(() => currentUserQuery.data.value?.organization.
 const permissions = computed(() => currentUserQuery.data.value?.membership.permissions ?? [])
 const has = (permission: string) => permissions.value.includes(permission)
 const enabled = computed(() => Boolean(organizationId.value))
+const canReadCampaigns = computed(() => has("campaigns.read"))
+const canReadJobs = computed(() => has("jobs.read"))
+const canReadContent = computed(() => has("content.read"))
+const canReadMemberships = computed(() => has("memberships.read"))
 const wizardOpen = ref(false)
 const notice = ref("")
 const actionError = ref("")
+const jobError = ref("")
 const actionId = ref("")
 const liveJobs = ref<Job[]>([])
 const editingBrief = ref<ContentBrief | null>(null)
@@ -33,14 +39,19 @@ const timers = new Set<ReturnType<typeof setTimeout>>()
 const pollingJobs = new Map<string, string>()
 const jobTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let disposed = false
+const promotionProductFilters = { status: "ACTIVE" } as const
+const promotionAssetFilters = { status: "ACTIVE" } as const
+const ordinaryExperience = computed(() => props.experience === "ordinary")
+const showAdvancedRecords = computed(() => props.experience === "advanced" || advancedRecordsOpen.value)
+const canObserveJobs = computed(() => canReadJobs.value && showAdvancedRecords.value)
 
 const campaignsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.campaigns(organizationId.value)), queryFn: listCampaigns, enabled: computed(() => enabled.value && has("campaigns.read")) })
 const briefsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.briefs(organizationId.value)), queryFn: () => listBriefs(), enabled: computed(() => enabled.value && has("campaigns.read")) })
-const productsQuery = useQuery({ queryKey: computed(() => productQueryKeys.list(organizationId.value, {})), queryFn: () => listProducts(), enabled: computed(() => enabled.value && has("products.read")) })
-const platformsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.platforms(organizationId.value)), queryFn: listPlatformPage, enabled })
-const assetsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.assets(organizationId.value)), queryFn: listAssets, enabled: computed(() => enabled.value && has("assets.read")) })
+const productsQuery = useQuery({ queryKey: computed(() => productQueryKeys.list(organizationId.value, promotionProductFilters)), queryFn: () => listProducts(promotionProductFilters), enabled: computed(() => enabled.value && has("products.read")) })
+const platformsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.platforms(organizationId.value)), queryFn: listPlatformPage, enabled: computed(() => enabled.value && has("memberships.read")) })
+const assetsQuery = useQuery({ queryKey: computed(() => assetKeys.list(organizationId.value, promotionAssetFilters)), queryFn: () => listAssets(promotionAssetFilters), enabled: computed(() => enabled.value && has("assets.read")) })
 const conceptsQuery = useQuery({ queryKey: computed(() => [...contentQueryKeys.briefs(organizationId.value), "approved-concepts"]), queryFn: listApprovedBriefConcepts, enabled: computed(() => enabled.value && has("knowledge.read")) })
-const jobsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.jobs(organizationId.value)), queryFn: () => listJobs(), enabled: computed(() => enabled.value && has("jobs.read")) })
+const jobsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.jobs(organizationId.value)), queryFn: () => listJobs(), enabled: computed(() => enabled.value && canObserveJobs.value) })
 const masterQuery = useQuery({ queryKey: computed(() => contentQueryKeys.masterContents(organizationId.value, {})), queryFn: () => listMasterContents(), enabled: computed(() => enabled.value && has("content.read")) })
 
 const campaigns = useCursorCollection(campaignsQuery.data, "/api/v1/campaigns", organizationId, (item) => item.id)
@@ -50,23 +61,30 @@ const platformPages = useCursorCollection(platformsQuery.data, "/api/v1/platform
 const assetPages = useCursorCollection(assetsQuery.data, "/api/v1/assets", organizationId, (item) => item.id)
 const jobPages = useCursorCollection(jobsQuery.data, "/api/v1/jobs", organizationId, (item) => item.job_id)
 const masterPages = useCursorCollection(masterQuery.data, "/api/v1/master-contents", organizationId, (item) => item.id)
-const briefs = briefPages.items
+const visibleCampaigns = computed(() => canReadCampaigns.value ? campaigns.items.value : [])
+const briefs = computed(() => canReadCampaigns.value ? briefPages.items.value : [])
+const visibleMasterContents = computed(() => canReadContent.value ? masterPages.items.value : [])
+const eligibleProducts = computed(() => productPages.items.value.filter((product) => product.status === "ACTIVE"))
+const eligibleAssets = computed(() => assetPages.items.value.filter((asset) => asset.status === "ACTIVE"))
+const approvedConcepts = computed(() => (conceptsQuery.data.value?.results ?? []).filter((concept) => concept.status === "APPROVED"))
 const jobs = computed(() => {
+  if (!canObserveJobs.value) return []
   const combined = [...jobPages.items.value, ...liveJobs.value]
   return [...new Map(combined.map((job) => [job.job_id, job])).values()]
 })
 const activeJobStatuses = new Set(["QUEUED", "RUNNING", "RETRY_QUEUED"])
-const ordinaryExperience = computed(() => props.experience === "ordinary")
-const showAdvancedRecords = computed(() => props.experience === "advanced" || advancedRecordsOpen.value)
+const visibleJobError = computed(() => jobError.value || (jobsQuery.isError.value ? "生成记录暂时无法更新，请重新加载后再试。" : ""))
 const proposalBlocker = computed(() => {
   if (!has("campaigns.manage")) return "你当前没有创建推广方案的权限，请联系管理员。"
   if (!has("products.read")) return "需要产品库查看权限，才能为真实产品准备推广方案。"
+  if (!has("memberships.read")) return "需要组织成员查看权限，才能读取平台定义。"
   if (campaignsQuery.isPending.value && has("campaigns.read")) return "正在检查已有推广资料…"
   if (productsQuery.isPending.value || platformsQuery.isPending.value) return "正在检查产品和推广渠道…"
   if (campaignsQuery.isError.value && has("campaigns.read")) return "已有推广资料暂时没有加载成功，请重新检查后再试。"
   if (productsQuery.isError.value) return "产品资料暂时没有加载成功，请重新检查后再试。"
   if (platformsQuery.isError.value) return "推广渠道暂时没有加载成功，请重新检查后再试。"
-  if (!productPages.items.value.length && !productPages.next.value) return "产品库还没有可推广的产品，请先补充产品资料。"
+  if (!eligibleProducts.value.length && productPages.next.value) return "还有产品资料未加载，请先加载后再继续。"
+  if (!eligibleProducts.value.length) return "产品库还没有可推广的产品，请先补充产品资料。"
   if (!platformPages.items.value.length) return "还没有可用的推广渠道，请先请管理员完成渠道配置。"
   return ""
 })
@@ -110,10 +128,10 @@ function isActiveOrganization(scope: string): boolean {
 }
 
 async function pollJob(id: string, scope: string): Promise<void> {
-  if (!isActiveOrganization(scope) || pollingJobs.get(id) !== scope) return
+  if (!canObserveJobs.value || !isActiveOrganization(scope) || pollingJobs.get(id) !== scope) return
   try {
     const job = await getJob(id)
-    if (!isActiveOrganization(scope) || pollingJobs.get(id) !== scope) return
+    if (!canObserveJobs.value || !isActiveOrganization(scope) || pollingJobs.get(id) !== scope) return
     upsertJob(job)
     if (job.status === "SUCCEEDED") {
       await queryClient.invalidateQueries({ queryKey: contentQueryKeys.masterContents(scope, {}) })
@@ -129,10 +147,10 @@ async function pollJob(id: string, scope: string): Promise<void> {
     }, 2500)
     timers.add(timer)
     jobTimers.set(id, timer)
-  } catch (error) {
+  } catch {
     if (!isActiveOrganization(scope) || pollingJobs.get(id) !== scope) return
     stopPolling(id)
-    actionError.value = safeError(error)
+    jobError.value = "生成记录暂时无法更新，请重新加载后再试。"
   }
 }
 
@@ -144,7 +162,7 @@ function stopPolling(id: string): void {
 
 function beginPolling(id: string): void {
   const scope = organizationId.value
-  if (!isActiveOrganization(scope) || pollingJobs.get(id) === scope) return
+  if (!canObserveJobs.value || !isActiveOrganization(scope) || pollingJobs.get(id) === scope) return
   if (pollingJobs.has(id)) stopPolling(id)
   pollingJobs.set(id, scope)
   void pollJob(id, scope)
@@ -161,7 +179,7 @@ async function refreshJob(id: string): Promise<void> {
 async function startGeneration(brief: ContentBrief): Promise<void> {
   if (brief.status !== "READY" || !has("content.manage") || actionId.value) return
   actionId.value = brief.id
-  actionError.value = ""
+  jobError.value = ""
   const scope = organizationId.value
   try {
     const accepted = await generateMaster(brief.id)
@@ -171,7 +189,7 @@ async function startGeneration(brief: ContentBrief): Promise<void> {
     }
     beginPolling(accepted.job_id)
   } catch (error) {
-    if (isActiveOrganization(scope)) actionError.value = safeError(error)
+    if (isActiveOrganization(scope)) jobError.value = ordinaryExperience.value ? "生成请求暂时没有提交成功，请稍后再试。" : safeError(error)
   } finally {
     if (isActiveOrganization(scope)) actionId.value = ""
   }
@@ -225,9 +243,14 @@ async function jobAction(job: Job, action: "cancel" | "retry"): Promise<void> {
     else stopPolling(updated.job_id)
   } catch (error) {
     if (!isActiveOrganization(scope)) return
-    actionError.value = safeError(error)
+    jobError.value = ordinaryExperience.value ? "生成记录暂时无法更新，请重新加载后再试。" : safeError(error)
     if (error instanceof ApiError && error.status === 409) await refreshJob(job.job_id)
   }
+}
+
+async function reloadJobs(): Promise<void> {
+  jobError.value = ""
+  await jobsQuery.refetch()
 }
 
 async function saved(): Promise<void> {
@@ -251,8 +274,55 @@ watch(organizationId, (current, previous) => {
   editingBrief.value = null
   notice.value = ""
   actionError.value = ""
+  jobError.value = ""
   actionId.value = ""
 })
+
+function cancelAndClear(queryKey: readonly unknown[]): void {
+  void queryClient.cancelQueries({ queryKey })
+  queryClient.removeQueries({ queryKey })
+}
+
+watch(canReadCampaigns, (current, previous) => {
+  if (!previous || current) return
+  const scope = organizationId.value
+  campaigns.reset()
+  briefPages.reset()
+  wizardOpen.value = false
+  editingBrief.value = null
+  cancelAndClear(contentQueryKeys.campaigns(scope))
+  cancelAndClear(contentQueryKeys.briefs(scope))
+}, { flush: "sync" })
+
+watch(canReadJobs, (current, previous) => {
+  if (!previous || current) return
+  for (const id of [...pollingJobs.keys()]) stopPolling(id)
+  liveJobs.value = []
+  jobError.value = ""
+  jobPages.reset()
+  cancelAndClear(contentQueryKeys.jobs(organizationId.value))
+}, { flush: "sync" })
+
+watch(canObserveJobs, (current, previous) => {
+  if (!previous || current) return
+  for (const id of [...pollingJobs.keys()]) stopPolling(id)
+  liveJobs.value = []
+  jobError.value = ""
+}, { flush: "sync" })
+
+watch(canReadContent, (current, previous) => {
+  if (!previous || current) return
+  masterPages.reset()
+  cancelAndClear(contentQueryKeys.masterContents(organizationId.value, {}))
+}, { flush: "sync" })
+
+watch(canReadMemberships, (current, previous) => {
+  if (!previous || current) return
+  platformPages.reset()
+  wizardOpen.value = false
+  editingBrief.value = null
+  cancelAndClear(contentQueryKeys.platforms(organizationId.value))
+}, { flush: "sync" })
 
 watch(jobs, (items) => {
   for (const job of items) if (activeJobStatuses.has(job.status)) beginPolling(job.job_id)
@@ -280,10 +350,10 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
       </ol>
 
       <section class="readiness-grid" aria-label="推广资料准备情况">
-        <article><strong>{{ has('products.read') ? productPages.items.value.length : '—' }}</strong><span>可推广产品</span><small>{{ has('products.read') ? '来自当前组织的产品库' : '没有产品库查看权限' }}</small><button v-if="productsQuery.isError.value" type="button" @click="productsQuery.refetch()">重新检查产品资料</button></article>
-        <article><strong>{{ platformPages.items.value.length }}</strong><span>可用推广渠道</span><small>来自当前组织的渠道配置</small><button v-if="platformsQuery.isError.value" type="button" @click="platformsQuery.refetch()">重新检查推广渠道</button></article>
-        <article><strong>{{ has('assets.read') ? assetPages.items.value.length : '—' }}</strong><span>可用素材</span><small>{{ has('assets.read') ? '素材不是开始方案的必填项' : '没有素材库查看权限，不影响先整理方案' }}</small><button v-if="has('assets.read') && assetsQuery.isError.value" type="button" @click="assetsQuery.refetch()">重新检查素材</button></article>
-        <article><strong>{{ has('knowledge.read') ? (conceptsQuery.data.value?.results.length ?? 0) : '—' }}</strong><span>已批准知识</span><small>{{ has('knowledge.read') ? '可在方案中选用' : '没有知识库查看权限，不会代填知识' }}</small><button v-if="has('knowledge.read') && conceptsQuery.isError.value" type="button" @click="conceptsQuery.refetch()">重新检查知识资料</button></article>
+        <article><strong>{{ has('products.read') ? `已加载 ${eligibleProducts.length} 项` : '—' }}</strong><span>可推广产品</span><small>{{ has('products.read') ? '来自当前组织的 ACTIVE 产品；数字仅代表已加载页' : '没有产品库查看权限' }}</small><button v-if="productsQuery.isError.value" type="button" @click="productsQuery.refetch()">重新检查产品资料</button><button v-else-if="has('products.read') && !eligibleProducts.length && productPages.next.value" type="button" @click="productPages.loadMore">加载更多产品资料</button></article>
+        <article><strong>{{ has('memberships.read') ? `已加载 ${platformPages.items.value.length} 项` : '—' }}</strong><span>可选平台定义</span><small>来自系统支持的平台定义，不代表账号已连接</small><button v-if="has('memberships.read') && platformsQuery.isError.value" type="button" @click="platformsQuery.refetch()">重新检查平台定义</button></article>
+        <article><strong>{{ has('assets.read') ? `已加载 ${eligibleAssets.length} 项` : '—' }}</strong><span>可用素材</span><small>{{ has('assets.read') ? '来自 ACTIVE 素材；数字仅代表已加载页' : '没有素材库查看权限，不影响先整理方案' }}</small><button v-if="has('assets.read') && assetsQuery.isError.value" type="button" @click="assetsQuery.refetch()">重新检查素材</button></article>
+        <article><strong>{{ has('knowledge.read') ? `已加载 ${approvedConcepts.length} 项` : '—' }}</strong><span>已批准知识</span><small>{{ has('knowledge.read') ? '仅包含 APPROVED 知识；数字仅代表已加载页' : '没有知识库查看权限，不会代填知识' }}</small><button v-if="has('knowledge.read') && conceptsQuery.isError.value" type="button" @click="conceptsQuery.refetch()">重新检查知识资料</button></article>
       </section>
 
       <button class="advanced-disclosure" type="button" :aria-expanded="advancedRecordsOpen" @click="advancedRecordsOpen = !advancedRecordsOpen">
@@ -293,25 +363,24 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
     <header v-else class="library-header"><div><p class="eyebrow">从需求到可审核内容</p><h1 id="factory-title">AI 内容工厂</h1><p>按“准备需求、提交审核、AI 生成、查看结果”四步完成内容生产。</p></div><button v-if="has('campaigns.manage')" class="primary-action" type="button" @click="wizardOpen = true">创建内容任务</button></header>
     <p v-if="notice" role="status" class="notice">{{ notice }}</p><p v-if="actionError" role="alert" class="form-alert">{{ actionError }}</p>
     <section v-if="showAdvancedRecords" class="query-errors" aria-label="数据加载问题">
-      <p v-if="campaignsQuery.isError.value" role="alert">{{ queryError(campaignsQuery.error.value, '活动') }} <button type="button" @click="campaignsQuery.refetch()">重新加载活动</button></p>
-      <p v-if="briefsQuery.isError.value" role="alert">{{ queryError(briefsQuery.error.value, '内容需求') }} <button type="button" @click="briefsQuery.refetch()">重新加载内容需求</button></p>
-      <p v-if="productsQuery.isError.value" role="alert">{{ queryError(productsQuery.error.value, '产品') }} <button type="button" @click="productsQuery.refetch()">重新加载产品</button></p>
-      <p v-if="platformsQuery.isError.value" role="alert">{{ queryError(platformsQuery.error.value, '平台') }} <button type="button" @click="platformsQuery.refetch()">重新加载平台</button></p>
+      <p v-if="has('campaigns.read') && campaignsQuery.isError.value" role="alert">{{ queryError(campaignsQuery.error.value, '活动') }} <button type="button" @click="campaignsQuery.refetch()">重新加载活动</button></p>
+      <p v-if="has('campaigns.read') && briefsQuery.isError.value" role="alert">{{ queryError(briefsQuery.error.value, '内容需求') }} <button type="button" @click="briefsQuery.refetch()">重新加载内容需求</button></p>
+      <p v-if="has('products.read') && productsQuery.isError.value" role="alert">{{ queryError(productsQuery.error.value, '产品') }} <button type="button" @click="productsQuery.refetch()">重新加载产品</button></p>
+      <p v-if="has('memberships.read') && platformsQuery.isError.value" role="alert">{{ queryError(platformsQuery.error.value, '平台') }} <button type="button" @click="platformsQuery.refetch()">重新加载平台</button></p>
       <p v-if="has('assets.read') && assetsQuery.isError.value" role="alert">{{ queryError(assetsQuery.error.value, '素材') }} <button type="button" @click="assetsQuery.refetch()">重新加载素材</button></p>
-      <p v-if="has('jobs.read') && jobsQuery.isError.value" role="alert">{{ queryError(jobsQuery.error.value, '生成任务') }} <button type="button" @click="jobsQuery.refetch()">重新加载生成任务</button></p>
       <p v-if="has('content.read') && masterQuery.isError.value" role="alert">{{ queryError(masterQuery.error.value, '生成结果') }} <button type="button" @click="masterQuery.refetch()">重新加载生成结果</button></p>
     </section>
-    <section v-if="showAdvancedRecords" class="summary-grid" aria-label="当前工作摘要"><article><strong>{{ campaigns.items.value.length }}</strong><span>活动</span></article><article><strong>{{ briefs.length }}</strong><span>内容需求</span></article><article><strong>{{ jobs.length }}</strong><span>生成任务</span></article><article><strong>{{ masterPages.items.value.length }}</strong><span>生成结果</span><button v-if="masterPages.next.value" type="button" @click="masterPages.loadMore">加载更多生成结果</button><span v-if="masterPages.error.value" role="alert">{{ masterPages.error.value }} <button type="button" @click="masterPages.loadMore">重试</button></span></article></section>
+    <section v-if="showAdvancedRecords" class="summary-grid" aria-label="当前工作摘要"><article><strong>{{ visibleCampaigns.length }}</strong><span>活动</span></article><article><strong>{{ briefs.length }}</strong><span>内容需求</span></article><article><strong>{{ jobs.length }}</strong><span>生成任务</span></article><article><strong>{{ visibleMasterContents.length }}</strong><span>生成结果</span><button v-if="has('content.read') && masterPages.next.value" type="button" @click="masterPages.loadMore">加载更多生成结果</button><span v-if="has('content.read') && masterPages.error.value" role="alert">{{ masterPages.error.value }} <button type="button" @click="masterPages.loadMore">重试</button></span></article></section>
 
     <template v-if="showAdvancedRecords">
-      <section aria-labelledby="campaigns-title"><h2 id="campaigns-title">推广活动</h2><p v-if="campaignsQuery.isPending.value" role="status">正在加载推广活动…</p><div v-else-if="campaigns.items.value.length" class="card-grid"><article v-for="campaign in campaigns.items.value" :key="campaign.id" class="workflow-card"><h3>{{ campaign.name }}</h3><p class="muted">{{ campaign.description || '没有补充说明' }}</p></article></div><p v-else class="muted">还没有推广活动。</p><p v-if="campaigns.error.value" role="alert">{{ campaigns.error.value }} <button type="button" @click="campaigns.loadMore">重试</button></p><button v-else-if="campaigns.next.value" type="button" @click="campaigns.loadMore">加载更多推广活动</button></section>
+      <section v-if="has('campaigns.read')" aria-labelledby="campaigns-title"><h2 id="campaigns-title">推广活动</h2><p v-if="campaignsQuery.isPending.value" role="status">正在加载推广活动…</p><div v-else-if="visibleCampaigns.length" class="card-grid"><article v-for="campaign in visibleCampaigns" :key="campaign.id" class="workflow-card"><h3>{{ campaign.name }}</h3><p class="muted">{{ campaign.description || '没有补充说明' }}</p></article></div><p v-else class="muted">还没有推广活动。</p><p v-if="campaigns.error.value" role="alert">{{ campaigns.error.value }} <button type="button" @click="campaigns.loadMore">重试</button></p><button v-else-if="campaigns.next.value" type="button" @click="campaigns.loadMore">加载更多推广活动</button></section>
 
-      <section aria-labelledby="briefs-title"><h2 id="briefs-title">内容需求</h2><p v-if="briefsQuery.isPending.value" role="status">正在加载内容需求…</p><div v-else-if="!briefs.length" class="state-panel"><h3>还没有内容需求</h3><p>从“创建内容任务”开始，向导会帮你准备完整信息。</p></div><div v-else class="card-grid"><article v-for="item in briefs" :key="item.id" class="workflow-card"><div class="card-heading"><h3>{{ campaigns.items.value.find(c => c.id === item.campaign_id)?.name || '内容需求' }}</h3><span class="status-chip">{{ item.status === 'READY' ? '可生成' : '需求草稿' }}</span></div><p>{{ item.target_country }} · {{ item.customer_type }} · {{ item.language }}</p><p v-if="item.status === 'DRAFT' && !has('campaigns.review')" class="muted">等待审核人员确认</p><div class="card-actions"><button v-if="item.status === 'DRAFT' && has('campaigns.manage')" type="button" @click="openBriefEditor(item)">编辑需求草稿</button><button v-if="item.status === 'DRAFT' && has('campaigns.review')" type="button" :disabled="actionId === item.id" @click="ready(item)">确认需求可生成</button><button v-if="item.status === 'READY' && has('campaigns.manage')" type="button" @click="createBriefRevision(item)">创建需求修订版</button><button v-if="item.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId)" @click="startGeneration(item)">开始AI生成</button></div></article></div><p v-if="briefPages.error.value" role="alert">{{ briefPages.error.value }} <button type="button" @click="briefPages.loadMore">重试</button></p><button v-else-if="briefPages.next.value" type="button" @click="briefPages.loadMore">加载更多内容需求</button></section>
+      <section v-if="has('campaigns.read')" aria-labelledby="briefs-title"><h2 id="briefs-title">内容需求</h2><p v-if="briefsQuery.isPending.value" role="status">正在加载内容需求…</p><div v-else-if="!briefs.length" class="state-panel"><h3>还没有内容需求</h3><p>从“创建内容任务”开始，向导会帮你准备完整信息。</p></div><div v-else class="card-grid"><article v-for="item in briefs" :key="item.id" class="workflow-card"><div class="card-heading"><h3>{{ visibleCampaigns.find(c => c.id === item.campaign_id)?.name || '内容需求' }}</h3><span class="status-chip">{{ item.status === 'READY' ? '可生成' : '需求草稿' }}</span></div><p>{{ item.target_country }} · {{ item.customer_type }} · {{ item.language }}</p><p v-if="item.status === 'DRAFT' && !has('campaigns.review')" class="muted">等待审核人员确认</p><div class="card-actions"><button v-if="item.status === 'DRAFT' && has('campaigns.manage')" type="button" @click="openBriefEditor(item)">编辑需求草稿</button><button v-if="item.status === 'DRAFT' && has('campaigns.review')" type="button" :disabled="actionId === item.id" @click="ready(item)">确认需求可生成</button><button v-if="item.status === 'READY' && has('campaigns.manage')" type="button" @click="createBriefRevision(item)">创建需求修订版</button><button v-if="item.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId)" @click="startGeneration(item)">开始AI生成</button></div></article></div><p v-if="briefPages.error.value" role="alert">{{ briefPages.error.value }} <button type="button" @click="briefPages.loadMore">重试</button></p><button v-else-if="briefPages.next.value" type="button" @click="briefPages.loadMore">加载更多内容需求</button></section>
 
-      <section aria-labelledby="jobs-title"><h2 id="jobs-title">生成任务</h2><div v-if="jobs.length" class="card-grid"><article v-for="(job, index) in jobs" :key="job.job_id" class="workflow-card"><div class="card-heading"><h3>{{ ordinaryExperience ? `第 ${index + 1} 项生成记录` : `任务 ${job.job_id}` }}</h3><span class="status-chip">{{ jobStatusLabel(job) }}</span></div><p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p><p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p><p v-else-if="job.status === 'FAILED'" role="alert">{{ ordinaryExperience ? '这次没有生成完成，你可以再次尝试。' : job.error?.message || '生成未完成，可以重试。' }}</p><div class="card-actions"><button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">{{ ordinaryExperience ? '停止生成' : '取消任务' }}</button><button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">{{ ordinaryExperience ? '再次尝试' : '重新尝试' }}</button></div></article></div><p v-else class="muted">提交生成后，进度会显示在这里。</p><p v-if="jobPages.error.value" role="alert">{{ jobPages.error.value }} <button type="button" @click="jobPages.loadMore">重试</button></p><button v-else-if="jobPages.next.value" type="button" @click="jobPages.loadMore">加载更多生成任务</button></section>
+      <section v-if="has('jobs.read')" aria-labelledby="jobs-title"><h2 id="jobs-title">生成任务</h2><p v-if="visibleJobError" role="alert">{{ visibleJobError }} <button type="button" @click="reloadJobs">重新加载生成记录</button></p><div v-if="jobs.length" class="card-grid"><article v-for="(job, index) in jobs" :key="job.job_id" class="workflow-card"><div class="card-heading"><h3>{{ ordinaryExperience ? `第 ${index + 1} 项生成记录` : `任务 ${job.job_id}` }}</h3><span class="status-chip">{{ jobStatusLabel(job) }}</span></div><p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p><p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p><p v-else-if="job.status === 'FAILED'" role="alert">{{ ordinaryExperience ? '这次没有生成完成，你可以再次尝试。' : job.error?.message || '生成未完成，可以重试。' }}</p><div class="card-actions"><button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">{{ ordinaryExperience ? '停止生成' : '取消任务' }}</button><button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">{{ ordinaryExperience ? '再次尝试' : '重新尝试' }}</button></div></article></div><p v-else class="muted">提交生成后，进度会显示在这里。</p><p v-if="jobPages.error.value" role="alert">{{ jobPages.error.value }} <button type="button" @click="jobPages.loadMore">重试</button></p><button v-else-if="jobPages.next.value" type="button" @click="jobPages.loadMore">加载更多生成任务</button></section>
     </template>
 
-    <ContentBriefWizard v-if="wizardOpen || editingBrief" :brief="editingBrief" :campaigns="campaigns.items.value" :products="productPages.items.value" :platforms="platformPages.items.value" :assets="assetPages.items.value" :concepts="conceptsQuery.data.value?.results ?? []" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
+    <ContentBriefWizard v-if="wizardOpen || editingBrief" :brief="editingBrief" :campaigns="visibleCampaigns" :products="eligibleProducts" :platforms="platformPages.items.value" :assets="eligibleAssets" :concepts="approvedConcepts" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
   </main>
 </template>
 

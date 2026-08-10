@@ -1,7 +1,9 @@
 from copy import deepcopy
+from datetime import timedelta
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.utils import timezone
 
 from apps.identity.models import Membership, Role
 from apps.knowledge.guards import _test_fixture_writes
@@ -10,6 +12,7 @@ from apps.leads.models import LeadCandidate
 from apps.leads.schemas import lead_analysis_errors
 from apps.leads.services import build_analysis_snapshot
 from apps.sources.models import SourceEvidence, evidence_service_writes
+from apps.sources.services import RetentionService
 
 
 def _authorize(user, organization):
@@ -164,6 +167,36 @@ def test_snapshot_rejects_unusable_evidence_before_analysis_lease(
         evidence.availability = availability
         evidence.original_text = original_text
         evidence.save(update_fields=["availability", "original_text", "updated_at"])
+
+    with pytest.raises(ValidationError, match="available non-empty"):
+        build_analysis_snapshot(
+            candidate=candidate,
+            evidence_ids=[evidence.id],
+            actor=user,
+        )
+
+    candidate.refresh_from_db()
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None
+
+
+@pytest.mark.django_db
+def test_cleanup_first_then_analysis_rejects_without_creating_lease(
+    candidate,
+    evidence,
+    user,
+):
+    _authorize(user, candidate.organization)
+    cutoff = timezone.now() - timedelta(days=30)
+    with evidence_service_writes():
+        evidence.captured_at = cutoff - timedelta(days=1)
+        evidence.save(update_fields=["captured_at", "updated_at"])
+    result = RetentionService.cleanup(
+        organization=candidate.organization,
+        cutoff=cutoff,
+        actor=user,
+    )
+    assert result.redacted == 1
 
     with pytest.raises(ValidationError, match="available non-empty"):
         build_analysis_snapshot(

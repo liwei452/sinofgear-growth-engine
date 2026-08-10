@@ -6,6 +6,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
@@ -33,9 +34,12 @@ from apps.sources.services import (
     EvidenceService,
     IngestionService,
     RetentionService,
+    SourceIdempotencyConflictError,
+    SourceIngestionRequestService,
     canonical_source_evidence_snapshot,
     source_import_job_snapshot,
 )
+from apps.sources.tasks import execute_source_import
 
 
 @pytest.fixture
@@ -192,6 +196,26 @@ def _attach_ingestion_copy(*, evidence, user, author_name, screenshot_asset):
     return batch, row
 
 
+def _request_and_run_import(
+    *, organization, user, key, payload, source_type, monkeypatch
+):
+    from apps.sources import tasks
+
+    monkeypatch.setattr(tasks.execute_source_import, "delay", lambda *_args: None)
+    reference = prepare_import_reference(payload, source_type=source_type)
+    batch, job = SourceIngestionRequestService.create_or_reuse(
+        organization=organization,
+        creator=user,
+        source_type=source_type,
+        idempotency_key=key,
+        prepared_reference=reference,
+    )
+    result = execute_source_import(str(job.id), str(batch.id))
+    assert result["status"] == IngestionBatch.Status.SUCCEEDED
+    batch.refresh_from_db()
+    return batch
+
+
 @pytest.mark.django_db
 def test_cleanup_redacts_old_transient_evidence_and_preserves_fingerprint_history(
     organization, user, source_manager
@@ -285,6 +309,7 @@ def test_cleanup_tombstones_every_linked_ingestion_raw_copy(
     content.refresh_from_db()
     batch.refresh_from_db()
     row.refresh_from_db()
+    batch.full_clean()
     materialized = json.dumps(
         {
             "evidence": {
@@ -310,6 +335,213 @@ def test_cleanup_tombstones_every_linked_ingestion_raw_copy(
     assert result.redacted == 1
     assert result.deleted_text == 4
     assert result.anonymized_actors == 3
+
+
+@pytest.mark.django_db
+def test_reimport_after_cleanup_never_rehydrates_raw_duplicate_copies(
+    organization, user, source_manager, monkeypatch
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    secret_text = "REIMPORT-SECRET need custom helical gear"
+    secret_author = "REIMPORT-SECRET-AUTHOR"
+    screenshot = _asset(
+        organization=organization,
+        user=user,
+        marker="reimport-secret-screen",
+    )
+    payload = {
+        "source_url": "https://example.com/posts/reimport-retained",
+        "original_text": secret_text,
+        "author_name": secret_author,
+        "screenshot_asset_id": str(screenshot.id),
+    }
+    first_batch = _request_and_run_import(
+        organization=organization,
+        user=user,
+        key="retention-reimport-first",
+        payload=payload,
+        source_type=IngestionBatch.SourceType.SCREENSHOT,
+        monkeypatch=monkeypatch,
+    )
+    evidence = SourceEvidence.objects.get(
+        ingestion_rows__batch=first_batch,
+        ingestion_rows__outcome=IngestionRow.Outcome.ACCEPTED,
+    )
+    with evidence_service_writes():
+        evidence.captured_at = cutoff - timedelta(days=1)
+        evidence.save(update_fields=["captured_at", "updated_at"])
+
+    first_cleanup = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+    assert first_cleanup.redacted == 1
+
+    second_batch = _request_and_run_import(
+        organization=organization,
+        user=user,
+        key="retention-reimport-second",
+        payload=payload,
+        source_type=IngestionBatch.SourceType.SCREENSHOT,
+        monkeypatch=monkeypatch,
+    )
+    second_row = second_batch.rows.get(row_number=1)
+    evidence.refresh_from_db()
+    evidence.source_signal.source_content.refresh_from_db()
+    committed_after_import = json.dumps(
+        {
+            "evidence": evidence.original_text,
+            "content": {
+                "text": evidence.source_signal.source_content.original_text,
+                "author": evidence.source_signal.source_content.author_public_name,
+            },
+            "row": second_row.normalized_input,
+            "batch": second_batch.input_reference,
+        },
+        sort_keys=True,
+    )
+    assert secret_text not in committed_after_import
+    assert secret_author not in committed_after_import
+    assert str(screenshot.id) not in committed_after_import
+    assert second_row.outcome == IngestionRow.Outcome.DUPLICATE
+    assert second_row.source_evidence_id == evidence.id
+    assert second_row.normalized_input["retention"]["reason"] == (
+        "TRANSIENT_30D_EXPIRED"
+    )
+    assert second_batch.input_reference["retention"]["reason"] == (
+        "TRANSIENT_30D_EXPIRED"
+    )
+
+    second_cleanup = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+    second_batch.refresh_from_db()
+    second_row.refresh_from_db()
+    committed_after_cleanup = json.dumps(
+        {
+            "row": second_row.normalized_input,
+            "batch": second_batch.input_reference,
+        },
+        sort_keys=True,
+    )
+    assert secret_text not in committed_after_cleanup
+    assert secret_author not in committed_after_cleanup
+    assert str(screenshot.id) not in committed_after_cleanup
+    assert second_cleanup.redacted == 0
+    assert second_cleanup.deleted_text == 0
+    assert second_cleanup.anonymized_actors == 0
+    assert second_cleanup.no_op == 1
+
+
+@pytest.mark.django_db
+def test_retained_batch_reuses_immutable_original_request_identity(
+    organization, user, source_manager, monkeypatch
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    source_type = IngestionBatch.SourceType.URL
+    payload = {
+        "source_url": "https://example.com/posts/retained-identity",
+        "original_text": "Original immutable request text",
+    }
+    batch = _request_and_run_import(
+        organization=organization,
+        user=user,
+        key="retained-request-identity",
+        payload=payload,
+        source_type=source_type,
+        monkeypatch=monkeypatch,
+    )
+    evidence = SourceEvidence.objects.get(ingestion_rows__batch=batch)
+    with evidence_service_writes():
+        evidence.captured_at = cutoff - timedelta(days=1)
+        evidence.save(update_fields=["captured_at", "updated_at"])
+    RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+    batch.refresh_from_db()
+    original_job_id = batch.job_id
+    reference = prepare_import_reference(payload, source_type=source_type)
+
+    reused_batch, reused_job = SourceIngestionRequestService.create_or_reuse(
+        organization=organization,
+        creator=user,
+        source_type=source_type,
+        idempotency_key="retained-request-identity",
+        prepared_reference=reference,
+    )
+
+    assert reused_batch.id == batch.id
+    assert reused_job.id == original_job_id
+    assert IngestionBatch.objects.count() == 1
+
+    changed_reference = prepare_import_reference(
+        {
+            "source_url": "https://example.com/posts/retained-identity",
+            "original_text": "A different request text",
+        },
+        source_type=source_type,
+    )
+    with pytest.raises(SourceIdempotencyConflictError):
+        SourceIngestionRequestService.create_or_reuse(
+            organization=organization,
+            creator=user,
+            source_type=source_type,
+            idempotency_key="retained-request-identity",
+            prepared_reference=changed_reference,
+        )
+
+
+@pytest.mark.django_db
+def test_cleanup_protects_evidence_while_matching_raw_import_is_queued(
+    organization, user, source_manager, monkeypatch
+):
+    from apps.sources import tasks
+
+    monkeypatch.setattr(tasks.execute_source_import, "delay", lambda *_args: None)
+    cutoff = timezone.now() - timedelta(days=30)
+    evidence = _evidence(
+        organization=organization,
+        user=user,
+        marker="queued-matching-copy",
+        captured_at=cutoff - timedelta(days=1),
+        text="Queued raw duplicate",
+    )
+    reference = prepare_import_reference(
+        {
+            "source_url": evidence.source_url,
+            "original_text": evidence.original_text,
+        },
+        source_type=IngestionBatch.SourceType.URL,
+    )
+    batch, _job = SourceIngestionRequestService.create_or_reuse(
+        organization=organization,
+        creator=user,
+        source_type=IngestionBatch.SourceType.URL,
+        idempotency_key="queued-matching-copy",
+        prepared_reference=reference,
+    )
+
+    result = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+
+    evidence.refresh_from_db()
+    batch.refresh_from_db()
+    assert evidence.availability == SourceEvidence.Availability.AVAILABLE
+    assert evidence.original_text == "Queued raw duplicate"
+    assert batch.input_reference["rows"][0]["original_text"] == (
+        "Queued raw duplicate"
+    )
+    assert result.redacted == 0
+    assert result.protected == 1
+    assert result.protected_reasons == {"SHARED_OR_ACTIVE_RAW_COPY": 1}
 
 
 @pytest.mark.django_db
@@ -347,7 +579,7 @@ def test_cleanup_rolls_back_every_copy_when_batch_tombstone_fails(
 
     monkeypatch.setattr(
         IngestionBatchQuerySet,
-        "_service_redact_input_reference",
+        "_service_tombstone_input_reference",
         fail_batch_tombstone,
     )
 
@@ -372,6 +604,80 @@ def test_cleanup_rolls_back_every_copy_when_batch_tombstone_fails(
     assert result.failures == 1
     assert result.deleted_text == 0
     assert result.anonymized_actors == 0
+
+
+@pytest.mark.django_db
+def test_cleanup_redacted_evidence_still_tombstones_later_linked_raw_copies(
+    organization, user, source_manager
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    secret_text = "LATE-LINKED-RAW-COPY"
+    secret_author = "LATE-LINKED-AUTHOR"
+    evidence = _evidence(
+        organization=organization,
+        user=user,
+        marker="late-linked-copy",
+        captured_at=cutoff - timedelta(days=1),
+        text=secret_text,
+    )
+    first = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+    assert first.redacted == 1
+    reference = prepare_import_reference(
+        {
+            "source_url": evidence.source_url,
+            "original_text": secret_text,
+            "author_name": secret_author,
+        },
+        source_type=IngestionBatch.SourceType.URL,
+    )
+    batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.URL,
+        input_reference=reference,
+        idempotency_key="late-linked-raw-copy",
+        created_by=user,
+    )
+    with ingestion_row_service_writes():
+        row = IngestionRow.objects.create(
+            organization=organization,
+            batch=batch,
+            row_number=1,
+            normalized_input={
+                key: value
+                for key, value in reference["rows"][0].items()
+                if key != "row_number"
+            },
+            outcome=IngestionRow.Outcome.DUPLICATE,
+            source_content=evidence.source_signal.source_content,
+            source_signal=evidence.source_signal,
+            source_evidence=evidence,
+        )
+
+    second = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+
+    batch.refresh_from_db()
+    row.refresh_from_db()
+    persisted = json.dumps(
+        {"batch": batch.input_reference, "row": row.normalized_input},
+        sort_keys=True,
+    )
+    assert secret_text not in persisted
+    assert secret_author not in persisted
+    assert row.normalized_input["retention"]["source_evidence_id"] == str(
+        evidence.id
+    )
+    assert second.redacted == 0
+    assert second.deleted_text == 2
+    assert second.anonymized_actors == 2
+    assert second.no_op == 0
 
 
 @pytest.mark.django_db
@@ -704,7 +1010,7 @@ def test_cleanup_does_not_anonymize_source_shared_with_protected_evidence(
 
 
 @pytest.mark.django_db
-def test_cleanup_rechecks_active_analysis_after_evidence_lock(
+def test_cleanup_reads_analysis_history_once_under_organization_lock(
     organization, user, source_manager, monkeypatch
 ):
     cutoff = timezone.now() - timedelta(days=30)
@@ -714,11 +1020,16 @@ def test_cleanup_rechecks_active_analysis_after_evidence_lock(
         marker="analysis-race",
         captured_at=cutoff - timedelta(days=1),
     )
-    reads = iter((set(), {str(evidence.id)}))
+    reads = []
+
+    def read_once(**_kwargs):
+        reads.append(True)
+        return {str(evidence.id)}
+
     monkeypatch.setattr(
         RetentionService,
         "_active_analysis_evidence_ids",
-        lambda **_kwargs: next(reads),
+        read_once,
     )
 
     result = RetentionService.cleanup(
@@ -729,6 +1040,53 @@ def test_cleanup_rechecks_active_analysis_after_evidence_lock(
     assert evidence.original_text
     assert result.protected == 1
     assert result.redacted == 0
+    assert reads == [True]
+
+
+@pytest.mark.django_db
+def test_cleanup_history_snapshot_scans_are_constant_for_one_or_many_evidence(
+    organization, other_organization, user
+):
+    cutoff = timezone.now() - timedelta(days=30)
+
+    def run_for(*, scope, actor_name, count):
+        actor = get_user_model().objects.create_user(username=actor_name)
+        Membership.objects.create(
+            user=actor,
+            organization=scope,
+            role=Role.objects.create_operator(),
+        )
+        for index in range(count):
+            _evidence(
+                organization=scope,
+                user=user,
+                marker=f"history-query-{actor_name}-{index}",
+                captured_at=cutoff - timedelta(days=1),
+            )
+        with CaptureQueriesContext(connection) as queries:
+            RetentionService.cleanup(
+                organization=scope,
+                cutoff=cutoff,
+                actor=actor,
+            )
+        history_queries = [
+            query["sql"]
+            for query in queries.captured_queries
+            if (
+                'SELECT "jobs_job"."input_snapshot"' in query["sql"]
+                or 'SELECT "ai_airun"."input_snapshot"' in query["sql"]
+            )
+        ]
+        return len(history_queries)
+
+    one = run_for(scope=organization, actor_name="history-one", count=1)
+    many = run_for(
+        scope=other_organization,
+        actor_name="history-many",
+        count=8,
+    )
+
+    assert one == many == 2
 
 
 @pytest.mark.django_db

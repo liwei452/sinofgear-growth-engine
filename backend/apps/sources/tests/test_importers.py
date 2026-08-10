@@ -7,6 +7,8 @@ from apps.sources.importers import (
     import_result_from_reference,
     parse_import,
     prepare_import_reference,
+    tombstone_prepared_reference,
+    validate_prepared_import_reference,
 )
 
 
@@ -219,6 +221,63 @@ def test_all_prepared_modes_round_trip_their_canonical_source_type(source_type, 
     assert reference["source_type"] == source_type
     result = import_result_from_reference(reference, source_type=source_type)
     assert len(result.rows) == 1
+
+
+def test_retained_reference_has_one_strict_parseable_tombstone_shape():
+    evidence_id = "00000000-0000-0000-0000-000000000099"
+    reference = prepare_import_reference(
+        {
+            "source_url": "https://e.test/retained",
+            "original_text": "must disappear",
+            "author_name": "must disappear too",
+            "screenshot_asset_id": "00000000-0000-0000-0000-000000000001",
+        },
+        source_type="SCREENSHOT",
+    )
+
+    retained = tombstone_prepared_reference(
+        reference,
+        source_type="SCREENSHOT",
+        evidence_ids_by_row={1: evidence_id},
+    )
+
+    validate_prepared_import_reference(retained, source_type="SCREENSHOT")
+    result = import_result_from_reference(retained, source_type="SCREENSHOT")
+    assert result.rows == []
+    assert result.retained_rows[0].source_evidence_id == evidence_id
+    assert retained == {
+        "schema": "GUIDED_IMPORT_V1",
+        "source_type": "SCREENSHOT",
+        "rows": [
+            {
+                "platform": "MANUAL",
+                "source_url": "https://e.test/retained",
+                "signal_type": "MENTION",
+                "original_text": "",
+                "author_name": "",
+                "published_at": None,
+                "screenshot_asset_id": None,
+                "row_number": 1,
+                "retention": {
+                    "schema": "SOURCE_RETENTION_TOMBSTONE_V1",
+                    "status": "REDACTED_BY_RETENTION",
+                    "reason": "TRANSIENT_30D_EXPIRED",
+                    "source_evidence_id": evidence_id,
+                },
+            }
+        ],
+        "errors": [],
+        "retention": {
+            "schema": "SOURCE_RETENTION_TOMBSTONE_V1",
+            "status": "REDACTED_BY_RETENTION",
+            "reason": "TRANSIENT_30D_EXPIRED",
+            "redacted_row_numbers": [1],
+        },
+    }
+
+    retained["unexpected"] = "arbitrary"
+    with pytest.raises(ValidationError, match="prepared input reference"):
+        validate_prepared_import_reference(retained, source_type="SCREENSHOT")
 
 
 @pytest.mark.parametrize("relabelled_type", ["URL", "CSV", "JSON"])

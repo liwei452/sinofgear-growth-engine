@@ -1,7 +1,8 @@
 import csv
 import io
 import json
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -25,6 +26,9 @@ SUPPORTED_SOURCE_TYPES = frozenset(
     }
 )
 PREPARED_IMPORT_SCHEMA = "GUIDED_IMPORT_V1"
+RETENTION_TOMBSTONE_SCHEMA = "SOURCE_RETENTION_TOMBSTONE_V1"
+RETENTION_TOMBSTONE_STATUS = "REDACTED_BY_RETENTION"
+RETENTION_TOMBSTONE_REASON = "TRANSIENT_30D_EXPIRED"
 PREPARED_ROW_FIELDS = frozenset(
     {
         "platform",
@@ -84,6 +88,14 @@ class ImportRow:
 class ImportResult:
     rows: list[ImportRow]
     errors: list[dict[str, object]]
+    retained_rows: list["RetainedImportRow"] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class RetainedImportRow:
+    row_number: int
+    source_evidence_id: str
+    normalized_input: dict[str, object]
 
 
 def _batch_error(message: str, *, code: str) -> ValidationError:
@@ -394,12 +406,83 @@ def prepare_import_reference(payload: object, source_type: str) -> dict[str, obj
     return reference
 
 
+def _retention_marker(*, source_evidence_id=None) -> dict[str, object]:
+    marker: dict[str, object] = {
+        "schema": RETENTION_TOMBSTONE_SCHEMA,
+        "status": RETENTION_TOMBSTONE_STATUS,
+        "reason": RETENTION_TOMBSTONE_REASON,
+    }
+    if source_evidence_id is not None:
+        marker["source_evidence_id"] = str(source_evidence_id)
+    return marker
+
+
+def tombstone_prepared_reference(
+    reference: object,
+    *,
+    source_type: str,
+    evidence_ids_by_row: dict[int, object],
+) -> dict[str, object]:
+    validate_prepared_import_reference(reference, source_type=source_type)
+    prepared = deepcopy(reference)
+    known_rows = {row["row_number"] for row in prepared["rows"]}
+    new_rows = set(evidence_ids_by_row)
+    existing_rows = {
+        row["row_number"]
+        for row in prepared["rows"]
+        if isinstance(row, dict) and "retention" in row
+    }
+    retained_rows = existing_rows | new_rows
+    if not new_rows or not retained_rows <= known_rows:
+        raise ValidationError(
+            {"input_reference": "Retention rows must exist in the prepared import."}
+        )
+    if "import_asset_id" in prepared and retained_rows != known_rows:
+        raise ValidationError(
+            {
+                "input_reference": (
+                    "A shared import asset cannot be partially retained safely."
+                )
+            }
+        )
+    for row in prepared["rows"]:
+        row_number = row["row_number"]
+        if row_number not in new_rows:
+            continue
+        try:
+            evidence_id = str(UUID(str(evidence_ids_by_row[row_number])))
+        except (TypeError, ValueError, AttributeError) as error:
+            raise ValidationError(
+                {"input_reference": "Retention evidence identity must be a UUID."}
+            ) from error
+        row["original_text"] = ""
+        row["author_name"] = ""
+        row["screenshot_asset_id"] = None
+        row["retention"] = _retention_marker(
+            source_evidence_id=evidence_id
+        )
+    prepared.pop("import_asset_id", None)
+    prepared["retention"] = {
+        **_retention_marker(),
+        "redacted_row_numbers": sorted(retained_rows),
+    }
+    validate_prepared_import_reference(prepared, source_type=source_type)
+    return prepared
+
+
 def validate_prepared_import_reference(reference: object, *, source_type: str) -> None:
     if not isinstance(reference, dict):
         raise ValidationError(
             {"input_reference": "Guided imports require a prepared input reference."}
         )
-    allowed_top_level = {"schema", "source_type", "rows", "errors", "import_asset_id"}
+    allowed_top_level = {
+        "schema",
+        "source_type",
+        "rows",
+        "errors",
+        "import_asset_id",
+        "retention",
+    }
     if (
         set(reference) - allowed_top_level
         or reference.get("schema") != PREPARED_IMPORT_SCHEMA
@@ -424,8 +507,15 @@ def validate_prepared_import_reference(reference: object, *, source_type: str) -
         raise ValidationError(
             {"input_reference": "Guided imports require prepared rows within the supported limit."}
         )
+    retained_rows: list[int] = []
     for row in reference["rows"]:
-        if not isinstance(row, dict) or set(row) != PREPARED_ROW_FIELDS:
+        is_retained = isinstance(row, dict) and "retention" in row
+        expected_fields = (
+            PREPARED_ROW_FIELDS | {"retention"}
+            if is_retained
+            else PREPARED_ROW_FIELDS
+        )
+        if not isinstance(row, dict) or set(row) != expected_fields:
             raise ValidationError(
                 {"input_reference": "Guided imports require prepared rows with supported fields."}
             )
@@ -443,8 +533,44 @@ def validate_prepared_import_reference(reference: object, *, source_type: str) -
             raise ValidationError(
                 {"input_reference": "Guided imports require prepared rows with valid field types."}
             )
+        parse_input = row
+        if is_retained:
+            marker = row["retention"]
+            if (
+                not isinstance(marker, dict)
+                or set(marker)
+                != {
+                    "schema",
+                    "status",
+                    "reason",
+                    "source_evidence_id",
+                }
+                or marker.get("schema") != RETENTION_TOMBSTONE_SCHEMA
+                or marker.get("status") != RETENTION_TOMBSTONE_STATUS
+                or marker.get("reason") != RETENTION_TOMBSTONE_REASON
+                or row.get("original_text") != ""
+                or row.get("author_name") != ""
+                or row.get("screenshot_asset_id") is not None
+            ):
+                raise ValidationError(
+                    {"input_reference": "Retained import rows require a strict tombstone."}
+                )
+            try:
+                UUID(str(marker["source_evidence_id"]))
+            except (TypeError, ValueError, AttributeError) as error:
+                raise ValidationError(
+                    {"input_reference": "Retained import evidence identity is invalid."}
+                ) from error
+            retained_rows.append(row_number)
+            parse_input = dict(row)
+            parse_input.pop("retention")
+            parse_input["original_text"] = "retained"
+            if source_type == IngestionBatch.SourceType.SCREENSHOT:
+                parse_input["screenshot_asset_id"] = (
+                    "00000000-0000-0000-0000-000000000000"
+                )
         parsed, parse_error = _parse_row(
-            row,
+            parse_input,
             row_number=row_number,
             source_type=source_type,
         )
@@ -472,6 +598,25 @@ def validate_prepared_import_reference(reference: object, *, source_type: str) -
             raise ValidationError(
                 {"input_reference": "Guided imports require prepared errors with controlled fields."}
             )
+    if retained_rows:
+        marker = reference.get("retention")
+        if (
+            not isinstance(marker, dict)
+            or set(marker)
+            != {"schema", "status", "reason", "redacted_row_numbers"}
+            or marker.get("schema") != RETENTION_TOMBSTONE_SCHEMA
+            or marker.get("status") != RETENTION_TOMBSTONE_STATUS
+            or marker.get("reason") != RETENTION_TOMBSTONE_REASON
+            or marker.get("redacted_row_numbers") != sorted(retained_rows)
+            or "import_asset_id" in reference
+        ):
+            raise ValidationError(
+                {"input_reference": "Retained imports require a strict batch tombstone."}
+            )
+    elif "retention" in reference:
+        raise ValidationError(
+            {"input_reference": "Prepared imports cannot contain an empty tombstone."}
+        )
     if "import_asset_id" in reference:
         try:
             UUID(str(reference["import_asset_id"]))
@@ -484,7 +629,17 @@ def validate_prepared_import_reference(reference: object, *, source_type: str) -
 def import_result_from_reference(reference: object, source_type: str) -> ImportResult:
     validate_prepared_import_reference(reference, source_type=source_type)
     rows: list[ImportRow] = []
+    retained_rows: list[RetainedImportRow] = []
     for raw in reference["rows"]:
+        if "retention" in raw:
+            retained_rows.append(
+                RetainedImportRow(
+                    row_number=raw["row_number"],
+                    source_evidence_id=raw["retention"]["source_evidence_id"],
+                    normalized_input=deepcopy(raw),
+                )
+            )
+            continue
         row, error = _parse_row(
             raw,
             row_number=raw["row_number"],
@@ -495,4 +650,8 @@ def import_result_from_reference(reference: object, source_type: str) -> ImportR
                 {"input_reference": "Prepared import row no longer satisfies its contract."}
             )
         rows.append(row)
-    return ImportResult(rows=rows, errors=[dict(error) for error in reference["errors"]])
+    return ImportResult(
+        rows=rows,
+        errors=[dict(error) for error in reference["errors"]],
+        retained_rows=retained_rows,
+    )

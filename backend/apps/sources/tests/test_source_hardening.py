@@ -280,6 +280,83 @@ def test_guided_batch_rejects_raw_text_on_save_update_and_bulk_update(organizati
 
 
 @pytest.mark.django_db
+def test_batch_persists_and_guards_immutable_original_request_identity(organization):
+    import_asset_id = "00000000-0000-0000-0000-000000000077"
+    reference = prepare_import_reference(
+        {
+            "import_asset_id": import_asset_id,
+            "rows": [
+                {
+                    "source_url": "https://e.test/immutable-request",
+                    "original_text": "Original request",
+                }
+            ],
+        },
+        source_type=IngestionBatch.SourceType.JSON,
+    )
+    expected_digest = hashlib.sha256(
+        json.dumps(reference, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+    batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.JSON,
+        input_reference=reference,
+        idempotency_key="immutable-request-identity",
+    )
+
+    assert batch.prepared_reference_sha256 == expected_digest
+    assert str(batch.request_import_asset_id) == import_asset_id
+    batch.prepared_reference_sha256 = "f" * 64
+    with pytest.raises(ValidationError, match="immutable"):
+        batch.save(update_fields=["prepared_reference_sha256", "updated_at"])
+    batch.refresh_from_db()
+    batch.request_import_asset_id = "00000000-0000-0000-0000-000000000088"
+    with pytest.raises(ValidationError, match="immutable"):
+        IngestionBatch.objects.bulk_update(
+            [batch], ["request_import_asset_id"]
+        )
+
+
+@pytest.mark.django_db
+def test_batch_tombstone_writer_cannot_be_called_as_arbitrary_json_mutation(
+    organization,
+):
+    reference = prepare_import_reference(
+        {
+            "source_url": "https://e.test/guarded-tombstone",
+            "original_text": "Raw public trace",
+        },
+        source_type=IngestionBatch.SourceType.URL,
+    )
+    batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.URL,
+        input_reference=reference,
+        idempotency_key="guarded-tombstone-writer",
+    )
+
+    with pytest.raises(ValidationError, match="service-internal"):
+        IngestionBatch.objects.filter(
+            pk=batch.pk
+        )._service_tombstone_input_reference(
+            evidence_ids_by_row={
+                1: "00000000-0000-0000-0000-000000000001"
+            }
+        )
+
+    batch.input_reference = _empty_reference(source_type="URL")
+    with pytest.raises(ValidationError, match="immutable"):
+        batch.save(update_fields=["input_reference", "updated_at"])
+    with pytest.raises(ValidationError, match="immutable"):
+        IngestionBatch.objects.filter(pk=batch.pk).update(
+            input_reference=_empty_reference(source_type="URL")
+        )
+
+
+@pytest.mark.django_db
 def test_only_prepared_rows_persist_and_legitimate_cookie_word_is_unchanged(organization):
     raw_document = json.dumps(
         {

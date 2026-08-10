@@ -251,6 +251,34 @@ def test_worker_terminalizes_batch_with_database_corrupted_prepared_reference(
 
 
 @pytest.mark.django_db
+def test_worker_rejects_valid_but_identity_changed_raw_reference(
+    organization, user
+):
+    batch = make_batch(
+        organization=organization,
+        user=user,
+        key="worker-valid-reference-drift",
+    )
+    changed = prepare_import_reference(
+        {
+            "source_url": "https://e.test/changed-after-binding",
+            "original_text": "Changed after immutable binding",
+        },
+        source_type=IngestionBatch.SourceType.URL,
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE sources_ingestionbatch SET input_reference = %s WHERE id = %s",
+            [json.dumps(changed), batch.id.hex],
+        )
+
+    result = execute_source_import(str(batch.job_id), str(batch.id))
+
+    _assert_preflight_failed(batch, result)
+    assert SourceEvidence.objects.count() == 0
+
+
+@pytest.mark.django_db
 def test_worker_terminalizes_batch_with_database_corrupted_cross_org_target(
     organization, other_organization, user, target
 ):

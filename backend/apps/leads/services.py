@@ -871,6 +871,9 @@ class LeadAnalysisService:
         *, organization, candidate, evidence_ids, expected_version, idempotency_key, actor
     ):
         from .tasks import execute_lead_analysis
+        from apps.identity.services import lock_organization_scope
+
+        organization = lock_organization_scope(organization=organization)
 
         candidate_id = getattr(candidate, "pk", candidate)
         locked = LeadCandidate.objects.select_for_update().filter(
@@ -1294,6 +1297,7 @@ def build_analysis_snapshot(*, candidate, evidence_ids, actor) -> dict[str, obje
     from apps.identity.models import Membership
     from apps.identity.permissions import PermissionCode
     from apps.identity.services import get_active_membership, require_permission
+    from apps.identity.services import lock_organization_scope
     from apps.knowledge.models import (
         KnowledgeConcept,
         KnowledgeConceptEvidence,
@@ -1307,7 +1311,9 @@ def build_analysis_snapshot(*, candidate, evidence_ids, actor) -> dict[str, obje
     except Membership.DoesNotExist as error:
         raise PermissionDenied("An active organization membership is required.") from error
     require_permission(membership=membership, permission=PermissionCode.LEADS_ANALYZE)
-    organization = membership.organization
+    organization = lock_organization_scope(
+        organization=membership.organization
+    )
     candidate_id = getattr(candidate, "pk", candidate)
     locked_candidate = (
         LeadCandidate.objects.select_for_update()

@@ -1,6 +1,5 @@
 import hashlib
 import ipaddress
-import json
 from copy import deepcopy
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -26,11 +25,12 @@ from .models import (
     SourceEvidence,
     SourceSignal,
     _EVIDENCE_TRUSTED_ASSET_CAPABILITY,
+    _INGESTION_RETENTION_TOMBSTONE_CAPABILITY,
     _evidence_trusted_asset_writes,
-    _ingestion_batch_retention_writes,
     _ingestion_batch_state_writes,
     evidence_service_writes,
     ingestion_row_service_writes,
+    prepared_reference_sha256,
 )
 
 
@@ -532,6 +532,7 @@ class RetentionService:
     _RAW_ASSET_KEYS = frozenset({"screenshot_asset_id", "import_asset_id"})
     _RETENTION_MARKER = MappingProxyType(
         {
+            "schema": "SOURCE_RETENTION_TOMBSTONE_V1",
             "status": "REDACTED_BY_RETENTION",
             "reason": "TRANSIENT_30D_EXPIRED",
         }
@@ -650,7 +651,14 @@ class RetentionService:
         *,
         organization,
         ingestion_rows: list[IngestionRow],
+        active_ingestion_fingerprints: set[str],
+        has_unparseable_active_input: bool,
     ) -> bool:
+        if (
+            has_unparseable_active_input
+            or row.content_hash in active_ingestion_fingerprints
+        ):
+            return True
         content = row.source_signal.source_content
         if content is not None and SourceEvidence.objects.filter(
             organization=organization,
@@ -675,6 +683,40 @@ class RetentionService:
         ).exclude(pk__in=linked_row_ids).exists():
             return True
         return False
+
+    @staticmethod
+    def _active_ingestion_raw_fingerprints(
+        *, organization
+    ) -> tuple[set[str], bool]:
+        references = IngestionBatch.objects.filter(
+            organization=organization,
+            job__type=Job.Type.SOURCE_IMPORT,
+            job__status__in=RetentionService._ACTIVE_JOB_STATUSES,
+        ).values_list("input_reference", flat=True)
+        fingerprints: set[str] = set()
+        unparseable = False
+        for reference in references:
+            rows = reference.get("rows") if isinstance(reference, dict) else None
+            if not isinstance(rows, list):
+                unparseable = True
+                continue
+            for raw in rows:
+                if not isinstance(raw, dict):
+                    unparseable = True
+                    continue
+                if "retention" in raw:
+                    continue
+                try:
+                    fingerprints.add(
+                        evidence_fingerprint(
+                            original_text=raw["original_text"],
+                            source_url=raw["source_url"],
+                            platform=raw["platform"],
+                        )
+                    )
+                except (KeyError, TypeError, ValidationError):
+                    unparseable = True
+        return fingerprints, unparseable
 
     @staticmethod
     def _tombstone_raw_json(value) -> tuple[object, int, int]:
@@ -709,6 +751,27 @@ class RetentionService:
                 anonymized += actor_count
             return result, deleted_text, anonymized
         return value, 0, 0
+
+    @staticmethod
+    def _contains_raw_json(value) -> bool:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if (
+                    key
+                    in (
+                        RetentionService._RAW_TEXT_KEYS
+                        | RetentionService._RAW_ACTOR_KEYS
+                        | RetentionService._RAW_ASSET_KEYS
+                    )
+                    and item not in (None, "")
+                ):
+                    return True
+                if RetentionService._contains_raw_json(item):
+                    return True
+            return False
+        if isinstance(value, list):
+            return any(RetentionService._contains_raw_json(item) for item in value)
+        return False
 
     @staticmethod
     def _redact_locked(
@@ -761,7 +824,8 @@ class RetentionService:
                 )
             )
             normalized_input["retention"] = dict(
-                RetentionService._RETENTION_MARKER
+                RetentionService._RETENTION_MARKER,
+                source_evidence_id=str(row.id),
             )
             ingestion_row.normalized_input = normalized_input
             with ingestion_row_service_writes():
@@ -778,20 +842,19 @@ class RetentionService:
             )
         for batch in ingestion_batches:
             input_reference = deepcopy(batch.input_reference)
-            redacted_reference, text_count, actor_count = (
+            _redacted_reference, text_count, actor_count = (
                 RetentionService._tombstone_raw_json(input_reference)
             )
-            redacted_reference["retention"] = {
-                **RetentionService._RETENTION_MARKER,
-                "redacted_row_numbers": sorted(rows_by_batch.get(batch.id, set())),
-            }
-            with _ingestion_batch_retention_writes():
-                IngestionBatch.objects.filter(
-                    pk=batch.pk,
-                    organization=organization,
-                )._service_redact_input_reference(
-                    input_reference=redacted_reference
-                )
+            IngestionBatch.objects.filter(
+                pk=batch.pk,
+                organization=organization,
+            )._service_tombstone_input_reference(
+                _capability=_INGESTION_RETENTION_TOMBSTONE_CAPABILITY,
+                evidence_ids_by_row={
+                    row_number: row.id
+                    for row_number in rows_by_batch.get(batch.id, set())
+                },
+            )
             deleted_text += text_count
             anonymized += actor_count
         return deleted_text, anonymized
@@ -843,6 +906,9 @@ class RetentionService:
         if not isinstance(cutoff, datetime) or timezone.is_naive(cutoff):
             raise ValueError("Retention cutoff must be a timezone-aware datetime.")
         RetentionService._authorize(organization=organization, actor=actor)
+        from apps.identity.services import lock_organization_scope
+
+        organization = lock_organization_scope(organization=organization)
         if actor is None and (job_id is None or claim_token is None):
             raise PermissionDenied(
                 "Actorless retention cleanup requires a claimed retention job."
@@ -856,6 +922,12 @@ class RetentionService:
                 raise ValidationError("Retention worker owns the wrong job type.")
 
         active_ids = RetentionService._active_analysis_evidence_ids(
+            organization=organization
+        )
+        (
+            active_ingestion_fingerprints,
+            has_unparseable_active_input,
+        ) = RetentionService._active_ingestion_raw_fingerprints(
             organization=organization
         )
         candidate_ids = list(
@@ -887,19 +959,12 @@ class RetentionService:
                     if row.captured_at >= cutoff:
                         values["no_op"] += 1
                         continue
-                    if (
-                        row.availability
-                        == SourceEvidence.Availability.REDACTED_BY_RETENTION
-                    ):
-                        values["no_op"] += 1
-                        continue
                     RetentionService._validate_relationships(
                         row, organization=organization
                     )
-                    active_ids.update(
-                        RetentionService._active_analysis_evidence_ids(
-                            organization=organization
-                        )
+                    was_redacted = (
+                        row.availability
+                        == SourceEvidence.Availability.REDACTED_BY_RETENTION
                     )
                     protection_reason = RetentionService._protection_reason(
                         row, active_ids=active_ids
@@ -927,10 +992,35 @@ class RetentionService:
                         .filter(organization=organization, pk__in=batch_ids)
                         .order_by("pk")
                     )
+                    content = row.source_signal.source_content
+                    linked_raw_copy = any(
+                        RetentionService._contains_raw_json(
+                            ingestion_row.normalized_input
+                        )
+                        for ingestion_row in ingestion_rows
+                    ) or any(
+                        RetentionService._contains_raw_json(
+                            batch.input_reference
+                        )
+                        for batch in ingestion_batches
+                    )
+                    if content is not None:
+                        linked_raw_copy = linked_raw_copy or bool(
+                            content.original_text or content.author_public_name
+                        )
+                    if was_redacted and not linked_raw_copy:
+                        values["no_op"] += 1
+                        continue
                     if RetentionService._has_shared_raw_copy_dependency(
                         row,
                         organization=organization,
                         ingestion_rows=ingestion_rows,
+                        active_ingestion_fingerprints=(
+                            active_ingestion_fingerprints
+                        ),
+                        has_unparseable_active_input=(
+                            has_unparseable_active_input
+                        ),
                     ):
                         values["protected"] += 1
                         protected_reasons["SHARED_OR_ACTIVE_RAW_COPY"] = (
@@ -946,7 +1036,7 @@ class RetentionService:
                         ingestion_rows=ingestion_rows,
                         ingestion_batches=ingestion_batches,
                     )
-                    values["redacted"] += 1
+                    values["redacted"] += int(not was_redacted)
                     values["deleted_text"] += deleted_text
                     values["anonymized_actors"] += anonymized
                     changed_ids.append(str(row.id))
@@ -958,7 +1048,7 @@ class RetentionService:
             **values,
             protected_reasons=MappingProxyType(dict(sorted(protected_reasons.items()))),
         )
-        if result.redacted or result.failures:
+        if changed_ids or result.failures:
             bounded_changed = changed_ids[:RETENTION_AUDIT_ID_LIMIT]
             remaining = RETENTION_AUDIT_ID_LIMIT - len(bounded_changed)
             bounded_failed = failed_ids[:remaining]
@@ -1010,17 +1100,7 @@ SOURCE_IMPORT_PREFLIGHT_ERROR = {
 }
 
 
-def prepared_reference_digest(reference) -> str:
-    encoded = json.dumps(
-        reference,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def source_import_job_snapshot(batch: IngestionBatch) -> dict[str, object]:
-    reference = batch.input_reference if isinstance(batch.input_reference, dict) else {}
     return {
         "schema": SOURCE_IMPORT_JOB_SCHEMA,
         "ingestion_batch_id": str(batch.id),
@@ -1028,8 +1108,12 @@ def source_import_job_snapshot(batch: IngestionBatch) -> dict[str, object]:
         "monitoring_target_id": (
             str(batch.monitoring_target_id) if batch.monitoring_target_id else None
         ),
-        "prepared_reference_sha256": prepared_reference_digest(batch.input_reference),
-        "import_asset_id": reference.get("import_asset_id"),
+        "prepared_reference_sha256": batch.prepared_reference_sha256,
+        "import_asset_id": (
+            str(batch.request_import_asset_id)
+            if batch.request_import_asset_id is not None
+            else None
+        ),
         "batch_idempotency_key": batch.idempotency_key,
     }
 
@@ -1061,6 +1145,9 @@ class SourceIngestionRequestService:
         import_asset_id=None,
     ):
         from .tasks import execute_source_import
+        from apps.identity.services import lock_organization_scope
+
+        organization = lock_organization_scope(organization=organization)
 
         monitoring_target = SourceIngestionRequestService._target(
             organization=organization, target_id=monitoring_target_id
@@ -1071,9 +1158,15 @@ class SourceIngestionRequestService:
         safe_reference = deepcopy(prepared_reference)
         if import_asset is not None:
             safe_reference["import_asset_id"] = str(import_asset.id)
+        if source_type != IngestionBatch.SourceType.API:
             from .importers import validate_prepared_import_reference
-
             validate_prepared_import_reference(safe_reference, source_type=source_type)
+        retained_evidence_by_row = (
+            SourceIngestionRequestService._redacted_evidence_by_row(
+                organization=organization,
+                safe_reference=safe_reference,
+            )
+        )
         try:
             with transaction.atomic():
                 batch = IngestionBatch.objects.create(
@@ -1084,6 +1177,15 @@ class SourceIngestionRequestService:
                     idempotency_key=idempotency_key,
                     created_by=creator,
                 )
+                if retained_evidence_by_row:
+                    persisted = IngestionBatch.objects.filter(
+                        pk=batch.pk,
+                        organization=organization,
+                    )._service_tombstone_input_reference(
+                        _capability=_INGESTION_RETENTION_TOMBSTONE_CAPABILITY,
+                        evidence_ids_by_row=retained_evidence_by_row,
+                    )
+                    batch.input_reference = persisted["input_reference"]
         except IntegrityError:
             batch = (
                 IngestionBatch.objects.select_for_update()
@@ -1141,12 +1243,49 @@ class SourceIngestionRequestService:
         return batch, job
 
     @staticmethod
+    def _redacted_evidence_by_row(*, organization, safe_reference):
+        if not isinstance(safe_reference, dict):
+            return {}
+        rows = safe_reference.get("rows")
+        if not isinstance(rows, list):
+            return {}
+        fingerprints_by_row = {
+            row["row_number"]: evidence_fingerprint(
+                original_text=row["original_text"],
+                source_url=row["source_url"],
+                platform=row["platform"],
+            )
+            for row in rows
+            if isinstance(row, dict)
+            and "retention" not in row
+            and row.get("original_text")
+        }
+        if not fingerprints_by_row:
+            return {}
+        retained_by_hash = {
+            evidence.content_hash: evidence.id
+            for evidence in SourceEvidence.objects.select_for_update()
+            .filter(
+                organization=organization,
+                content_hash__in=set(fingerprints_by_row.values()),
+                availability=SourceEvidence.Availability.REDACTED_BY_RETENTION,
+            )
+            .order_by("pk")
+        }
+        return {
+            row_number: retained_by_hash[fingerprint]
+            for row_number, fingerprint in fingerprints_by_row.items()
+            if fingerprint in retained_by_hash
+        }
+
+    @staticmethod
     def _same_request(*, batch, source_type, monitoring_target, safe_reference):
         return (
             batch.source_type == source_type
             and batch.monitoring_target_id
             == (monitoring_target.id if monitoring_target is not None else None)
-            and batch.input_reference == safe_reference
+            and batch.prepared_reference_sha256
+            == prepared_reference_sha256(safe_reference)
         )
 
     @staticmethod
@@ -1224,6 +1363,9 @@ class IngestionService:
     @transaction.atomic
     def run(*, batch_id, organization, claim_token) -> IngestionBatch:
         from .importers import import_result_from_reference
+        from apps.identity.services import lock_organization_scope
+
+        organization = lock_organization_scope(organization=organization)
 
         batch = (
             IngestionBatch.objects.select_for_update()
@@ -1280,6 +1422,16 @@ class IngestionService:
                 batch=batch,
                 organization=organization,
                 error=error,
+            )
+        for retained_row in parsed.retained_rows:
+            if IngestionRow.objects.filter(
+                batch=batch, row_number=retained_row.row_number
+            ).exists():
+                continue
+            IngestionService._persist_retained_row(
+                batch=batch,
+                organization=organization,
+                row=retained_row,
             )
         for row in parsed.rows:
             if IngestionRow.objects.filter(batch=batch, row_number=row.row_number).exists():
@@ -1340,19 +1492,41 @@ class IngestionService:
             platform=row.platform,
         )
         existing_evidence = (
-            SourceEvidence.objects.select_related(
+            SourceEvidence.objects.select_for_update().select_related(
                 "source_signal", "source_signal__source_content"
             )
             .filter(organization=organization, content_hash=fingerprint)
+            .order_by("pk")
             .first()
         )
         if existing_evidence is not None:
+            duplicate_input = normalized_input
+            if (
+                existing_evidence.availability
+                == SourceEvidence.Availability.REDACTED_BY_RETENTION
+            ):
+                persisted = IngestionBatch.objects.filter(
+                    pk=batch.pk,
+                    organization=organization,
+                )._service_tombstone_input_reference(
+                    _capability=_INGESTION_RETENTION_TOMBSTONE_CAPABILITY,
+                    evidence_ids_by_row={row.row_number: existing_evidence.id},
+                )
+                batch.input_reference = persisted["input_reference"]
+                duplicate_input = dict(
+                    next(
+                        item
+                        for item in batch.input_reference["rows"]
+                        if item["row_number"] == row.row_number
+                    )
+                )
+                duplicate_input.pop("row_number")
             with ingestion_row_service_writes():
                 IngestionRow.objects.create(
                     organization=organization,
                     batch=batch,
                     row_number=row.row_number,
-                    normalized_input=normalized_input,
+                    normalized_input=duplicate_input,
                     outcome=IngestionRow.Outcome.DUPLICATE,
                     source_content=existing_evidence.source_signal.source_content,
                     source_signal=existing_evidence.source_signal,
@@ -1405,6 +1579,37 @@ class IngestionService:
                 outcome=IngestionRow.Outcome.ACCEPTED,
                 source_content=source_content,
                 source_signal=signal,
+                source_evidence=evidence,
+            )
+
+    @staticmethod
+    def _persist_retained_row(*, batch, organization, row) -> None:
+        evidence = (
+            SourceEvidence.objects.select_for_update()
+            .select_related("source_signal", "source_signal__source_content")
+            .filter(
+                pk=row.source_evidence_id,
+                organization=organization,
+                availability=SourceEvidence.Availability.REDACTED_BY_RETENTION,
+            )
+            .order_by("pk")
+            .first()
+        )
+        if evidence is None:
+            raise ValidationError(
+                "Retained import evidence is unavailable or no longer redacted."
+            )
+        normalized_input = deepcopy(row.normalized_input)
+        normalized_input.pop("row_number", None)
+        with ingestion_row_service_writes():
+            IngestionRow.objects.create(
+                organization=organization,
+                batch=batch,
+                row_number=row.row_number,
+                normalized_input=normalized_input,
+                outcome=IngestionRow.Outcome.DUPLICATE,
+                source_content=evidence.source_signal.source_content,
+                source_signal=evidence.source_signal,
                 source_evidence=evidence,
             )
 
@@ -1490,6 +1695,12 @@ class IngestionService:
                 source_type=batch.source_type,
             )
         except ValidationError:
+            return None, dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
+        if (
+            "retention" not in batch.input_reference
+            and prepared_reference_sha256(batch.input_reference)
+            != batch.prepared_reference_sha256
+        ):
             return None, dict(SOURCE_IMPORT_PREFLIGHT_ERROR)
 
         locked_target = None

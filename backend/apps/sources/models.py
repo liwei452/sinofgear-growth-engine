@@ -1,3 +1,5 @@
+import hashlib
+import json
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -24,13 +26,20 @@ _ingestion_row_service_write: ContextVar[bool] = ContextVar(
 _ingestion_batch_state_service_write: ContextVar[bool] = ContextVar(
     "source_ingestion_batch_state_service_write", default=False
 )
-_ingestion_batch_retention_service_write: ContextVar[bool] = ContextVar(
-    "source_ingestion_batch_retention_service_write", default=False
-)
 _evidence_trusted_asset_fields: ContextVar[dict[str, object] | None] = ContextVar(
     "source_evidence_trusted_asset_fields", default=None
 )
 _EVIDENCE_TRUSTED_ASSET_CAPABILITY = object()
+_INGESTION_RETENTION_TOMBSTONE_CAPABILITY = object()
+
+
+def prepared_reference_sha256(reference) -> str:
+    encoded = json.dumps(
+        reference,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 @contextmanager
@@ -58,15 +67,6 @@ def _ingestion_batch_state_writes():
         yield
     finally:
         _ingestion_batch_state_service_write.reset(token)
-
-
-@contextmanager
-def _ingestion_batch_retention_writes():
-    token = _ingestion_batch_retention_service_write.set(True)
-    try:
-        yield
-    finally:
-        _ingestion_batch_retention_service_write.reset(token)
 
 
 @contextmanager
@@ -294,22 +294,37 @@ class IngestionBatchQuerySet(ValidatedSourceQuerySet):
             raise self.model.DoesNotExist
         return safe_values
 
-    def _service_redact_input_reference(self, *, input_reference):
-        """Narrow writer for irreversible retention tombstones on a locked batch."""
-        if not _ingestion_batch_retention_service_write.get():
+    def _service_tombstone_input_reference(
+        self,
+        *,
+        _capability=None,
+        evidence_ids_by_row,
+    ):
+        """Apply the only permitted one-way mutation of prepared import input."""
+        if _capability is not _INGESTION_RETENTION_TOMBSTONE_CAPABILITY:
             raise ValidationError(
-                "Ingestion batch retention data may change only through its service."
+                "Ingestion batch retention mutation is service-internal."
             )
-        safe_reference = sanitize_source_json(input_reference)
-        model_instance = self.model()
-        self.model._meta.get_field("input_reference").clean(
-            safe_reference, model_instance
+        rows = list(self.select_for_update().order_by("pk")[:2])
+        if len(rows) != 1:
+            if not rows:
+                raise self.model.DoesNotExist
+            raise ValidationError("Retention mutation requires exactly one batch.")
+        batch = rows[0]
+        from .importers import tombstone_prepared_reference
+
+        safe_reference = tombstone_prepared_reference(
+            batch.input_reference,
+            source_type=batch.source_type,
+            evidence_ids_by_row=evidence_ids_by_row,
         )
         safe_values = {
             "input_reference": safe_reference,
             "updated_at": timezone.now(),
         }
-        if models.QuerySet.update(self, **safe_values) != 1:
+        if models.QuerySet.update(
+            self.filter(pk=batch.pk), **safe_values
+        ) != 1:
             raise self.model.DoesNotExist
         return safe_values
 
@@ -427,6 +442,17 @@ class IngestionBatch(ValidatedOrganizationModel):
         related_name="ingestion_batch",
     )
     input_reference = models.JSONField(default=dict, blank=True)
+    prepared_reference_sha256 = models.CharField(
+        max_length=64,
+        blank=True,
+        editable=False,
+        validators=[SHA256_VALIDATOR],
+    )
+    request_import_asset_id = models.UUIDField(
+        null=True,
+        blank=True,
+        editable=False,
+    )
     received_count = models.PositiveIntegerField(default=0)
     accepted_count = models.PositiveIntegerField(default=0)
     duplicate_count = models.PositiveIntegerField(default=0)
@@ -449,7 +475,13 @@ class IngestionBatch(ValidatedOrganizationModel):
             models.UniqueConstraint(
                 fields=["organization", "idempotency_key"],
                 name="sources_unique_batch_key",
-            )
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    prepared_reference_sha256__regex=r"^[0-9a-f]{64}$"
+                ),
+                name="sources_batch_request_digest_valid",
+            ),
         ]
 
     def clean(self) -> None:
@@ -457,6 +489,41 @@ class IngestionBatch(ValidatedOrganizationModel):
         self.input_reference = sanitize_source_json(self.input_reference)
         self.row_errors = sanitize_source_json(self.row_errors)
         errors: dict[str, str] = {}
+        if self._state.adding and not isinstance(
+            self.input_reference, (str, bytes)
+        ):
+            try:
+                expected_digest = prepared_reference_sha256(
+                    self.input_reference
+                )
+            except (TypeError, ValueError):
+                errors["input_reference"] = (
+                    "Ingestion batches require a prepared structured input reference."
+                )
+                expected_digest = None
+            if (
+                expected_digest is not None
+                and self.prepared_reference_sha256
+                and self.prepared_reference_sha256 != expected_digest
+            ):
+                errors["prepared_reference_sha256"] = (
+                    "Prepared reference identity must match the original input."
+                )
+            if expected_digest is not None:
+                self.prepared_reference_sha256 = expected_digest
+            reference_asset_id = (
+                self.input_reference.get("import_asset_id")
+                if isinstance(self.input_reference, dict)
+                else None
+            )
+            if (
+                self.request_import_asset_id is not None
+                and str(self.request_import_asset_id) != str(reference_asset_id)
+            ):
+                errors["request_import_asset_id"] = (
+                    "Import asset identity must match the original input."
+                )
+            self.request_import_asset_id = reference_asset_id or None
         self._validate_bound_input_identity(errors)
         if isinstance(self.input_reference, (str, bytes)):
             errors["input_reference"] = (
@@ -484,6 +551,8 @@ class IngestionBatch(ValidatedOrganizationModel):
             .values(
                 "source_type",
                 "input_reference",
+                "prepared_reference_sha256",
+                "request_import_asset_id",
                 "idempotency_key",
                 "monitoring_target_id",
                 "job_id",
@@ -495,6 +564,8 @@ class IngestionBatch(ValidatedOrganizationModel):
         identity_fields = (
             "source_type",
             "input_reference",
+            "prepared_reference_sha256",
+            "request_import_asset_id",
             "idempotency_key",
             "monitoring_target_id",
         )
@@ -510,9 +581,7 @@ class IngestionBatch(ValidatedOrganizationModel):
             and self.job_id is not None
             and identity_changed
         )
-        if (
-            persisted["job_id"] is not None and identity_changed
-        ) or binding_changed or binding_with_changed_input:
+        if identity_changed or binding_changed or binding_with_changed_input:
             errors["job"] = "Bound ingestion batch input identity is immutable."
 
 

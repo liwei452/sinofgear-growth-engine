@@ -102,6 +102,8 @@ function resetTransientState(): void {
   session += 1
   fileRead += 1
   clearPolling()
+  submitting.value = false
+  progress.value = "idle"
   revokeScreenshotUrl()
   screenshot.value = null
   importText.value = ""

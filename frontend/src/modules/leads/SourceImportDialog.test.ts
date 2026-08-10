@@ -127,6 +127,25 @@ it("does not create a batch when a pending screenshot upload finishes after clos
   expect(fetchMock).toHaveBeenCalledTimes(1)
 })
 
+it("reopens ready for a new import while an old screenshot upload remains inert", async () => {
+  const user = userEvent.setup()
+  vi.stubGlobal("URL", class extends URL { static createObjectURL = vi.fn(() => "blob:signal"); static revokeObjectURL = vi.fn() })
+  const asset = deferred<Response>()
+  const fetchMock = vi.fn().mockImplementationOnce(() => asset.promise).mockResolvedValueOnce(json({ job_id: "new-job", ingestion_batch_id: "new-batch", status: "QUEUED" }, 202)).mockResolvedValueOnce(json(job("SUCCEEDED")))
+  vi.stubGlobal("fetch", fetchMock)
+  document.cookie = "csrftoken=token; path=/"
+  const view = render(SourceImportDialog, { props: { organizationId: "org-1", open: true }, global: testApp() })
+  await user.click(screen.getByRole("button", { name: "更多导入方式" })); await user.click(screen.getByRole("tab", { name: "截图" }))
+  await user.type(screen.getByLabelText("公开链接"), "https://example.test/old"); await user.type(screen.getByLabelText("公开原文"), "old")
+  await user.upload(screen.getByLabelText("截图文件"), new File(["image"], "old.png", { type: "image/png" })); await user.click(screen.getByRole("button", { name: "导入公开信号" }))
+  await user.click(screen.getByRole("button", { name: "取消" })); await view.rerender({ organizationId: "org-1", open: true })
+  await user.click(screen.getByRole("tab", { name: "帖子链接" }))
+  expect(screen.getByRole("button", { name: "导入公开信号" })).toBeEnabled()
+  await user.click(screen.getByRole("button", { name: "导入公开信号" })); await flushPromises()
+  asset.resolve(json({ id: "old-asset" }, 201)); await flushPromises()
+  expect(fetchMock).toHaveBeenCalledTimes(3)
+})
+
 it("cleans preview URLs and prevents failed or stale file reads from enabling submission", async () => {
   const user = userEvent.setup()
   const createUrl = vi.fn().mockReturnValueOnce("blob:first").mockReturnValueOnce("blob:second")

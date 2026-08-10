@@ -66,3 +66,9 @@
 - CSV/JSON clears prior text before reading; failed reads show `文件没有读取成功，请重新选择文件。` with a `重新选择文件` focus recovery. Stale read completion is ignored after a new file, mode change, reset, close/reopen, or organization change.
 - The selector now uses roving tabindex, `aria-controls`, a labelled tabpanel, ArrowLeft/ArrowRight/Home/End activation and focus movement. Disclosure transfers focus to the first newly visible tab.
 - Screenshot object URLs are still synchronously revoked on replacement and reset paths; the reset path is reached for close, `open=false`, organization changes, and unmount.
+
+## Fix Round 2: reset invalidated submission state
+
+- RED: the new close-during-deferred-upload/reopen regression failed because the reopened action stayed `正在提交…` and disabled.
+- GREEN: reset now clears `submitting` and progress synchronously while incrementing the session; stale finally blocks remain unable to mutate the newer session. The regression proves a new valid URL import proceeds and the old upload remains inert.
+- Verification: focused API+dialog suite passed 20/20; `vue-tsc --noEmit` and ESLint passed; full frontend Vitest passed 30 files / 205 tests; `git diff --check` passed.

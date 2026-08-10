@@ -20,6 +20,7 @@ export type AppRouteComponents = {
   PlatformAccounts: Component
   Analytics: Component
   LeadRadar: Component
+  CompanyProfile: Component
   Placeholder: Component
 }
 
@@ -54,7 +55,13 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
       path: "",
       name: "home",
       component: options.components.Dashboard,
-      meta: { title: "首页" },
+      meta: { title: "今天" },
+    },
+    {
+      path: "promotion",
+      name: "promotion",
+      component: options.components.Placeholder,
+      meta: { title: "推广" },
     },
     {
       path: "products",
@@ -83,12 +90,18 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
     { path: "assets", name: "assets", component: options.components.Assets, meta: { title: "素材库" } },
     { path: "publishing-calendar", name: "publishing-calendar", component: options.components.PublishingCalendar, meta: { title: "发布日历" } },
     { path: "platform-accounts", name: "platform-accounts", component: options.components.PlatformAccounts, meta: { title: "平台账户" } },
-    { path: "analytics", name: "analytics", component: options.components.Analytics, meta: { title: "数据看板" } },
+    { path: "analytics", name: "analytics", component: options.components.Analytics, meta: { title: "效果" } },
     {
       path: "lead-radar",
       name: "lead-radar",
       component: options.components.LeadRadar,
       meta: { title: "客户机会" },
+    },
+    {
+      path: "company-profile",
+      name: "company-profile",
+      component: options.components.CompanyProfile,
+      meta: { title: "公司资料" },
     },
   ]
   const router = createRouter({

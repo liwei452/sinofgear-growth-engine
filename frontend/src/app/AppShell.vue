@@ -6,37 +6,80 @@ import { RouterLink, RouterView, useRoute, useRouter } from "vue-router"
 import { ApiError } from "../api/client"
 import { currentUserQueryOptions, logout } from "../modules/auth/auth"
 
-const navigation = [
-  { group: "工作台", items: [{ label: "首页", to: "/", icon: "首" }] },
+type NavigationMode = "ordinary" | "advanced"
+type NavigationItem = { label: string; to: string; icon: string; permission?: string }
+type NavigationSection = { group: string; items: NavigationItem[] }
+
+const navigationPreferenceKey = "sinofgear-navigation-mode-v1"
+const ordinaryNavigation: NavigationSection[] = [
+  {
+    group: "日常工作",
+    items: [
+      { label: "今天", to: "/", icon: "今" },
+      { label: "推广", to: "/promotion", icon: "推" },
+      { label: "客户机会", to: "/lead-radar", icon: "客" },
+      { label: "效果", to: "/analytics", icon: "效" },
+      { label: "公司资料", to: "/company-profile", icon: "司" },
+    ],
+  },
+]
+const advancedNavigation: NavigationSection[] = [
+  {
+    group: "工作台",
+    items: [
+      { label: "首页", to: "/", icon: "首" },
+      { label: "客户机会", to: "/lead-radar", icon: "客", permission: "leads.read" },
+    ],
+  },
   {
     group: "内容准备",
     items: [
-      { label: "产品库", to: "/products", icon: "产" },
-      { label: "知识库", to: "/knowledge", icon: "知" },
-      { label: "素材库", to: "/assets", icon: "素" },
+      { label: "产品库", to: "/products", icon: "产", permission: "products.read" },
+      { label: "知识库", to: "/knowledge", icon: "知", permission: "knowledge.read" },
+      { label: "素材库", to: "/assets", icon: "素", permission: "assets.read" },
     ],
   },
   {
     group: "内容与审核",
     items: [
-      { label: "AI 内容工厂", to: "/content-factory", icon: "AI" },
-      { label: "审核中心", to: "/reviews", icon: "审" },
+      { label: "AI 内容工厂", to: "/content-factory", icon: "AI", permission: "campaigns.read" },
+      { label: "审核中心", to: "/reviews", icon: "审", permission: "content.read" },
     ],
   },
   {
     group: "发布与增长",
     items: [
-      { label: "发布日历", to: "/publishing-calendar", icon: "发" },
-      { label: "平台账号", to: "/platform-accounts", icon: "账" },
-      { label: "数据看板", to: "/analytics", icon: "数" },
+      { label: "发布日历", to: "/publishing-calendar", icon: "发", permission: "publishing.read" },
+      { label: "平台账户", to: "/platform-accounts", icon: "账", permission: "publishing.read" },
+      { label: "数据看板", to: "/analytics", icon: "数", permission: "tracking.read" },
     ],
   },
 ]
+
+function readNavigationMode(): NavigationMode {
+  try {
+    const stored = window.localStorage.getItem(navigationPreferenceKey)
+    return stored === "advanced" || stored === "ordinary" ? stored : "ordinary"
+  } catch {
+    return "ordinary"
+  }
+}
 
 const route = useRoute()
 const router = useRouter()
 const queryClient = useQueryClient()
 const currentUser = useQuery(currentUserQueryOptions())
+const navigationMode = ref<NavigationMode>(readNavigationMode())
+const permissions = computed(() => currentUser.data.value?.membership.permissions ?? [])
+const navigation = computed<NavigationSection[]>(() => {
+  if (navigationMode.value === "ordinary") return ordinaryNavigation
+  return advancedNavigation
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => !item.permission || permissions.value.includes(item.permission)),
+    }))
+    .filter((section) => section.items.length > 0)
+})
 const navOpen = ref(false)
 const isNarrowViewport = ref(false)
 const sidebarElement = ref<HTMLElement | null>(null)
@@ -102,6 +145,15 @@ function toggleNavigation() {
 function startLogout() {
   logoutMutation.reset()
   logoutMutation.mutate()
+}
+
+function switchNavigationMode(): void {
+  navigationMode.value = navigationMode.value === "ordinary" ? "advanced" : "ordinary"
+  try {
+    window.localStorage.setItem(navigationPreferenceKey, navigationMode.value)
+  } catch {
+    // The in-memory mode remains usable when storage is blocked or full.
+  }
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -174,6 +226,9 @@ onBeforeUnmount(() => {
           </RouterLink>
         </section>
       </nav>
+      <button class="navigation-mode-button" type="button" @click="switchNavigationMode">
+        {{ navigationMode === "ordinary" ? "打开高级功能" : "返回普通功能" }}
+      </button>
     </aside>
     <button
       v-if="navOpen && isNarrowViewport"

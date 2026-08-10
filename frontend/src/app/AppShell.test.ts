@@ -1,5 +1,5 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
-import { fireEvent, render, screen, waitFor } from "@testing-library/vue"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
 import { defineComponent, h } from "vue"
 import { createMemoryHistory, createRouter, RouterView } from "vue-router"
@@ -15,7 +15,15 @@ const Root = defineComponent({ setup: () => () => h(RouterView) })
 const currentUser = {
   user: { id: 1, username: "operator" },
   organization: { id: "org-1", name: "示例组织", slug: "demo" },
-  membership: { id: "member-1", role: "OPERATOR", status: "ACTIVE" },
+  membership: {
+    id: "member-1",
+    role: "OPERATOR",
+    status: "ACTIVE",
+    permissions: [
+      "products.read", "knowledge.read", "assets.read", "campaigns.read", "content.read",
+      "publishing.read", "tracking.read", "leads.read",
+    ],
+  },
 }
 
 function useViewport(narrow: boolean) {
@@ -33,7 +41,13 @@ function useViewport(narrow: boolean) {
   return mediaQuery
 }
 
-async function renderShell(initialPath = "/", { narrow = false } = {}) {
+async function renderShell(
+  initialPath = "/",
+  { narrow = false, permissions = currentUser.membership.permissions }: {
+    narrow?: boolean
+    permissions?: string[]
+  } = {},
+) {
   const mediaQuery = useViewport(narrow)
   const history = createMemoryHistory()
   history.push(initialPath)
@@ -45,7 +59,11 @@ async function renderShell(initialPath = "/", { narrow = false } = {}) {
         path: "/",
         component: AppShell,
         children: [
-          { path: "", component: Page, meta: { title: "首页" } },
+          { path: "", component: Page, meta: { title: "今天" } },
+          { path: "promotion", component: PlaceholderPage, meta: { title: "推广" } },
+          { path: "lead-radar", component: PlaceholderPage, meta: { title: "客户机会" } },
+          { path: "analytics", component: PlaceholderPage, meta: { title: "效果" } },
+          { path: "company-profile", component: PlaceholderPage, meta: { title: "公司资料" } },
           { path: "products", component: PlaceholderPage, meta: { title: "产品库" } },
           { path: ":pathMatch(.*)*", component: PlaceholderPage, meta: { title: "功能" } },
         ],
@@ -53,7 +71,10 @@ async function renderShell(initialPath = "/", { narrow = false } = {}) {
     ],
   })
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser)
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, {
+    ...currentUser,
+    membership: { ...currentUser.membership, permissions },
+  })
   const result = render(Root, {
     global: { plugins: [[VueQueryPlugin, { queryClient }], router] },
   })
@@ -63,24 +84,64 @@ async function renderShell(initialPath = "/", { narrow = false } = {}) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  window.localStorage.clear()
   document.cookie = "csrftoken=; Max-Age=0; path=/"
 })
 
-it("shows grouped Chinese navigation, organization, user, and active item", async () => {
-  await renderShell("/products")
+it("shows only five task-oriented entries by default", async () => {
+  await renderShell("/company-profile")
 
-  for (const label of [
-    "首页", "产品库", "知识库", "素材库", "AI 内容工厂", "审核中心",
-    "发布日历", "平台账号", "数据看板",
+  const navigation = screen.getByRole("navigation", { name: "主导航" })
+  expect(within(navigation).getAllByRole("link")).toHaveLength(5)
+  for (const [label, href] of [
+    ["今天", "/"], ["推广", "/promotion"], ["客户机会", "/lead-radar"],
+    ["效果", "/analytics"], ["公司资料", "/company-profile"],
   ]) {
-    expect(screen.getByRole("link", { name: label })).toBeInTheDocument()
+    expect(within(navigation).getByRole("link", { name: label })).toHaveAttribute("href", href)
   }
+  expect(within(navigation).queryByRole("link", { name: "知识库" })).not.toBeInTheDocument()
   expect(screen.getByText("示例组织")).toBeInTheDocument()
   expect(screen.getByText("operator")).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "产品库" })).toHaveAttribute("aria-current", "page")
-  expect(screen.getByRole("heading", { name: "产品库" })).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "公司资料" })).toHaveAttribute("aria-current", "page")
+  expect(screen.getByRole("heading", { name: "公司资料" })).toBeInTheDocument()
   expect(screen.getByText("这个入口已经准备好，具体业务能力将在后续阶段接入。")).toBeInTheDocument()
   expect(screen.getByRole("link", { name: "返回首页" })).toHaveAttribute("href", "/")
+})
+
+it("reveals permitted administration routes in advanced mode and persists the preference", async () => {
+  const user = userEvent.setup()
+  await renderShell()
+
+  await user.click(screen.getByRole("button", { name: "打开高级功能" }))
+
+  expect(screen.getByRole("link", { name: "知识库" })).toBeVisible()
+  expect(screen.getByRole("link", { name: "平台账户" })).toBeVisible()
+  expect(screen.queryByRole("link", { name: "推广" })).not.toBeInTheDocument()
+  expect(window.localStorage.getItem("sinofgear-navigation-mode-v1")).toBe("advanced")
+})
+
+it("keeps advanced routes hidden when their read permission is absent", async () => {
+  const user = userEvent.setup()
+  await renderShell("/", { permissions: ["knowledge.read"] })
+
+  await user.click(screen.getByRole("button", { name: "打开高级功能" }))
+
+  expect(screen.getByRole("link", { name: "知识库" })).toBeVisible()
+  expect(screen.queryByRole("link", { name: "产品库" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "客户机会" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "平台账户" })).not.toBeInTheDocument()
+})
+
+it("defaults malformed navigation preferences to ordinary and never persists an invalid value", async () => {
+  window.localStorage.setItem("sinofgear-navigation-mode-v1", "{not-json")
+  const user = userEvent.setup()
+  await renderShell()
+
+  expect(screen.getByRole("link", { name: "推广" })).toBeVisible()
+  expect(screen.queryByRole("link", { name: "知识库" })).not.toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "打开高级功能" }))
+  await user.click(screen.getByRole("button", { name: "返回普通功能" }))
+  expect(window.localStorage.getItem("sinofgear-navigation-mode-v1")).toBe("ordinary")
 })
 
 it("opens and closes the narrow-screen navigation with button and Escape", async () => {
@@ -103,7 +164,7 @@ it("opens and closes the narrow-screen navigation with button and Escape", async
   expect(screen.getByRole("link", { name: "SinofGear 首页" })).toHaveFocus()
 
   await user.tab({ shift: true })
-  expect(screen.getByRole("link", { name: "数据看板" })).toHaveFocus()
+  expect(screen.getByRole("button", { name: "打开高级功能" })).toHaveFocus()
   await user.tab()
   expect(screen.getByRole("link", { name: "SinofGear 首页" })).toHaveFocus()
 
@@ -119,9 +180,9 @@ it("opens and closes the narrow-screen navigation with button and Escape", async
   expect(sidebar).toHaveAttribute("inert")
 
   await user.click(menuButton)
-  await user.click(screen.getByRole("link", { name: "产品库" }))
+  await user.click(screen.getByRole("link", { name: "客户机会" }))
   expect(sidebar).toHaveAttribute("inert")
-  expect(screen.getByRole("heading", { name: "产品库" })).toBeVisible()
+  expect(screen.getByRole("heading", { name: "客户机会" })).toBeVisible()
   expect(screen.getByRole("main")).toHaveFocus()
   expect(sidebar).not.toContainElement(document.activeElement)
   expect(menuButton).not.toHaveFocus()
@@ -138,7 +199,7 @@ it("keeps the desktop navigation exposed when the drawer state is closed", async
   const sidebar = screen.getByTestId("app-sidebar")
   expect(sidebar).not.toHaveAttribute("aria-hidden")
   expect(sidebar).not.toHaveAttribute("inert")
-  expect(screen.getByRole("link", { name: "产品库" })).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "今天" })).toBeInTheDocument()
 })
 
 it("closes an open narrow drawer and focuses routed content after programmatic navigation", async () => {

@@ -187,6 +187,23 @@ a {
   background: white;
 }
 
+.navigation-mode-button {
+  width: calc(100% - 16px);
+  min-height: 42px;
+  margin: 24px 8px 4px;
+  border: 1px solid var(--sg-line);
+  border-radius: var(--sg-radius-sm);
+  background: var(--sg-canvas);
+  color: var(--sg-brand);
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.navigation-mode-button:hover {
+  border-color: var(--sg-brand);
+  background: var(--sg-brand-soft);
+}
+
 .app-main {
   min-height: 100vh;
   margin-left: var(--sg-sidebar-width);
@@ -277,6 +294,173 @@ a {
 .page-stack {
   display: grid;
   gap: 24px;
+}
+
+.cockpit-hero,
+.company-profile-header {
+  border: 1px solid var(--sg-line);
+  border-left: 5px solid var(--sg-brand);
+  border-radius: var(--sg-radius-lg);
+  background: var(--sg-surface);
+  padding: clamp(24px, 5vw, 42px);
+  box-shadow: 0 8px 24px rgb(23 34 49 / 6%);
+}
+
+.cockpit-hero h1,
+.company-profile-header h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 4vw, 2.7rem);
+  line-height: 1.15;
+}
+
+.cockpit-hero > div > p:last-child,
+.company-profile-header > div > p:last-child {
+  max-width: 720px;
+  margin: 14px 0 0;
+  color: var(--sg-muted);
+  line-height: 1.7;
+}
+
+.cockpit-grid,
+.company-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.cockpit-card,
+.profile-source-card {
+  min-width: 0;
+  border: 1px solid var(--sg-line);
+  border-radius: var(--sg-radius-md);
+  background: var(--sg-surface);
+  padding: clamp(20px, 3vw, 28px);
+  box-shadow: 0 5px 18px rgb(23 34 49 / 4%);
+}
+
+.cockpit-card-priority {
+  border-top: 4px solid var(--sg-brand);
+}
+
+.cockpit-card-heading,
+.profile-source-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.cockpit-card-heading h2,
+.profile-source-heading h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.cockpit-card-heading .eyebrow {
+  margin-bottom: 5px;
+}
+
+.cockpit-list {
+  display: grid;
+  gap: 0;
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cockpit-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-top: 1px solid var(--sg-line);
+  padding: 16px 0;
+}
+
+.cockpit-list li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.cockpit-list li:last-child {
+  padding-bottom: 0;
+}
+
+.cockpit-list p,
+.cockpit-empty,
+.profile-empty-copy p {
+  margin: 5px 0 0;
+  color: var(--sg-muted);
+  line-height: 1.55;
+}
+
+.cockpit-list-compact li {
+  align-items: flex-start;
+}
+
+.cockpit-local-error {
+  margin-top: 18px;
+  border: 1px solid #e7c471;
+  border-radius: var(--sg-radius-sm);
+  background: #fff9e8;
+  padding: 14px;
+  color: #6a4b00;
+}
+
+.cockpit-local-error p {
+  margin: 0 0 10px;
+}
+
+.cockpit-local-error button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--sg-brand);
+  font-weight: 750;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.cockpit-success {
+  border-radius: var(--sg-radius-sm);
+  background: #eef8f1;
+  padding: 12px;
+  color: #24613a;
+}
+
+.profile-source-card {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+.profile-source-kicker {
+  margin: 0 0 5px;
+  color: var(--sg-muted);
+  font-size: 0.78rem;
+}
+
+.profile-source-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--sg-brand-soft);
+  color: var(--sg-brand);
+  font-weight: 850;
+}
+
+.profile-source-summary {
+  margin: 0;
+  color: var(--sg-ink);
+  font-size: 1.12rem;
+  font-weight: 750;
+}
+
+.profile-empty-copy strong,
+.profile-empty-copy p {
+  display: block;
 }
 
 .welcome-panel {
@@ -527,6 +711,11 @@ a {
     border: 0;
     background: rgb(23 34 49 / 46%);
   }
+
+  .cockpit-grid,
+  .company-profile-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 560px) {
@@ -551,6 +740,11 @@ a {
 
   .step-badge {
     align-self: flex-start;
+  }
+
+  .cockpit-list li {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

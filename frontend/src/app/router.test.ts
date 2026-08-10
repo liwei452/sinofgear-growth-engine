@@ -19,6 +19,7 @@ const PublishingCalendar = defineComponent({ name: "PublishingStub", template: "
 const PlatformAccounts = defineComponent({ name: "AccountsStub", template: "<p>真实平台账户</p>" })
 const Analytics = defineComponent({ name: "AnalyticsStub", template: "<p>真实数据看板</p>" })
 const LeadRadar = defineComponent({ name: "LeadRadarStub", template: "<p>真实客户机会</p>" })
+const CompanyProfile = defineComponent({ name: "CompanyProfileStub", template: "<p>真实公司资料</p>" })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
 function deferred<T>() {
@@ -36,7 +37,7 @@ function router(client = queryClient(), initialPath?: string) {
   if (initialPath) history.push(initialPath)
   return createAppRouter(client, {
     history,
-    components: { Login, Shell, Dashboard, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LeadRadar, Placeholder },
+    components: { Login, Shell, Dashboard, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LeadRadar, CompanyProfile, Placeholder },
   })
 }
 
@@ -106,6 +107,21 @@ describe("protected routing", () => {
 
     expect(await screen.findByText("真实客户机会")).toBeInTheDocument()
     expect(appRouter.currentRoute.value.meta.title).toBe("客户机会")
+  })
+
+  it("mounts the ordinary promotion transition and real company profile routes", async () => {
+    const client = queryClient()
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: [] } })
+    const appRouter = router(client)
+    render(Root, { global: { plugins: [appRouter] } })
+
+    await appRouter.push("/promotion")
+    expect(await screen.findByText("占位内容")).toBeInTheDocument()
+    expect(appRouter.currentRoute.value.meta.title).toBe("推广")
+
+    await appRouter.push("/company-profile")
+    expect(await screen.findByText("真实公司资料")).toBeInTheDocument()
+    expect(appRouter.currentRoute.value.meta.title).toBe("公司资料")
   })
 
   it.each([401, 403])("redirects status %s to login with the local target", async (status) => {

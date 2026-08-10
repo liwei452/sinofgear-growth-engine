@@ -9,7 +9,7 @@ import { assetKeys, listAssets } from "../assets/api"
 import ContentBriefWizard from "./ContentBriefWizard.vue"
 import {
   cancelJob, contentQueryKeys, generateMaster, getJob, listBriefs,
-  listApprovedBriefConcepts, listCampaigns, listJobs, listMasterContents, listPlatformPage, markBriefReady,
+  listApprovedBriefConcepts, listBriefConcepts, listCampaigns, listJobs, listMasterContents, listPlatformPage, markBriefReady,
   retryJob, reviseBrief, type ContentBrief, type Job,
 } from "./api"
 import { useCursorCollection } from "./useCursorCollection"
@@ -24,6 +24,10 @@ const permissions = computed(() => currentUserQuery.data.value?.membership.permi
 const has = (permission: string) => permissions.value.includes(permission)
 const enabled = computed(() => Boolean(organizationId.value))
 const canReadCampaigns = computed(() => has("campaigns.read"))
+const canManageCampaigns = computed(() => has("campaigns.manage"))
+const canReadProducts = computed(() => has("products.read"))
+const canReadAssets = computed(() => has("assets.read"))
+const canReadKnowledge = computed(() => has("knowledge.read"))
 const canReadJobs = computed(() => has("jobs.read"))
 const canReadContent = computed(() => has("content.read"))
 const canReadMemberships = computed(() => has("memberships.read"))
@@ -39,18 +43,22 @@ const timers = new Set<ReturnType<typeof setTimeout>>()
 const pollingJobs = new Map<string, string>()
 const jobTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let disposed = false
-const promotionProductFilters = { status: "ACTIVE" } as const
-const promotionAssetFilters = { status: "ACTIVE" } as const
 const ordinaryExperience = computed(() => props.experience === "ordinary")
+const promotionProductFilters = computed(() => ordinaryExperience.value ? { status: "ACTIVE" } as const : {})
+const promotionAssetFilters = computed(() => ordinaryExperience.value ? { status: "ACTIVE" } as const : {})
+const conceptQueryKey = computed(() => [
+  ...contentQueryKeys.briefs(organizationId.value),
+  ordinaryExperience.value ? "approved-concepts" : "all-concepts",
+])
 const showAdvancedRecords = computed(() => props.experience === "advanced" || advancedRecordsOpen.value)
 const canObserveJobs = computed(() => canReadJobs.value && showAdvancedRecords.value)
 
 const campaignsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.campaigns(organizationId.value)), queryFn: listCampaigns, enabled: computed(() => enabled.value && has("campaigns.read")) })
 const briefsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.briefs(organizationId.value)), queryFn: () => listBriefs(), enabled: computed(() => enabled.value && has("campaigns.read")) })
-const productsQuery = useQuery({ queryKey: computed(() => productQueryKeys.list(organizationId.value, promotionProductFilters)), queryFn: () => listProducts(promotionProductFilters), enabled: computed(() => enabled.value && has("products.read")) })
+const productsQuery = useQuery({ queryKey: computed(() => productQueryKeys.list(organizationId.value, promotionProductFilters.value)), queryFn: () => listProducts(promotionProductFilters.value), enabled: computed(() => enabled.value && has("products.read")) })
 const platformsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.platforms(organizationId.value)), queryFn: listPlatformPage, enabled: computed(() => enabled.value && has("memberships.read")) })
-const assetsQuery = useQuery({ queryKey: computed(() => assetKeys.list(organizationId.value, promotionAssetFilters)), queryFn: () => listAssets(promotionAssetFilters), enabled: computed(() => enabled.value && has("assets.read")) })
-const conceptsQuery = useQuery({ queryKey: computed(() => [...contentQueryKeys.briefs(organizationId.value), "approved-concepts"]), queryFn: listApprovedBriefConcepts, enabled: computed(() => enabled.value && has("knowledge.read")) })
+const assetsQuery = useQuery({ queryKey: computed(() => assetKeys.list(organizationId.value, promotionAssetFilters.value)), queryFn: () => listAssets(promotionAssetFilters.value), enabled: computed(() => enabled.value && has("assets.read")) })
+const conceptsQuery = useQuery({ queryKey: conceptQueryKey, queryFn: () => ordinaryExperience.value ? listApprovedBriefConcepts() : listBriefConcepts(), enabled: computed(() => enabled.value && has("knowledge.read")) })
 const jobsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.jobs(organizationId.value)), queryFn: () => listJobs(), enabled: computed(() => enabled.value && canObserveJobs.value) })
 const masterQuery = useQuery({ queryKey: computed(() => contentQueryKeys.masterContents(organizationId.value, {})), queryFn: () => listMasterContents(), enabled: computed(() => enabled.value && has("content.read")) })
 
@@ -64,9 +72,12 @@ const masterPages = useCursorCollection(masterQuery.data, "/api/v1/master-conten
 const visibleCampaigns = computed(() => canReadCampaigns.value ? campaigns.items.value : [])
 const briefs = computed(() => canReadCampaigns.value ? briefPages.items.value : [])
 const visibleMasterContents = computed(() => canReadContent.value ? masterPages.items.value : [])
-const eligibleProducts = computed(() => productPages.items.value.filter((product) => product.status === "ACTIVE"))
-const eligibleAssets = computed(() => assetPages.items.value.filter((asset) => asset.status === "ACTIVE"))
-const approvedConcepts = computed(() => (conceptsQuery.data.value?.results ?? []).filter((concept) => concept.status === "APPROVED"))
+const visibleProducts = computed(() => canReadProducts.value ? productPages.items.value : [])
+const visibleAssets = computed(() => canReadAssets.value ? assetPages.items.value : [])
+const visibleConcepts = computed(() => canReadKnowledge.value ? conceptsQuery.data.value?.results ?? [] : [])
+const eligibleProducts = computed(() => canReadProducts.value ? productPages.items.value.filter((product) => product.status === "ACTIVE") : [])
+const eligibleAssets = computed(() => canReadAssets.value ? assetPages.items.value.filter((asset) => asset.status === "ACTIVE") : [])
+const approvedConcepts = computed(() => canReadKnowledge.value ? (conceptsQuery.data.value?.results ?? []).filter((concept) => concept.status === "APPROVED") : [])
 const jobs = computed(() => {
   if (!canObserveJobs.value) return []
   const combined = [...jobPages.items.value, ...liveJobs.value]
@@ -74,6 +85,9 @@ const jobs = computed(() => {
 })
 const activeJobStatuses = new Set(["QUEUED", "RUNNING", "RETRY_QUEUED"])
 const visibleJobError = computed(() => jobError.value || (jobsQuery.isError.value ? "生成记录暂时无法更新，请重新加载后再试。" : ""))
+const visibleJobPageError = computed(() => jobPages.error.value
+  ? ordinaryExperience.value ? "生成记录下一页暂时无法加载，请重新加载后再试。" : jobPages.error.value
+  : "")
 const proposalBlocker = computed(() => {
   if (!has("campaigns.manage")) return "你当前没有创建推广方案的权限，请联系管理员。"
   if (!has("products.read")) return "需要产品库查看权限，才能为真实产品准备推广方案。"
@@ -171,7 +185,7 @@ function beginPolling(id: string): void {
 async function refreshJob(id: string): Promise<void> {
   const scope = organizationId.value
   const job = await getJob(id)
-  if (!isActiveOrganization(scope)) return
+  if (!canObserveJobs.value || !isActiveOrganization(scope)) return
   upsertJob(job)
   if (activeJobStatuses.has(job.status)) beginPolling(job.job_id)
 }
@@ -294,6 +308,36 @@ watch(canReadCampaigns, (current, previous) => {
   cancelAndClear(contentQueryKeys.briefs(scope))
 }, { flush: "sync" })
 
+watch(canReadProducts, (current, previous) => {
+  if (!previous || current) return
+  productPages.reset()
+  wizardOpen.value = false
+  editingBrief.value = null
+  cancelAndClear(productQueryKeys.lists(organizationId.value))
+}, { flush: "sync" })
+
+watch(canReadAssets, (current, previous) => {
+  if (!previous || current) return
+  assetPages.reset()
+  wizardOpen.value = false
+  editingBrief.value = null
+  cancelAndClear(assetKeys.all(organizationId.value))
+}, { flush: "sync" })
+
+watch(canReadKnowledge, (current, previous) => {
+  if (!previous || current) return
+  wizardOpen.value = false
+  editingBrief.value = null
+  cancelAndClear(conceptQueryKey.value)
+}, { flush: "sync" })
+
+watch(canManageCampaigns, (current, previous) => {
+  if (!previous || current) return
+  wizardOpen.value = false
+  editingBrief.value = null
+  actionId.value = ""
+}, { flush: "sync" })
+
 watch(canReadJobs, (current, previous) => {
   if (!previous || current) return
   for (const id of [...pollingJobs.keys()]) stopPolling(id)
@@ -350,7 +394,7 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
       </ol>
 
       <section class="readiness-grid" aria-label="推广资料准备情况">
-        <article><strong>{{ has('products.read') ? `已加载 ${eligibleProducts.length} 项` : '—' }}</strong><span>可推广产品</span><small>{{ has('products.read') ? '来自当前组织的 ACTIVE 产品；数字仅代表已加载页' : '没有产品库查看权限' }}</small><button v-if="productsQuery.isError.value" type="button" @click="productsQuery.refetch()">重新检查产品资料</button><button v-else-if="has('products.read') && !eligibleProducts.length && productPages.next.value" type="button" @click="productPages.loadMore">加载更多产品资料</button></article>
+        <article><strong>{{ has('products.read') ? `已加载 ${eligibleProducts.length} 项` : '—' }}</strong><span>可推广产品</span><small>{{ has('products.read') ? '来自当前组织的 ACTIVE 产品；数字仅代表已加载页' : '没有产品库查看权限' }}</small><button v-if="has('products.read') && productsQuery.isError.value" type="button" @click="productsQuery.refetch()">重新检查产品资料</button><button v-else-if="has('products.read') && !eligibleProducts.length && productPages.next.value" type="button" @click="productPages.loadMore">加载更多产品资料</button></article>
         <article><strong>{{ has('memberships.read') ? `已加载 ${platformPages.items.value.length} 项` : '—' }}</strong><span>可选平台定义</span><small>来自系统支持的平台定义，不代表账号已连接</small><button v-if="has('memberships.read') && platformsQuery.isError.value" type="button" @click="platformsQuery.refetch()">重新检查平台定义</button></article>
         <article><strong>{{ has('assets.read') ? `已加载 ${eligibleAssets.length} 项` : '—' }}</strong><span>可用素材</span><small>{{ has('assets.read') ? '来自 ACTIVE 素材；数字仅代表已加载页' : '没有素材库查看权限，不影响先整理方案' }}</small><button v-if="has('assets.read') && assetsQuery.isError.value" type="button" @click="assetsQuery.refetch()">重新检查素材</button></article>
         <article><strong>{{ has('knowledge.read') ? `已加载 ${approvedConcepts.length} 项` : '—' }}</strong><span>已批准知识</span><small>{{ has('knowledge.read') ? '仅包含 APPROVED 知识；数字仅代表已加载页' : '没有知识库查看权限，不会代填知识' }}</small><button v-if="has('knowledge.read') && conceptsQuery.isError.value" type="button" @click="conceptsQuery.refetch()">重新检查知识资料</button></article>
@@ -377,10 +421,10 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
 
       <section v-if="has('campaigns.read')" aria-labelledby="briefs-title"><h2 id="briefs-title">内容需求</h2><p v-if="briefsQuery.isPending.value" role="status">正在加载内容需求…</p><div v-else-if="!briefs.length" class="state-panel"><h3>还没有内容需求</h3><p>从“创建内容任务”开始，向导会帮你准备完整信息。</p></div><div v-else class="card-grid"><article v-for="item in briefs" :key="item.id" class="workflow-card"><div class="card-heading"><h3>{{ visibleCampaigns.find(c => c.id === item.campaign_id)?.name || '内容需求' }}</h3><span class="status-chip">{{ item.status === 'READY' ? '可生成' : '需求草稿' }}</span></div><p>{{ item.target_country }} · {{ item.customer_type }} · {{ item.language }}</p><p v-if="item.status === 'DRAFT' && !has('campaigns.review')" class="muted">等待审核人员确认</p><div class="card-actions"><button v-if="item.status === 'DRAFT' && has('campaigns.manage')" type="button" @click="openBriefEditor(item)">编辑需求草稿</button><button v-if="item.status === 'DRAFT' && has('campaigns.review')" type="button" :disabled="actionId === item.id" @click="ready(item)">确认需求可生成</button><button v-if="item.status === 'READY' && has('campaigns.manage')" type="button" @click="createBriefRevision(item)">创建需求修订版</button><button v-if="item.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId)" @click="startGeneration(item)">开始AI生成</button></div></article></div><p v-if="briefPages.error.value" role="alert">{{ briefPages.error.value }} <button type="button" @click="briefPages.loadMore">重试</button></p><button v-else-if="briefPages.next.value" type="button" @click="briefPages.loadMore">加载更多内容需求</button></section>
 
-      <section v-if="has('jobs.read')" aria-labelledby="jobs-title"><h2 id="jobs-title">生成任务</h2><p v-if="visibleJobError" role="alert">{{ visibleJobError }} <button type="button" @click="reloadJobs">重新加载生成记录</button></p><div v-if="jobs.length" class="card-grid"><article v-for="(job, index) in jobs" :key="job.job_id" class="workflow-card"><div class="card-heading"><h3>{{ ordinaryExperience ? `第 ${index + 1} 项生成记录` : `任务 ${job.job_id}` }}</h3><span class="status-chip">{{ jobStatusLabel(job) }}</span></div><p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p><p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p><p v-else-if="job.status === 'FAILED'" role="alert">{{ ordinaryExperience ? '这次没有生成完成，你可以再次尝试。' : job.error?.message || '生成未完成，可以重试。' }}</p><div class="card-actions"><button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">{{ ordinaryExperience ? '停止生成' : '取消任务' }}</button><button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">{{ ordinaryExperience ? '再次尝试' : '重新尝试' }}</button></div></article></div><p v-else class="muted">提交生成后，进度会显示在这里。</p><p v-if="jobPages.error.value" role="alert">{{ jobPages.error.value }} <button type="button" @click="jobPages.loadMore">重试</button></p><button v-else-if="jobPages.next.value" type="button" @click="jobPages.loadMore">加载更多生成任务</button></section>
+      <section v-if="has('jobs.read')" aria-labelledby="jobs-title"><h2 id="jobs-title">生成任务</h2><p v-if="visibleJobError" role="alert">{{ visibleJobError }} <button type="button" @click="reloadJobs">重新加载生成记录</button></p><div v-if="jobs.length" class="card-grid"><article v-for="(job, index) in jobs" :key="job.job_id" class="workflow-card"><div class="card-heading"><h3>{{ ordinaryExperience ? `第 ${index + 1} 项生成记录` : `任务 ${job.job_id}` }}</h3><span class="status-chip">{{ jobStatusLabel(job) }}</span></div><p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p><p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p><p v-else-if="job.status === 'FAILED'" role="alert">{{ ordinaryExperience ? '这次没有生成完成，你可以再次尝试。' : job.error?.message || '生成未完成，可以重试。' }}</p><div class="card-actions"><button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">{{ ordinaryExperience ? '停止生成' : '取消任务' }}</button><button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">{{ ordinaryExperience ? '再次尝试' : '重新尝试' }}</button></div></article></div><p v-else class="muted">提交生成后，进度会显示在这里。</p><p v-if="visibleJobPageError" role="alert">{{ visibleJobPageError }} <button type="button" @click="jobPages.loadMore">{{ ordinaryExperience ? '重新加载更多生成记录' : '重试' }}</button></p><button v-else-if="jobPages.next.value" type="button" @click="jobPages.loadMore">加载更多生成任务</button></section>
     </template>
 
-    <ContentBriefWizard v-if="wizardOpen || editingBrief" :brief="editingBrief" :campaigns="visibleCampaigns" :products="eligibleProducts" :platforms="platformPages.items.value" :assets="eligibleAssets" :concepts="approvedConcepts" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
+    <ContentBriefWizard v-if="wizardOpen || editingBrief" :brief="editingBrief" :campaigns="visibleCampaigns" :products="ordinaryExperience ? eligibleProducts : visibleProducts" :platforms="platformPages.items.value" :assets="ordinaryExperience ? eligibleAssets : visibleAssets" :concepts="ordinaryExperience ? approvedConcepts : visibleConcepts" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
   </main>
 </template>
 

@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { currentUserQueryOptions, type CurrentUser } from "../auth/auth"
+import { assetKeys } from "../assets/api"
+import { productQueryKeys } from "../products/api"
 import { contentQueryKeys } from "./api"
 import ContentFactoryPage from "./ContentFactoryPage.vue"
 
@@ -26,12 +28,12 @@ const brief = (status = "DRAFT") => ({
 function baseResponse(path: string, activeBriefs: unknown[] = []) {
   if (path === "/api/v1/campaigns") return { next: null, previous: null, results: [campaign] }
   if (path === "/api/v1/content-briefs") return { next: null, previous: null, results: activeBriefs }
-  if (path === "/api/v1/products?status=ACTIVE") return { next: null, previous: null, results: [{ id: "product-1", name_zh: "精密齿轮", name_en: "Precision Gear", status: "ACTIVE" }] }
+  if (["/api/v1/products?status=ACTIVE", "/api/v1/products"].includes(path)) return { next: null, previous: null, results: [{ id: "product-1", name_zh: "精密齿轮", name_en: "Precision Gear", status: "ACTIVE" }] }
   if (path === "/api/v1/platforms") return { results: [{ id: "platform-1", code: "LINKEDIN", name: "LinkedIn", capabilities: ["PUBLISH"] }] }
-  if (path === "/api/v1/assets?status=ACTIVE") return { next: null, previous: null, results: [] }
+  if (["/api/v1/assets?status=ACTIVE", "/api/v1/assets"].includes(path)) return { next: null, previous: null, results: [] }
   if (path === "/api/v1/jobs") return { next: null, previous: null, results: [] }
   if (path === "/api/v1/master-contents") return { next: null, previous: null, results: [] }
-  if (path === "/api/v1/knowledge/concepts?status=APPROVED&page_size=50") return {
+  if (["/api/v1/knowledge/concepts?status=APPROVED&page_size=50", "/api/v1/knowledge/concepts?page_size=50"].includes(path)) return {
     next: null, previous: null, results: [
       { id: "concept-helical", code: "HELICAL_GEAR", concept_type: "PRODUCT_TYPE", label_zh: "斜齿轮", label_en: "Helical Gear", status: "APPROVED" },
       { id: "concept-grinding", code: "GRINDING", concept_type: "PROCESS", label_zh: "磨齿", label_en: "Grinding", status: "APPROVED" },
@@ -147,10 +149,10 @@ it("loads one safe cursor page and selects products and assets from page two", a
   const secondProduct = { id: "product-2", name_zh: "第二页齿轮", name_en: "Page Two Gear", status: "ACTIVE" }
   const secondAsset = { id: "asset-2", asset_type: "IMAGE", original_filename: "page-two.png", mime_type: "image/png", size_bytes: 10, language: "zh", status: "ACTIVE", tags: [], created_at: "" }
   const fetchMock = vi.fn(async (path: string) => {
-    if (path === "/api/v1/products?status=ACTIVE") return new Response(JSON.stringify({ next: "/api/v1/products?status=ACTIVE&cursor=two", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
-    if (path === "/api/v1/products?status=ACTIVE&cursor=two") return new Response(JSON.stringify({ next: null, previous: "/api/v1/products?status=ACTIVE", results: [secondProduct] }), { status: 200, headers: { "Content-Type": "application/json" } })
-    if (path === "/api/v1/assets?status=ACTIVE") return new Response(JSON.stringify({ next: "/api/v1/assets?status=ACTIVE&cursor=two", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
-    if (path === "/api/v1/assets?status=ACTIVE&cursor=two") return new Response(JSON.stringify({ next: null, previous: "/api/v1/assets?status=ACTIVE", results: [secondAsset] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/products") return new Response(JSON.stringify({ next: "/api/v1/products?cursor=two", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/products?cursor=two") return new Response(JSON.stringify({ next: null, previous: "/api/v1/products", results: [secondProduct] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/assets") return new Response(JSON.stringify({ next: "/api/v1/assets?cursor=two", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/assets?cursor=two") return new Response(JSON.stringify({ next: null, previous: "/api/v1/assets", results: [secondAsset] }), { status: 200, headers: { "Content-Type": "application/json" } })
     return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
   })
   vi.stubGlobal("fetch", fetchMock)
@@ -164,8 +166,8 @@ it("loads one safe cursor page and selects products and assets from page two", a
 
   expect(await screen.findByLabelText("第二页齿轮")).toBeInTheDocument()
   expect(screen.getByText("page-two.png")).toBeInTheDocument()
-  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/products?status=ACTIVE&cursor=two")).toHaveLength(1)
-  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/assets?status=ACTIVE&cursor=two")).toHaveLength(1)
+  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/products?cursor=two")).toHaveLength(1)
+  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/assets?cursor=two")).toHaveLength(1)
   expect(screen.queryByRole("button", { name: "加载更多产品" })).not.toBeInTheDocument()
 })
 
@@ -279,7 +281,7 @@ it("shows named product, platform, and job errors and recovers each query", asyn
   const attempts = new Map<string, number>()
   const recoveredJob = { job_id: "job-recovered", type: "CONTENT_GENERATE", status: "SUCCEEDED", progress: 100, attempt: 1, max_attempts: 3, created_at: "", finished_at: "", error: null, result_reference: {} }
   const fetchMock = vi.fn(async (path: string) => {
-    if (["/api/v1/products?status=ACTIVE", "/api/v1/platforms", "/api/v1/jobs"].includes(path)) {
+    if (["/api/v1/products", "/api/v1/platforms", "/api/v1/jobs"].includes(path)) {
       const attempt = (attempts.get(path) ?? 0) + 1
       attempts.set(path, attempt)
       if (attempt === 1) return new Response(JSON.stringify({ detail: "temporary" }), { status: 503, headers: { "Content-Type": "application/json" } })
@@ -301,7 +303,7 @@ it("shows named product, platform, and job errors and recovers each query", asyn
   expect(await screen.findByLabelText("精密齿轮")).toBeInTheDocument()
   expect(screen.getByLabelText("LinkedIn")).toBeInTheDocument()
   expect(attempts).toEqual(new Map([
-    ["/api/v1/products?status=ACTIVE", 2], ["/api/v1/platforms", 2], ["/api/v1/jobs", 2],
+    ["/api/v1/products", 2], ["/api/v1/platforms", 2], ["/api/v1/jobs", 2],
   ]))
 })
 
@@ -378,6 +380,140 @@ it("clears protected campaign, job, and content data when permissions are revoke
   expect(cancelQueries).toHaveBeenCalledWith({ queryKey: contentQueryKeys.briefs("org-1") })
   expect(cancelQueries).toHaveBeenCalledWith({ queryKey: contentQueryKeys.jobs("org-1") })
   expect(cancelQueries).toHaveBeenCalledWith({ queryKey: contentQueryKeys.masterContents("org-1", {}) })
+})
+
+it.each([
+  ["products.read", () => productQueryKeys.list("org-1", { status: "ACTIVE" })],
+  ["assets.read", () => assetKeys.list("org-1", { status: "ACTIVE" })],
+  ["knowledge.read", () => [...contentQueryKeys.briefs("org-1"), "approved-concepts"]],
+  ["campaigns.manage", null],
+] as const)("closes an open wizard immediately when %s is revoked", async (revokedPermission, queryKey) => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(baseResponse(path)), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
+  const permissions = ["campaigns.read", "campaigns.manage", "products.read", "assets.read", "knowledge.read", "memberships.read"]
+  const view = renderPage(permissions, "ordinary")
+  const user = userEvent.setup()
+
+  await user.click(await screen.findByRole("button", { name: "让 AI 给我方案" }))
+  expect(screen.getByRole("dialog")).toBeVisible()
+  if (queryKey) expect(view.queryClient.getQueryData(queryKey())).toBeDefined()
+
+  view.queryClient.setQueryData(
+    currentUserQueryOptions().queryKey,
+    currentUser(permissions.filter((permission) => permission !== revokedPermission)),
+  )
+
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument())
+  if (queryKey) expect(view.queryClient.getQueryData(queryKey())).toBeUndefined()
+})
+
+it("removes the product recovery action as soon as products.read is revoked", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    if (path === "/api/v1/products?status=ACTIVE") {
+      return new Response(JSON.stringify({ detail: "PRODUCT_BACKEND_FAILURE" }), {
+        status: 500, headers: { "Content-Type": "application/json" },
+      })
+    }
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  }))
+  const permissions = ["campaigns.read", "campaigns.manage", "products.read", "memberships.read"]
+  const view = renderPage(permissions, "ordinary")
+
+  expect(await screen.findByRole("button", { name: "重新检查产品资料" })).toBeVisible()
+  view.queryClient.setQueryData(
+    currentUserQueryOptions().queryKey,
+    currentUser(permissions.filter((permission) => permission !== "products.read")),
+  )
+
+  await waitFor(() => expect(screen.queryByRole("button", { name: "重新检查产品资料" })).not.toBeInTheDocument())
+})
+
+it("ignores a deferred conflict refresh after jobs.read is revoked", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const failedJob = { job_id: "job-refresh-revoked", type: "CONTENT_GENERATE", status: "FAILED", progress: 60, attempt: 1, max_attempts: 3, created_at: "", finished_at: "", error: { message: "failed" }, result_reference: null }
+  let resolveDetail!: (response: Response) => void
+  const detail = new Promise<Response>((resolve) => { resolveDetail = resolve })
+  let jobLists = 0
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === "/api/v1/jobs") {
+      jobLists += 1
+      return new Response(JSON.stringify({ next: null, previous: null, results: jobLists === 1 ? [failedJob] : [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path.endsWith("/retry") && options?.method === "POST") return new Response(JSON.stringify({ detail: "conflict" }), { status: 409, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/jobs/job-refresh-revoked") return detail
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const permissions = ["campaigns.read", "jobs.read", "jobs.manage"]
+  const view = renderPage(permissions, "advanced")
+  const user = userEvent.setup()
+
+  await user.click(await screen.findByRole("button", { name: "重新尝试" }))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/jobs/job-refresh-revoked", expect.anything()))
+  view.queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(["campaigns.read", "jobs.manage"]))
+  resolveDetail(new Response(JSON.stringify({ ...failedJob, status: "SUCCEEDED", progress: 100 }), { status: 200, headers: { "Content-Type": "application/json" } }))
+  await detail
+  view.queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(permissions))
+
+  await waitFor(() => expect(jobLists).toBe(2))
+  expect(screen.queryByText("任务 job-refresh-revoked")).not.toBeInTheDocument()
+})
+
+it("hides backend cursor details behind a fixed ordinary-mode recovery", async () => {
+  const backendDetail = "Invalid cursor JOB_CURSOR_EXPIRED_400"
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/jobs") return new Response(JSON.stringify({ next: "/api/v1/jobs?cursor=expired", previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/jobs?cursor=expired") return new Response(JSON.stringify({ detail: backendDetail }), { status: 400, headers: { "Content-Type": "application/json" } })
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["jobs.read"], "ordinary")
+
+  await user.click(screen.getByRole("button", { name: "查看高级记录" }))
+  await user.click(await screen.findByRole("button", { name: "加载更多生成任务" }))
+
+  const recovery = await screen.findByRole("alert")
+  expect(recovery).toHaveTextContent("生成记录下一页暂时无法加载，请重新加载后再试。")
+  expect(recovery).not.toHaveTextContent(backendDetail)
+  expect(within(recovery).getByRole("button", { name: "重新加载更多生成记录" })).toBeVisible()
+})
+
+it("loads linked unavailable records into the advanced draft editor", async () => {
+  const staleDraft = {
+    ...brief(),
+    product_ids: ["product-1", "product-archived"],
+    asset_ids: ["asset-archived"],
+    concept_links: [{ role: "STANDARD", concept_id: "concept-rejected" }],
+  }
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/content-briefs") return new Response(JSON.stringify({ next: null, previous: null, results: [staleDraft] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/products") return new Response(JSON.stringify({ next: null, previous: null, results: [
+      { id: "product-1", name_zh: "精密齿轮", name_en: "Precision Gear", status: "ACTIVE" },
+      { id: "product-archived", name_zh: "旧产品", name_en: "Old product", status: "ARCHIVED" },
+    ] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/assets") return new Response(JSON.stringify({ next: null, previous: null, results: [
+      { id: "asset-archived", asset_type: "IMAGE", original_filename: "old-photo.png", mime_type: "image/png", size_bytes: 1, language: "zh", status: "ARCHIVED", tags: [], created_at: "" },
+    ] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/knowledge/concepts?page_size=50") return new Response(JSON.stringify({ next: null, previous: null, results: [
+      { id: "concept-rejected", code: "OLD", concept_type: "STANDARD", label_zh: "旧标准", label_en: "Old standard", status: "REJECTED" },
+    ] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read", "knowledge.read", "memberships.read"], "advanced")
+
+  await user.click(await screen.findByRole("button", { name: "编辑需求草稿" }))
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+
+  expect(await screen.findByLabelText("旧产品（不可用，仅可移除）")).toBeVisible()
+  expect(screen.getByLabelText("old-photo.png（不可用，仅可移除）")).toBeVisible()
+  expect(screen.getByLabelText("Old standard (STANDARD)（不可用，仅可移除）")).toBeVisible()
+  expect(fetchMock).toHaveBeenCalledWith("/api/v1/products", expect.anything())
+  expect(fetchMock).toHaveBeenCalledWith("/api/v1/assets", expect.anything())
+  expect(fetchMock).toHaveBeenCalledWith("/api/v1/knowledge/concepts?page_size=50", expect.anything())
 })
 
 it("stops an in-flight job poll and ignores its response when jobs.read is revoked", async () => {

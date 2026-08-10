@@ -118,6 +118,8 @@ export const listApprovedBriefConcepts = async (): Promise<CursorPage<BriefConce
   required(await apiRequest<CursorPage<BriefConcept>>(
     "/api/v1/knowledge/concepts?status=APPROVED&page_size=50",
   ))
+export const listBriefConcepts = async (): Promise<CursorPage<BriefConcept>> =>
+  required(await apiRequest<CursorPage<BriefConcept>>("/api/v1/knowledge/concepts?page_size=50"))
 export const createCampaign = async (input: { name: string; description: string }): Promise<Campaign> =>
   required(await apiRequest<Campaign>("/api/v1/campaigns", { method: "POST", body: { ...input, status: "DRAFT", product_ids: [] } }))
 export const listBriefs = async (filters: { status?: string; campaign?: string } = {}): Promise<CursorPage<ContentBrief>> =>

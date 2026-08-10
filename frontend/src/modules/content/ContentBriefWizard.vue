@@ -44,8 +44,30 @@ const conceptRoles: Partial<Record<BriefConcept["concept_type"], string>> = {
   STANDARD: "STANDARD",
   APPLICATION: "APPLICATION",
 }
-const supportedConcepts = computed(() => props.concepts.filter(
-  (concept) => Boolean(conceptRoles[concept.concept_type]),
+const originalProductIds = new Set(props.brief?.product_ids ?? [])
+const originalAssetIds = new Set(props.brief?.asset_ids ?? [])
+const originalConceptIds = new Set(props.brief?.concept_links.map((link) => link.concept_id) ?? [])
+const availableProducts = computed(() => props.products.filter((product) => product.status === "ACTIVE"))
+const unavailableProducts = computed(() => props.products.filter((product) =>
+  product.status !== "ACTIVE" && originalProductIds.has(product.id) && productIds.value.includes(product.id),
+))
+const missingProductIds = computed(() => [...originalProductIds].filter((id) =>
+  productIds.value.includes(id) && !props.products.some((product) => product.id === id),
+))
+const availableAssets = computed(() => props.assets.filter((asset) => asset.status === "ACTIVE"))
+const unavailableAssets = computed(() => props.assets.filter((asset) =>
+  asset.status !== "ACTIVE" && originalAssetIds.has(asset.id) && assetIds.value.includes(asset.id),
+))
+const missingAssetIds = computed(() => [...originalAssetIds].filter((id) =>
+  assetIds.value.includes(id) && !props.assets.some((asset) => asset.id === id),
+))
+const isSelectableConcept = (concept: BriefConcept) => concept.status === "APPROVED" && Boolean(conceptRoles[concept.concept_type])
+const availableConcepts = computed(() => props.concepts.filter(isSelectableConcept))
+const unavailableConcepts = computed(() => props.concepts.filter((concept) =>
+  !isSelectableConcept(concept) && originalConceptIds.has(concept.id) && conceptIds.value.includes(concept.id),
+))
+const missingConceptIds = computed(() => [...originalConceptIds].filter((id) =>
+  conceptIds.value.includes(id) && !props.concepts.some((concept) => concept.id === id),
 ))
 const existingConceptRoles = new Map(
   props.brief?.concept_links.map((link) => [link.concept_id, link.role]) ?? [],
@@ -140,6 +162,18 @@ function list(value: string): string[] {
   return [...found.values()]
 }
 
+function removeProduct(id: string): void {
+  productIds.value = productIds.value.filter((selected) => selected !== id)
+}
+
+function removeAsset(id: string): void {
+  assetIds.value = assetIds.value.filter((selected) => selected !== id)
+}
+
+function removeConcept(id: string): void {
+  conceptIds.value = conceptIds.value.filter((selected) => selected !== id)
+}
+
 async function next(): Promise<void> {
   clearErrors()
   if (step.value === 1) {
@@ -204,7 +238,7 @@ async function submit(): Promise<void> {
     const conceptLinks = conceptIds.value.map((conceptId) => {
       const concept = props.concepts.find((item) => item.id === conceptId)
       const role = concept
-        ? conceptRoles[concept.concept_type]
+        ? conceptRoles[concept.concept_type] ?? existingConceptRoles.get(conceptId)
         : existingConceptRoles.get(conceptId)
       return role ? { role, concept_id: conceptId } : null
     })
@@ -263,10 +297,10 @@ async function submit(): Promise<void> {
 
         <section v-else-if="step === 2" aria-labelledby="selection-step">
           <h3 id="selection-step">选择产品和平台</h3>
-          <fieldset data-field="products"><legend>产品（至少一个）</legend><span v-if="fieldErrors.products" class="field-error">{{ fieldErrors.products }}</span><label v-for="item in products" :key="item.id"><input v-model="productIds" type="checkbox" :value="item.id" :aria-label="item.name_zh || item.name_en"> {{ item.name_zh || item.name_en }}</label><button v-if="more.products" type="button" @click="emit('loadMore', 'products')">加载更多产品</button><span v-if="pageErrors.products" role="alert">{{ pageErrors.products }} <button type="button" @click="emit('loadMore', 'products')">重试</button></span></fieldset>
+          <fieldset data-field="products"><legend>产品（至少一个）</legend><span v-if="fieldErrors.products" class="field-error">{{ fieldErrors.products }}</span><label v-for="item in availableProducts" :key="item.id"><input v-model="productIds" type="checkbox" :value="item.id" :aria-label="item.name_zh || item.name_en"> {{ item.name_zh || item.name_en }}</label><label v-for="item in unavailableProducts" :key="`unavailable-${item.id}`"><input type="checkbox" checked :aria-label="`${item.name_zh || item.name_en}（不可用，仅可移除）`" @change="removeProduct(item.id)"> {{ item.name_zh || item.name_en }} <small>不可用，仅可移除</small></label><label v-for="id in missingProductIds" :key="`missing-${id}`"><input type="checkbox" checked :aria-label="`历史关联产品 ${id}（不可用，仅可移除）`" @change="removeProduct(id)"> 历史关联产品 {{ id }} <small>不可用，仅可移除</small></label><button v-if="more.products" type="button" @click="emit('loadMore', 'products')">加载更多产品</button><span v-if="pageErrors.products" role="alert">{{ pageErrors.products }} <button type="button" @click="emit('loadMore', 'products')">重试</button></span></fieldset>
           <fieldset data-field="platforms"><legend>平台（至少一个）</legend><span v-if="fieldErrors.platforms" class="field-error">{{ fieldErrors.platforms }}</span><label v-for="item in platforms" :key="item.id"><input v-model="platformIds" type="checkbox" :value="item.id" :aria-label="item.name"> {{ item.name }} <small>{{ item.capabilities.join('、') || '基础内容' }}</small></label><button v-if="more.platforms" type="button" @click="emit('loadMore', 'platforms')">加载更多平台</button><span v-if="pageErrors.platforms" role="alert">{{ pageErrors.platforms }} <button type="button" @click="emit('loadMore', 'platforms')">重试</button></span></fieldset>
-          <fieldset v-if="assets.length || more.assets || fieldErrors.assets" data-field="assets"><legend>可选素材</legend><span v-if="fieldErrors.assets" class="field-error">{{ fieldErrors.assets }}</span><label v-for="item in assets" :key="item.id"><input v-model="assetIds" type="checkbox" :value="item.id"> {{ item.original_filename }}</label><button v-if="more.assets" type="button" @click="emit('loadMore', 'assets')">加载更多素材</button><span v-if="pageErrors.assets" role="alert">{{ pageErrors.assets }} <button type="button" @click="emit('loadMore', 'assets')">重试</button></span></fieldset>
-          <fieldset v-if="supportedConcepts.length" data-field="concepts"><legend>已批准知识（可选）</legend><label v-for="item in supportedConcepts" :key="item.id"><input v-model="conceptIds" type="checkbox" :value="item.id" :aria-label="`${item.label_en || item.label_zh} (${item.concept_type})`"> {{ item.label_zh || item.label_en }} <small>{{ item.code }}</small></label></fieldset>
+          <fieldset v-if="availableAssets.length || unavailableAssets.length || missingAssetIds.length || more.assets || fieldErrors.assets" data-field="assets"><legend>可选素材</legend><span v-if="fieldErrors.assets" class="field-error">{{ fieldErrors.assets }}</span><label v-for="item in availableAssets" :key="item.id"><input v-model="assetIds" type="checkbox" :value="item.id"> {{ item.original_filename }}</label><label v-for="item in unavailableAssets" :key="`unavailable-${item.id}`"><input type="checkbox" checked :aria-label="`${item.original_filename}（不可用，仅可移除）`" @change="removeAsset(item.id)"> {{ item.original_filename }} <small>不可用，仅可移除</small></label><label v-for="id in missingAssetIds" :key="`missing-${id}`"><input type="checkbox" checked :aria-label="`历史关联素材 ${id}（不可用，仅可移除）`" @change="removeAsset(id)"> 历史关联素材 {{ id }} <small>不可用，仅可移除</small></label><button v-if="more.assets" type="button" @click="emit('loadMore', 'assets')">加载更多素材</button><span v-if="pageErrors.assets" role="alert">{{ pageErrors.assets }} <button type="button" @click="emit('loadMore', 'assets')">重试</button></span></fieldset>
+          <fieldset v-if="availableConcepts.length || unavailableConcepts.length || missingConceptIds.length" data-field="concepts"><legend>已批准知识（可选）</legend><label v-for="item in availableConcepts" :key="item.id"><input v-model="conceptIds" type="checkbox" :value="item.id" :aria-label="`${item.label_en || item.label_zh} (${item.concept_type})`"> {{ item.label_zh || item.label_en }} <small>{{ item.code }}</small></label><label v-for="item in unavailableConcepts" :key="`unavailable-${item.id}`"><input type="checkbox" checked :aria-label="`${item.label_en || item.label_zh} (${item.concept_type})（不可用，仅可移除）`" @change="removeConcept(item.id)"> {{ item.label_zh || item.label_en }} <small>不可用，仅可移除</small></label><label v-for="id in missingConceptIds" :key="`missing-${id}`"><input type="checkbox" checked :aria-label="`历史关联知识 ${id}（不可用，仅可移除）`" @change="removeConcept(id)"> 历史关联知识 {{ id }} <small>不可用，仅可移除</small></label></fieldset>
         </section>
 
         <section v-else-if="step === 3" aria-labelledby="details-step">

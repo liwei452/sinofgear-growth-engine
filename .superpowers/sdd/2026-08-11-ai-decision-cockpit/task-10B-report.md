@@ -77,3 +77,38 @@
 
 - Added deterministic deferred-promise coverage for timer cancellation after close/unmount and stale CSV/JSON resolutions/rejections across mode changes, close/reopen, and newer selections. Existing deferred-upload and session tests cover stale active submissions and object-URL replacement/close cleanup.
 - Focused verification passed 22/22 with typecheck and lint. The preceding full frontend run passed 30 files / 205 tests.
+
+## Fix Round 4: direct lifecycle coverage completion
+
+### RED / coverage characterization
+
+- The Fix Round 3 quality audit was the coverage RED: it identified five lifecycle cases that were not directly asserted even though the production session, file-read token, timer, object-URL, and idempotency paths were already present.
+- Added deterministic direct coverage for all five cases. The first run was 10/13 because two assertions counted unrelated framework timers and test cleanup restored the temporary `URL` global before Vue unmounted. Those were test-harness failures, not production behavior failures; the assertions were narrowed to the component's exact 1-second timer handle and the retry test now unmounts while its URL double is live.
+- With those harness corrections, all five characterizations passed against the existing production component. No production code changed in this round.
+
+### Changes
+
+- Replaced the ambiguous close-then-unmount polling test with a direct active-unmount test. It starts a second deferred poll, unmounts, verifies the exact polling timer is cleared, resolves the stale poll, advances time, and asserts no further request or `completed` emission.
+- Added direct organization-change coverage for both a scheduled old timer and a separately deferred old poll. It proves the old timer is cleared, the late old terminal response is inert, the new organization can submit, and only the `['leads', 'org-2', 'job', 'new-job']` cache key is populated for the new job.
+- Added newer-file precedence coverage: a late old CSV success cannot replace a two-row newer CSV preview, and a late old JSON rejection cannot add an alert or disable a valid newer JSON preview.
+- Added direct screenshot object-URL revocation coverage on component unmount.
+- Added private screenshot upload failure/retry coverage. It asserts understandable recovery copy and focus, one idempotency key generation for the unchanged intent, exactly one ingestion request after the successful retry, and one completion emission.
+
+### GREEN commands and results
+
+| Command | Result |
+| --- | --- |
+| `C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vitest/vitest.mjs --run src/modules/leads/SourceImportDialog.test.ts` | PASS: 13/13 dialog tests. |
+| `C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vitest/vitest.mjs --run src/modules/leads/api.test.ts src/modules/leads/SourceImportDialog.test.ts` | PASS: 26/26 tests in 2 files. |
+| `C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vitest/vitest.mjs --run` | PASS: 30 files / 211 tests. |
+| `C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vue-tsc/bin/vue-tsc.js --noEmit` | PASS. |
+| `C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/eslint/bin/eslint.js .` | PASS with zero warnings/errors. |
+| `git diff --check` | PASS. |
+
+### Fix Round 4 self-review
+
+- Each new assertion is bound to observable lifecycle behavior: request counts, emitted completion payloads, exact cleared timer handles, organization-scoped query data, preview validity, recovery focus/copy, ingestion count, idempotency generation, or object-URL revocation.
+- Deferred promises are always settled before test exit; fake timers are restored after every test; owned spies are restored explicitly; screenshot views are unmounted before the temporary URL implementation is removed.
+- The organization test derives the expected query key literally rather than using the production key builder, so an incorrectly scoped key cannot satisfy the assertion.
+- The retry test verifies both sides of duplicate prevention: the unchanged intent generates one key across both upload attempts, while only the successful private upload can lead to the single ingestion request.
+- No production component, API, backend, generated schema, queue page, plan, or ledger file changed.

@@ -1,13 +1,13 @@
 import { render, screen } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
-import { VueQueryPlugin } from "@tanstack/vue-query"
+import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
 import { flushPromises } from "@vue/test-utils"
 import { afterEach, expect, it, vi } from "vitest"
 
 import SourceImportDialog from "./SourceImportDialog.vue"
 
-function testApp() {
-  return { plugins: [VueQueryPlugin] }
+function testApp(queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+  return { plugins: [[VueQueryPlugin, { queryClient }]] }
 }
 
 function json(body: unknown, status = 200): Response {
@@ -170,15 +170,34 @@ it("cleans preview URLs and prevents failed or stale file reads from enabling su
   expect(screen.getByRole("button", { name: "导入公开信号" })).toBeDisabled()
 })
 
-it("cancels active polling on close and unmount", async () => {
+it("makes an active and pending poll inert when unmounted", async () => {
   vi.useFakeTimers()
+  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout")
+  const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout")
   const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-  const fetchMock = vi.fn().mockResolvedValueOnce(json({ job_id: "job-1", ingestion_batch_id: "batch-1", status: "QUEUED" }, 202)).mockResolvedValueOnce(json(job("QUEUED")))
+  const pendingPoll = deferred<Response>()
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(json({ job_id: "job-1", ingestion_batch_id: "batch-1", status: "QUEUED" }, 202))
+    .mockResolvedValueOnce(json(job("QUEUED")))
+    .mockImplementationOnce(() => pendingPoll.promise)
   vi.stubGlobal("fetch", fetchMock); document.cookie = "csrftoken=token; path=/"
   const view = render(SourceImportDialog, { props: { organizationId: "org-1", open: true }, global: testApp() })
   await user.type(screen.getByLabelText("公开链接"), "https://example.test/post"); await user.type(screen.getByLabelText("公开原文"), "text"); await user.click(screen.getByRole("button", { name: "导入公开信号" })); await flushPromises()
-  await user.click(screen.getByRole("button", { name: "取消" })); await vi.advanceTimersByTimeAsync(5_000); expect(fetchMock).toHaveBeenCalledTimes(2)
-  view.unmount(); await vi.advanceTimersByTimeAsync(5_000); expect(fetchMock).toHaveBeenCalledTimes(2)
+  await vi.advanceTimersByTimeAsync(1_000)
+  expect(fetchMock).toHaveBeenCalledTimes(3)
+  const pollTimerIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 1_000)
+  expect(pollTimerIndex).toBeGreaterThanOrEqual(0)
+  const pollTimer = setTimeoutSpy.mock.results[pollTimerIndex].value
+
+  view.unmount()
+  expect(clearTimeoutSpy).toHaveBeenCalledWith(pollTimer)
+  pendingPoll.resolve(json(job("SUCCEEDED")))
+  await flushPromises()
+  await vi.advanceTimersByTimeAsync(5_000)
+  expect(fetchMock).toHaveBeenCalledTimes(3)
+  expect(view.emitted("completed")).toBeUndefined()
+  setTimeoutSpy.mockRestore()
+  clearTimeoutSpy.mockRestore()
 })
 
 it("ignores stale CSV and JSON reads after mode, close, and newer-file changes", async () => {
@@ -198,4 +217,155 @@ it("ignores stale CSV and JSON reads after mode, close, and newer-file changes",
   const nextFile = new File(["x"], "new.json"); Object.defineProperty(nextFile, "text", { value: () => newer.promise })
   await user.upload(screen.getAllByLabelText("JSON 文件").find((item) => item.tagName === "INPUT")!, nextFile); newer.resolve('{"rows":[{"source_url":"https://example.test/new","original_text":"text"}]}'); await flushPromises()
   expect(screen.getByRole("button", { name: "导入公开信号" })).toBeEnabled()
+})
+
+it("isolates active polling when the organization changes and scopes the new job cache", async () => {
+  vi.useFakeTimers()
+  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout")
+  const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout")
+  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const oldPoll = deferred<Response>()
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(json({ job_id: "timer-job", ingestion_batch_id: "timer-batch", status: "QUEUED" }, 202))
+    .mockResolvedValueOnce(json({ ...job("QUEUED"), job_id: "timer-job" }))
+    .mockResolvedValueOnce(json({ job_id: "old-job", ingestion_batch_id: "old-batch", status: "QUEUED" }, 202))
+    .mockImplementationOnce(() => oldPoll.promise)
+    .mockResolvedValueOnce(json({ job_id: "new-job", ingestion_batch_id: "new-batch", status: "QUEUED" }, 202))
+    .mockResolvedValueOnce(json({ ...job("SUCCEEDED"), job_id: "new-job" }))
+  vi.stubGlobal("fetch", fetchMock)
+  document.cookie = "csrftoken=token; path=/"
+  const view = render(SourceImportDialog, {
+    props: { organizationId: "org-1", open: true },
+    global: testApp(queryClient),
+  })
+  await user.type(screen.getByLabelText("公开链接"), "https://example.test/post")
+  await user.type(screen.getByLabelText("公开原文"), "public text")
+
+  await user.click(screen.getByRole("button", { name: "导入公开信号" }))
+  await flushPromises()
+  const pollTimerIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 1_000)
+  expect(pollTimerIndex).toBeGreaterThanOrEqual(0)
+  const oldTimer = setTimeoutSpy.mock.results[pollTimerIndex].value
+  await view.rerender({ organizationId: "org-2", open: true })
+  expect(clearTimeoutSpy).toHaveBeenCalledWith(oldTimer)
+
+  await view.rerender({ organizationId: "org-1", open: true })
+  await user.click(screen.getByRole("button", { name: "导入公开信号" }))
+  await flushPromises()
+  await view.rerender({ organizationId: "org-2", open: true })
+  expect(screen.getByRole("button", { name: "导入公开信号" })).toBeEnabled()
+  await user.click(screen.getByRole("button", { name: "导入公开信号" }))
+  await flushPromises()
+
+  expect(queryClient.getQueryData(["leads", "org-2", "job", "new-job"])).toMatchObject({ status: "SUCCEEDED" })
+  expect(queryClient.getQueryData(["leads", "org-1", "job", "new-job"])).toBeUndefined()
+  expect(view.emitted("completed")).toEqual([[{ batchId: "new-batch", jobId: "new-job" }]])
+
+  oldPoll.resolve(json({ ...job("SUCCEEDED"), job_id: "old-job" }))
+  await flushPromises()
+  await vi.advanceTimersByTimeAsync(5_000)
+  expect(fetchMock).toHaveBeenCalledTimes(6)
+  expect(view.emitted("completed")).toEqual([[{ batchId: "new-batch", jobId: "new-job" }]])
+  setTimeoutSpy.mockRestore()
+  clearTimeoutSpy.mockRestore()
+})
+
+it("keeps newer CSV and JSON previews when older file reads settle later", async () => {
+  const user = userEvent.setup()
+  const oldCsv = deferred<string>()
+  const oldJson = deferred<string>()
+  render(SourceImportDialog, { props: { organizationId: "org-1", open: true }, global: testApp() })
+  await user.click(screen.getByRole("button", { name: "更多导入方式" }))
+  await user.click(screen.getByRole("tab", { name: "CSV 文件" }))
+  const csvInput = screen.getAllByLabelText("CSV 文件").find((item) => item.tagName === "INPUT")!
+  const staleCsv = new File(["old"], "old.csv", { type: "text/csv" })
+  const newestCsv = new File(["new"], "new.csv", { type: "text/csv" })
+  Object.defineProperty(staleCsv, "text", { value: () => oldCsv.promise })
+  Object.defineProperty(newestCsv, "text", { value: () => Promise.resolve("source_url,original_text\nhttps://example.test/new-1,text\nhttps://example.test/new-2,text") })
+  await user.upload(csvInput, staleCsv)
+  await user.upload(csvInput, newestCsv)
+  await flushPromises()
+  expect(screen.getByText(/2/, { selector: ".preview span" })).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "导入公开信号" })).toBeEnabled()
+
+  oldCsv.resolve("source_url,original_text\nhttps://example.test/stale,text")
+  await flushPromises()
+  expect(screen.getByText(/2/, { selector: ".preview span" })).toBeInTheDocument()
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+
+  await user.click(screen.getByRole("tab", { name: "JSON 文件" }))
+  const jsonInput = screen.getAllByLabelText("JSON 文件").find((item) => item.tagName === "INPUT")!
+  const staleJson = new File(["old"], "old.json", { type: "application/json" })
+  const newestJson = new File(["new"], "new.json", { type: "application/json" })
+  Object.defineProperty(staleJson, "text", { value: () => oldJson.promise })
+  Object.defineProperty(newestJson, "text", { value: () => Promise.resolve('{"rows":[{"source_url":"https://example.test/new-1","original_text":"text"},{"source_url":"https://example.test/new-2","original_text":"text"}]}') })
+  await user.upload(jsonInput, staleJson)
+  await user.upload(jsonInput, newestJson)
+  await flushPromises()
+  oldJson.reject(new Error("stale read failed"))
+  await flushPromises()
+  expect(screen.getByText(/2/, { selector: ".preview span" })).toBeInTheDocument()
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "导入公开信号" })).toBeEnabled()
+})
+
+it("revokes a live screenshot object URL on unmount", async () => {
+  const user = userEvent.setup()
+  const revokeUrl = vi.fn()
+  vi.stubGlobal("URL", class extends URL {
+    static createObjectURL = vi.fn(() => "blob:unmount-preview")
+    static revokeObjectURL = revokeUrl
+  })
+  const view = render(SourceImportDialog, { props: { organizationId: "org-1", open: true }, global: testApp() })
+  await user.click(screen.getByRole("button", { name: "更多导入方式" }))
+  await user.click(screen.getByRole("tab", { name: "截图" }))
+  await user.upload(screen.getByLabelText("截图文件"), new File(["image"], "signal.png", { type: "image/png" }))
+
+  view.unmount()
+  expect(revokeUrl).toHaveBeenCalledTimes(1)
+  expect(revokeUrl).toHaveBeenCalledWith("blob:unmount-preview")
+})
+
+it("recovers from a private screenshot upload failure and retries the unchanged intent once", async () => {
+  const user = userEvent.setup()
+  const randomUuid = vi.spyOn(globalThis.crypto, "randomUUID")
+    .mockReturnValue("00000000-0000-4000-8000-000000000001")
+  vi.stubGlobal("URL", class extends URL {
+    static createObjectURL = vi.fn(() => "blob:retry-preview")
+    static revokeObjectURL = vi.fn()
+  })
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(json({ detail: "private upload failed" }, 500))
+    .mockResolvedValueOnce(json({ id: "00000000-0000-4000-8000-000000000002" }, 201))
+    .mockResolvedValueOnce(json({ job_id: "job-1", ingestion_batch_id: "batch-1", status: "QUEUED" }, 202))
+    .mockResolvedValueOnce(json(job("SUCCEEDED")))
+  vi.stubGlobal("fetch", fetchMock)
+  document.cookie = "csrftoken=token; path=/"
+  const view = render(SourceImportDialog, { props: { organizationId: "org-1", open: true }, global: testApp() })
+  await user.click(screen.getByRole("button", { name: "更多导入方式" }))
+  await user.click(screen.getByRole("tab", { name: "截图" }))
+  await user.type(screen.getByLabelText("公开链接"), "https://example.test/image")
+  await user.type(screen.getByLabelText("公开原文"), "public text")
+  await user.upload(screen.getByLabelText("截图文件"), new File(["image"], "signal.png", { type: "image/png" }))
+
+  await user.click(screen.getByRole("button", { name: "导入公开信号" }))
+  await flushPromises()
+  expect(screen.getByRole("alert")).toHaveTextContent("服务暂时不可用，请稍后重试。")
+  const recover = screen.getByRole("button", { name: "重新上传截图" })
+  expect(recover).toBeVisible()
+  await user.click(recover)
+  expect(screen.getByLabelText("截图文件")).toHaveFocus()
+
+  await user.click(screen.getByRole("button", { name: "导入公开信号" }))
+  await flushPromises()
+  const ingestionCalls = fetchMock.mock.calls.filter(([path]) => path === "/api/v1/ingestion-batches")
+  expect(ingestionCalls).toHaveLength(1)
+  expect(JSON.parse((ingestionCalls[0][1] as RequestInit).body as string)).toMatchObject({
+    idempotency_key: "00000000-0000-4000-8000-000000000001",
+  })
+  expect(randomUuid).toHaveBeenCalledTimes(1)
+  expect(view.emitted("completed")).toEqual([[{ batchId: "batch-1", jobId: "job-1" }]])
+  view.unmount()
+  randomUuid.mockRestore()
 })

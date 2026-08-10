@@ -43,6 +43,18 @@ def test_candidate_normalizes_public_company_domain(candidate):
 
 
 @pytest.mark.django_db
+def test_direct_candidate_creation_requires_enterprise_identity(organization, signal, user):
+    with pytest.raises(ValidationError, match="company name or public company domain"):
+        LeadCandidate.objects.create(
+            organization=organization,
+            source_signal=signal,
+            company_name="",
+            company_domain="",
+            created_by=user,
+        )
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     "domain",
     [

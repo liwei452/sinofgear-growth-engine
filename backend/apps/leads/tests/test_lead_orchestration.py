@@ -1,9 +1,11 @@
 from copy import deepcopy
 
 import pytest
+from django.db import models
 from django.utils import timezone
 
 from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
+from apps.ai.orchestration import GenerationPreflightError
 from apps.ai.services import PromptVersionService
 from apps.identity.models import Membership, Role
 from apps.jobs.models import Job
@@ -15,7 +17,12 @@ from apps.knowledge.models import (
     KnowledgeEvidence,
     KnowledgeStatus,
 )
-from apps.leads.models import LeadCandidate, LeadInsight
+from apps.leads.models import (
+    LeadAnalysisBinding,
+    LeadCandidate,
+    LeadInsight,
+    lead_history_writes,
+)
 from apps.leads.orchestration import execute_lead_analysis_job
 from apps.leads.schemas import LEAD_ANALYSIS_OUTPUT_SCHEMA
 from apps.leads.services import LeadService, LeadStateError, build_analysis_snapshot
@@ -93,7 +100,152 @@ def _analysis_context(candidate, evidence, user):
         idempotency_key=f"lead-analysis-{candidate.id}-{candidate.version}",
         created_by=user,
     )
+    with lead_history_writes():
+        LeadAnalysisBinding.objects.create(
+            organization=candidate.organization,
+            job=job,
+            candidate=candidate,
+            prompt_version=prompt,
+            requested_by=user,
+        )
     return snapshot, prompt, job
+
+
+def _bind(job, candidate, prompt, user):
+    with lead_history_writes():
+        return LeadAnalysisBinding.objects.create(
+            organization=candidate.organization,
+            job=job,
+            candidate=candidate,
+            prompt_version=prompt,
+            requested_by=user,
+        )
+
+
+@pytest.mark.django_db
+def test_worker_rejects_missing_durable_binding_and_recovers_owned_lease(
+    candidate, evidence, approved_requirement, approved_capability, user
+):
+    Membership.objects.create(
+        user=user,
+        organization=candidate.organization,
+        role=Role.objects.create_operator(),
+    )
+    snapshot = build_analysis_snapshot(
+        candidate=candidate, evidence_ids=[evidence.id], actor=user
+    )
+    prompt = PromptVersionService.create(
+        purpose="LEAD_ANALYZE",
+        code="missing-binding",
+        provider="missing-binding-provider",
+        model="fake-v1",
+        template="{input_json}",
+        output_schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
+        status=PromptVersion.Status.PUBLISHED,
+        created_by=user,
+    )
+    job = JobService.create(
+        organization=candidate.organization,
+        job_type=Job.Type.LEAD_ANALYZE,
+        input_snapshot=snapshot,
+        created_by=user,
+    )
+
+    with pytest.raises(GenerationPreflightError, match="binding"):
+        execute_lead_analysis_job(job.id, prompt.id)
+
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    assert job.status == Job.Status.FAILED
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None
+    assert not AIRun.objects.filter(job=job).exists()
+
+
+@pytest.mark.django_db
+def test_worker_rejects_prompt_that_differs_from_durable_binding_without_provider_call(
+    candidate, evidence, approved_requirement, approved_capability, user
+):
+    snapshot, bound_prompt, job = _analysis_context(candidate, evidence, user)
+    other_prompt = PromptVersionService.create(
+        purpose="LEAD_ANALYZE",
+        code="mismatched-bound-prompt",
+        provider="must-not-run",
+        model="fake-v2",
+        template="{input_json}",
+        output_schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
+        status=PromptVersion.Status.PUBLISHED,
+        created_by=user,
+    )
+    provider = SequenceProvider(
+        [_valid_output(snapshot=snapshot, evidence_id=evidence.id)]
+    )
+    provider_registry.register("must-not-run", provider, replace=True)
+
+    with pytest.raises(GenerationPreflightError, match="bound prompt"):
+        execute_lead_analysis_job(job.id, other_prompt.id)
+
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    assert bound_prompt.id != other_prompt.id
+    assert provider.calls == 0
+    assert job.status == Job.Status.FAILED
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert not LeadInsight.objects.filter(candidate=candidate).exists()
+
+
+@pytest.mark.django_db
+def test_worker_rejects_tampered_binding_candidate_and_recovers_snapshot_owner(
+    candidate,
+    evidence,
+    second_source_pair,
+    approved_requirement,
+    approved_capability,
+    user,
+):
+    _snapshot, prompt, job = _analysis_context(candidate, evidence, user)
+    other = LeadCandidate.objects.create(
+        organization=candidate.organization,
+        source_signal=second_source_pair[0],
+        company_name="Other Enterprise",
+        created_by=user,
+    )
+    models.QuerySet.update(
+        LeadAnalysisBinding._base_manager.filter(job=job), candidate=other
+    )
+
+    with pytest.raises(GenerationPreflightError, match="binding"):
+        execute_lead_analysis_job(job.id, prompt.id)
+
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    other.refresh_from_db()
+    assert job.status == Job.Status.FAILED
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None
+    assert other.status == LeadCandidate.Status.DISCOVERED
+
+
+@pytest.mark.django_db
+def test_worker_rejects_tampered_snapshot_and_recovers_durable_binding_owner(
+    candidate, evidence, approved_requirement, approved_capability, user
+):
+    snapshot, prompt, job = _analysis_context(candidate, evidence, user)
+    tampered = deepcopy(snapshot)
+    tampered["lead_candidate_id"] = "00000000-0000-4000-8000-000000000001"
+    models.QuerySet.update(
+        Job._base_manager.filter(pk=job.pk), input_snapshot=tampered
+    )
+
+    with pytest.raises(GenerationPreflightError, match="binding"):
+        execute_lead_analysis_job(job.id, prompt.id)
+
+    job.refresh_from_db()
+    candidate.refresh_from_db()
+    assert job.status == Job.Status.FAILED
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None
+    assert not AIRun.objects.filter(job=job).exists()
 
 
 @pytest.mark.django_db
@@ -288,6 +440,7 @@ def test_new_analysis_job_appends_version_without_overwriting_history(
         idempotency_key=f"lead-analysis-second-{candidate.id}",
         created_by=user,
     )
+    _bind(second_job, candidate, second_prompt, user)
     second_output = _valid_output(snapshot=second_snapshot, evidence_id=evidence.id)
     second_output["need_summary_en"] = "Updated audited conclusion."
     provider_registry.register(
@@ -369,6 +522,7 @@ def test_failed_reanalysis_restores_analyzed_and_retry_reacquires_lease(
         idempotency_key=f"retry-reanalysis-{candidate.id}",
         created_by=user,
     )
+    _bind(second_job, candidate, prompt, user)
     valid = _valid_output(snapshot=second_snapshot, evidence_id=evidence.id)
     invalid = deepcopy(valid)
     invalid["reasons"][0]["evidence_ids"] = []
@@ -507,6 +661,7 @@ def test_old_failed_job_redelivery_cannot_release_new_analysis_lease(
         idempotency_key=f"second-analysis-{candidate.id}",
         created_by=user,
     )
+    _bind(second_job, candidate, prompt, user)
     candidate.refresh_from_db()
     second_lease = candidate.analysis_lease_token
     second_version = candidate.version
@@ -637,6 +792,7 @@ def test_cross_type_same_code_binds_requirement_and_capability_unambiguously(
         input_snapshot=snapshot,
         created_by=user,
     )
+    _bind(job, candidate, prompt, user)
     output = _valid_output(snapshot=snapshot, evidence_id=evidence.id)
     output["requirements"][0]["type"] = "SHARED_CODE"
     output["capability_matches"][0] = {

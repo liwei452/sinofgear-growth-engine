@@ -99,6 +99,13 @@ def test_repeated_filters_are_rejected(organization):
     assert response.json()["code"] == "http_400"
 
 
+def test_malformed_candidate_cursor_is_recoverable(organization):
+    _user, client = _operator(organization)
+    response = client.get("/api/v1/lead-candidates?cursor=not-a-valid-cursor")
+    assert response.status_code == 400
+    assert response.json()["code"] == "http_400"
+
+
 def test_cross_org_candidate_detail_is_404(candidate, other_organization):
     _user, client = _operator(other_organization)
     response = client.get(f"/api/v1/lead-candidates/{candidate.id}")
@@ -283,3 +290,38 @@ def test_detail_history_has_bounded_queries_and_safe_ai_metadata(
     }
     assert "template" not in str(body).lower()
     assert "provider_metadata" not in str(body).lower()
+
+
+@pytest.mark.parametrize(
+    ("role_factory", "expected_actions"),
+    [
+        (Role.objects.create_read_only, []),
+        (Role.objects.create_operator, ["ANALYZE"]),
+        (
+            Role.objects.create_reviewer,
+            ["CONFIRM", "CORRECT", "DISMISS", "REQUEST_MORE_EVIDENCE"],
+        ),
+        (
+            Role.objects.create_administrator,
+            ["ANALYZE", "CONFIRM", "CORRECT", "DISMISS", "REQUEST_MORE_EVIDENCE"],
+        ),
+    ],
+)
+def test_detail_permitted_actions_follow_exact_membership_permissions(
+    candidate,
+    evidence,
+    ai_run,
+    insight_payload,
+    role_factory,
+    expected_actions,
+):
+    _analyzed(candidate, evidence, ai_run, insight_payload)
+    role = role_factory()
+    _user, client = _client(
+        candidate.organization,
+        role,
+        f"actions-{role.code.lower()}",
+    )
+    response = client.get(f"/api/v1/lead-candidates/{candidate.id}")
+    assert response.status_code == 200
+    assert response.json()["permitted_actions"] == expected_actions

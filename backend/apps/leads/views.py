@@ -227,7 +227,9 @@ class LeadCandidateListView(APIView):
             return _validation_response(error)
         candidate = _candidate_detail_queryset(request.organization).get(pk=candidate.pk)
         return Response(
-            LeadCandidateDetailSerializer(candidate).data,
+            LeadCandidateDetailSerializer(
+                candidate, context={"request": request}
+            ).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -246,7 +248,11 @@ class LeadCandidateDetailView(APIView):
         ).first()
         if candidate is None:
             raise Http404
-        return Response(LeadCandidateDetailSerializer(candidate).data)
+        return Response(
+            LeadCandidateDetailSerializer(
+                candidate, context={"request": request}
+            ).data
+        )
 
 
 @extend_schema(tags=["Leads"])

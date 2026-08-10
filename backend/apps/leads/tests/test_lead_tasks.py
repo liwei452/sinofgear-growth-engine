@@ -6,6 +6,7 @@ from apps.identity.models import Membership, Role
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
 from apps.knowledge.models import KnowledgeGraphLock
+from apps.leads.models import LeadAnalysisBinding, lead_history_writes
 from apps.leads.schemas import LEAD_ANALYSIS_OUTPUT_SCHEMA
 from apps.leads.services import build_analysis_snapshot
 from apps.leads.tasks import execute_lead_analysis
@@ -54,13 +55,21 @@ def test_lead_analysis_task_returns_durable_result_ids(
         input_snapshot=snapshot,
         created_by=user,
     )
+    with lead_history_writes():
+        LeadAnalysisBinding.objects.create(
+            organization=candidate.organization,
+            job=job,
+            candidate=candidate,
+            prompt_version=prompt,
+            requested_by=user,
+        )
     provider_registry.register(
         "lead-task",
         SequenceProvider([_valid_output(snapshot=snapshot, evidence_id=evidence.id)]),
         replace=True,
     )
 
-    result = execute_lead_analysis.delay(str(job.id), str(prompt.id)).get()
+    result = execute_lead_analysis.delay(str(job.id)).get()
 
     job.refresh_from_db()
     assert result == {**job.result_reference, "status": AIRun.Status.SUCCEEDED}

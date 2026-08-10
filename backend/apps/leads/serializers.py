@@ -1,6 +1,7 @@
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from apps.identity.permissions import PermissionCode
 from apps.sources.models import SourceEvidence
 
 from .models import LeadCandidate, LeadInsight, LeadReview
@@ -340,14 +341,29 @@ class LeadCandidateDetailSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_permitted_actions(self, candidate):
+        request = self.context.get("request")
+        membership = getattr(request, "membership", None)
+        if (
+            membership is None
+            or membership.organization_id != candidate.organization_id
+        ):
+            return []
+        permissions = set(membership.role.permissions)
+        can_analyze = PermissionCode.LEADS_ANALYZE.value in permissions
+        can_review = PermissionCode.LEADS_REVIEW.value in permissions
         actions = []
         if candidate.status == LeadCandidate.Status.ANALYZED:
-            actions.extend(["ANALYZE", "CONFIRM", "CORRECT", "DISMISS", "REQUEST_MORE_EVIDENCE"])
-        elif candidate.status == LeadCandidate.Status.DISCOVERED:
+            if can_analyze:
+                actions.append("ANALYZE")
+            if can_review:
+                actions.extend(
+                    ["CONFIRM", "CORRECT", "DISMISS", "REQUEST_MORE_EVIDENCE"]
+                )
+        elif candidate.status == LeadCandidate.Status.DISCOVERED and can_analyze:
             actions.append("ANALYZE")
-        elif candidate.status == LeadCandidate.Status.REVIEWED:
+        elif candidate.status == LeadCandidate.Status.REVIEWED and can_review:
             actions.extend(["DISMISS", "REQUEST_MORE_EVIDENCE"])
-        elif candidate.status == LeadCandidate.Status.DISMISSED:
+        elif candidate.status == LeadCandidate.Status.DISMISSED and can_review:
             actions.append("REOPEN")
         return actions
 

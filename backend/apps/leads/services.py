@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 
@@ -1103,6 +1103,22 @@ class LeadReviewService:
         idempotency_key,
         correction=None,
     ):
+        from apps.identity.models import Membership
+        from apps.identity.permissions import PermissionCode
+        from apps.identity.services import get_active_membership, require_permission
+
+        try:
+            membership = get_active_membership(user=reviewer)
+        except Membership.DoesNotExist as error:
+            raise PermissionDenied(
+                "An active review membership is required."
+            ) from error
+        if membership.organization_id != organization.id:
+            raise PermissionDenied("An active review membership is required.")
+        require_permission(
+            membership=membership,
+            permission=PermissionCode.LEADS_REVIEW,
+        )
         if action in {"MERGE_COMPANY", "SPLIT_COMPANY"}:
             raise ValidationError({"action": "This review action is reserved for B2."})
         if action not in LeadReview.Action.values:
@@ -1173,6 +1189,10 @@ class LeadReviewService:
                 LeadCandidate.Status.REVIEWED,
             }:
                 raise LeadStateError("Only analyzed or reviewed candidates can be dismissed.")
+            if not (locked.company_domain or locked.company_name).strip():
+                raise LeadStateError(
+                    "Lead candidate requires an enterprise identity before dismissal."
+                )
             locked.status = LeadCandidate.Status.DISMISSED
             identity = (locked.company_domain or locked.company_name).strip().casefold()
             ignore_fingerprint = hashlib.sha256(

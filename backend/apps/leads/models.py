@@ -318,11 +318,16 @@ class LeadCandidate(OrganizationScopedModel):
     def clean(self):
         super().clean()
         errors: dict[str, str] = {}
+        self.company_name = self.company_name.strip()
         if self.company_domain:
             try:
                 self.company_domain = normalize_company_domain(self.company_domain)
             except ValidationError as error:
                 errors["company_domain"] = " ".join(error.messages)
+        if not self.company_name and not self.company_domain:
+            errors["company_name"] = (
+                "Lead candidates require a company name or public company domain."
+            )
         _related_organization_error(self, "source_signal", errors)
         if self._state.adding:
             if (

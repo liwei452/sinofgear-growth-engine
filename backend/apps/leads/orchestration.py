@@ -17,11 +17,11 @@ from apps.ai.orchestration import (
     execute_generation_job,
 )
 from apps.jobs.models import Job
-from apps.jobs.services import StaleJobWorkerError
+from apps.jobs.services import JobService, StaleJobWorkerError
 from apps.knowledge.services import validate_frozen_ontology_snapshot
 from apps.sources.models import SourceEvidence
 
-from .models import LeadCandidate
+from .models import LeadAnalysisBinding, LeadCandidate
 from .schemas import (
     LEAD_ANALYSIS_OUTPUT_SCHEMA,
     frozen_source_evidence_errors,
@@ -198,23 +198,117 @@ def _validate_lead_output(output: dict, *, snapshot: dict) -> None:
         raise JSONSchemaValidationError("; ".join(errors[:10]))
 
 
-def _recover_candidate(snapshot, *, organization_id) -> None:
+def _snapshot_recovery_candidate_id(snapshot, *, organization_id, binding=None):
+    if isinstance(snapshot, dict):
+        frozen = json.loads(json.dumps(snapshot))
+        digest = frozen.pop("integrity_sha256", None)
+        if (
+            frozen.get("organization_id") == str(organization_id)
+            and isinstance(digest, str)
+            and hmac.compare_digest(digest, _snapshot_digest(frozen))
+        ):
+            return frozen.get("lead_candidate_id")
     if (
-        not isinstance(snapshot, dict)
-        or snapshot.get("organization_id") != str(organization_id)
+        binding is not None
+        and binding.organization_id == organization_id
+        and binding.job.organization_id == organization_id
     ):
+        return binding.candidate_id
+    return None
+
+
+def _recover_candidate(snapshot, *, organization_id, binding=None) -> None:
+    if not isinstance(snapshot, dict):
+        return
+    candidate_id = _snapshot_recovery_candidate_id(
+        snapshot,
+        organization_id=organization_id,
+        binding=binding,
+    )
+    if candidate_id is None:
         return
     LeadService.recover_failed_analysis(
         organization_id=organization_id,
-        candidate_id=snapshot.get("lead_candidate_id"),
+        candidate_id=candidate_id,
         started_from=snapshot.get("candidate_status_at_start"),
         analysis_lease_token=snapshot.get("analysis_lease_id"),
     )
 
 
+def _terminalize_preflight_failure(job) -> None:
+    if job.status not in {Job.Status.QUEUED, Job.Status.RETRY_QUEUED}:
+        return
+    claimed = JobService.claim(
+        worker_id="lead-analysis-preflight",
+        job_id=job.id,
+    )
+    if claimed is not None:
+        JobService.fail(
+            claimed.id,
+            claim_token=claimed.claim_token,
+            error={"code": "job_error"},
+        )
+
+
+def _bound_prompt(job, prompt_version_id):
+    binding = (
+        LeadAnalysisBinding.objects.select_related("job", "candidate", "prompt_version")
+        .filter(job_id=job.id)
+        .first()
+    )
+    snapshot = job.input_snapshot
+    frozen = json.loads(json.dumps(snapshot)) if isinstance(snapshot, dict) else {}
+    digest = frozen.pop("integrity_sha256", None)
+    expected_fields = {
+        "schema",
+        "organization_id",
+        "lead_candidate_id",
+        "candidate_status_at_start",
+        "analysis_lease_id",
+        "analysis_lease_version",
+        "candidate",
+        "evidence",
+        "ontology_snapshot",
+        "capability_bindings",
+    }
+    snapshot_integrity_valid = (
+        set(frozen) == expected_fields
+        and frozen.get("schema") == "LEAD_ANALYSIS_INPUT_V1"
+        and isinstance(digest, str)
+        and hmac.compare_digest(digest, _snapshot_digest(frozen))
+    )
+    valid = (
+        binding is not None
+        and binding.organization_id == job.organization_id
+        and binding.job.organization_id == job.organization_id
+        and binding.candidate.organization_id == job.organization_id
+        and isinstance(snapshot, dict)
+        and snapshot.get("organization_id") == str(job.organization_id)
+        and snapshot.get("lead_candidate_id") == str(binding.candidate_id)
+        and snapshot_integrity_valid
+        and binding.prompt_version.purpose == "LEAD_ANALYZE"
+        and binding.prompt_version.status == PromptVersion.Status.PUBLISHED
+        and binding.prompt_version.output_schema == LEAD_ANALYSIS_OUTPUT_SCHEMA
+    )
+    if not valid:
+        raise GenerationPreflightError(
+            "invalid_lead_analysis_binding",
+            "Durable lead-analysis binding is missing or inconsistent.",
+        )
+    if (
+        prompt_version_id is not None
+        and str(prompt_version_id) != str(binding.prompt_version_id)
+    ):
+        raise GenerationPreflightError(
+            "lead_prompt_binding_mismatch",
+            "Requested prompt does not match the durable bound prompt.",
+        )
+    return binding, binding.prompt_version
+
+
 def execute_lead_analysis_job(
     job_id,
-    prompt_version_id,
+    prompt_version_id=None,
     provider_code: str | None = None,
 ) -> AIRun:
     job = Job.objects.get(pk=job_id)
@@ -222,13 +316,27 @@ def execute_lead_analysis_job(
         raise GenerationPreflightError(
             "job_type_mismatch", "Job is not a lead-analysis job."
         )
-    prompt = PromptVersion.objects.filter(pk=prompt_version_id).first()
-    if prompt is not None and prompt.output_schema != LEAD_ANALYSIS_OUTPUT_SCHEMA:
-        _recover_candidate(job.input_snapshot, organization_id=job.organization_id)
-        raise GenerationPreflightError(
-            "invalid_prompt_schema",
-            "Published lead prompt must use the canonical lead-analysis schema.",
+    binding = None
+    try:
+        binding, prompt = _bound_prompt(job, prompt_version_id)
+        if provider_code is not None and provider_code.strip().lower() != prompt.provider.lower():
+            raise GenerationPreflightError(
+                "lead_provider_binding_mismatch",
+                "Requested provider does not match the durable bound prompt.",
+            )
+    except GenerationPreflightError:
+        binding = (
+            LeadAnalysisBinding.objects.select_related("job", "candidate")
+            .filter(job_id=job.id)
+            .first()
         )
+        _terminalize_preflight_failure(job)
+        _recover_candidate(
+            job.input_snapshot,
+            organization_id=job.organization_id,
+            binding=binding,
+        )
+        raise
     if job.status == Job.Status.RETRY_QUEUED:
         LeadService.resume_analysis_retry(
             organization_id=job.organization_id,
@@ -248,8 +356,8 @@ def execute_lead_analysis_job(
     try:
         run = execute_generation_job(
             job_id,
-            prompt_version_id=prompt_version_id,
-            provider_code=provider_code,
+            prompt_version_id=prompt.id,
+            provider_code=prompt.provider,
             worker_id="lead-analysis-worker",
             result_writer=result_writer,
             input_validator=_validate_lead_input,
@@ -263,10 +371,19 @@ def execute_lead_analysis_job(
     except StaleJobWorkerError:
         raise
     except GenerationPreflightError:
-        _recover_candidate(job.input_snapshot, organization_id=job.organization_id)
+        _terminalize_preflight_failure(job)
+        _recover_candidate(
+            job.input_snapshot,
+            organization_id=job.organization_id,
+            binding=binding,
+        )
         raise
     if run.status in {AIRun.Status.FAILED, AIRun.Status.CANCELED}:
-        _recover_candidate(job.input_snapshot, organization_id=job.organization_id)
+        _recover_candidate(
+            job.input_snapshot,
+            organization_id=job.organization_id,
+            binding=binding,
+        )
     return run
 
 

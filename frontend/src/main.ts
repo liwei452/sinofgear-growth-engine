@@ -24,6 +24,7 @@ const router = createAppRouter(queryClient, {
     PublishingCalendar: defineAsyncComponent(() => import("./modules/publishing/PublishingCalendarPage.vue")),
     PlatformAccounts: defineAsyncComponent(() => import("./modules/platformAccounts/PlatformAccountsPage.vue")),
     Analytics: defineAsyncComponent(() => import("./modules/analytics/AnalyticsPage.vue")),
+    LeadRadar: defineAsyncComponent(() => import("./modules/leads/LeadRadarPage.vue")),
     Placeholder: PlaceholderPage,
   },
 })

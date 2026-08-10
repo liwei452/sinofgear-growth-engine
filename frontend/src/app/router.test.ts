@@ -18,6 +18,7 @@ const Assets = defineComponent({ name: "AssetsStub", template: "<p>真实素材�
 const PublishingCalendar = defineComponent({ name: "PublishingStub", template: "<p>真实发布日历</p>" })
 const PlatformAccounts = defineComponent({ name: "AccountsStub", template: "<p>真实平台账户</p>" })
 const Analytics = defineComponent({ name: "AnalyticsStub", template: "<p>真实数据看板</p>" })
+const LeadRadar = defineComponent({ name: "LeadRadarStub", template: "<p>真实客户机会</p>" })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
 function deferred<T>() {
@@ -35,7 +36,7 @@ function router(client = queryClient(), initialPath?: string) {
   if (initialPath) history.push(initialPath)
   return createAppRouter(client, {
     history,
-    components: { Login, Shell, Dashboard, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, Placeholder },
+    components: { Login, Shell, Dashboard, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LeadRadar, Placeholder },
   })
 }
 
@@ -93,6 +94,18 @@ describe("protected routing", () => {
       await appRouter.push(path)
       expect(await screen.findByText(label)).toBeInTheDocument()
     }
+  })
+
+  it("mounts the authenticated customer-opportunity route with its plain-language title", async () => {
+    const client = queryClient()
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: ["leads.read"] } })
+    const appRouter = router(client)
+    render(Root, { global: { plugins: [appRouter] } })
+
+    await appRouter.push("/lead-radar")
+
+    expect(await screen.findByText("真实客户机会")).toBeInTheDocument()
+    expect(appRouter.currentRoute.value.meta.title).toBe("客户机会")
   })
 
   it.each([401, 403])("redirects status %s to login with the local target", async (status) => {

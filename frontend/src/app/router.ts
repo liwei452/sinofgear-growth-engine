@@ -19,6 +19,7 @@ export type AppRouteComponents = {
   PublishingCalendar: Component
   PlatformAccounts: Component
   Analytics: Component
+  LeadRadar: Component
   Placeholder: Component
 }
 
@@ -83,6 +84,12 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
     { path: "publishing-calendar", name: "publishing-calendar", component: options.components.PublishingCalendar, meta: { title: "发布日历" } },
     { path: "platform-accounts", name: "platform-accounts", component: options.components.PlatformAccounts, meta: { title: "平台账户" } },
     { path: "analytics", name: "analytics", component: options.components.Analytics, meta: { title: "数据看板" } },
+    {
+      path: "lead-radar",
+      name: "lead-radar",
+      component: options.components.LeadRadar,
+      meta: { title: "客户机会" },
+    },
   ]
   const router = createRouter({
     history: options.history ?? createWebHistory(),

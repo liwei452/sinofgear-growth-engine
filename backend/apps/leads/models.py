@@ -293,9 +293,18 @@ class LeadCandidate(OrganizationScopedModel):
     )
 
     class Meta:
+        base_manager_name = "objects"
+        default_manager_name = "objects"
         ordering = ["-created_at", "-id"]
         constraints = [
-            models.CheckConstraint(condition=models.Q(version__gte=1), name="leads_candidate_version_positive")
+            models.CheckConstraint(condition=models.Q(version__gte=1), name="leads_candidate_version_positive"),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(analysis_lease_token__isnull=True)
+                    | models.Q(status__in=["ANALYZING", "ANALYZED"])
+                ),
+                name="leads_candidate_lease_status_valid",
+            ),
         ]
 
     def clean(self):
@@ -307,8 +316,16 @@ class LeadCandidate(OrganizationScopedModel):
             except ValidationError as error:
                 errors["company_domain"] = " ".join(error.messages)
         _related_organization_error(self, "source_signal", errors)
-        if self._state.adding and self.status != self.Status.DISCOVERED:
-            errors["status"] = "Lead candidates must be created as DISCOVERED."
+        if self._state.adding:
+            if (
+                self.analysis_lease_token is not None
+                and not _lead_analysis_lease_write.get()
+            ):
+                errors["analysis_lease_token"] = (
+                    "Analysis lease is managed only by LeadService."
+                )
+            if self.status != self.Status.DISCOVERED:
+                errors["status"] = "Lead candidates must be created as DISCOVERED."
         if self.latest_insight_id:
             _related_organization_error(self, "latest_insight", errors)
             latest_values = LeadInsight._base_manager.filter(pk=self.latest_insight_id).values(

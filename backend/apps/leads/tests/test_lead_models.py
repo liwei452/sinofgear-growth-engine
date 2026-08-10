@@ -1,4 +1,5 @@
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -10,6 +11,7 @@ from apps.leads.models import (
     LeadCandidateEvidence,
     LeadInsight,
     LeadInsightRequirement,
+    lead_analysis_lease_writes,
 )
 from apps.leads.services import LeadService, LeadStateError, LeadVersionConflict
 
@@ -92,6 +94,84 @@ def test_candidate_must_be_created_as_discovered(organization, signal, user):
             source_signal=signal,
             status=LeadCandidate.Status.READY_FOR_HANDOFF,
             created_by=user,
+        )
+
+
+@pytest.mark.django_db
+def test_candidate_direct_create_rejects_forged_analysis_lease(
+    organization, signal, user
+):
+    with pytest.raises(ValidationError, match="managed only by LeadService"):
+        LeadCandidate.objects.create(
+            organization=organization,
+            source_signal=signal,
+            analysis_lease_token=uuid4(),
+            created_by=user,
+        )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("manager_name", ["objects", "_base_manager"])
+def test_candidate_bulk_create_rejects_forged_analysis_lease(
+    organization, signal, user, manager_name
+):
+    candidate = LeadCandidate(
+        organization=organization,
+        source_signal=signal,
+        company_name=f"Forged through {manager_name}",
+        analysis_lease_token=uuid4(),
+        created_by=user,
+    )
+
+    with pytest.raises(ValidationError, match="managed only by LeadService"):
+        getattr(LeadCandidate, manager_name).bulk_create([candidate])
+
+    assert not LeadCandidate.objects.filter(company_name=candidate.company_name).exists()
+
+
+@pytest.mark.django_db
+def test_candidate_ordinary_save_rejects_forged_analysis_lease(candidate):
+    candidate.analysis_lease_token = uuid4()
+
+    with pytest.raises(ValidationError, match="managed only by LeadService"):
+        candidate.save(update_fields=["analysis_lease_token", "updated_at"])
+
+    candidate.refresh_from_db()
+    assert candidate.analysis_lease_token is None
+
+
+@pytest.mark.django_db
+def test_candidate_analysis_lease_context_allows_service_lifecycle(candidate):
+    lease = uuid4()
+    candidate.status = LeadCandidate.Status.ANALYZING
+    candidate.analysis_lease_token = lease
+    with lead_analysis_lease_writes():
+        candidate.save(
+            update_fields=["status", "analysis_lease_token", "updated_at"]
+        )
+
+    candidate.refresh_from_db()
+    assert candidate.status == LeadCandidate.Status.ANALYZING
+    assert candidate.analysis_lease_token == lease
+
+    candidate.status = LeadCandidate.Status.DISCOVERED
+    candidate.analysis_lease_token = None
+    with lead_analysis_lease_writes():
+        candidate.save(
+            update_fields=["status", "analysis_lease_token", "updated_at"]
+        )
+
+    candidate.refresh_from_db()
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_database_rejects_discovered_candidate_with_analysis_lease(candidate):
+    with pytest.raises(IntegrityError), transaction.atomic():
+        models.QuerySet.update(
+            LeadCandidate._base_manager.filter(pk=candidate.pk),
+            analysis_lease_token=uuid4(),
         )
 
 

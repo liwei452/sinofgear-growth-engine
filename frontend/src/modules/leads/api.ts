@@ -40,6 +40,14 @@ export type ImportPreview = {
 
 const leadPath = "/api/v1/lead-candidates"
 const supportedImportModes = new Set<ImportDraft["mode"]>(["URL", "SCREENSHOT", "CSV", "JSON", "PASTE"])
+const maxImportRows = 10_000
+const maxOriginalTextChars = 20_000
+const supportedSignalTypes = new Set([
+  "COMMENT", "POST_AUTHOR", "CHANNEL_OWNER", "PROFILE_MATCH", "MENTION", "HASHTAG_MATCH",
+])
+const supportedCsvHeaders = new Set([
+  "platform", "source_url", "signal_type", "original_text", "author_name", "published_at", "screenshot_asset_id",
+])
 
 export const leadKeys = {
   all: (organizationId: string) => ["leads", organizationId] as const,
@@ -90,6 +98,16 @@ function invalid(row: number | null, message: string): ImportPreviewMessage {
   return { row, message }
 }
 
+function isUuid(value: unknown): boolean {
+  return typeof value === "string"
+    && /^\{?[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\}?$/i.test(value)
+}
+
+function isIsoDateTime(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2}(?:[.,]\d{1,6})?)?(?:Z|[+-]\d{2}:?\d{2})?$/.test(value)) return false
+  return !Number.isNaN(Date.parse(value.replace(",", ".")))
+}
+
 function validateRow(raw: unknown, row: number, screenshotRequired = false): ImportPreviewMessage | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return invalid(row, "This row must be an object.")
   const record = raw as Record<string, unknown>
@@ -99,13 +117,40 @@ function validateRow(raw: unknown, row: number, screenshotRequired = false): Imp
   if (typeof record.original_text !== "string" || !record.original_text.trim()) {
     return invalid(row, "Provide the public source text.")
   }
-  if (screenshotRequired && (typeof record.screenshot_asset_id !== "string" || !record.screenshot_asset_id.trim())) {
+  if (record.original_text.length > maxOriginalTextChars) {
+    return invalid(row, `Shorten the public source text to ${maxOriginalTextChars} characters.`)
+  }
+  const platform = record.platform ?? "MANUAL"
+  if (typeof platform !== "string" || !platform.trim() || platform.trim().length > 32) {
+    return invalid(row, "Provide a platform name of at most 32 characters.")
+  }
+  const signalType = record.signal_type ?? "MENTION"
+  if (typeof signalType !== "string" || !supportedSignalTypes.has(signalType.trim().toUpperCase())) {
+    return invalid(row, "Use a supported public signal type.")
+  }
+  const authorName = record.author_name ?? ""
+  if (typeof authorName !== "string" || authorName.length > 255) {
+    return invalid(row, "Use a public author name of at most 255 characters.")
+  }
+  const publishedAt = record.published_at
+  if (publishedAt !== undefined && publishedAt !== null && publishedAt !== ""
+    && (typeof publishedAt !== "string" || !isIsoDateTime(publishedAt))) {
+    return invalid(row, "Use an ISO 8601 publication timestamp.")
+  }
+  const screenshotAssetId = record.screenshot_asset_id
+  if (screenshotRequired && (screenshotAssetId === undefined || screenshotAssetId === null || screenshotAssetId === "")) {
     return invalid(row, "Attach the private screenshot asset.")
+  }
+  if (screenshotAssetId !== undefined && screenshotAssetId !== null && screenshotAssetId !== "" && !isUuid(screenshotAssetId)) {
+    return invalid(row, "Attach a valid private screenshot asset.")
   }
   return null
 }
 
 function previewRows(rows: unknown[], startRow: number, screenshotRequired = false): ImportPreview {
+  if (rows.length > maxImportRows) {
+    return { validRows: 0, invalidRows: 1, messages: [invalid(null, `Reduce the import to ${maxImportRows} rows or fewer.`)] }
+  }
   const messages = rows.flatMap((row, index) => {
     const issue = validateRow(row, startRow + index, screenshotRequired)
     return issue ? [issue] : []
@@ -158,9 +203,11 @@ function parseCsv(text: string): { headers: string[]; rows: string[][] } | Impor
 function previewCsv(text: string): ImportPreview {
   const parsed = parseCsv(text.replace(/^\uFEFF/, ""))
   if ("row" in parsed) return { validRows: 0, invalidRows: 1, messages: [parsed] }
-  const allowedHeaders = new Set(["source_url", "original_text", "platform", "signal_type", "author_name", "published_at"])
-  if (!parsed.headers.length || parsed.headers.some((header) => !allowedHeaders.has(header)) || new Set(parsed.headers).size !== parsed.headers.length) {
+  if (!parsed.headers.length || parsed.headers.some((header) => !supportedCsvHeaders.has(header)) || new Set(parsed.headers).size !== parsed.headers.length) {
     return { validRows: 0, invalidRows: 1, messages: [invalid(1, "CSV must include unique supported headers.")] }
+  }
+  if (parsed.rows.length > maxImportRows) {
+    return { validRows: 0, invalidRows: 1, messages: [invalid(null, `Reduce the import to ${maxImportRows} rows or fewer.`)] }
   }
   const messages: ImportPreviewMessage[] = []
   let validRows = 0
@@ -180,16 +227,22 @@ function previewCsv(text: string): ImportPreview {
 }
 
 function previewJson(text: string): ImportPreview {
+  const payload = jsonPayload(text)
+  if (!payload) return { validRows: 0, invalidRows: 1, messages: [invalid(null, "JSON must contain a rows list.")] }
+  return previewRows(payload.rows as unknown[], 1)
+}
+
+function jsonPayload(text: string): Record<string, unknown> | null {
   let payload: unknown
   try {
     payload = JSON.parse(text)
   } catch {
-    return { validRows: 0, invalidRows: 1, messages: [invalid(null, "JSON is malformed.")] }
+    return null
   }
   if (!payload || typeof payload !== "object" || !Array.isArray((payload as { rows?: unknown }).rows)) {
-    return { validRows: 0, invalidRows: 1, messages: [invalid(null, "JSON must contain a rows list.")] }
+    return null
   }
-  return previewRows((payload as { rows: unknown[] }).rows, 1)
+  return payload as Record<string, unknown>
 }
 
 export function previewImport(draft: ImportDraft): ImportPreview {
@@ -204,6 +257,9 @@ export function previewImport(draft: ImportDraft): ImportPreview {
       }], 1, true)
     case "PASTE": {
       const rows = draft.text.split(/\r?\n/).flatMap((line) => line.trim() ? [line] : [])
+      if (rows.length > maxImportRows) {
+        return { validRows: 0, invalidRows: 1, messages: [invalid(null, `Reduce the import to ${maxImportRows} rows or fewer.`)] }
+      }
       const messages: ImportPreviewMessage[] = []
       let validRows = 0
       draft.text.split(/\r?\n/).forEach((line, index) => {
@@ -224,6 +280,8 @@ export function previewImport(draft: ImportDraft): ImportPreview {
 
 function ingestionPayload(draft: ImportDraft): IngestionBatchCreate {
   if (!supportedImportModes.has(draft.mode)) throw new Error("Unsupported import mode")
+  const preview = previewImport(draft)
+  if (!preview.validRows || preview.invalidRows) throw new Error("Import contains invalid rows.")
   switch (draft.mode) {
     case "URL":
       return {
@@ -242,13 +300,22 @@ function ingestionPayload(draft: ImportDraft): IngestionBatchCreate {
         },
       }
     case "CSV":
-    case "JSON":
       return {
-        source_type: draft.mode,
+        source_type: "CSV",
         idempotency_key: draft.idempotencyKey,
         ...(draft.importAssetId ? { import_asset_id: draft.importAssetId } : {}),
         payload: { text: draft.text },
       }
+    case "JSON": {
+      const payload = jsonPayload(draft.text)
+      if (!payload) throw new Error("Import contains invalid rows.")
+      return {
+        source_type: "JSON",
+        idempotency_key: draft.idempotencyKey,
+        ...(draft.importAssetId ? { import_asset_id: draft.importAssetId } : {}),
+        payload,
+      }
+    }
     case "PASTE":
       return { source_type: "PASTE", idempotency_key: draft.idempotencyKey, payload: { text: draft.text } }
   }

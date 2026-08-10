@@ -80,15 +80,15 @@ it("maps every supported import mode without adding unsupported request fields",
   vi.stubGlobal("fetch", fetchMock)
 
   await createIngestionBatch({ mode: "URL", sourceUrl: "https://example.test/post", originalText: "Need gears", idempotencyKey: "url-1" })
-  await createIngestionBatch({ mode: "SCREENSHOT", sourceUrl: "https://example.test/post", originalText: "Need gears", screenshotAssetId: "asset-1", idempotencyKey: "shot-1" })
+  await createIngestionBatch({ mode: "SCREENSHOT", sourceUrl: "https://example.test/post", originalText: "Need gears", screenshotAssetId: "00000000-0000-0000-0000-000000000001", idempotencyKey: "shot-1" })
   await createIngestionBatch({ mode: "CSV", text: "source_url,original_text\nhttps://example.test/post,Need gears", importAssetId: "asset-2", idempotencyKey: "csv-1" })
   await createIngestionBatch({ mode: "JSON", text: '{"rows":[{"source_url":"https://example.test/post","original_text":"Need gears"}]}', idempotencyKey: "json-1" })
 
   expect(fetchMock.mock.calls.map(([, options]) => JSON.parse((options as RequestInit).body as string))).toEqual([
     { source_type: "URL", idempotency_key: "url-1", payload: { source_url: "https://example.test/post", original_text: "Need gears" } },
-    { source_type: "SCREENSHOT", idempotency_key: "shot-1", payload: { source_url: "https://example.test/post", original_text: "Need gears", screenshot_asset_id: "asset-1" } },
+    { source_type: "SCREENSHOT", idempotency_key: "shot-1", payload: { source_url: "https://example.test/post", original_text: "Need gears", screenshot_asset_id: "00000000-0000-0000-0000-000000000001" } },
     { source_type: "CSV", idempotency_key: "csv-1", import_asset_id: "asset-2", payload: { text: "source_url,original_text\nhttps://example.test/post,Need gears" } },
-    { source_type: "JSON", idempotency_key: "json-1", payload: { text: '{"rows":[{"source_url":"https://example.test/post","original_text":"Need gears"}]}' } },
+    { source_type: "JSON", idempotency_key: "json-1", payload: { rows: [{ source_url: "https://example.test/post", original_text: "Need gears" }] } },
   ])
 })
 
@@ -130,6 +130,52 @@ it("rejects unsupported import modes before making a request", async () => {
   await expect(createIngestionBatch({ mode: "API", idempotencyKey: "unsupported" } as never))
     .rejects.toThrow("Unsupported import mode")
   expect(fetchMock).not.toHaveBeenCalled()
+})
+
+it("rejects unsafe row URLs at the request boundary without making a request", async () => {
+  const fetchMock = vi.fn()
+  vi.stubGlobal("fetch", fetchMock)
+  const drafts = [
+    { mode: "URL", sourceUrl: "javascript:alert(1)", originalText: "Need gears", idempotencyKey: "bad-url" },
+    { mode: "SCREENSHOT", sourceUrl: "https://user:pass@example.test/post", originalText: "Need gears", screenshotAssetId: "00000000-0000-0000-0000-000000000001", idempotencyKey: "bad-shot" },
+    { mode: "PASTE", text: "javascript:alert(1)\tNeed gears", idempotencyKey: "bad-paste" },
+    { mode: "CSV", text: "source_url,original_text\njavascript:alert(1),Need gears", idempotencyKey: "bad-csv" },
+    { mode: "JSON", text: '{"rows":[{"source_url":"javascript:alert(1)","original_text":"Need gears"}]}', idempotencyKey: "bad-json" },
+  ] as const
+
+  for (const draft of drafts) await expect(createIngestionBatch(draft)).rejects.toThrow("invalid rows")
+  expect(fetchMock).not.toHaveBeenCalled()
+})
+
+it("matches backend row constraints in local previews", () => {
+  expect(previewImport({
+    mode: "JSON",
+    text: JSON.stringify({ rows: [
+      { source_url: "https://example.test/one", original_text: "x".repeat(20_001) },
+      { source_url: "https://example.test/two", original_text: "Need gears", platform: "x".repeat(33) },
+      { source_url: "https://example.test/three", original_text: "Need gears", signal_type: "INVALID" },
+      { source_url: "https://example.test/four", original_text: "Need gears", author_name: 7 },
+      { source_url: "https://example.test/five", original_text: "Need gears", published_at: "not-a-date" },
+    ] }),
+    idempotencyKey: "json-boundaries",
+  })).toMatchObject({ validRows: 0, invalidRows: 5, messages: [{ row: 1 }, { row: 2 }, { row: 3 }, { row: 4 }, { row: 5 }] })
+  expect(previewImport({
+    mode: "SCREENSHOT",
+    sourceUrl: "https://example.test/shot",
+    originalText: "Need gears",
+    screenshotAssetId: "not-a-uuid",
+    idempotencyKey: "shot-boundary",
+  })).toMatchObject({ validRows: 0, invalidRows: 1, messages: [{ row: 1 }] })
+  expect(previewImport({
+    mode: "CSV",
+    text: "source_url,original_text,screenshot_asset_id\nhttps://example.test/csv,Need gears,not-a-uuid",
+    idempotencyKey: "csv-boundary",
+  })).toMatchObject({ validRows: 0, invalidRows: 1, messages: [{ row: 2 }] })
+  expect(previewImport({
+    mode: "PASTE",
+    text: Array.from({ length: 10_001 }, (_, index) => `https://example.test/${index}\tNeed gears`).join("\n"),
+    idempotencyKey: "paste-limit",
+  })).toMatchObject({ validRows: 0, invalidRows: 1, messages: [{ row: null }] })
 })
 
 it("sends expected versions and idempotency keys for analysis and review", async () => {

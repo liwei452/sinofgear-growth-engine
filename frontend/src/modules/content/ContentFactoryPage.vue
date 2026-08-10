@@ -141,6 +141,13 @@ function isActiveOrganization(scope: string): boolean {
   return !disposed && Boolean(scope) && organizationId.value === scope
 }
 
+function isActiveCampaignManagementSession(scope: string, membershipId: string): boolean {
+  return isActiveOrganization(scope)
+    && Boolean(membershipId)
+    && currentUserQuery.data.value?.membership.id === membershipId
+    && canManageCampaigns.value
+}
+
 async function pollJob(id: string, scope: string): Promise<void> {
   if (!canObserveJobs.value || !isActiveOrganization(scope) || pollingJobs.get(id) !== scope) return
   try {
@@ -233,14 +240,16 @@ function openBriefEditor(brief: ContentBrief): void {
 async function createBriefRevision(brief: ContentBrief): Promise<void> {
   if (brief.status !== "READY" || !has("campaigns.manage")) return
   const scope = organizationId.value
+  const membershipId = currentUserQuery.data.value?.membership.id ?? ""
   try {
     const revision = await reviseBrief(brief.id)
+    if (!isActiveCampaignManagementSession(scope, membershipId)) return
     await queryClient.invalidateQueries({ queryKey: contentQueryKeys.briefs(scope) })
-    if (!isActiveOrganization(scope)) return
+    if (!isActiveCampaignManagementSession(scope, membershipId)) return
     editingBrief.value = revision
     notice.value = "已从可生成需求创建新的草稿版本，请检查并保存。"
   } catch (error) {
-    if (isActiveOrganization(scope)) actionError.value = safeError(error)
+    if (isActiveCampaignManagementSession(scope, membershipId)) actionError.value = safeError(error)
   }
 }
 

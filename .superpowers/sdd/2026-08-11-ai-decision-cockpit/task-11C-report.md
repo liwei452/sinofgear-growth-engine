@@ -218,3 +218,256 @@ The configured npm/node shims still target a removed runtime, so the verified Co
 - Production build: exit 0, 150 modules transformed.
 - `git diff --check`: exit 0.
 - Backend, generated schema, dependencies, E2E, plan, and ledger were not changed.
+
+## Fix Round 2
+
+Commit: `2c6cc27 fix: preserve advanced promotion recovery`.
+
+Addressed the remaining review findings C1 and I3 and the Fix Round 1 regression N1. M1 and M2 remain deferred as requested.
+
+### C1 — complete live permission revocation
+
+- Added current-permission gates for product, asset, and knowledge-derived wizard inputs so retained query data cannot remain visible after permission loss.
+- Added synchronous revocation watchers for `products.read`, `assets.read`, and `knowledge.read`. Each watcher resets the relevant collection where applicable, cancels/removes the organization-scoped cache, and immediately closes both creation and edit wizards.
+- Added a synchronous `campaigns.manage` watcher that immediately closes the writable wizard/editor and clears the active write marker after manage permission is revoked.
+- Guarded the ordinary product recovery action with the current `products.read` permission.
+- Added a post-await `canObserveJobs` check to `refreshJob`, preventing a deferred 409 recovery detail response from repopulating `liveJobs` after `jobs.read` disappears.
+- Added mounted regressions that open the real wizard and then revoke each of `products.read`, `assets.read`, `knowledge.read`, and `campaigns.manage`, plus product-retry and deferred-refresh revocation coverage.
+
+### I3 — controlled ordinary job pagination recovery
+
+- Added a permission/disclosure-safe computed pagination error for jobs.
+- In ordinary mode, a failed next-page request now renders the fixed Chinese text `生成记录下一页暂时无法加载，请重新加载后再试。` and the concrete action `重新加载更多生成记录`.
+- Backend English, error codes, and cursor details remain absent from the ordinary DOM. Advanced mode retains the existing diagnostic pagination message.
+- Added a failed safe-next-cursor regression whose backend response contains `Invalid cursor JOB_CURSOR_EXPIRED_400`; the test asserts that the detail is not rendered.
+
+### N1 — preserve advanced stale-link recovery
+
+- Kept ordinary mode on ACTIVE product/asset requests and the APPROVED concept request.
+- Changed advanced `/content-factory` product, asset, and concept sources to unfiltered list requests, while retaining organization-scoped, filter-aligned query keys.
+- The wizard now presents only ACTIVE products/assets and APPROVED supported concepts as new selections.
+- Already-linked inactive/archived/rejected/deprecated records are shown with `不可用，仅可移除`. Their one-way removal row disappears after unchecking, so the stale relationship cannot be re-added as a new selection.
+- Existing product/asset/concept IDs outside the loaded page are represented by selected, remove-only provenance placeholders. Existing concept roles remain preservable until the operator removes the relationship.
+- Added tests for loaded stale product/asset/concept visibility and removal payloads, a relationship outside loaded pages, ordinary creation exclusion of unlinked unavailable rows, and advanced page integration using the unfiltered sources.
+
+### Fix Round 2 TDD evidence
+
+#### C1/I3 RED
+
+Initial command after adding the page-level regressions:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vitest/vitest.mjs run src/modules/content/ContentFactoryPage.test.ts --config vite.config.ts --reporter=dot
+```
+
+Result: exit 1; 24 tests ran, 6 failed and 18 passed. This first run also exposed that the new ordinary-only fixtures had to pass `experience="ordinary"` explicitly because the component default is intentionally advanced. After correcting that test setup, inspection confirmed the intended implementation RED paths: no product/asset/knowledge/manage revocation watchers, no post-await permission check in `refreshJob`, an unguarded product retry, and direct rendering of `jobPages.error.value`.
+
+GREEN command after the minimal permission and pagination changes:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vitest/vitest.mjs run src/modules/content/ContentFactoryPage.test.ts --config vite.config.ts --reporter=dot
+```
+
+Result: exit 0; 1 file passed, 24/24 tests passed.
+
+#### N1 wizard RED
+
+Command:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vitest/vitest.mjs run src/modules/content/ContentBriefWizard.test.ts --config vite.config.ts --reporter=dot
+```
+
+Result: exit 1; 3 failed, 4 passed. Linked unavailable records had no unavailable/remove-only label, outside-page linked provenance had no visible checkbox, and an unlinked archived product remained selectable during creation.
+
+GREEN with the eligibility and remove-only reconciliation implemented: exit 0; 1 file passed, 7/7 tests passed.
+
+#### N1 page integration RED
+
+Command:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vitest/vitest.mjs run src/modules/content/ContentFactoryPage.test.ts --config vite.config.ts -t "loads linked unavailable records" --reporter=dot
+```
+
+Result: exit 1; 1 failed, 24 skipped. The editor displayed ID-only placeholders because the advanced page still requested globally filtered sources and could not load the stale record metadata.
+
+GREEN after separating ordinary and advanced query filters: exit 0; 1 passed, 24 skipped. The linked archived product, archived asset, and rejected concept were visible by name with remove-only labels, and the test observed the unfiltered advanced request URLs.
+
+### Fix Round 2 final verification
+
+The configured global npm/node shims still point to a removed runtime, so the same Codex-bundled Node executable was used directly. No dependency was installed or changed.
+
+Focused promotion/content/wizard tests:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vitest/vitest.mjs run src/modules/content/PromotionPage.test.ts src/modules/content/ContentFactoryPage.test.ts src/modules/content/ContentBriefWizard.test.ts --config vite.config.ts --reporter=dot
+```
+
+Result: exit 0; 3 files passed, 42/42 tests passed.
+
+Full frontend suite:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vitest/vitest.mjs run --config vite.config.ts --reporter=dot
+```
+
+Result: exit 0; 34 files passed, 302/302 tests passed.
+
+Typecheck:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vue-tsc/bin/vue-tsc.js --noEmit
+```
+
+Result: exit 0, no diagnostics.
+
+Lint:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/eslint/bin/eslint.js .
+```
+
+Result: exit 0, no diagnostics.
+
+Production build:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vite/bin/vite.js build
+```
+
+Result: exit 0; 150 modules transformed; production bundle built successfully.
+
+Diff check:
+
+```powershell
+git diff --check
+```
+
+Result: exit 0, no whitespace errors.
+
+No backend, generated API/schema, dependency, E2E, project-plan, or task-ledger files changed. Task 11D E2E was not added or run.
+
+### Fix Round 2 self-review
+
+#### Permission and async boundaries
+
+- Every read permission named by the re-review now has both a current-use gate and revocation cleanup at the page boundary.
+- Wizard closure is synchronous with permission-cache mutation, so protected selections and write controls do not survive into a later render.
+- Product and asset query cleanup uses organization prefixes, covering both ordinary filtered and advanced unfiltered variants.
+- Knowledge cleanup removes the currently active ordinary/advanced concept query key.
+- Both polling and 409 refresh paths re-check current observation authority after awaiting a job detail response.
+
+#### Ordinary error privacy
+
+- Initial job observation remains disclosure-gated.
+- List, poll, action, generation, and now cursor-page errors all use controlled ordinary Chinese recovery wording.
+- The failed-cursor test proves backend English/code text does not cross the ordinary rendering boundary.
+
+#### Advanced backward compatibility and data honesty
+
+- `/promotion` continues to count and offer only ACTIVE/APPROVED data.
+- `/content-factory` can load existing stale relationship metadata, but the shared wizard still forbids every unavailable record as a new relationship.
+- Missing-page placeholders use only real IDs from the persisted brief; they do not fabricate resources or introduce a relationship.
+- Removing a stale relationship changes the PATCH payload. Leaving a visible stale relationship selected preserves its real ID and existing concept role for deliberate operator recovery.
+
+### Fix Round 2 concerns
+
+- Environment only: the configured global Node/npm wrappers remain broken; direct project-tool verification with the bundled Node runtime is complete and green.
+- The advanced unfiltered lists still load through normal cursor pages. Linked records outside loaded pages therefore use explicit ID provenance placeholders rather than issuing unsupported per-record asset/concept requests.
+- M1 (unused transition component) and M2 (`aria-controls` for disclosure) remain intentionally deferred.
+- This requested bookkeeping append is intentionally left uncommitted, so commit `2c6cc27` and all source code remain unchanged; `task-11C-report.md` is the only tracked worktree modification.
+
+## Fix Round 3
+
+Requested commit: `fix: guard promotion revision completion`.
+
+Addressed the remaining Important finding from the Fix Round 2 re-review. M1 and M2 remain deferred as requested.
+
+### Deferred revision completion authority boundary
+
+- `createBriefRevision` now captures both the initiating organization and membership ID before starting the revision request.
+- A shared completion guard requires that the component is still mounted, the organization and membership are unchanged, and the current session still has `campaigns.manage`.
+- The guard runs immediately after the revision request and again after brief-query invalidation, covering permission or session changes during either awaited operation.
+- The error path uses the same guard, so a rejected late response cannot post a stale action error after management authority disappears.
+- A deterministic regression starts a revision, revokes `campaigns.manage` while the response is unresolved, resolves it, and proves that no editor, success notice, or alert appears. It then restores the permission and proves the late revision still does not reopen the editor or repopulate stale UI state.
+
+### Sibling awaited-management audit
+
+- `ready`: completion invalidates the readable brief collection and may report the real server transition, but it does not reopen or repopulate a protected write surface. No analogous gap was found.
+- `startGeneration`: an accepted server job is represented only in the separately `jobs.read`-gated observation surface; polling also re-checks current job visibility. Revoking `content.manage` cannot restore a generation control or editor. No analogous gap was found.
+- `jobAction`: a completed cancel/retry reflects a real job state in the separately readable job surface and does not restore a management control. No analogous gap was found.
+- `saved`: a temporary deferred PATCH probe revoked `campaigns.manage` before settlement. The existing synchronous watcher unmounted the wizard, and the late child completion remained inert without posting the parent success notice. Because it passed before any save-path production change, the diagnostic test was removed and no speculative hardening was added.
+
+### Fix Round 3 TDD evidence
+
+The final deterministic RED command was:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vitest/vitest.mjs run src/modules/content/ContentFactoryPage.test.ts --config vite.config.ts -t "does not reopen a deferred revision" --reporter=dot
+```
+
+RED result: exit 1; 1 failed and 25 skipped. After the deferred revision resolved, the editor reopened and the stale success notice `已从可生成需求创建新的草稿版本，请检查并保存。` appeared despite the revoked permission.
+
+GREEN after adding the organization, membership-session, and current-permission completion guard: exit 0; 1 passed and 25 skipped.
+
+The sibling saved-completion diagnostic used a deferred draft PATCH and the same live permission revocation. It passed without save-path production changes, confirming there was no concrete analogous reopen/repopulate gap to retain as a regression.
+
+### Fix Round 3 final verification
+
+The configured global npm/node shims still point to a removed runtime, so the verified Codex-bundled Node executable was used directly. No dependency was installed or changed.
+
+Focused promotion/content/wizard tests:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vitest/vitest.mjs run src/modules/content/PromotionPage.test.ts src/modules/content/ContentFactoryPage.test.ts src/modules/content/ContentBriefWizard.test.ts --config vite.config.ts --reporter=dot
+```
+
+Result: exit 0; 3 files passed, 43/43 tests passed.
+
+Full frontend suite:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vitest/vitest.mjs run --config vite.config.ts --reporter=dot
+```
+
+Result: exit 0; 34 files passed, 303/303 tests passed.
+
+Typecheck:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vue-tsc/bin/vue-tsc.js --noEmit
+```
+
+Result: exit 0, no diagnostics.
+
+Lint:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/eslint/bin/eslint.js .
+```
+
+Result: exit 0, no diagnostics.
+
+Production build:
+
+```powershell
+& 'C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\resources\cua_node\bin\node.exe' node_modules/vite/bin/vite.js build
+```
+
+Result: exit 0; 150 modules transformed; production bundle built successfully.
+
+### Fix Round 3 self-review
+
+- The fix is scoped to the one completion that could recreate a protected editor from a server response.
+- It checks both identity continuity and present authorization, rather than treating request-time permission as durable.
+- It checks before query invalidation and again before UI mutation, so neither awaited boundary can bypass the guard.
+- Permission restoration does not replay or surface the discarded late revision response.
+- No sibling completion was changed without a concrete analogous failure.
+- Backend, generated API/schema, dependencies, E2E, project-plan, and task-ledger files remain unchanged. Task 11D E2E was not added or run.
+
+### Fix Round 3 concerns
+
+- Environment only: the configured global Node/npm wrappers remain broken; direct project-tool verification with the bundled Node runtime is complete and green.
+- The server may still have created the revision before permission revocation reached the client. The client intentionally discards that stale response; a later authorized brief refresh is the source of truth.
+- M1 (unused transition component) and M2 (`aria-controls` for disclosure) remain intentionally deferred.

@@ -3,7 +3,7 @@ from pathlib import Path
 from django.apps import apps
 
 
-def test_phase_b1_domain_apps_are_registered_with_empty_url_modules() -> None:
+def test_phase_b1_domain_apps_are_registered_with_stage_appropriate_urls() -> None:
     assert apps.get_app_config("sources").name == "apps.sources"
     assert apps.get_app_config("leads").name == "apps.leads"
 
@@ -11,7 +11,14 @@ def test_phase_b1_domain_apps_are_registered_with_empty_url_modules() -> None:
     from apps.sources.urls import urlpatterns as source_patterns
 
     assert lead_patterns == []
-    assert source_patterns == []
+    assert [pattern.name for pattern in source_patterns] == [
+        "monitoring-targets",
+        "ingestion-batches",
+        "source-contents",
+        "source-signals",
+        "source-evidences",
+        "source-evidence-detail",
+    ]
 
 
 def test_required_workspace_files_exist() -> None:

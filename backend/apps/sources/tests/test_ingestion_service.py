@@ -4,9 +4,11 @@ from dataclasses import FrozenInstanceError
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, InterfaceError, connection, transaction
+from django.db.models.query import QuerySet
 from django.test.utils import CaptureQueriesContext
 
 from apps.assets.models import MaterialAsset
+from apps.identity.models import Organization
 from apps.jobs.services import JobService, StaleJobWorkerError
 from apps.sources.importers import prepare_import_reference
 from apps.sources.models import (
@@ -247,6 +249,53 @@ def test_preflight_acquires_target_and_complete_asset_locks_inside_transaction(
 
     assert result.status == IngestionBatch.Status.SUCCEEDED
     assert lock_calls == {"assets": 1, "targets": 1}
+
+
+@pytest.mark.django_db
+def test_asset_backed_import_locks_organization_asset_then_batch(
+    organization, user, target, asset, monkeypatch
+):
+    batch = make_batch(
+        organization=organization,
+        job=None,
+        target=target,
+        source_type=IngestionBatch.SourceType.JSON,
+        payload={
+            "import_asset_id": str(asset.id),
+            "rows": [
+                {
+                    "source_url": "https://e.test/import-lock-order",
+                    "original_text": "Need gear",
+                }
+            ],
+        },
+        key="asset-backed-import-lock-order",
+        user=user,
+    )
+    claimed = JobService.claim(worker_id="asset-lock-worker", job_id=batch.job_id)
+    locked_models = []
+    original_fetch_all = QuerySet._fetch_all
+
+    def observe_locked_fetch(queryset):
+        if queryset._result_cache is None and queryset.query.select_for_update:
+            locked_models.append(queryset.model)
+        return original_fetch_all(queryset)
+
+    monkeypatch.setattr(QuerySet, "_fetch_all", observe_locked_fetch)
+
+    result = IngestionService.run(
+        batch_id=batch.id,
+        organization=organization,
+        claim_token=claimed.claim_token,
+    )
+
+    assert result.status == IngestionBatch.Status.SUCCEEDED
+    first_positions = {
+        model: locked_models.index(model)
+        for model in (Organization, MaterialAsset, IngestionBatch)
+    }
+    assert first_positions[Organization] < first_positions[MaterialAsset]
+    assert first_positions[MaterialAsset] < first_positions[IngestionBatch]
 
 
 @pytest.mark.django_db

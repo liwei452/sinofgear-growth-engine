@@ -81,6 +81,16 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function renderDialog(
   permissions = ["leads.read", "leads.analyze", "leads.review", "leads.handoff"],
   fetchMock = vi.fn(async () => json(detail)),
@@ -182,6 +192,86 @@ it("gates analyze, review, and handoff controls independently", async () => {
   expect(screen.getByText("CRM 交接尚未接入，当前不会发送任何客户数据。")).toBeVisible()
 })
 
+it("removes cached evidence and audit immediately when read permission is withdrawn", async () => {
+  const view = renderDialog()
+  await screen.findByText("We need replacement helical gears, 200 pcs.")
+  const cancellations = vi.spyOn(view.queryClient, "cancelQueries")
+
+  view.queryClient.setQueryData(currentUserQueryOptions().queryKey, userWith(["leads.analyze", "leads.review"]))
+
+  await waitFor(() => expect(screen.queryByText("We need replacement helical gears, 200 pcs.")).not.toBeInTheDocument())
+  expect(screen.queryByText("高级审计信息")).not.toBeInTheDocument()
+  expect(screen.getByText("当前账号不能查看机会依据")).toBeVisible()
+  expect(cancellations).toHaveBeenCalledWith({ queryKey: ["leads", "org-1", "detail", "lead-1"], exact: true })
+  expect(cancellations).toHaveBeenCalledWith({ queryKey: ["leads", "org-1", "job"] })
+})
+
+it("keeps typed review input visible but disables it when review permission is withdrawn", async () => {
+  const view = renderDialog(["leads.read", "leads.review"])
+  await userEvent.click(await screen.findByRole("button", { name: "确认机会" }))
+  await userEvent.type(screen.getByLabelText("处理原因"), "Keep this draft visible.")
+
+  view.queryClient.setQueryData(currentUserQueryOptions().queryKey, userWith(["leads.read"]))
+
+  expect(await screen.findByText("审核权限已撤销，当前处理内容不会提交。")).toBeVisible()
+  expect(screen.getByLabelText("处理原因")).toHaveValue("Keep this draft visible.")
+  expect(screen.getByRole("button", { name: "确认机会" })).toBeDisabled()
+})
+
+it("shows unavailable evidence honestly and analyzes only usable evidence IDs", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const mixed = {
+    ...detail,
+    evidence: [
+      detail.evidence[0],
+      {
+        ...detail.evidence[0], id: "evidence-unavailable", availability: "SOURCE_UNAVAILABLE",
+        original_text: "This unavailable text must not be quoted.", source_url: "https://example.test/unavailable",
+      },
+    ],
+  }
+  const bodies: Array<Record<string, unknown>> = []
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path.endsWith("/analyze")) {
+      bodies.push(JSON.parse(options?.body as string) as Record<string, unknown>)
+      return json({ job_id: "job-1", lead_candidate_id: "lead-1", status: "QUEUED" }, 202)
+    }
+    if (path === "/api/v1/jobs/job-1") return json({
+      job_id: "job-1", status: "SUCCEEDED", type: "LEAD_ANALYZE", progress: 100, attempt: 1,
+      max_attempts: 3, created_at: "2026-08-11T00:00:00Z", finished_at: "2026-08-11T00:01:00Z",
+      error: null, result_reference: null,
+    })
+    return json(mixed)
+  })
+  renderDialog(["leads.read", "leads.analyze"], fetchMock)
+
+  expect(await screen.findByText("公开来源当前不可用")).toBeVisible()
+  expect(screen.queryByText("This unavailable text must not be quoted.")).not.toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "打开不可用来源" })).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole("button", { name: "重新分析" }))
+  await screen.findByText("分析已完成")
+  expect(bodies[0]?.evidence_ids).toEqual(["evidence-1"])
+})
+
+it.each([
+  ["REDACTED_BY_RETENTION", "内容已按保留期限移除"],
+  ["SOURCE_UNAVAILABLE", "公开来源当前不可用"],
+] as const)("disables analysis when all evidence is %s", async (availability, statusCopy) => {
+  const unusable = {
+    ...detail,
+    evidence: [{
+      ...detail.evidence[0], availability, original_text: "", translated_text: "",
+      source_url: "https://example.test/removed",
+    }],
+  }
+  renderDialog(["leads.read", "leads.analyze"], vi.fn(async () => json(unusable)))
+
+  expect(await screen.findByText(statusCopy)).toBeVisible()
+  expect(screen.queryByRole("link", { name: "打开公开来源" })).not.toBeInTheDocument()
+  expect(screen.getByText("没有可用于分析的公开证据。请先补充仍可访问的公开原文。")).toBeVisible()
+  expect(screen.getByRole("button", { name: "重新分析" })).toBeDisabled()
+})
+
 it("submits only backend-supported correction fields with the exact version and reason", async () => {
   document.cookie = "csrftoken=csrf-value; path=/"
   const requests: Array<Record<string, unknown>> = []
@@ -269,6 +359,76 @@ it("preserves typed review input on 409, refetches, and resubmits against the la
   expect(reviewBodies[1]?.idempotency_key).not.toBe(reviewBodies[0]?.idempotency_key)
 })
 
+it("preserves a stale review draft but blocks retry when refreshed actions remove it", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let detailReads = 0
+  let reviews = 0
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/lead-reviews") {
+      reviews += 1
+      return json({ code: "version_conflict", message: "stale", recovery_action: "reload" }, 409)
+    }
+    detailReads += 1
+    return json(detailReads === 1 ? detail : {
+      ...detail, version: 3, status: "REVIEWED", permitted_actions: ["DISMISS", "REQUEST_MORE_EVIDENCE"],
+    })
+  })
+  renderDialog(["leads.read", "leads.review"], fetchMock)
+  await userEvent.click(await screen.findByRole("button", { name: "确认机会" }))
+  await userEvent.type(screen.getByLabelText("处理原因"), "Preserve this decision draft.")
+  await userEvent.click(screen.getByRole("button", { name: "确认机会" }))
+
+  expect(await screen.findByText("最新状态不再允许“确认机会”，请保留原因并取消后重新选择。")).toBeVisible()
+  expect(screen.getByLabelText("处理原因")).toHaveValue("Preserve this decision draft.")
+  expect(screen.getByRole("button", { name: "按最新版本重新提交" })).toBeDisabled()
+  await userEvent.click(screen.getByRole("button", { name: "按最新版本重新提交" }))
+  expect(reviews).toBe(1)
+})
+
+it("keeps a review draft but does not arm retry when the version-conflict refetch fails", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let detailReads = 0
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/lead-reviews") {
+      return json({ code: "version_conflict", message: "stale", recovery_action: "reload" }, 409)
+    }
+    detailReads += 1
+    return detailReads === 1 ? json(detail) : json({ detail: "private failure" }, 500)
+  })
+  renderDialog(["leads.read", "leads.review"], fetchMock)
+  await userEvent.click(await screen.findByRole("button", { name: "确认机会" }))
+  await userEvent.type(screen.getByLabelText("处理原因"), "Keep this after refetch failure.")
+  await userEvent.click(screen.getByRole("button", { name: "确认机会" }))
+
+  expect(await screen.findByText("最新机会版本没有加载成功，请重新加载后再提交。")).toBeVisible()
+  expect(screen.getByLabelText("处理原因")).toHaveValue("Keep this after refetch failure.")
+  expect(screen.queryByText("另一位同事刚刚保存了处理结果")).not.toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "按最新版本重新提交" })).toBeDisabled()
+})
+
+it.each([
+  ["idempotency_conflict", "幂等键已绑定其他处理。", "修改处理内容后重新提交。"],
+  ["lead_state_conflict", "当前机会状态不允许该处理。", "重新加载机会后选择可用操作。"],
+] as const)("blocks review retry for %s and shows its recovery", async (code, conflictMessage, recovery) => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let detailReads = 0
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/lead-reviews") return json({ code, message: conflictMessage, recovery_action: recovery }, 409)
+    detailReads += 1
+    return json(detail)
+  })
+  renderDialog(["leads.read", "leads.review"], fetchMock)
+  await userEvent.click(await screen.findByRole("button", { name: "确认机会" }))
+  await userEvent.type(screen.getByLabelText("处理原因"), "Retain classified conflict input.")
+  await userEvent.click(screen.getByRole("button", { name: "确认机会" }))
+
+  expect(await screen.findByText(`${conflictMessage} ${recovery}`)).toBeVisible()
+  expect(screen.getByLabelText("处理原因")).toHaveValue("Retain classified conflict input.")
+  expect(screen.queryByRole("button", { name: "按最新版本重新提交" })).not.toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "确认机会" })).toBeDisabled()
+  expect(detailReads).toBe(1)
+})
+
 it("recovers an analysis conflict against the refreshed version and follows the accepted job", async () => {
   document.cookie = "csrftoken=csrf-value; path=/"
   const analyzeBodies: Array<Record<string, unknown>> = []
@@ -303,6 +463,43 @@ it("recovers an analysis conflict against the refreshed version and follows the 
   expect(analyzeBodies[1]?.idempotency_key).not.toBe(analyzeBodies[0]?.idempotency_key)
 })
 
+it("does not arm analysis retry when the version-conflict refetch fails", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let detailReads = 0
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path.endsWith("/analyze")) return json({ code: "version_conflict", message: "stale", recovery_action: "reload" }, 409)
+    detailReads += 1
+    return detailReads === 1 ? json(detail) : json({ detail: "private failure" }, 500)
+  })
+  renderDialog(["leads.read", "leads.analyze"], fetchMock)
+  await userEvent.click(await screen.findByRole("button", { name: "重新分析" }))
+
+  expect(await screen.findByText("最新机会版本没有加载成功，请重新加载后再分析。")).toBeVisible()
+  expect(screen.queryByText("另一位同事刚刚保存了处理结果")).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "按最新版本重新提交" })).not.toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "重新分析" })).toBeDisabled()
+})
+
+it.each([
+  ["idempotency_conflict", "分析键已绑定其他请求。", "修改分析范围后重试。"],
+  ["lead_state_conflict", "当前机会状态不能分析。", "重新加载机会后重试。"],
+] as const)("blocks analysis retry for %s and shows its recovery", async (code, conflictMessage, recovery) => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let detailReads = 0
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path.endsWith("/analyze")) return json({ code, message: conflictMessage, recovery_action: recovery }, 409)
+    detailReads += 1
+    return json(detail)
+  })
+  renderDialog(["leads.read", "leads.analyze"], fetchMock)
+  await userEvent.click(await screen.findByRole("button", { name: "重新分析" }))
+
+  expect(await screen.findByText(`${conflictMessage} ${recovery}`)).toBeVisible()
+  expect(screen.queryByRole("button", { name: "按最新版本重新提交" })).not.toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "重新分析" })).toBeDisabled()
+  expect(detailReads).toBe(1)
+})
+
 it("invalidates the organization queue, detail, and job scopes after a review", async () => {
   document.cookie = "csrftoken=csrf-value; path=/"
   const fetchMock = vi.fn(async (path: string) => path === "/api/v1/lead-reviews"
@@ -323,6 +520,80 @@ it("invalidates the organization queue, detail, and job scopes after a review", 
   expect(invalidations).toHaveBeenCalledWith({ queryKey: ["leads", "org-1", "detail", "lead-1"] })
   expect(invalidations).toHaveBeenCalledWith({ queryKey: ["leads", "org-1", "job"] })
 })
+
+it.each(["close", "candidate", "organization"] as const)(
+  "invalidates the captured review scopes after a late accepted mutation on %s",
+  async (transition) => {
+    document.cookie = "csrftoken=csrf-value; path=/"
+    const reviewResponse = deferred<Response>()
+    const fetchMock = vi.fn((path: string) => {
+      if (path === "/api/v1/lead-reviews") return reviewResponse.promise
+      if (path.endsWith("/lead-2")) {
+        return Promise.resolve(json({ ...detail, id: "lead-2", company: { ...detail.company, name: "New Candidate" } }))
+      }
+      return Promise.resolve(json(detail))
+    })
+    const view = renderDialog(["leads.read", "leads.review"], fetchMock)
+    const invalidations = vi.spyOn(view.queryClient, "invalidateQueries")
+    await userEvent.click(await screen.findByRole("button", { name: "确认机会" }))
+    await userEvent.type(screen.getByLabelText("处理原因"), "Late server-side review.")
+    await userEvent.click(screen.getByRole("button", { name: "确认机会" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/lead-reviews", expect.anything()))
+
+    if (transition === "close") await view.rerender({ organizationId: "org-1", candidateId: "lead-1", open: false })
+    else if (transition === "candidate") await view.rerender({ organizationId: "org-1", candidateId: "lead-2", open: true })
+    else await view.rerender({ organizationId: "org-2", candidateId: "lead-2", open: true })
+
+    reviewResponse.resolve(json({
+      review_id: "review-late", lead_candidate_id: "lead-1", candidate_status: "REVIEWED",
+      candidate_version: 3, insight_id: null, insight_version: null,
+    }, 201))
+
+    await waitFor(() => {
+      expect(invalidations).toHaveBeenCalledWith({ queryKey: ["leads", "org-1", "list"] })
+      expect(invalidations).toHaveBeenCalledWith({ queryKey: ["leads", "org-1", "detail", "lead-1"] })
+      expect(invalidations).toHaveBeenCalledWith({ queryKey: ["leads", "org-1", "job"] })
+    })
+    expect(screen.queryByText("处理结果已保存")).not.toBeInTheDocument()
+    if (transition !== "close") expect(await screen.findByText("New Candidate")).toBeVisible()
+  },
+)
+
+it.each(["close", "candidate", "organization"] as const)(
+  "invalidates captured analysis scopes without polling after a late acceptance on %s",
+  async (transition) => {
+    document.cookie = "csrftoken=csrf-value; path=/"
+    const analyzeResponse = deferred<Response>()
+    const fetchMock = vi.fn((path: string) => {
+      if (path.endsWith("/analyze")) return analyzeResponse.promise
+      if (path.endsWith("/lead-2")) {
+        return Promise.resolve(json({ ...detail, id: "lead-2", company: { ...detail.company, name: "New Candidate" } }))
+      }
+      return Promise.resolve(json(detail))
+    })
+    const view = renderDialog(["leads.read", "leads.analyze"], fetchMock)
+    const invalidations = vi.spyOn(view.queryClient, "invalidateQueries")
+    await userEvent.click(await screen.findByRole("button", { name: "重新分析" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/lead-candidates/lead-1/analyze", expect.anything(),
+    ))
+
+    if (transition === "close") await view.rerender({ organizationId: "org-1", candidateId: "lead-1", open: false })
+    else if (transition === "candidate") await view.rerender({ organizationId: "org-1", candidateId: "lead-2", open: true })
+    else await view.rerender({ organizationId: "org-2", candidateId: "lead-2", open: true })
+
+    analyzeResponse.resolve(json({ job_id: "job-late", lead_candidate_id: "lead-1", status: "QUEUED" }, 202))
+
+    await waitFor(() => {
+      expect(invalidations).toHaveBeenCalledWith({ queryKey: ["leads", "org-1", "list"] })
+      expect(invalidations).toHaveBeenCalledWith({ queryKey: ["leads", "org-1", "detail", "lead-1"] })
+      expect(invalidations).toHaveBeenCalledWith({ queryKey: ["leads", "org-1", "job"] })
+    })
+    expect(fetchMock.mock.calls.some(([path]) => path === "/api/v1/jobs/job-late")).toBe(false)
+    expect(screen.queryByText("分析已完成")).not.toBeInTheDocument()
+    if (transition !== "close") expect(await screen.findByText("New Candidate")).toBeVisible()
+  },
+)
 
 it("shows every review reason and correction in the collapsed audit history", async () => {
   const history = {

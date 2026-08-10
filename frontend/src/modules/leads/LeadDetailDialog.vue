@@ -18,6 +18,7 @@ import {
 
 type ReviewAction = "CONFIRM" | "CORRECT" | "DISMISS" | "REOPEN" | "REQUEST_MORE_EVIDENCE"
 type CompanyCorrection = { company_name?: string; company_domain?: string; country_hint?: string }
+type RecoveryState = "idle" | "refreshing" | "ready" | "unavailable" | "blocked"
 
 const props = defineProps<{ organizationId: string; candidateId: string | null; open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -32,7 +33,7 @@ const correctedCountry = ref("")
 const correctedFields = ref<Set<keyof CompanyCorrection>>(new Set())
 const message = ref("")
 const alert = ref("")
-const conflict = ref(false)
+const recoveryState = ref<RecoveryState>("idle")
 const submitting = ref(false)
 const analyzing = ref(false)
 const activeJobId = ref<string | null>(null)
@@ -57,6 +58,9 @@ const detailQuery = useQuery({
 })
 const detail = computed(() => detailQuery.data.value)
 const permittedActions = computed(() => new Set(detail.value?.permitted_actions ?? []))
+const usableEvidence = computed(() => (detail.value?.evidence ?? []).filter((item) => (
+  item.availability === "AVAILABLE" && item.original_text.trim().length > 0
+)))
 const reviewActions = computed(() => ([
   { action: "CONFIRM" as const, label: "确认机会" },
   { action: "CORRECT" as const, label: "纠正信息" },
@@ -91,9 +95,24 @@ const reviewCorrection = computed<CompanyCorrection>(() => {
   if (correctedFields.value.has("country_hint")) correction.country_hint = correctedCountry.value
   return correction
 })
+const selectedActionAllowed = computed(() => Boolean(
+  selectedAction.value && permittedActions.value.has(selectedAction.value),
+))
 const canSubmitReview = computed(() => Boolean(selectedAction.value && reason.value.trim())
   && (selectedAction.value !== "CORRECT" || Object.keys(reviewCorrection.value).length > 0)
+  && canReview.value
+  && selectedActionAllowed.value
+  && ["idle", "ready"].includes(recoveryState.value)
+  && !detailQuery.isFetching.value
   && !submitting.value)
+const canStartAnalysis = computed(() => canAnalyze.value
+  && permittedActions.value.has("ANALYZE")
+  && usableEvidence.value.length > 0
+  && ["idle", "ready"].includes(recoveryState.value)
+  && !detailQuery.isFetching.value
+  && !analyzing.value)
+const showVersionReviewRetry = computed(() => selectedAction.value !== null
+  && ["ready", "unavailable"].includes(recoveryState.value))
 
 function freshKey(prefix: string): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID()
@@ -140,7 +159,7 @@ function resetTransient(): void {
   correctedFields.value = new Set()
   message.value = ""
   alert.value = ""
-  conflict.value = false
+  recoveryState.value = "idle"
   submitting.value = false
   analyzing.value = false
   activeJobId.value = null
@@ -168,6 +187,8 @@ function closeDialog(): void {
 }
 
 function startReview(action: ReviewAction): void {
+  if (!canReview.value || !permittedActions.value.has(action)
+    || submitting.value || analyzing.value || detailQuery.isFetching.value) return
   selectedAction.value = action
   reason.value = ""
   correctedName.value = companyName.value
@@ -176,13 +197,15 @@ function startReview(action: ReviewAction): void {
   correctedFields.value = new Set()
   message.value = ""
   alert.value = ""
-  conflict.value = false
+  recoveryState.value = "idle"
+  reviewKeySignature = ""
+  reviewKey = ""
 }
 
 function cancelReview(): void {
   selectedAction.value = null
   reason.value = ""
-  conflict.value = false
+  recoveryState.value = "idle"
   alert.value = ""
 }
 
@@ -200,10 +223,14 @@ function confirmationLabel(action: ReviewAction): string {
   })[action]
 }
 
-async function refetchLatestAfterConflict(token: number, organizationId: string, candidateId: string): Promise<void> {
+async function refetchLatestAfterConflict(token: number, organizationId: string, candidateId: string): Promise<boolean> {
   const refreshed = await detailQuery.refetch()
-  if (!isCurrent(token, organizationId, candidateId)) return
-  if (refreshed.error) alert.value = "最新机会版本没有加载成功，请重新加载后再提交。"
+  if (!isCurrent(token, organizationId, candidateId)) return false
+  return !refreshed.error && Boolean(refreshed.data)
+}
+
+function classifiedConflictMessage(error: ApiError): string {
+  return [error.userMessage, error.recoveryAction].filter(Boolean).join(" ")
 }
 
 async function submitReview(): Promise<void> {
@@ -227,17 +254,30 @@ async function submitReview(): Promise<void> {
   alert.value = ""
   try {
     await createLeadReview(payload)
+    await invalidateMutationScopes(organizationId, candidateId)
     if (!isCurrent(token, organizationId, candidateId)) return
-    conflict.value = false
+    recoveryState.value = "idle"
     selectedAction.value = null
     message.value = "处理结果已保存"
-    await invalidateMutationScopes(organizationId, candidateId)
   } catch (error) {
     if (!isCurrent(token, organizationId, candidateId)) return
     if (error instanceof ApiError && error.status === 409) {
-      conflict.value = true
+      if (error.code !== "version_conflict") {
+        recoveryState.value = "blocked"
+        message.value = ""
+        alert.value = classifiedConflictMessage(error)
+        return
+      }
+      recoveryState.value = "refreshing"
+      const refreshed = await refetchLatestAfterConflict(token, organizationId, candidateId)
+      if (!isCurrent(token, organizationId, candidateId)) return
+      if (!refreshed) {
+        recoveryState.value = "unavailable"
+        alert.value = "最新机会版本没有加载成功，请重新加载后再提交。"
+        return
+      }
       message.value = "另一位同事刚刚保存了处理结果"
-      await refetchLatestAfterConflict(token, organizationId, candidateId)
+      recoveryState.value = selectedActionAllowed.value ? "ready" : "unavailable"
     } else {
       alert.value = errorMessage(error, "处理结果没有保存，请检查后重试。")
     }
@@ -279,8 +319,8 @@ async function startAnalysis(): Promise<void> {
   const current = detail.value
   const candidateId = props.candidateId
   const organizationId = props.organizationId
-  if (!current || !candidateId || !canAnalyze.value || !permittedActions.value.has("ANALYZE") || analyzing.value) return
-  const evidenceIds = current.evidence.map((item) => item.id)
+  if (!current || !candidateId || !canStartAnalysis.value) return
+  const evidenceIds = usableEvidence.value.map((item) => item.id)
   if (!evidenceIds.length) {
     alert.value = "当前没有可供分析的公开证据。"
     return
@@ -295,19 +335,38 @@ async function startAnalysis(): Promise<void> {
       expected_version: current.version,
       idempotency_key: keyForAnalysis(current.version, evidenceIds),
     })
-    if (!isCurrent(token, organizationId, candidateId)) return
-    conflict.value = false
-    activeJobId.value = accepted.job_id
     await invalidateMutationScopes(organizationId, candidateId)
     if (!isCurrent(token, organizationId, candidateId)) return
+    recoveryState.value = "idle"
+    activeJobId.value = accepted.job_id
     await pollAnalysis(accepted.job_id, token, organizationId, candidateId)
   } catch (error) {
     if (!isCurrent(token, organizationId, candidateId)) return
     analyzing.value = false
     if (error instanceof ApiError && error.status === 409) {
-      conflict.value = true
+      if (error.code !== "version_conflict") {
+        recoveryState.value = "blocked"
+        message.value = ""
+        alert.value = classifiedConflictMessage(error)
+        return
+      }
+      recoveryState.value = "refreshing"
+      const refreshed = await refetchLatestAfterConflict(token, organizationId, candidateId)
+      if (!isCurrent(token, organizationId, candidateId)) return
+      if (!refreshed) {
+        recoveryState.value = "unavailable"
+        message.value = ""
+        alert.value = "最新机会版本没有加载成功，请重新加载后再分析。"
+        return
+      }
+      if (!permittedActions.value.has("ANALYZE") || !usableEvidence.value.length) {
+        recoveryState.value = "unavailable"
+        message.value = ""
+        alert.value = "最新状态不再允许分析，请重新加载机会后选择可用操作。"
+        return
+      }
+      recoveryState.value = "ready"
       message.value = "另一位同事刚刚保存了处理结果"
-      await refetchLatestAfterConflict(token, organizationId, candidateId)
     } else {
       alert.value = errorMessage(error, "分析没有开始，请检查后重试。")
     }
@@ -336,6 +395,17 @@ function actionLabel(action: string): string {
   } as Record<string, string>)[action] ?? action
 }
 
+function evidenceAvailabilityText(availability: string, originalText: string): string {
+  if (availability === "REDACTED_BY_RETENTION") return "内容已按保留期限移除"
+  if (availability === "SOURCE_UNAVAILABLE") return "公开来源当前不可用"
+  if (!originalText.trim()) return "公开原文为空，当前不能用于分析"
+  return ""
+}
+
+function evidenceIsUsable(availability: string, originalText: string): boolean {
+  return availability === "AVAILABLE" && originalText.trim().length > 0
+}
+
 function auditJson(value: unknown): string {
   if (value === null || value === undefined) return "无"
   try { return JSON.stringify(value, null, 2) } catch { return "无法显示" }
@@ -348,6 +418,17 @@ watch(() => [props.open, props.organizationId, props.candidateId] as const, (cur
   }
   if (!previous || current.some((value, index) => value !== previous[index])) resetTransient()
 }, { immediate: true, flush: "sync" })
+
+watch(canRead, (current, previous) => {
+  if (!previous || current) return
+  const organizationId = props.organizationId
+  const candidateId = props.candidateId
+  resetTransient()
+  if (organizationId && candidateId) {
+    void queryClient.cancelQueries({ queryKey: leadKeys.detail(organizationId, candidateId), exact: true })
+  }
+  if (organizationId) void queryClient.cancelQueries({ queryKey: leadKeys.jobs(organizationId) })
+}, { flush: "sync" })
 
 onBeforeUnmount(() => {
   const organizationId = props.organizationId
@@ -368,8 +449,9 @@ onBeforeUnmount(() => {
       <p class="live-message" role="status" aria-live="polite">{{ message }}</p>
       <p v-if="alert" class="form-alert" role="alert">{{ alert }}</p>
 
-      <p v-if="detailQuery.isPending.value" role="status" aria-live="polite">正在加载机会依据…</p>
-      <section v-else-if="detailQuery.isError.value" class="state-panel" role="alert">
+      <p v-if="!canRead" class="state-panel" role="status">当前账号不能查看机会依据</p>
+      <p v-else-if="detailQuery.isPending.value && !detail" role="status" aria-live="polite">正在加载机会依据…</p>
+      <section v-else-if="detailQuery.isError.value && !detail" class="state-panel" role="alert">
         <h3>机会依据没有加载成功</h3>
         <button type="button" @click="detailQuery.refetch()">重新加载机会依据</button>
       </section>
@@ -392,10 +474,15 @@ onBeforeUnmount(() => {
           <p v-if="!detail.evidence.length">还没有可展示的公开证据。</p>
           <article v-for="item in detail.evidence" :key="item.id" class="evidence-card">
             <div class="evidence-meta"><strong>{{ item.platform }}</strong><span>{{ item.language || "语言未知" }}</span></div>
-            <blockquote>{{ item.original_text }}</blockquote>
-            <div v-if="item.translated_text" class="translation"><h4>翻译（辅助理解）</h4><p>{{ item.translated_text }}</p></div>
-            <a v-if="safePublicHttpUrl(item.source_url)" :href="safePublicHttpUrl(item.source_url)!" target="_blank" rel="noopener noreferrer">打开公开来源</a>
-            <span v-else class="unsafe-link">公开来源链接不可用</span>
+            <p v-if="!evidenceIsUsable(item.availability, item.original_text)" class="evidence-status">
+              {{ evidenceAvailabilityText(item.availability, item.original_text) }}
+            </p>
+            <template v-else>
+              <blockquote>{{ item.original_text }}</blockquote>
+              <div v-if="item.translated_text" class="translation"><h4>翻译（辅助理解）</h4><p>{{ item.translated_text }}</p></div>
+              <a v-if="safePublicHttpUrl(item.source_url)" :href="safePublicHttpUrl(item.source_url)!" target="_blank" rel="noopener noreferrer">打开公开来源</a>
+              <span v-else class="unsafe-link">公开来源链接不可用</span>
+            </template>
           </article>
         </section>
 
@@ -426,25 +513,28 @@ onBeforeUnmount(() => {
         <section class="detail-section decision-section" aria-labelledby="human-decision-title">
           <h3 id="human-decision-title">人工决定</h3>
           <div v-if="!selectedAction" class="action-grid">
-            <button v-if="canAnalyze && permittedActions.has('ANALYZE')" type="button" :disabled="analyzing" @click="startAnalysis">{{ analyzing ? "正在分析…" : conflict ? "按最新版本重新提交" : "重新分析" }}</button>
-            <button v-for="item in reviewActions" :key="item.action" type="button" @click="startReview(item.action)">{{ item.label }}</button>
+            <button v-if="canAnalyze && permittedActions.has('ANALYZE')" type="button" :disabled="!canStartAnalysis" @click="startAnalysis">{{ analyzing ? "正在分析…" : recoveryState === "ready" ? "按最新版本重新提交" : "重新分析" }}</button>
+            <p v-if="canAnalyze && permittedActions.has('ANALYZE') && !usableEvidence.length" class="handoff-note">没有可用于分析的公开证据。请先补充仍可访问的公开原文。</p>
+            <button v-for="item in reviewActions" :key="item.action" type="button" :disabled="submitting || analyzing || detailQuery.isFetching.value" @click="startReview(item.action)">{{ item.label }}</button>
             <template v-if="showHandoffNotice">
               <button type="button" aria-label="交给 CRM" disabled>交给 CRM（尚未接入）</button>
               <p class="handoff-note">CRM 交接尚未接入，当前不会发送任何客户数据。</p>
             </template>
           </div>
           <form v-else class="review-form" @submit.prevent="submitReview">
-            <fieldset v-if="selectedAction === 'CORRECT'">
+            <p v-if="!canReview" class="form-alert">审核权限已撤销，当前处理内容不会提交。</p>
+            <p v-else-if="!selectedActionAllowed" class="form-alert">最新状态不再允许“{{ actionLabel(selectedAction) }}”，请保留原因并取消后重新选择。</p>
+            <fieldset v-if="selectedAction === 'CORRECT'" :disabled="!canReview || submitting">
               <legend>纠正已推断的公司信息</legend>
               <label>公司名称<input v-model="correctedName" autocomplete="organization" @input="markCorrected('company_name')"></label>
               <label>公开域名<input v-model="correctedDomain" inputmode="url" @input="markCorrected('company_domain')"></label>
               <label>国家或地区<input v-model="correctedCountry" maxlength="255" @input="markCorrected('country_hint')"></label>
               <p>这里只提交后端支持的公司名称、公开域名和国家或地区字段。</p>
             </fieldset>
-            <label>处理原因<textarea v-model="reason" rows="4" maxlength="2000" required></textarea></label>
+            <label>处理原因<textarea v-model="reason" rows="4" maxlength="2000" required :disabled="!canReview || submitting"></textarea></label>
             <div class="form-actions">
               <button type="button" :disabled="submitting" @click="cancelReview">取消</button>
-              <button v-if="conflict" class="primary-action" type="submit" :disabled="!canSubmitReview">按最新版本重新提交</button>
+              <button v-if="showVersionReviewRetry" class="primary-action" type="submit" :disabled="!canSubmitReview">按最新版本重新提交</button>
               <button v-else class="primary-action" type="submit" :disabled="!canSubmitReview">{{ confirmationLabel(selectedAction) }}</button>
             </div>
           </form>

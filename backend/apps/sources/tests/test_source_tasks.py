@@ -2,6 +2,7 @@ import pytest
 
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
+from apps.sources.importers import prepare_import_reference
 from apps.sources.models import IngestionBatch
 from apps.sources.services import IngestionService
 from apps.sources.tasks import execute_source_import
@@ -12,10 +13,13 @@ def make_batch(*, organization, job, user, key="worker-batch"):
         organization=organization,
         job=job,
         source_type=IngestionBatch.SourceType.URL,
-        input_reference={
-            "source_url": "https://e.test/worker",
-            "original_text": "Need replacement gear",
-        },
+        input_reference=prepare_import_reference(
+            {
+                "source_url": "https://e.test/worker",
+                "original_text": "Need replacement gear",
+            },
+            source_type="URL",
+        ),
         idempotency_key=key,
         created_by=user,
     )

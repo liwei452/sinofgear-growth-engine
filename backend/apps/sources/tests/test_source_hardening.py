@@ -1,3 +1,4 @@
+import json
 from contextlib import nullcontext
 from copy import deepcopy
 
@@ -12,6 +13,7 @@ from apps.sources.models import (
     evidence_service_writes,
     ingestion_row_service_writes,
 )
+from apps.sources.importers import prepare_import_reference
 from apps.sources.services import EvidenceService
 
 
@@ -23,6 +25,11 @@ def _write_context(instance):
     return nullcontext()
 
 
+def _empty_reference(source_type="PASTE"):
+    payload = {"text": ""} if source_type in {"CSV", "PASTE"} else {"rows": []}
+    return prepare_import_reference(payload, source_type=source_type)
+
+
 @pytest.mark.django_db
 def test_persisted_source_organization_is_immutable_through_every_orm_path(
     organization, other_organization, target, content, signal, user
@@ -30,6 +37,7 @@ def test_persisted_source_organization_is_immutable_through_every_orm_path(
     batch = IngestionBatch.objects.create(
         organization=organization,
         source_type=IngestionBatch.SourceType.PASTE,
+        input_reference=_empty_reference(),
         idempotency_key="organization-immutable-batch",
         monitoring_target=target,
     )
@@ -108,6 +116,7 @@ def test_ingestion_batch_with_rows_cannot_be_deleted(
     batch = IngestionBatch.objects.create(
         organization=organization,
         source_type=IngestionBatch.SourceType.PASTE,
+        input_reference=_empty_reference(),
         idempotency_key=f"protected-batch-{delete_style}",
     )
     row = IngestionRow(
@@ -134,6 +143,10 @@ def test_ingestion_batch_history_cannot_be_deleted_even_before_rows(organization
     batch = IngestionBatch.objects.create(
         organization=organization,
         source_type=IngestionBatch.SourceType.URL,
+        input_reference=prepare_import_reference(
+            {"source_url": "https://e.test/empty", "original_text": "Public"},
+            source_type="URL",
+        ),
         idempotency_key="protected-empty-batch",
     )
     with pytest.raises(ProtectedError):
@@ -171,7 +184,7 @@ def test_all_source_json_fields_sanitize_nested_secrets_without_mutating_input(
 
     batch = IngestionBatch.objects.create(
         organization=organization,
-        source_type=IngestionBatch.SourceType.JSON,
+        source_type=IngestionBatch.SourceType.API,
         idempotency_key="sanitized-all-json",
         input_reference=sensitive,
         row_errors=sensitive,
@@ -212,3 +225,144 @@ def test_all_source_json_fields_sanitize_nested_secrets_without_mutating_input(
     assert row.normalized_input == clean
     assert row.error == clean
     assert sensitive == original
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("raw_reference", ["raw source text", b"raw source bytes"])
+@pytest.mark.parametrize(
+    "source_type", [IngestionBatch.SourceType.PASTE, IngestionBatch.SourceType.API]
+)
+def test_guided_batch_rejects_raw_text_on_create_and_bulk_create(
+    organization, raw_reference, source_type
+):
+    values = {
+        "organization": organization,
+        "source_type": source_type,
+        "input_reference": raw_reference,
+    }
+    with pytest.raises(ValidationError, match="prepared"):
+        IngestionBatch.objects.create(
+            idempotency_key=f"raw-create-{source_type}-{type(raw_reference).__name__}",
+            **values,
+        )
+    with pytest.raises(ValidationError, match="prepared"):
+        IngestionBatch.objects.bulk_create(
+            [
+                IngestionBatch(
+                    idempotency_key=f"raw-bulk-{source_type}-{type(raw_reference).__name__}",
+                    **values,
+                )
+            ]
+        )
+
+
+@pytest.mark.django_db
+def test_guided_batch_rejects_raw_text_on_save_update_and_bulk_update(organization):
+    batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.PASTE,
+        input_reference=_empty_reference(),
+        idempotency_key="safe-before-raw-write",
+    )
+
+    batch.input_reference = "raw save text"
+    with pytest.raises(ValidationError, match="prepared"):
+        batch.save()
+    with pytest.raises(ValidationError, match="prepared"):
+        IngestionBatch.objects.filter(pk=batch.pk).update(input_reference="raw update text")
+    batch.refresh_from_db()
+    batch.input_reference = "raw bulk update text"
+    with pytest.raises(ValidationError, match="prepared"):
+        IngestionBatch.objects.bulk_update([batch], ["input_reference"])
+
+
+@pytest.mark.django_db
+def test_only_prepared_rows_persist_and_legitimate_cookie_word_is_unchanged(organization):
+    raw_document = json.dumps(
+        {
+            "rows": [
+                {
+                    "source_url": "https://e.test/public",
+                    "original_text": "Customer asks about cookie dimensions.",
+                    "cookie": "session=private",
+                    "authorization": "Bearer private",
+                    "raw_headers": {"X-Secret": "private"},
+                }
+            ]
+        }
+    )
+    reference = prepare_import_reference(raw_document, source_type="JSON")
+    batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.JSON,
+        input_reference=reference,
+        idempotency_key="prepared-only",
+    )
+    batch.refresh_from_db()
+
+    persisted = json.dumps(batch.input_reference, sort_keys=True)
+    assert batch.input_reference["rows"][0]["original_text"] == (
+        "Customer asks about cookie dimensions."
+    )
+    assert raw_document not in persisted
+    assert "session=private" not in persisted
+    assert "Bearer private" not in persisted
+    assert "X-Secret" not in persisted
+
+
+@pytest.mark.django_db
+def test_prepared_shape_cannot_smuggle_raw_text_through_error_or_typed_fields(organization):
+    reference = prepare_import_reference(
+        {"source_url": "https://e.test/public", "original_text": "Public"},
+        source_type="URL",
+    )
+    reference["errors"] = [
+        {
+            "row": None,
+            "code": "INVALID_PAYLOAD",
+            "recovery_action": "authorization=Bearer private",
+        }
+    ]
+    reference["rows"][0]["author_name"] = {"raw_document": "private"}
+
+    with pytest.raises(ValidationError, match="prepared"):
+        IngestionBatch.objects.create(
+            organization=organization,
+            source_type=IngestionBatch.SourceType.URL,
+            input_reference=reference,
+            idempotency_key="prepared-smuggle",
+        )
+
+
+@pytest.mark.django_db
+def test_raw_csv_columns_and_paste_document_are_not_persisted(organization):
+    csv_document = (
+        "source_url,original_text,cookie,authorization,raw_headers\n"
+        "https://e.test/csv,Public,session=private,Bearer private,X-Secret"
+    )
+    paste_document = "https://e.test/paste\tCustomer mentioned cookie dimensions."
+    csv_batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.CSV,
+        input_reference=prepare_import_reference(csv_document, source_type="CSV"),
+        idempotency_key="prepared-csv-no-raw",
+    )
+    paste_batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.PASTE,
+        input_reference=prepare_import_reference(paste_document, source_type="PASTE"),
+        idempotency_key="prepared-paste-no-raw",
+    )
+    csv_batch.refresh_from_db()
+    paste_batch.refresh_from_db()
+
+    csv_persisted = json.dumps(csv_batch.input_reference, sort_keys=True)
+    paste_persisted = json.dumps(paste_batch.input_reference, sort_keys=True)
+    assert csv_document not in csv_persisted
+    assert "session=private" not in csv_persisted
+    assert "Bearer private" not in csv_persisted
+    assert "X-Secret" not in csv_persisted
+    assert paste_document not in paste_persisted
+    assert paste_batch.input_reference["rows"][0]["original_text"] == (
+        "Customer mentioned cookie dimensions."
+    )

@@ -1,7 +1,9 @@
 from uuid import uuid4
 
 import pytest
+from django.db import IntegrityError, InterfaceError
 from apps.jobs.services import JobService, StaleJobWorkerError
+from apps.sources.importers import prepare_import_reference
 from apps.sources.models import (
     IngestionBatch,
     IngestionRow,
@@ -13,12 +15,13 @@ from apps.sources.services import IngestionService
 
 
 def make_batch(*, organization, job, source_type, payload, key, user, target=None):
+    input_reference = prepare_import_reference(payload, source_type=source_type)
     return IngestionBatch.objects.create(
         organization=organization,
         job=job,
         monitoring_target=target,
         source_type=source_type,
-        input_reference=payload,
+        input_reference=input_reference,
         idempotency_key=key,
         created_by=user,
     )
@@ -350,3 +353,95 @@ def test_batch_level_row_limit_failure_is_persisted_without_rows(
     assert result.received_count == 0
     assert result.rows.count() == 0
     assert result.row_errors[0]["code"] == "BATCH_ROW_LIMIT_EXCEEDED"
+
+
+@pytest.mark.django_db
+def test_integrity_error_isolated_to_middle_row_and_retry_uses_persisted_outcomes(
+    organization, job, user, target, monkeypatch
+):
+    batch = make_batch(
+        organization=organization,
+        job=job,
+        target=target,
+        source_type=IngestionBatch.SourceType.JSON,
+        payload={
+            "rows": [
+                {"source_url": "https://e.test/first", "original_text": "First"},
+                {"source_url": "https://e.test/middle", "original_text": "Middle"},
+                {"source_url": "https://e.test/third", "original_text": "Third"},
+            ]
+        },
+        key="integrity-savepoint",
+        user=user,
+    )
+    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+    original = IngestionService._persist_valid_row
+
+    def fail_middle(*, batch, organization, row):
+        if row.source_url.endswith("/middle"):
+            raise IntegrityError("simulated row constraint")
+        return original(batch=batch, organization=organization, row=row)
+
+    monkeypatch.setattr(IngestionService, "_persist_valid_row", fail_middle)
+    kwargs = {
+        "batch_id": batch.id,
+        "organization": organization,
+        "claim_token": claimed.claim_token,
+    }
+
+    first = IngestionService.run(**kwargs)
+    second = IngestionService.run(**kwargs)
+
+    assert first.id == second.id
+    assert second.status == IngestionBatch.Status.PARTIAL_SUCCESS
+    assert (
+        second.received_count,
+        second.accepted_count,
+        second.duplicate_count,
+        second.failed_count,
+    ) == (3, 2, 0, 1)
+    assert list(second.rows.values_list("row_number", "outcome")) == [
+        (1, IngestionRow.Outcome.ACCEPTED),
+        (2, IngestionRow.Outcome.FAILED),
+        (3, IngestionRow.Outcome.ACCEPTED),
+    ]
+    assert second.rows.get(row_number=2).error == {
+        "row": 2,
+        "code": "ROW_DATABASE_CONFLICT",
+        "recovery_action": "Review this row's values and retry the import.",
+    }
+    assert SourceContent.objects.count() == 2
+    assert SourceSignal.objects.count() == 2
+    assert SourceEvidence.objects.count() == 2
+
+
+@pytest.mark.django_db
+def test_connection_database_error_propagates_instead_of_becoming_a_row_failure(
+    organization, job, user, target, monkeypatch
+):
+    batch = make_batch(
+        organization=organization,
+        job=job,
+        target=target,
+        source_type=IngestionBatch.SourceType.URL,
+        payload={"source_url": "https://e.test/connection", "original_text": "Public"},
+        key="connection-error",
+        user=user,
+    )
+    claimed = JobService.claim(worker_id="test-worker", job_id=job.id)
+
+    def fail_connection(**_kwargs):
+        raise InterfaceError("simulated lost connection")
+
+    monkeypatch.setattr(IngestionService, "_persist_valid_row", fail_connection)
+
+    with pytest.raises(InterfaceError, match="lost connection"):
+        IngestionService.run(
+            batch_id=batch.id,
+            organization=organization,
+            claim_token=claimed.claim_token,
+        )
+
+    batch.refresh_from_db()
+    assert batch.status == IngestionBatch.Status.QUEUED
+    assert batch.rows.count() == 0

@@ -3,7 +3,7 @@ import ipaddress
 from urllib.parse import urlsplit, urlunsplit
 
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import DatabaseError, OperationalError, transaction
 from django.utils import timezone
 
 from apps.assets.models import MaterialAsset
@@ -200,7 +200,7 @@ class IngestionService:
     @staticmethod
     @transaction.atomic
     def run(*, batch_id, organization, claim_token) -> IngestionBatch:
-        from .importers import parse_import
+        from .importers import import_result_from_reference
 
         batch = (
             IngestionBatch.objects.select_for_update()
@@ -227,13 +227,18 @@ class IngestionService:
         batch.save(update_fields=["status", "started_at", "finished_at", "updated_at"])
 
         try:
-            parsed = parse_import(batch.input_reference, source_type=batch.source_type)
+            parsed = import_result_from_reference(
+                batch.input_reference, source_type=batch.source_type
+            )
         except ValidationError as error:
             batch_error = _batch_parse_error(error)
             IngestionService._finish_batch(batch, batch_errors=[batch_error])
             return batch
 
+        batch_errors = [error for error in parsed.errors if error.get("row") is None]
         for error in parsed.errors:
+            if error.get("row") is None:
+                continue
             IngestionService._persist_parse_error(
                 batch=batch,
                 organization=organization,
@@ -256,8 +261,21 @@ class IngestionService:
                     row=row,
                     error=IngestionService._row_processing_error(error, row=row),
                 )
+            except OperationalError:
+                raise
+            except DatabaseError:
+                IngestionService._persist_failed_row(
+                    batch=batch,
+                    organization=organization,
+                    row=row,
+                    error={
+                        "row": row.row_number,
+                        "code": "ROW_DATABASE_CONFLICT",
+                        "recovery_action": "Review this row's values and retry the import.",
+                    },
+                )
 
-        IngestionService._finish_batch(batch)
+        IngestionService._finish_batch(batch, batch_errors=batch_errors)
         return batch
 
     @staticmethod

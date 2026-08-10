@@ -3,7 +3,7 @@ import json
 import pytest
 from django.core.exceptions import ValidationError
 
-from apps.sources.importers import parse_import
+from apps.sources.importers import parse_import, prepare_import_reference
 
 
 @pytest.mark.parametrize(
@@ -98,6 +98,98 @@ def test_csv_formula_is_retained_as_inert_text():
     )
 
     assert result.rows[0].original_text == "=1+1"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b'\xef\xbb\xbfsource_url,original_text,author_name\r\nhttps://e.test/1,"Need, gears","Li, Wei"',
+        '\ufeffsource_url,original_text,author_name\nhttps://e.test/1,"Need, gears","Li, Wei"',
+    ],
+)
+def test_csv_accepts_one_utf8_bom_and_preserves_quoted_fields(payload):
+    result = parse_import(payload, source_type="CSV")
+
+    assert result.errors == []
+    assert result.rows[0].original_text == "Need, gears"
+    assert result.rows[0].author_name == "Li, Wei"
+
+
+def test_csv_rejects_unknown_headers_without_retaining_the_header_value():
+    result = parse_import(
+        (
+            "source_url,original_text,cookie,authorization,raw_headers\n"
+            "https://e.test/1,Need gear,session=private,Bearer private,X-Secret"
+        ),
+        source_type="CSV",
+    )
+
+    assert result.rows == []
+    assert result.errors == [
+        {
+            "row": 1,
+            "code": "CSV_COLUMNS_UNEXPECTED",
+            "recovery_action": "Use only supported CSV columns and re-import the file.",
+        }
+    ]
+    assert "private" not in repr(result)
+
+
+def test_csv_rejects_surplus_values_on_the_exact_source_row():
+    result = parse_import(
+        "source_url,original_text\nhttps://e.test/1,Need gear,secret-surplus",
+        source_type="CSV",
+    )
+
+    assert result.rows == []
+    assert result.errors == [
+        {
+            "row": 2,
+            "code": "CSV_SURPLUS_VALUES",
+            "recovery_action": "Remove values without matching CSV headers and re-import this row.",
+        }
+    ]
+    assert "secret-surplus" not in repr(result)
+
+
+def test_safe_reference_whitelists_json_rows_without_redacting_public_comment_text():
+    raw_document = json.dumps(
+        {
+            "authorization": "Bearer outer-secret",
+            "rows": [
+                {
+                    "source_url": "https://e.test/1",
+                    "original_text": "The customer mentioned cookie dimensions.",
+                    "cookie": "session=private",
+                    "nested": {"authorization": "Bearer nested-secret"},
+                    "raw_headers": {"X-Secret": "private"},
+                }
+            ],
+        }
+    )
+
+    reference = prepare_import_reference(raw_document, source_type="JSON")
+
+    assert set(reference) == {"schema", "rows", "errors"}
+    assert set(reference["rows"][0]) == {
+        "platform",
+        "source_url",
+        "signal_type",
+        "original_text",
+        "author_name",
+        "published_at",
+        "screenshot_asset_id",
+        "row_number",
+    }
+    assert reference["rows"][0]["original_text"] == (
+        "The customer mentioned cookie dimensions."
+    )
+    persisted_shape = json.dumps(reference, sort_keys=True)
+    assert "outer-secret" not in persisted_shape
+    assert "nested-secret" not in persisted_shape
+    assert "session=private" not in persisted_shape
+    assert "X-Secret" not in persisted_shape
+    assert raw_document not in persisted_shape
 
 
 def test_original_text_over_20_000_characters_is_a_row_error():

@@ -2,6 +2,7 @@ import pytest
 from django.core.exceptions import ValidationError
 
 from apps.sources.models import IngestionRow, SourceEvidence, evidence_service_writes, ingestion_row_service_writes
+from apps.sources.importers import prepare_import_reference
 from apps.sources.services import EvidenceService, evidence_fingerprint
 
 
@@ -101,6 +102,7 @@ def test_ingestion_row_is_service_write_only(organization, job):
     batch = IngestionBatch.objects.create(
         organization=organization,
         source_type=IngestionBatch.SourceType.PASTE,
+        input_reference=prepare_import_reference({"text": ""}, source_type="PASTE"),
         idempotency_key="batch-row-guard",
         job=job,
     )

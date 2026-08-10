@@ -350,6 +350,19 @@ class IngestionBatch(ValidatedOrganizationModel):
         self.input_reference = sanitize_source_json(self.input_reference)
         self.row_errors = sanitize_source_json(self.row_errors)
         errors: dict[str, str] = {}
+        if isinstance(self.input_reference, (str, bytes)):
+            errors["input_reference"] = (
+                "Ingestion batches require a prepared structured input reference."
+            )
+        elif self.source_type != self.SourceType.API:
+            from .importers import validate_prepared_import_reference
+
+            try:
+                validate_prepared_import_reference(
+                    self.input_reference, source_type=self.source_type
+                )
+            except ValidationError as error:
+                errors["input_reference"] = " ".join(error.messages)
         _validate_related_organization(self, "monitoring_target", errors)
         _validate_related_organization(self, "job", errors)
         if errors:

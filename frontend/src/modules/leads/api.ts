@@ -58,7 +58,8 @@ export const leadKeys = {
   all: (organizationId: string) => ["leads", organizationId] as const,
   list: (organizationId: string, filters: LeadFilters) => [...leadKeys.all(organizationId), "list", filters] as const,
   detail: (organizationId: string, candidateId: string) => [...leadKeys.all(organizationId), "detail", candidateId] as const,
-  job: (organizationId: string, jobId: string) => [...leadKeys.all(organizationId), "job", jobId] as const,
+  jobs: (organizationId: string) => [...leadKeys.all(organizationId), "job"] as const,
+  job: (organizationId: string, jobId: string) => [...leadKeys.jobs(organizationId), jobId] as const,
 }
 
 export function isActiveImportJob(status: Job["status"]): boolean {
@@ -374,8 +375,8 @@ export async function createIngestionBatch(draft: ImportDraft): Promise<Ingestio
   }))
 }
 
-export async function getJob(jobId: string): Promise<Job> {
-  return required(await apiRequest<Job>(`/api/v1/jobs/${encodeURIComponent(jobId)}`))
+export async function getJob(jobId: string, options: LeadReadOptions = {}): Promise<Job> {
+  return required(await apiRequest<Job>(`/api/v1/jobs/${encodeURIComponent(jobId)}`, options))
 }
 
 export async function analyzeLeadCandidate(

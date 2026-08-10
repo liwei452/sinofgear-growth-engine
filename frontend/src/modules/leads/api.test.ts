@@ -38,6 +38,7 @@ it("keeps cursors on the lead endpoint", () => {
 it("keeps organization data in every query key", () => {
   expect(leadKeys.list("org-a", { score_band: "HIGH" })[1]).toBe("org-a")
   expect(leadKeys.detail("org-b", "lead-1")[1]).toBe("org-b")
+  expect(leadKeys.jobs("org-c")).toEqual(["leads", "org-c", "job"])
   expect(leadKeys.job("org-c", "job-1")[1]).toBe("org-c")
 })
 
@@ -257,7 +258,8 @@ it("sends expected versions and idempotency keys for analysis and review", async
 
   await analyzeLeadCandidate("lead-1", { evidence_ids: ["evidence-1"], expected_version: 2, idempotency_key: "analyze-1" })
   await createLeadReview({ action: "CONFIRM", candidate_id: "lead-1", expected_version: 2, idempotency_key: "review-1", reason: "Evidence is sufficient." })
-  await getJob("job-1")
+  const controller = new AbortController()
+  await getJob("job-1", { signal: controller.signal })
 
   expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/lead-candidates/lead-1/analyze", expect.objectContaining({
     method: "POST", body: JSON.stringify({ evidence_ids: ["evidence-1"], expected_version: 2, idempotency_key: "analyze-1" }),
@@ -265,5 +267,7 @@ it("sends expected versions and idempotency keys for analysis and review", async
   expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/lead-reviews", expect.objectContaining({
     method: "POST", body: JSON.stringify({ action: "CONFIRM", candidate_id: "lead-1", expected_version: 2, idempotency_key: "review-1", reason: "Evidence is sufficient." }),
   }))
-  expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/v1/jobs/job-1", expect.anything())
+  expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/v1/jobs/job-1", expect.objectContaining({
+    signal: controller.signal,
+  }))
 })

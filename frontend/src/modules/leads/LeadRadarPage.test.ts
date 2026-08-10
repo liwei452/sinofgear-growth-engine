@@ -123,6 +123,9 @@ it("separates value, evidence sufficiency, and inferred company identity", async
 
   await userEvent.click(screen.getByRole("button", { name: "查看依据" }))
   expect(view.emitted("select-candidate")).toEqual([["lead-high"]])
+  expect(await screen.findByRole("heading", { name: "机会依据" })).toHaveFocus()
+  await userEvent.click(screen.getByRole("button", { name: "关闭机会依据" }))
+  expect(screen.getByRole("button", { name: "查看依据" })).toHaveFocus()
 })
 
 it("keeps adequate evidence separate from a low value score", async () => {

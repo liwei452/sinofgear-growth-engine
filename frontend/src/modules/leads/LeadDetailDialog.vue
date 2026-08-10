@@ -1,0 +1,480 @@
+<script setup lang="ts">
+import { useQuery, useQueryClient } from "@tanstack/vue-query"
+import { computed, onBeforeUnmount, ref, watch } from "vue"
+
+import { ApiError } from "../../api/client"
+import OperationModal from "../../shared/components/OperationModal.vue"
+import { currentUserQueryOptions } from "../auth/auth"
+import {
+  analyzeLeadCandidate,
+  createLeadReview,
+  getJob,
+  getLeadCandidate,
+  isActiveImportJob,
+  leadKeys,
+  safePublicHttpUrl,
+  type LeadReviewCreate,
+} from "./api"
+
+type ReviewAction = "CONFIRM" | "CORRECT" | "DISMISS" | "REOPEN" | "REQUEST_MORE_EVIDENCE"
+type CompanyCorrection = { company_name?: string; company_domain?: string; country_hint?: string }
+
+const props = defineProps<{ organizationId: string; candidateId: string | null; open: boolean }>()
+const emit = defineEmits<{ close: [] }>()
+const queryClient = useQueryClient()
+const currentUserQuery = useQuery(currentUserQueryOptions())
+
+const selectedAction = ref<ReviewAction | null>(null)
+const reason = ref("")
+const correctedName = ref("")
+const correctedDomain = ref("")
+const correctedCountry = ref("")
+const correctedFields = ref<Set<keyof CompanyCorrection>>(new Set())
+const message = ref("")
+const alert = ref("")
+const conflict = ref(false)
+const submitting = ref(false)
+const analyzing = ref(false)
+const activeJobId = ref<string | null>(null)
+let pollTimer: ReturnType<typeof setTimeout> | undefined
+let session = 0
+let reviewKeySignature = ""
+let reviewKey = ""
+let analyzeKeySignature = ""
+let analyzeKey = ""
+
+const permissions = computed(() => currentUserQuery.data.value?.membership.permissions ?? [])
+const canAnalyze = computed(() => permissions.value.includes("leads.analyze"))
+const canReview = computed(() => permissions.value.includes("leads.review"))
+const canHandoff = computed(() => permissions.value.includes("leads.handoff"))
+const canRead = computed(() => permissions.value.includes("leads.read"))
+
+const detailQuery = useQuery({
+  queryKey: computed(() => leadKeys.detail(props.organizationId, props.candidateId ?? "")),
+  queryFn: ({ signal }) => getLeadCandidate(props.candidateId!, { signal }),
+  enabled: computed(() => props.open && Boolean(props.organizationId && props.candidateId) && canRead.value),
+  retry: false,
+})
+const detail = computed(() => detailQuery.data.value)
+const permittedActions = computed(() => new Set(detail.value?.permitted_actions ?? []))
+const reviewActions = computed(() => ([
+  { action: "CONFIRM" as const, label: "确认机会" },
+  { action: "CORRECT" as const, label: "纠正信息" },
+  { action: "DISMISS" as const, label: "暂不跟进" },
+  { action: "REOPEN" as const, label: "重新打开" },
+  { action: "REQUEST_MORE_EVIDENCE" as const, label: "请求更多证据" },
+].filter((item) => canReview.value && permittedActions.value.has(item.action))))
+const showHandoffNotice = computed(() => canHandoff.value
+  && ["REVIEWED", "READY_FOR_HANDOFF"].includes(detail.value?.status ?? ""))
+
+function stringField(record: unknown, field: string): string {
+  if (!record || typeof record !== "object") return ""
+  const value = (record as Record<string, unknown>)[field]
+  return typeof value === "string" ? value : ""
+}
+
+const companyName = computed(() => stringField(detail.value?.company, "name"))
+const companyDomain = computed(() => stringField(detail.value?.company, "domain"))
+const countryHint = computed(() => stringField(detail.value?.company, "country_hint"))
+const insight = computed(() => detail.value?.latest_insight ?? null)
+const evidenceSufficient = computed(() => {
+  const gates = insight.value?.gates
+  if (!gates || typeof gates !== "object") return null
+  const values = Object.values(gates)
+  if (!values.length || values.some((value) => typeof value !== "boolean")) return null
+  return values.every(Boolean)
+})
+const reviewCorrection = computed<CompanyCorrection>(() => {
+  const correction: CompanyCorrection = {}
+  if (correctedFields.value.has("company_name")) correction.company_name = correctedName.value
+  if (correctedFields.value.has("company_domain")) correction.company_domain = correctedDomain.value
+  if (correctedFields.value.has("country_hint")) correction.country_hint = correctedCountry.value
+  return correction
+})
+const canSubmitReview = computed(() => Boolean(selectedAction.value && reason.value.trim())
+  && (selectedAction.value !== "CORRECT" || Object.keys(reviewCorrection.value).length > 0)
+  && !submitting.value)
+
+function freshKey(prefix: string): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID()
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function keyForReview(version: number, correction: CompanyCorrection | undefined): string {
+  const signature = JSON.stringify([
+    props.organizationId, props.candidateId, selectedAction.value, version, reason.value, correction ?? null,
+  ])
+  if (signature !== reviewKeySignature) {
+    reviewKeySignature = signature
+    reviewKey = freshKey("lead-review")
+  }
+  return reviewKey
+}
+
+function keyForAnalysis(version: number, evidenceIds: readonly string[]): string {
+  const signature = JSON.stringify([props.organizationId, props.candidateId, version, evidenceIds])
+  if (signature !== analyzeKeySignature) {
+    analyzeKeySignature = signature
+    analyzeKey = freshKey("lead-analysis")
+  }
+  return analyzeKey
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.userMessage : fallback
+}
+
+function clearPolling(): void {
+  if (pollTimer) clearTimeout(pollTimer)
+  pollTimer = undefined
+}
+
+function resetTransient(): void {
+  session += 1
+  clearPolling()
+  selectedAction.value = null
+  reason.value = ""
+  correctedName.value = ""
+  correctedDomain.value = ""
+  correctedCountry.value = ""
+  correctedFields.value = new Set()
+  message.value = ""
+  alert.value = ""
+  conflict.value = false
+  submitting.value = false
+  analyzing.value = false
+  activeJobId.value = null
+  reviewKeySignature = ""
+  reviewKey = ""
+  analyzeKeySignature = ""
+  analyzeKey = ""
+}
+
+function isCurrent(token: number, organizationId: string, candidateId: string): boolean {
+  return props.open && session === token && props.organizationId === organizationId && props.candidateId === candidateId
+}
+
+async function invalidateMutationScopes(organizationId: string, candidateId: string): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: [...leadKeys.all(organizationId), "list"] }),
+    queryClient.invalidateQueries({ queryKey: leadKeys.detail(organizationId, candidateId) }),
+    queryClient.invalidateQueries({ queryKey: leadKeys.jobs(organizationId) }),
+  ])
+}
+
+function closeDialog(): void {
+  resetTransient()
+  emit("close")
+}
+
+function startReview(action: ReviewAction): void {
+  selectedAction.value = action
+  reason.value = ""
+  correctedName.value = companyName.value
+  correctedDomain.value = companyDomain.value
+  correctedCountry.value = countryHint.value
+  correctedFields.value = new Set()
+  message.value = ""
+  alert.value = ""
+  conflict.value = false
+}
+
+function cancelReview(): void {
+  selectedAction.value = null
+  reason.value = ""
+  conflict.value = false
+  alert.value = ""
+}
+
+function markCorrected(field: keyof CompanyCorrection): void {
+  correctedFields.value = new Set([...correctedFields.value, field])
+}
+
+function confirmationLabel(action: ReviewAction): string {
+  return ({
+    CONFIRM: "确认机会",
+    CORRECT: "确认纠正",
+    DISMISS: "确认暂不跟进",
+    REOPEN: "确认重新打开",
+    REQUEST_MORE_EVIDENCE: "确认请求更多证据",
+  })[action]
+}
+
+async function refetchLatestAfterConflict(token: number, organizationId: string, candidateId: string): Promise<void> {
+  const refreshed = await detailQuery.refetch()
+  if (!isCurrent(token, organizationId, candidateId)) return
+  if (refreshed.error) alert.value = "最新机会版本没有加载成功，请重新加载后再提交。"
+}
+
+async function submitReview(): Promise<void> {
+  const current = detail.value
+  const action = selectedAction.value
+  const candidateId = props.candidateId
+  const organizationId = props.organizationId
+  if (!current || !action || !candidateId || !canSubmitReview.value || !canReview.value) return
+  const token = session
+  const correction = action === "CORRECT" ? reviewCorrection.value : undefined
+  const payload: LeadReviewCreate = {
+    action,
+    candidate_id: candidateId,
+    expected_version: current.version,
+    idempotency_key: keyForReview(current.version, correction),
+    reason: reason.value,
+    ...(correction ? { correction } : {}),
+  }
+  submitting.value = true
+  message.value = ""
+  alert.value = ""
+  try {
+    await createLeadReview(payload)
+    if (!isCurrent(token, organizationId, candidateId)) return
+    conflict.value = false
+    selectedAction.value = null
+    message.value = "处理结果已保存"
+    await invalidateMutationScopes(organizationId, candidateId)
+  } catch (error) {
+    if (!isCurrent(token, organizationId, candidateId)) return
+    if (error instanceof ApiError && error.status === 409) {
+      conflict.value = true
+      message.value = "另一位同事刚刚保存了处理结果"
+      await refetchLatestAfterConflict(token, organizationId, candidateId)
+    } else {
+      alert.value = errorMessage(error, "处理结果没有保存，请检查后重试。")
+    }
+  } finally {
+    if (isCurrent(token, organizationId, candidateId)) submitting.value = false
+  }
+}
+
+async function pollAnalysis(jobId: string, token: number, organizationId: string, candidateId: string): Promise<void> {
+  if (!isCurrent(token, organizationId, candidateId)) return
+  try {
+    const job = await queryClient.fetchQuery({
+      queryKey: leadKeys.job(organizationId, jobId),
+      queryFn: ({ signal }) => getJob(jobId, { signal }),
+      retry: false,
+      staleTime: 0,
+    })
+    if (!isCurrent(token, organizationId, candidateId)) return
+    if (isActiveImportJob(job.status)) {
+      message.value = job.status === "RUNNING" ? "正在分析公开证据…" : "分析任务正在排队…"
+      pollTimer = setTimeout(() => { void pollAnalysis(jobId, token, organizationId, candidateId) }, 1_000)
+      return
+    }
+    analyzing.value = false
+    if (job.status === "SUCCEEDED") {
+      message.value = "分析已完成"
+      await invalidateMutationScopes(organizationId, candidateId)
+    } else {
+      alert.value = "分析没有完成，请检查公开证据后重试。"
+    }
+  } catch (error) {
+    if (!isCurrent(token, organizationId, candidateId)) return
+    analyzing.value = false
+    alert.value = errorMessage(error, "分析状态没有加载成功，请稍后重试。")
+  }
+}
+
+async function startAnalysis(): Promise<void> {
+  const current = detail.value
+  const candidateId = props.candidateId
+  const organizationId = props.organizationId
+  if (!current || !candidateId || !canAnalyze.value || !permittedActions.value.has("ANALYZE") || analyzing.value) return
+  const evidenceIds = current.evidence.map((item) => item.id)
+  if (!evidenceIds.length) {
+    alert.value = "当前没有可供分析的公开证据。"
+    return
+  }
+  const token = session
+  analyzing.value = true
+  alert.value = ""
+  message.value = "正在提交分析…"
+  try {
+    const accepted = await analyzeLeadCandidate(candidateId, {
+      evidence_ids: evidenceIds,
+      expected_version: current.version,
+      idempotency_key: keyForAnalysis(current.version, evidenceIds),
+    })
+    if (!isCurrent(token, organizationId, candidateId)) return
+    conflict.value = false
+    activeJobId.value = accepted.job_id
+    await invalidateMutationScopes(organizationId, candidateId)
+    if (!isCurrent(token, organizationId, candidateId)) return
+    await pollAnalysis(accepted.job_id, token, organizationId, candidateId)
+  } catch (error) {
+    if (!isCurrent(token, organizationId, candidateId)) return
+    analyzing.value = false
+    if (error instanceof ApiError && error.status === 409) {
+      conflict.value = true
+      message.value = "另一位同事刚刚保存了处理结果"
+      await refetchLatestAfterConflict(token, organizationId, candidateId)
+    } else {
+      alert.value = errorMessage(error, "分析没有开始，请检查后重试。")
+    }
+  }
+}
+
+function explanationText(value: unknown): string {
+  if (typeof value === "string" && value.trim()) return value.trim()
+  if (value && typeof value === "object") {
+    for (const key of ["summary", "reason", "text"]) {
+      const text = (value as Record<string, unknown>)[key]
+      if (typeof text === "string" && text.trim()) return text.trim()
+    }
+  }
+  return "AI 尚未给出可展示的判断说明。"
+}
+
+function valueLabel(band: string | undefined): string {
+  return ({ HIGH: "高价值机会", WATCH: "值得关注", OBSERVE: "继续观察", LOW: "当前价值较低" } as Record<string, string>)[band ?? ""] ?? "等待判断"
+}
+
+function actionLabel(action: string): string {
+  return ({
+    CONFIRM: "确认机会", CORRECT: "纠正信息", DISMISS: "暂不跟进", REOPEN: "重新打开",
+    REQUEST_MORE_EVIDENCE: "请求更多证据",
+  } as Record<string, string>)[action] ?? action
+}
+
+function auditJson(value: unknown): string {
+  if (value === null || value === undefined) return "无"
+  try { return JSON.stringify(value, null, 2) } catch { return "无法显示" }
+}
+
+watch(() => [props.open, props.organizationId, props.candidateId] as const, (current, previous) => {
+  if (previous?.[1] && previous[2]) {
+    void queryClient.cancelQueries({ queryKey: leadKeys.detail(previous[1], previous[2]), exact: true })
+    void queryClient.cancelQueries({ queryKey: leadKeys.jobs(previous[1]) })
+  }
+  if (!previous || current.some((value, index) => value !== previous[index])) resetTransient()
+}, { immediate: true, flush: "sync" })
+
+onBeforeUnmount(() => {
+  const organizationId = props.organizationId
+  const candidateId = props.candidateId
+  resetTransient()
+  if (organizationId && candidateId) void queryClient.cancelQueries({ queryKey: leadKeys.detail(organizationId, candidateId), exact: true })
+  if (organizationId) void queryClient.cancelQueries({ queryKey: leadKeys.jobs(organizationId) })
+})
+</script>
+
+<template>
+  <OperationModal v-if="open" title="机会依据" title-id="lead-detail-title" @close="closeDialog">
+    <article class="lead-detail">
+      <header class="dialog-header">
+        <p class="eyebrow">证据优先</p>
+        <button type="button" aria-label="关闭机会依据" @click="closeDialog">×</button>
+      </header>
+      <p class="live-message" role="status" aria-live="polite">{{ message }}</p>
+      <p v-if="alert" class="form-alert" role="alert">{{ alert }}</p>
+
+      <p v-if="detailQuery.isPending.value" role="status" aria-live="polite">正在加载机会依据…</p>
+      <section v-else-if="detailQuery.isError.value" class="state-panel" role="alert">
+        <h3>机会依据没有加载成功</h3>
+        <button type="button" @click="detailQuery.refetch()">重新加载机会依据</button>
+      </section>
+      <template v-else-if="detail">
+        <section class="detail-section summary-section" aria-labelledby="opportunity-summary-title">
+          <h3 id="opportunity-summary-title">机会摘要</h3>
+          <dl class="identity-grid">
+            <div><dt>公司名称</dt><dd>{{ companyName || "未知" }} <span class="pending-tag">待确认</span></dd></div>
+            <div><dt>公开域名</dt><dd>{{ companyDomain || "未知" }} <span class="pending-tag">待确认</span></dd></div>
+            <div><dt>国家或地区</dt><dd>{{ countryHint || "未知" }} <span class="pending-tag">待确认</span></dd></div>
+          </dl>
+          <div class="decision-signals">
+            <div><span>机会价值</span><strong>{{ valueLabel(insight?.score_band) }}</strong><small v-if="insight">评分 {{ insight.score }}</small></div>
+            <div><span>证据充分度</span><strong>{{ evidenceSufficient === true ? "证据已达到判断门槛" : evidenceSufficient === false ? "证据还不够" : "等待分析证据" }}</strong></div>
+          </div>
+        </section>
+
+        <section class="detail-section" aria-labelledby="original-evidence-title">
+          <h3 id="original-evidence-title">原始证据</h3>
+          <p v-if="!detail.evidence.length">还没有可展示的公开证据。</p>
+          <article v-for="item in detail.evidence" :key="item.id" class="evidence-card">
+            <div class="evidence-meta"><strong>{{ item.platform }}</strong><span>{{ item.language || "语言未知" }}</span></div>
+            <blockquote>{{ item.original_text }}</blockquote>
+            <div v-if="item.translated_text" class="translation"><h4>翻译（辅助理解）</h4><p>{{ item.translated_text }}</p></div>
+            <a v-if="safePublicHttpUrl(item.source_url)" :href="safePublicHttpUrl(item.source_url)!" target="_blank" rel="noopener noreferrer">打开公开来源</a>
+            <span v-else class="unsafe-link">公开来源链接不可用</span>
+          </article>
+        </section>
+
+        <section class="detail-section" aria-labelledby="ai-explanation-title">
+          <h3 id="ai-explanation-title">AI 为什么这样判断</h3>
+          <p>{{ explanationText(insight?.explanation) }}</p>
+        </section>
+
+        <section class="detail-section" aria-labelledby="match-title">
+          <h3 id="match-title">需求与能力匹配</h3>
+          <p v-if="!detail.requirements.length">还没有可核对的需求与能力匹配。</p>
+          <article v-for="requirement in detail.requirements" :key="requirement.id" class="match-card">
+            <div><span>推断需求</span><strong>{{ requirement.requirement_label }}</strong> <em class="pending-tag">待确认</em></div>
+            <p v-if="requirement.extracted_value">提取值：{{ requirement.extracted_value }} {{ requirement.unit }}</p>
+            <div><span>能力匹配</span><strong>{{ requirement.capability_label || "尚未匹配" }}</strong> <em class="pending-tag">待确认</em></div>
+          </article>
+        </section>
+
+        <section class="detail-section uncertainty-section" aria-labelledby="uncertainty-title">
+          <h3 id="uncertainty-title">不确定项</h3>
+          <ul>
+            <li>公司名称和公开域名来自公开信息推断，待人工确认。</li>
+            <li>需求与能力匹配由 AI 提取，不能替代原始证据。</li>
+            <li v-if="evidenceSufficient === false">至少一项证据门槛尚未满足。</li>
+          </ul>
+        </section>
+
+        <section class="detail-section decision-section" aria-labelledby="human-decision-title">
+          <h3 id="human-decision-title">人工决定</h3>
+          <div v-if="!selectedAction" class="action-grid">
+            <button v-if="canAnalyze && permittedActions.has('ANALYZE')" type="button" :disabled="analyzing" @click="startAnalysis">{{ analyzing ? "正在分析…" : conflict ? "按最新版本重新提交" : "重新分析" }}</button>
+            <button v-for="item in reviewActions" :key="item.action" type="button" @click="startReview(item.action)">{{ item.label }}</button>
+            <template v-if="showHandoffNotice">
+              <button type="button" aria-label="交给 CRM" disabled>交给 CRM（尚未接入）</button>
+              <p class="handoff-note">CRM 交接尚未接入，当前不会发送任何客户数据。</p>
+            </template>
+          </div>
+          <form v-else class="review-form" @submit.prevent="submitReview">
+            <fieldset v-if="selectedAction === 'CORRECT'">
+              <legend>纠正已推断的公司信息</legend>
+              <label>公司名称<input v-model="correctedName" autocomplete="organization" @input="markCorrected('company_name')"></label>
+              <label>公开域名<input v-model="correctedDomain" inputmode="url" @input="markCorrected('company_domain')"></label>
+              <label>国家或地区<input v-model="correctedCountry" maxlength="255" @input="markCorrected('country_hint')"></label>
+              <p>这里只提交后端支持的公司名称、公开域名和国家或地区字段。</p>
+            </fieldset>
+            <label>处理原因<textarea v-model="reason" rows="4" maxlength="2000" required></textarea></label>
+            <div class="form-actions">
+              <button type="button" :disabled="submitting" @click="cancelReview">取消</button>
+              <button v-if="conflict" class="primary-action" type="submit" :disabled="!canSubmitReview">按最新版本重新提交</button>
+              <button v-else class="primary-action" type="submit" :disabled="!canSubmitReview">{{ confirmationLabel(selectedAction) }}</button>
+            </div>
+          </form>
+        </section>
+
+        <details class="detail-section audit-section">
+          <summary>高级审计信息</summary>
+          <section v-if="insight" aria-labelledby="score-dimensions-title">
+            <h4 id="score-dimensions-title">评分维度</h4>
+            <dl class="audit-grid"><div v-for="(value, name) in insight.dimensions" :key="name"><dt>{{ name }}</dt><dd>{{ value }}</dd></div></dl>
+            <h4>AI 版本</h4>
+            <p>洞察版本 {{ insight.version }}</p>
+            <pre>{{ auditJson(insight.ai_audit) }}</pre>
+          </section>
+          <section aria-labelledby="review-history-title">
+            <h4 id="review-history-title">处理历史</h4>
+            <p v-if="!detail.review_history.length">还没有人工处理记录。</p>
+            <article v-for="review in detail.review_history" :key="review.id" class="history-card">
+              <strong>{{ actionLabel(review.action) }}</strong>
+              <p>{{ review.reason }}</p>
+              <pre v-if="review.correction !== null">{{ auditJson(review.correction) }}</pre>
+              <small>{{ review.created_at }}</small>
+            </article>
+          </section>
+        </details>
+      </template>
+    </article>
+  </OperationModal>
+</template>
+
+<style scoped>
+.lead-detail{display:grid;gap:1rem}.dialog-header,.evidence-meta,.form-actions{display:flex;align-items:center;justify-content:space-between;gap:1rem}.dialog-header .eyebrow,.live-message{margin:0}.live-message:empty{display:none}.detail-section{padding:1rem;border:1px solid var(--sg-line,#d8dee8);border-radius:.8rem;background:#fff}.detail-section h3{margin-top:0}.identity-grid,.audit-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.7rem}.identity-grid div,.audit-grid div{padding:.65rem;border-radius:.6rem;background:var(--sg-canvas,#f6f8fa)}dt,.detail-section span{color:var(--sg-muted,#536273)}dd{margin:.25rem 0 0;font-weight:700}.pending-tag{display:inline-flex;padding:.15rem .45rem;border-radius:999px;background:#fff4d6;color:#805400;font-size:.75rem;font-style:normal;font-weight:800}.decision-signals{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:1rem}.decision-signals>div{display:grid;gap:.25rem;padding:.8rem;border-left:4px solid var(--sg-brand,#005ba8);background:var(--sg-canvas,#f6f8fa)}.decision-signals>div+div{border-left-color:#c17d16}.evidence-card,.match-card,.history-card{display:grid;gap:.6rem;padding:.85rem;border:1px solid var(--sg-line,#d8dee8);border-radius:.7rem}.evidence-card+.evidence-card,.match-card+.match-card,.history-card+.history-card{margin-top:.75rem}blockquote{margin:.2rem 0;padding:.7rem;border-left:4px solid var(--sg-brand,#005ba8);background:#f5f9fd;white-space:pre-wrap}.translation h4,.translation p{margin:.25rem 0}.unsafe-link{font-weight:700}.uncertainty-section{background:#fffaf0}.action-grid,.form-actions{display:flex;flex-wrap:wrap;gap:.7rem}.handoff-note{flex-basis:100%;margin:0;color:var(--sg-muted,#536273)}.review-form,.review-form fieldset{display:grid;gap:.8rem}.review-form label{display:grid;gap:.35rem}.review-form input,.review-form textarea{box-sizing:border-box;width:100%}.form-actions{justify-content:flex-end}.primary-action{border-color:var(--sg-brand,#005ba8);background:var(--sg-brand,#005ba8);color:#fff}.form-alert{padding:.75rem;border-radius:.6rem;background:#fff0ed;color:#79291d}.audit-section summary{cursor:pointer;font-weight:800}.audit-section section{margin-top:1rem}.audit-section pre{max-width:100%;overflow:auto;padding:.7rem;border-radius:.5rem;background:#16202b;color:#f5f7fa;white-space:pre-wrap;word-break:break-word}.state-panel{text-align:center}@media(max-width:600px){.identity-grid,.decision-signals,.audit-grid{grid-template-columns:1fr}.dialog-header{align-items:flex-start}.action-grid,.form-actions{display:grid;grid-template-columns:1fr}.action-grid button,.form-actions button{width:100%}}
+</style>

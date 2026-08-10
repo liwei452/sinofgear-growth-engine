@@ -13,6 +13,7 @@ import {
   type LeadCandidateList,
   type LeadFilters,
 } from "./api"
+import LeadDetailDialog from "./LeadDetailDialog.vue"
 import SourceImportDialog from "./SourceImportDialog.vue"
 
 const emit = defineEmits<{ "select-candidate": [candidateId: string] }>()
@@ -24,6 +25,7 @@ const platform = ref("")
 const country = ref("")
 const pageUrl = ref<string | null>(null)
 const importOpen = ref(false)
+const selectedCandidateId = ref<string | null>(null)
 const details = shallowRef<Record<string, LeadCandidateDetail>>({})
 const detailStates = shallowRef<Record<string, "loading" | "success" | "error">>({})
 let detailLoad = 0
@@ -231,6 +233,11 @@ async function importCompleted(): Promise<void> {
   pageUrl.value = null
   await queryClient.invalidateQueries({ queryKey: leadKeys.all(organizationId.value) })
 }
+
+function selectCandidate(candidateId: string): void {
+  selectedCandidateId.value = candidateId
+  emit("select-candidate", candidateId)
+}
 </script>
 
 <template>
@@ -343,7 +350,7 @@ async function importCompleted(): Promise<void> {
         <p class="explanation">{{ explanation(candidate.id) }}</p>
         <div class="card-footer">
           <span>{{ candidate.country_hint || "地区待确认" }}</span>
-          <button type="button" @click="emit('select-candidate', candidate.id)">查看依据</button>
+          <button type="button" @click="selectCandidate(candidate.id)">查看依据</button>
         </div>
       </article>
     </section>
@@ -358,6 +365,12 @@ async function importCompleted(): Promise<void> {
       :open="importOpen"
       @close="importOpen = false"
       @completed="importCompleted"
+    />
+    <LeadDetailDialog
+      :organization-id="organizationId"
+      :candidate-id="selectedCandidateId"
+      :open="Boolean(selectedCandidateId)"
+      @close="selectedCandidateId = null"
     />
   </main>
 </template>

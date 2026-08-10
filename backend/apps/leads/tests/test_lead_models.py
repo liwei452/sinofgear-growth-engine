@@ -113,14 +113,25 @@ def test_b1_state_service_rejects_handoff_and_skipped_transitions(candidate, for
 
 @pytest.mark.django_db
 def test_new_analysis_appends_insight_and_preserves_previous(
-    candidate, evidence, ai_run, ai_run_factory, insight_payload, analysis_snapshot
+    candidate, evidence, ai_run_factory, insight_payload, analysis_snapshot
 ):
     transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
     first_payload = insight_payload(intent=19, company_fit=18, specificity=15, capability_fit=10, recency=10)
     second_payload = insight_payload(intent=30, company_fit=22, specificity=18, capability_fit=10, recency=5)
 
     first = record_insight(
-        candidate=candidate, ai_run=ai_run, evidence=[evidence], payload=first_payload
+        candidate=candidate,
+        ai_run=ai_run_factory(
+            candidate.organization,
+            input_snapshot=analysis_snapshot(
+                candidate=candidate,
+                evidence=[evidence],
+                ontology_snapshot=first_payload["ontology_snapshot"],
+            ),
+            output_payload=first_payload,
+        ),
+        evidence=[evidence],
+        payload=first_payload,
     )
     second = record_insight(
         candidate=candidate,
@@ -131,6 +142,7 @@ def test_new_analysis_appends_insight_and_preserves_previous(
                 evidence=[evidence],
                 ontology_snapshot=second_payload["ontology_snapshot"],
             ),
+            output_payload=second_payload,
         ),
         evidence=[evidence],
         payload=second_payload,
@@ -190,14 +202,29 @@ def test_reviewed_candidate_rejects_unreviewed_insight_append(
 
 @pytest.mark.django_db
 def test_insight_preserves_scores_explanation_confidence_and_ontology(
-    candidate, evidence, ai_run, insight_payload
+    candidate, evidence, ai_run_factory, insight_payload, analysis_snapshot
 ):
     transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    payload = insight_payload(
+        intent=30,
+        company_fit=25,
+        specificity=20,
+        capability_fit=15,
+        recency=10,
+    )
     insight = record_insight(
         candidate=candidate,
-        ai_run=ai_run,
+        ai_run=ai_run_factory(
+            candidate.organization,
+            input_snapshot=analysis_snapshot(
+                candidate=candidate,
+                evidence=[evidence],
+                ontology_snapshot=payload["ontology_snapshot"],
+            ),
+            output_payload=payload,
+        ),
         evidence=[evidence],
-        payload=insight_payload(intent=30, company_fit=25, specificity=20, capability_fit=15, recency=10),
+        payload=payload,
     )
 
     assert (
@@ -330,6 +357,7 @@ def test_latest_insight_cannot_be_rewound(
                 evidence=[evidence],
                 ontology_snapshot=second_payload["ontology_snapshot"],
             ),
+            output_payload=second_payload,
         ),
         evidence=[evidence],
         payload=second_payload,
@@ -391,23 +419,38 @@ def test_candidate_direct_save_detects_interleaved_version_change(candidate, mon
         {"score": 99},
         {"score_band": LeadInsight.ScoreBand.LOW},
         {"traceable_source": False, "high_value_eligible": True},
+        {"high_value_eligible": False},
     ],
 )
 def test_database_rejects_inconsistent_immutable_score_rows(
-    candidate, evidence, ai_run, insight_payload, invalid_values
+    candidate,
+    evidence,
+    ai_run_factory,
+    insight_payload,
+    analysis_snapshot,
+    invalid_values,
 ):
     transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    payload = insight_payload(
+        intent=30,
+        company_fit=25,
+        specificity=20,
+        capability_fit=15,
+        recency=10,
+    )
     insight = record_insight(
         candidate=candidate,
-        ai_run=ai_run,
-        evidence=[evidence],
-        payload=insight_payload(
-            intent=30,
-            company_fit=25,
-            specificity=20,
-            capability_fit=15,
-            recency=10,
+        ai_run=ai_run_factory(
+            candidate.organization,
+            input_snapshot=analysis_snapshot(
+                candidate=candidate,
+                evidence=[evidence],
+                ontology_snapshot=payload["ontology_snapshot"],
+            ),
+            output_payload=payload,
         ),
+        evidence=[evidence],
+        payload=payload,
     )
 
     with pytest.raises(IntegrityError), transaction.atomic():

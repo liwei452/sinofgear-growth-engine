@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Iterable, Sequence
@@ -88,6 +91,127 @@ class OntologySnapshot:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+FROZEN_ONTOLOGY_SCHEMA = "ONTOLOGY_SNAPSHOT_V1"
+
+
+def _snapshot_json_value(value):
+    if isinstance(value, dict):
+        return {key: _snapshot_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_snapshot_json_value(item) for item in value]
+    if isinstance(value, (UUID, datetime)):
+        return str(value)
+    return value
+
+
+def _ontology_digest(snapshot_without_digest: dict[str, object]) -> str:
+    encoded = json.dumps(
+        snapshot_without_digest,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _freeze_ontology_snapshot(snapshot: OntologySnapshot) -> dict[str, object]:
+    """Serialize a graph-lock-protected snapshot with a deterministic integrity digest."""
+    if not isinstance(snapshot, OntologySnapshot):
+        raise TypeError("Only a canonical OntologySnapshot can be frozen.")
+    frozen = {
+        "schema": FROZEN_ONTOLOGY_SCHEMA,
+        **_snapshot_json_value(snapshot.to_dict()),
+    }
+    frozen["integrity_sha256"] = _ontology_digest(frozen)
+    return frozen
+
+
+def validate_frozen_ontology_snapshot(
+    snapshot, *, organization_id
+) -> dict[str, object]:
+    """Validate immutable snapshot structure and digest without consulting current graph rows."""
+    if not isinstance(snapshot, dict):
+        raise ValidationError("Ontology snapshot must be an object.")
+    try:
+        frozen = json.loads(json.dumps(snapshot))
+    except (TypeError, ValueError) as error:
+        raise ValidationError("Ontology snapshot must be JSON serializable.") from error
+    supplied_digest = frozen.pop("integrity_sha256", None)
+    if (
+        not isinstance(supplied_digest, str)
+        or len(supplied_digest) != 64
+        or not hmac.compare_digest(supplied_digest, _ontology_digest(frozen))
+    ):
+        raise ValidationError("Ontology snapshot integrity digest is invalid.")
+    if frozen.get("schema") != FROZEN_ONTOLOGY_SCHEMA:
+        raise ValidationError("Ontology snapshot schema is unsupported.")
+    expected_root_fields = {
+        "schema",
+        "organization_id",
+        "concept_versions",
+        "relation_versions",
+        "evidence_references",
+        "generated_at",
+    }
+    if set(frozen) != expected_root_fields:
+        raise ValidationError("Ontology snapshot fields do not match its schema.")
+    if frozen.get("organization_id") != str(organization_id):
+        raise ValidationError("Ontology snapshot belongs to another organization.")
+    if not isinstance(frozen.get("generated_at"), str) or not frozen["generated_at"]:
+        raise ValidationError("Ontology snapshot generated_at is required.")
+    collection_schemas = {
+        "concept_versions": ("concept_id", {
+            "concept_id",
+            "code",
+            "concept_type",
+            "label_zh",
+            "label_en",
+            "version",
+            "status",
+        }),
+        "relation_versions": ("relation_id", {
+            "relation_id",
+            "subject_concept_id",
+            "predicate",
+            "object_concept_id",
+            "version",
+            "status",
+        }),
+        "evidence_references": ("evidence_id", {
+            "evidence_id",
+            "evidence_type",
+            "source_object_type",
+            "source_object_id",
+            "source_url",
+            "excerpt",
+            "captured_at",
+            "version",
+            "status",
+        }),
+    }
+    for collection, (identity_field, expected_fields) in collection_schemas.items():
+        rows = frozen.get(collection)
+        if not isinstance(rows, list):
+            raise ValidationError(f"Ontology snapshot {collection} must be a list.")
+        identities = []
+        for row in rows:
+            if (
+                not isinstance(row, dict)
+                or set(row) != expected_fields
+                or not row.get(identity_field)
+                or row.get("status") != "APPROVED"
+                or not isinstance(row.get("version"), int)
+                or isinstance(row.get("version"), bool)
+                or row["version"] < 1
+            ):
+                raise ValidationError(
+                    f"Ontology snapshot {collection} contains an invalid version row."
+                )
+            identities.append(str(row[identity_field]))
+        if len(identities) != len(set(identities)):
+            raise ValidationError(f"Ontology snapshot {collection} repeats an identity.")
+    return {**frozen, "integrity_sha256": supplied_digest}
 
 
 def _visible_filter(organization: Organization) -> Q:
@@ -410,3 +534,18 @@ def build_snapshot(
     *, organization: Organization, concept_ids: Sequence[UUID], max_depth: int = 2
 ) -> OntologySnapshot:
     return OntologyContextService(organization).build_snapshot(concept_ids=concept_ids, max_depth=max_depth)
+
+
+@transaction.atomic
+def build_frozen_snapshot(
+    *, organization: Organization, concept_ids: Sequence[UUID], max_depth: int = 2
+) -> dict[str, object]:
+    """Capture and freeze an ontology input while holding the canonical graph lock."""
+    from .graph import acquire_knowledge_graph_lock
+
+    acquire_knowledge_graph_lock()
+    snapshot = OntologyContextService(organization).build_snapshot(
+        concept_ids=concept_ids,
+        max_depth=max_depth,
+    )
+    return _freeze_ontology_snapshot(snapshot)

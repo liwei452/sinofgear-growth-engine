@@ -74,6 +74,104 @@ def evidence_fingerprint(*, original_text: str, source_url: str, platform: str) 
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+SOURCE_EVIDENCE_SNAPSHOT_SCHEMA = "SOURCE_EVIDENCE_SNAPSHOT_V1"
+
+
+def _snapshot_scalar(value):
+    return None if value is None else str(value)
+
+
+def canonical_source_evidence_snapshot(
+    evidence: SourceEvidence, *, organization
+) -> dict[str, object]:
+    """Build the complete public-evidence audit input from trusted persisted rows."""
+    evidence_id = getattr(evidence, "pk", evidence)
+    persisted = (
+        SourceEvidence.objects.select_related(
+            "source_signal__source_content",
+            "source_signal__source_content__monitoring_target",
+            "source_signal__monitoring_target",
+        )
+        .get(pk=evidence_id, organization=organization)
+    )
+    signal = persisted.source_signal
+    content = signal.source_content
+    target = signal.monitoring_target or (
+        content.monitoring_target if content is not None else None
+    )
+    return {
+        "schema": SOURCE_EVIDENCE_SNAPSHOT_SCHEMA,
+        "id": str(persisted.id),
+        "organization_id": str(persisted.organization_id),
+        "source_signal_id": str(persisted.source_signal_id),
+        "source_content_id": str(signal.source_content_id) if signal.source_content_id else None,
+        "monitoring_target_id": str(target.id) if target is not None else None,
+        "monitoring_target_type": target.target_type if target is not None else None,
+        "monitoring_target_collection_mode": (
+            target.collection_mode if target is not None else None
+        ),
+        "monitoring_target_platform": target.platform if target is not None else None,
+        "monitoring_target_external_reference": (
+            target.external_reference if target is not None else None
+        ),
+        "monitoring_target_normalized_url": (
+            target.normalized_url if target is not None else None
+        ),
+        "evidence_type": persisted.evidence_type,
+        "original_text": persisted.original_text,
+        "translated_text": persisted.translated_text,
+        "translated_language": persisted.translated_language,
+        "source_url": persisted.source_url,
+        "platform": persisted.platform,
+        "public_published_at": _snapshot_scalar(persisted.public_published_at),
+        "captured_at": _snapshot_scalar(persisted.captured_at),
+        "collection_method": persisted.collection_method,
+        "language": persisted.language,
+        "screenshot_asset_id": (
+            str(persisted.screenshot_asset_id) if persisted.screenshot_asset_id else None
+        ),
+        "import_asset_id": str(persisted.import_asset_id) if persisted.import_asset_id else None,
+        "content_hash": persisted.content_hash,
+        "availability": persisted.availability,
+        "retention_class": persisted.retention_class,
+        "created_by_id": str(persisted.created_by_id) if persisted.created_by_id else None,
+        "created_at": _snapshot_scalar(persisted.created_at),
+        "updated_at": _snapshot_scalar(persisted.updated_at),
+        "signal_type": signal.signal_type,
+        "signal_platform": signal.platform,
+        "signal_external_id": signal.external_id,
+        "signal_captured_at": _snapshot_scalar(signal.captured_at),
+        "signal_created_by_id": str(signal.created_by_id) if signal.created_by_id else None,
+        "signal_created_at": _snapshot_scalar(signal.created_at),
+        "signal_updated_at": _snapshot_scalar(signal.updated_at),
+        "source_content_platform": content.platform if content is not None else None,
+        "source_content_external_id": content.external_id if content is not None else None,
+        "source_content_canonical_url": content.canonical_url if content is not None else None,
+        "source_content_author_public_name": (
+            content.author_public_name if content is not None else None
+        ),
+        "source_content_title": content.title if content is not None else None,
+        "source_content_original_text": content.original_text if content is not None else None,
+        "source_content_public_published_at": (
+            _snapshot_scalar(content.public_published_at) if content is not None else None
+        ),
+        "source_content_language": content.language if content is not None else None,
+        "source_content_captured_at": (
+            _snapshot_scalar(content.captured_at) if content is not None else None
+        ),
+        "source_content_hash": content.content_hash if content is not None else None,
+        "source_content_created_by_id": (
+            str(content.created_by_id) if content is not None and content.created_by_id else None
+        ),
+        "source_content_created_at": (
+            _snapshot_scalar(content.created_at) if content is not None else None
+        ),
+        "source_content_updated_at": (
+            _snapshot_scalar(content.updated_at) if content is not None else None
+        ),
+    }
+
+
 @dataclass(frozen=True)
 class _LockedAsset:
     _instance: MaterialAsset

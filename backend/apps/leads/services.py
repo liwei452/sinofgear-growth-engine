@@ -40,6 +40,61 @@ def _confidence(value, field_name):
     return result
 
 
+def _payload_reference_id(value):
+    if value is None:
+        return None
+    reference = getattr(value, "pk", value)
+    return str(reference)
+
+
+def canonical_lead_insight_output(payload) -> dict[str, object]:
+    """Map the domain payload deterministically to the JSON saved on its AIRun."""
+    if not isinstance(payload, dict):
+        raise ValidationError("Insight output must be an object.")
+    requirements = payload.get("requirements", [])
+    if not isinstance(requirements, list) or any(
+        not isinstance(row, dict) for row in requirements
+    ):
+        raise ValidationError({"requirements": "Requirements must be a list of objects."})
+    canonical_requirements = []
+    for row in requirements:
+        canonical_requirements.append(
+            {
+                "requirement_concept_id": _payload_reference_id(
+                    row.get("requirement_concept", row.get("requirement_concept_id"))
+                ),
+                "capability_concept_id": _payload_reference_id(
+                    row.get("capability_concept", row.get("capability_concept_id"))
+                ),
+                "capability_knowledge_evidence_id": _payload_reference_id(
+                    row.get(
+                        "capability_knowledge_evidence",
+                        row.get("capability_knowledge_evidence_id"),
+                    )
+                ),
+                "evidence_id": _payload_reference_id(
+                    row.get("evidence", row.get("evidence_id"))
+                ),
+                "extracted_value": row.get("extracted_value"),
+                "unit": row.get("unit", ""),
+            }
+        )
+    return _json_copy(
+        {
+            "dimensions": payload.get("dimensions"),
+            "gates": payload.get("gates"),
+            "explanation": payload.get("explanation"),
+            "extracted_requirement_values": payload.get(
+                "extracted_requirement_values", []
+            ),
+            "confidence": payload.get("confidence"),
+            "ontology_snapshot": payload.get("ontology_snapshot"),
+            "requirements": canonical_requirements,
+        },
+        "output_json",
+    )
+
+
 class LeadService:
     @staticmethod
     @transaction.atomic
@@ -95,6 +150,10 @@ class LeadService:
             raise ValidationError({"ai_run": "AI run is not an audited lead-analysis run."})
         if LeadInsight.objects.filter(ai_run=run).exists():
             raise ValidationError({"ai_run": "AI run already produced a lead insight."})
+        if run.output_json != canonical_lead_insight_output(payload):
+            raise ValidationError(
+                {"ai_run": "Insight conclusions must equal the successful AI run output."}
+            )
 
         evidence_ids = [item.pk for item in evidence]
         if not evidence_ids or len(set(evidence_ids)) != len(evidence_ids):
@@ -246,6 +305,9 @@ class LeadService:
 
     @staticmethod
     def _validate_frozen_analysis_binding(*, run, candidate, evidence):
+        from apps.knowledge.services import validate_frozen_ontology_snapshot
+        from apps.sources.services import canonical_source_evidence_snapshot
+
         frozen = run.input_snapshot
         if not isinstance(frozen, dict) or run.job.input_snapshot != frozen:
             raise ValidationError({"ai_run": "AI run is not bound to its immutable job input."})
@@ -257,132 +319,24 @@ class LeadService:
         rows = frozen.get("evidence")
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise ValidationError({"ai_run": "AI run evidence snapshot is invalid."})
-        row_ids = [str(row.get("id")) for row in rows]
-        expected_by_id = {str(item.id): item.content_hash for item in evidence}
-        if (
-            len(row_ids) != len(set(row_ids))
-            or set(row_ids) != set(expected_by_id)
-            or any(row.get("content_hash") != expected_by_id.get(str(row.get("id"))) for row in rows)
-        ):
+        expected_rows = [
+            canonical_source_evidence_snapshot(
+                item,
+                organization=candidate.organization,
+            )
+            for item in evidence
+        ]
+        if rows != expected_rows:
             raise ValidationError({"ai_run": "AI run is bound to another evidence set."})
         ontology = frozen.get("ontology_snapshot")
-        if not isinstance(ontology, dict) or ontology.get("organization_id") != str(
-            candidate.organization_id
-        ):
-            raise ValidationError({"ai_run": "AI run ontology snapshot is invalid."})
-        required_collections = (
-            "concept_versions",
-            "relation_versions",
-            "evidence_references",
-        )
-        for collection in required_collections:
-            values = ontology.get(collection)
-            if not isinstance(values, list) or any(
-                not isinstance(row, dict) or row.get("status") != "APPROVED"
-                for row in values
-            ):
-                raise ValidationError(
-                    {"ai_run": "AI run ontology snapshot must contain only approved knowledge."}
-                )
-        if not ontology.get("generated_at"):
-            raise ValidationError({"ai_run": "AI run ontology snapshot is not frozen."})
-        LeadService._validate_frozen_knowledge_rows(
-            ontology=ontology,
-            organization_id=candidate.organization_id,
-        )
-        return _json_copy(ontology, "ontology_snapshot")
-
-    @staticmethod
-    def _validate_frozen_knowledge_rows(*, ontology, organization_id):
-        from apps.knowledge.graph import acquire_knowledge_graph_lock
-        from apps.knowledge.models import (
-            KnowledgeConcept,
-            KnowledgeEvidence,
-            KnowledgeRelation,
-            KnowledgeStatus,
-        )
-
-        acquire_knowledge_graph_lock()
-        concept_rows = ontology["concept_versions"]
-        concept_ids = [str(row.get("concept_id")) for row in concept_rows]
-        if len(concept_ids) != len(set(concept_ids)):
-            raise ValidationError({"ai_run": "Ontology snapshot repeats a concept."})
-        concepts = {
-            str(item.id): item
-            for item in KnowledgeConcept.objects.select_for_update().filter(id__in=concept_ids)
-        }
-        for row in concept_rows:
-            concept = concepts.get(str(row.get("concept_id")))
-            expected = None if concept is None else {
-                "code": concept.code,
-                "concept_type": concept.concept_type,
-                "label_zh": concept.label_zh,
-                "label_en": concept.label_en,
-                "version": concept.version,
-                "status": concept.status,
-            }
-            if (
-                concept is None
-                or concept.organization_id not in {None, organization_id}
-                or concept.status != KnowledgeStatus.APPROVED
-                or any(row.get(key) != value for key, value in expected.items())
-            ):
-                raise ValidationError({"ai_run": "Ontology concept snapshot is not trusted."})
-
-        relation_rows = ontology["relation_versions"]
-        relation_ids = [str(row.get("relation_id")) for row in relation_rows]
-        if len(relation_ids) != len(set(relation_ids)):
-            raise ValidationError({"ai_run": "Ontology snapshot repeats a relation."})
-        relations = {
-            str(item.id): item
-            for item in KnowledgeRelation.objects.select_for_update().filter(id__in=relation_ids)
-        }
-        for row in relation_rows:
-            relation = relations.get(str(row.get("relation_id")))
-            expected = None if relation is None else {
-                "subject_concept_id": str(relation.subject_concept_id),
-                "predicate": relation.predicate,
-                "object_concept_id": str(relation.object_concept_id),
-                "version": relation.version,
-                "status": relation.status,
-            }
-            if (
-                relation is None
-                or relation.organization_id not in {None, organization_id}
-                or relation.status != KnowledgeStatus.APPROVED
-                or any(str(row.get(key)) != str(value) for key, value in expected.items())
-            ):
-                raise ValidationError({"ai_run": "Ontology relation snapshot is not trusted."})
-
-        evidence_rows = ontology["evidence_references"]
-        knowledge_evidence_ids = [str(row.get("evidence_id")) for row in evidence_rows]
-        if len(knowledge_evidence_ids) != len(set(knowledge_evidence_ids)):
-            raise ValidationError({"ai_run": "Ontology snapshot repeats knowledge evidence."})
-        knowledge_evidence = {
-            str(item.id): item
-            for item in KnowledgeEvidence.objects.select_for_update().filter(
-                id__in=knowledge_evidence_ids
+        try:
+            ontology = validate_frozen_ontology_snapshot(
+                ontology,
+                organization_id=candidate.organization_id,
             )
-        }
-        for row in evidence_rows:
-            item = knowledge_evidence.get(str(row.get("evidence_id")))
-            expected = None if item is None else {
-                "evidence_type": item.evidence_type,
-                "source_object_type": item.source_object_type,
-                "source_object_id": str(item.source_object_id) if item.source_object_id else None,
-                "source_url": item.source_url,
-                "excerpt": item.excerpt,
-                "captured_at": str(item.captured_at) if item.captured_at else None,
-                "version": item.version,
-                "status": item.status,
-            }
-            if (
-                item is None
-                or item.organization_id not in {None, organization_id}
-                or item.status != KnowledgeStatus.APPROVED
-                or any(row.get(key) != value for key, value in expected.items())
-            ):
-                raise ValidationError({"ai_run": "Ontology evidence snapshot is not trusted."})
+        except ValidationError as error:
+            raise ValidationError({"ai_run": "AI run ontology snapshot is invalid."}) from error
+        return ontology
 
     @staticmethod
     def _prepare_requirements(requirements, *, evidence_by_id, organization_id):
@@ -477,4 +431,9 @@ class LeadService:
             )
 
 
-__all__ = ["LeadService", "LeadStateError", "LeadVersionConflict"]
+__all__ = [
+    "LeadService",
+    "LeadStateError",
+    "LeadVersionConflict",
+    "canonical_lead_insight_output",
+]

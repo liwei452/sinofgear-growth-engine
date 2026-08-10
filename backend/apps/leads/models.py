@@ -433,9 +433,19 @@ class LeadInsight(ImmutableLeadHistory):
             ),
             models.CheckConstraint(
                 condition=(
-                    models.Q(high_value_eligible=False)
-                    | models.Q(
+                    models.Q(
                         high_value_eligible=True,
+                        score_band="HIGH",
+                        traceable_source=True,
+                        explicit_need_or_company_match=True,
+                        capability_evidence=True,
+                        audited_run=True,
+                        ontology_snapshot_complete=True,
+                    )
+                    | models.Q(
+                        high_value_eligible=False,
+                    )
+                    & ~models.Q(
                         score_band="HIGH",
                         traceable_source=True,
                         explicit_need_or_company_match=True,

@@ -1,4 +1,5 @@
 import itertools
+from copy import deepcopy
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -16,13 +17,15 @@ from apps.knowledge.models import (
     KnowledgeEvidence,
     KnowledgeStatus,
 )
+from apps.knowledge.services import build_frozen_snapshot
+from apps.leads.services import canonical_lead_insight_output
 from apps.sources.models import (
     MonitoringTarget,
     SourceContent,
     SourceEvidence,
     SourceSignal,
 )
-from apps.sources.services import EvidenceService
+from apps.sources.services import EvidenceService, canonical_source_evidence_snapshot
 
 
 @pytest.fixture
@@ -118,6 +121,7 @@ def ai_run_factory(user):
         job_type=Job.Type.LEAD_ANALYZE,
         purpose="LEAD_ANALYZE",
         input_snapshot=None,
+        output_payload=None,
     ):
         number = next(counter)
         job = JobService.create(
@@ -147,7 +151,11 @@ def ai_run_factory(user):
                 model="fake-v1",
                 input_snapshot=job.input_snapshot,
                 status=AIRun.Status.SUCCEEDED,
-                output_json={},
+                output_json=(
+                    canonical_lead_insight_output(output_payload)
+                    if output_payload is not None
+                    else {}
+                ),
                 started_at=timezone.now(),
                 finished_at=timezone.now(),
             )
@@ -159,8 +167,8 @@ def ai_run_factory(user):
 def analysis_snapshot():
     def factory(*, candidate, evidence, ontology_snapshot):
         evidence_rows = [
-            {"id": str(item.id), "content_hash": item.content_hash}
-            for item in evidence
+            canonical_source_evidence_snapshot(item, organization=candidate.organization)
+            for item in sorted(evidence, key=lambda row: str(row.id))
         ]
         return {
             "organization_id": str(candidate.organization_id),
@@ -238,6 +246,11 @@ def candidate(organization, signal, user):
 def insight_payload(
     approved_requirement, approved_capability, approved_capability_evidence, evidence
 ):
+    ontology_snapshot = build_frozen_snapshot(
+        organization=evidence.organization,
+        concept_ids=[approved_requirement.id, approved_capability.id],
+    )
+
     def factory(*, intent=25, company_fit=20, specificity=15, capability_fit=10, recency=8):
         return {
             "dimensions": {
@@ -263,36 +276,7 @@ def insight_payload(
                 {"type": "quantity", "value": "200", "unit": "pcs"}
             ],
             "confidence": {"evidence": "0.9500", "company_match": "0.8000", "ai": "0.9000"},
-            "ontology_snapshot": {
-                "organization_id": str(evidence.organization_id),
-                "concept_versions": [
-                    {
-                        "concept_id": str(concept.id),
-                        "code": concept.code,
-                        "concept_type": concept.concept_type,
-                        "label_zh": concept.label_zh,
-                        "label_en": concept.label_en,
-                        "version": concept.version,
-                        "status": concept.status,
-                    }
-                    for concept in (approved_requirement, approved_capability)
-                ],
-                "relation_versions": [],
-                "evidence_references": [
-                    {
-                        "evidence_id": str(approved_capability_evidence.id),
-                        "evidence_type": approved_capability_evidence.evidence_type,
-                        "source_object_type": approved_capability_evidence.source_object_type,
-                        "source_object_id": None,
-                        "source_url": approved_capability_evidence.source_url,
-                        "excerpt": approved_capability_evidence.excerpt,
-                        "captured_at": None,
-                        "version": approved_capability_evidence.version,
-                        "status": approved_capability_evidence.status,
-                    }
-                ],
-                "generated_at": "2026-08-10T00:00:00+00:00",
-            },
+            "ontology_snapshot": deepcopy(ontology_snapshot),
             "requirements": [
                 {
                     "requirement_concept": approved_requirement,
@@ -318,4 +302,5 @@ def ai_run(ai_run_factory, candidate, evidence, insight_payload, analysis_snapsh
             evidence=[evidence],
             ontology_snapshot=payload["ontology_snapshot"],
         ),
+        output_payload=payload,
     )

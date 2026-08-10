@@ -42,3 +42,27 @@
 ## Concerns
 
 - The workspace's configured Node launcher is broken. Verification used a temporary, untracked Node 22.21.1 runtime at `C:\tmp\task-10b-node`; no project dependency or lockfile was changed.
+
+## Fix Round 1: async-session isolation and ARIA tabs
+
+### RED / GREEN
+
+- RED: added lifecycle and accessibility regressions, then ran `SourceImportDialog.test.ts`. The pre-fix implementation failed the tab focus/relationship assertion and did not provide safe file-read recovery. The initial test run recorded 2 failing tests and an unhandled screenshot-preview error in jsdom before test fixtures were completed.
+- GREEN: introduced a monotonically increasing session token for close, reopen, organization changes, and submissions. Every upload, ingestion creation, job poll, timer schedule, error, and completion emission checks its captured token after awaiting. File reads have independent read tokens and file-mode checks. The green run passes all dialog and API tests.
+
+### Fix Round 1 commands and results
+
+| Command | Result |
+| --- | --- |
+| `C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vitest/vitest.mjs --run src/modules/leads/SourceImportDialog.test.ts` | GREEN: 6/6 dialog tests passed. |
+| `C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vitest/vitest.mjs --run src/modules/leads/api.test.ts src/modules/leads/SourceImportDialog.test.ts` | GREEN: 19/19 tests passed in 2 files. |
+| `C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vue-tsc/bin/vue-tsc.js --noEmit` | PASS. |
+| `C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/eslint/bin/eslint.js .` | PASS. |
+| `git diff --check` | PASS. |
+
+### Fix Round 1 self-review
+
+- A stale poll or upload cannot write progress, clear another session's timer, schedule a timer, emit `completed`, or create an ingestion batch after close/reopen, unmount, or organization change.
+- CSV/JSON clears prior text before reading; failed reads show `文件没有读取成功，请重新选择文件。` with a `重新选择文件` focus recovery. Stale read completion is ignored after a new file, mode change, reset, close/reopen, or organization change.
+- The selector now uses roving tabindex, `aria-controls`, a labelled tabpanel, ArrowLeft/ArrowRight/Home/End activation and focus movement. Disclosure transfers focus to the first newly visible tab.
+- Screenshot object URLs are still synchronously revoked on replacement and reset paths; the reset path is reached for close, `open=false`, organization changes, and unmount.

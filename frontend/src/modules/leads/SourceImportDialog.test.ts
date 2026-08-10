@@ -169,3 +169,33 @@ it("cleans preview URLs and prevents failed or stale file reads from enabling su
   expect(screen.getByRole("alert")).toHaveTextContent("文件没有读取成功")
   expect(screen.getByRole("button", { name: "导入公开信号" })).toBeDisabled()
 })
+
+it("cancels active polling on close and unmount", async () => {
+  vi.useFakeTimers()
+  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+  const fetchMock = vi.fn().mockResolvedValueOnce(json({ job_id: "job-1", ingestion_batch_id: "batch-1", status: "QUEUED" }, 202)).mockResolvedValueOnce(json(job("QUEUED")))
+  vi.stubGlobal("fetch", fetchMock); document.cookie = "csrftoken=token; path=/"
+  const view = render(SourceImportDialog, { props: { organizationId: "org-1", open: true }, global: testApp() })
+  await user.type(screen.getByLabelText("公开链接"), "https://example.test/post"); await user.type(screen.getByLabelText("公开原文"), "text"); await user.click(screen.getByRole("button", { name: "导入公开信号" })); await flushPromises()
+  await user.click(screen.getByRole("button", { name: "取消" })); await vi.advanceTimersByTimeAsync(5_000); expect(fetchMock).toHaveBeenCalledTimes(2)
+  view.unmount(); await vi.advanceTimersByTimeAsync(5_000); expect(fetchMock).toHaveBeenCalledTimes(2)
+})
+
+it("ignores stale CSV and JSON reads after mode, close, and newer-file changes", async () => {
+  const user = userEvent.setup()
+  const csv = deferred<string>(); const jsonRead = deferred<string>(); const newer = deferred<string>()
+  const view = render(SourceImportDialog, { props: { organizationId: "org-1", open: true }, global: testApp() })
+  await user.click(screen.getByRole("button", { name: "更多导入方式" })); await user.click(screen.getByRole("tab", { name: "CSV 文件" }))
+  const csvFile = new File(["x"], "old.csv"); Object.defineProperty(csvFile, "text", { value: () => csv.promise })
+  await user.upload(screen.getAllByLabelText("CSV 文件").find((item) => item.tagName === "INPUT")!, csvFile)
+  await user.click(screen.getByRole("tab", { name: "JSON 文件" })); csv.resolve("source_url,original_text\nhttps://example.test/old,text"); await flushPromises()
+  expect(screen.getByRole("button", { name: "导入公开信号" })).toBeDisabled()
+  const jsonFile = new File(["x"], "old.json"); Object.defineProperty(jsonFile, "text", { value: () => jsonRead.promise })
+  await user.upload(screen.getAllByLabelText("JSON 文件").find((item) => item.tagName === "INPUT")!, jsonFile)
+  await view.rerender({ organizationId: "org-1", open: false }); await view.rerender({ organizationId: "org-1", open: true }); jsonRead.reject(new Error("late")); await flushPromises()
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  await user.click(screen.getByRole("tab", { name: "JSON 文件" }))
+  const nextFile = new File(["x"], "new.json"); Object.defineProperty(nextFile, "text", { value: () => newer.promise })
+  await user.upload(screen.getAllByLabelText("JSON 文件").find((item) => item.tagName === "INPUT")!, nextFile); newer.resolve('{"rows":[{"source_url":"https://example.test/new","original_text":"text"}]}'); await flushPromises()
+  expect(screen.getByRole("button", { name: "导入公开信号" })).toBeEnabled()
+})

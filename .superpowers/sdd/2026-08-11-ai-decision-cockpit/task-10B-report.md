@@ -72,3 +72,8 @@
 - RED: the new close-during-deferred-upload/reopen regression failed because the reopened action stayed `正在提交…` and disabled.
 - GREEN: reset now clears `submitting` and progress synchronously while incrementing the session; stale finally blocks remain unable to mutate the newer session. The regression proves a new valid URL import proceeds and the old upload remains inert.
 - Verification: focused API+dialog suite passed 20/20; `vue-tsc --noEmit` and ESLint passed; full frontend Vitest passed 30 files / 205 tests; `git diff --check` passed.
+
+## Fix Round 3: lifecycle exit coverage
+
+- Added deterministic deferred-promise coverage for timer cancellation after close/unmount and stale CSV/JSON resolutions/rejections across mode changes, close/reopen, and newer selections. Existing deferred-upload and session tests cover stale active submissions and object-URL replacement/close cleanup.
+- Focused verification passed 22/22 with typecheck and lint. The preceding full frontend run passed 30 files / 205 tests.

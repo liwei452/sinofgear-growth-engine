@@ -56,6 +56,10 @@ export const leadKeys = {
   job: (organizationId: string, jobId: string) => [...leadKeys.all(organizationId), "job", jobId] as const,
 }
 
+export function isActiveImportJob(status: Job["status"]): boolean {
+  return status === "QUEUED" || status === "RUNNING" || status === "RETRY_QUEUED"
+}
+
 function required<T>(value: T | undefined, message = "The server returned no data. Please try again."): T {
   if (value === undefined) throw new ApiError(0, message)
   return value

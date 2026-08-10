@@ -6,6 +6,7 @@ import {
   createIngestionBatch,
   createLeadReview,
   getJob,
+  isActiveImportJob,
   listLeadCandidates,
   leadKeys,
   previewImport,
@@ -36,6 +37,15 @@ it("keeps organization data in every query key", () => {
   expect(leadKeys.list("org-a", { score_band: "HIGH" })[1]).toBe("org-a")
   expect(leadKeys.detail("org-b", "lead-1")[1]).toBe("org-b")
   expect(leadKeys.job("org-c", "job-1")[1]).toBe("org-c")
+})
+
+it("polls only import jobs that can still make progress", () => {
+  expect(isActiveImportJob("QUEUED")).toBe(true)
+  expect(isActiveImportJob("RUNNING")).toBe(true)
+  expect(isActiveImportJob("RETRY_QUEUED")).toBe(true)
+  expect(isActiveImportJob("SUCCEEDED")).toBe(false)
+  expect(isActiveImportJob("FAILED")).toBe(false)
+  expect(isActiveImportJob("CANCELED")).toBe(false)
 })
 
 it("accepts only public HTTP(S) links", () => {

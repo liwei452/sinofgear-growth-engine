@@ -1,5 +1,6 @@
 import hashlib
 import ipaddress
+from collections import defaultdict
 from copy import deepcopy
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, IntegrityError, OperationalError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.assets.models import MaterialAsset
@@ -522,6 +524,7 @@ class RetentionResult:
 
 
 class RetentionService:
+    _HISTORY_ITERATOR_CHUNK_SIZE = 500
     _ACTIVE_JOB_STATUSES = frozenset(
         {Job.Status.QUEUED, Job.Status.RUNNING, Job.Status.RETRY_QUEUED}
     )
@@ -591,10 +594,13 @@ class RetentionService:
             job__type=Job.Type.LEAD_ANALYZE,
         ).values_list("input_snapshot", flat=True)
         protected_ids: set[str] = set()
-        for snapshot in (*job_snapshots, *run_snapshots):
-            protected_ids.update(
-                RetentionService._snapshot_evidence_ids(snapshot)
-            )
+        for snapshots in (job_snapshots, run_snapshots):
+            for snapshot in snapshots.iterator(
+                chunk_size=RetentionService._HISTORY_ITERATOR_CHUNK_SIZE
+            ):
+                protected_ids.update(
+                    RetentionService._snapshot_evidence_ids(snapshot)
+                )
         return protected_ids
 
     @staticmethod
@@ -659,14 +665,6 @@ class RetentionService:
             or row.content_hash in active_ingestion_fingerprints
         ):
             return True
-        content = row.source_signal.source_content
-        if content is not None and SourceEvidence.objects.filter(
-            organization=organization,
-            source_signal__source_content=content,
-        ).exclude(pk=row.pk).exclude(
-            availability=SourceEvidence.Availability.REDACTED_BY_RETENTION
-        ).exists():
-            return True
         batch_ids = {ingestion_row.batch_id for ingestion_row in ingestion_rows}
         if not batch_ids:
             return False
@@ -676,13 +674,94 @@ class RetentionService:
             job__status__in=RetentionService._ACTIVE_JOB_STATUSES,
         ).exists():
             return True
-        linked_row_ids = {ingestion_row.pk for ingestion_row in ingestion_rows}
-        if IngestionRow.objects.filter(
-            organization=organization,
-            batch_id__in=batch_ids,
-        ).exclude(pk__in=linked_row_ids).exists():
-            return True
         return False
+
+    @staticmethod
+    def _retention_components(*, organization, candidate_ids) -> list[tuple[object, ...]]:
+        """Group candidates only when they share raw data that cannot be split safely."""
+        candidate_ids = tuple(candidate_ids)
+        candidate_set = set(candidate_ids)
+        parent = {evidence_id: evidence_id for evidence_id in candidate_ids}
+
+        def find(evidence_id):
+            while parent[evidence_id] != evidence_id:
+                parent[evidence_id] = parent[parent[evidence_id]]
+                evidence_id = parent[evidence_id]
+            return evidence_id
+
+        def union(evidence_ids):
+            ordered = sorted(set(evidence_ids), key=str)
+            if len(ordered) < 2:
+                return
+            root = find(ordered[0])
+            for evidence_id in ordered[1:]:
+                other = find(evidence_id)
+                if root != other:
+                    parent[other] = root
+
+        candidate_evidence = list(
+            SourceEvidence.objects.filter(
+                organization=organization,
+                pk__in=candidate_ids,
+            )
+            .select_related("source_signal__source_content")
+            .order_by("pk")
+        )
+        by_content: dict[object, list[object]] = defaultdict(list)
+        for evidence in candidate_evidence:
+            content = evidence.source_signal.source_content
+            if content is not None and (
+                content.original_text or content.author_public_name
+            ):
+                by_content[content.id].append(evidence.id)
+        for evidence_ids in by_content.values():
+            union(evidence_ids)
+
+        candidate_rows = list(
+            IngestionRow.objects.filter(
+                organization=organization,
+                source_evidence_id__in=candidate_ids,
+            )
+            .select_related("batch")
+            .order_by("batch_id", "row_number", "pk")
+        )
+        batches = {
+            batch.id: batch
+            for batch in IngestionBatch.objects.filter(
+                organization=organization,
+                pk__in={row.batch_id for row in candidate_rows},
+            ).order_by("pk")
+        }
+        shared_batch_ids = {
+            batch.id
+            for batch in batches.values()
+            if isinstance(batch.input_reference, dict)
+            and batch.input_reference.get("import_asset_id") not in (None, "")
+        }
+        if shared_batch_ids:
+            shared_rows = IngestionRow.objects.filter(
+                organization=organization,
+                batch_id__in=shared_batch_ids,
+                source_evidence_id__in=candidate_set,
+            ).order_by("batch_id", "row_number", "pk")
+            by_batch: dict[object, list[object]] = defaultdict(list)
+            for ingestion_row in shared_rows:
+                by_batch[ingestion_row.batch_id].append(
+                    ingestion_row.source_evidence_id
+                )
+            for evidence_ids in by_batch.values():
+                union(evidence_ids)
+
+        components: dict[object, list[object]] = defaultdict(list)
+        for evidence_id in candidate_ids:
+            components[find(evidence_id)].append(evidence_id)
+        return sorted(
+            (
+                tuple(sorted(evidence_ids, key=str))
+                for evidence_ids in components.values()
+            ),
+            key=lambda evidence_ids: str(evidence_ids[0]),
+        )
 
     @staticmethod
     def _active_ingestion_raw_fingerprints(
@@ -779,7 +858,6 @@ class RetentionService:
         *,
         organization,
         ingestion_rows: list[IngestionRow],
-        ingestion_batches: list[IngestionBatch],
     ) -> tuple[int, int]:
         deleted_text = int(bool(row.original_text)) + int(bool(row.translated_text))
         row.original_text = ""
@@ -835,26 +913,53 @@ class RetentionService:
             deleted_text += text_count
             anonymized += actor_count
 
-        rows_by_batch: dict[object, set[int]] = {}
+        return deleted_text, anonymized
+
+    @staticmethod
+    def _tombstone_batches_locked(
+        *,
+        organization,
+        ingestion_rows: list[IngestionRow],
+        ingestion_batches: list[IngestionBatch],
+    ) -> tuple[int, int]:
+        deleted_text = 0
+        anonymized = 0
+        rows_by_batch: dict[object, dict[int, object]] = {}
         for ingestion_row in ingestion_rows:
-            rows_by_batch.setdefault(ingestion_row.batch_id, set()).add(
+            rows_by_batch.setdefault(ingestion_row.batch_id, {})[
                 ingestion_row.row_number
-            )
+            ] = ingestion_row.source_evidence_id
         for batch in ingestion_batches:
-            input_reference = deepcopy(batch.input_reference)
-            _redacted_reference, text_count, actor_count = (
-                RetentionService._tombstone_raw_json(input_reference)
+            selected_rows = rows_by_batch.get(batch.id, {})
+            if not selected_rows:
+                continue
+            reference_rows = (
+                batch.input_reference.get("rows", [])
+                if isinstance(batch.input_reference, dict)
+                else []
             )
-            IngestionBatch.objects.filter(
+            text_count = 0
+            actor_count = 0
+            for reference_row in reference_rows:
+                if (
+                    isinstance(reference_row, dict)
+                    and reference_row.get("row_number") in selected_rows
+                ):
+                    _redacted, row_text_count, row_actor_count = (
+                        RetentionService._tombstone_raw_json(
+                            deepcopy(reference_row)
+                        )
+                    )
+                    text_count += row_text_count
+                    actor_count += row_actor_count
+            persisted = IngestionBatch.objects.filter(
                 pk=batch.pk,
                 organization=organization,
             )._service_tombstone_input_reference(
                 _capability=_INGESTION_RETENTION_TOMBSTONE_CAPABILITY,
-                evidence_ids_by_row={
-                    row_number: row.id
-                    for row_number in rows_by_batch.get(batch.id, set())
-                },
+                evidence_ids_by_row=selected_rows,
             )
+            batch.input_reference = persisted["input_reference"]
             deleted_text += text_count
             anonymized += actor_count
         return deleted_text, anonymized
@@ -944,105 +1049,273 @@ class RetentionService:
         protected_reasons: dict[str, int] = {}
 
         values = counts.as_dict()
-        for evidence_id in candidate_ids:
+        components = RetentionService._retention_components(
+            organization=organization,
+            candidate_ids=candidate_ids,
+        )
+        for component_ids in components:
+            values_before = dict(values)
+            changed_count_before = len(changed_ids)
+            protected_reasons_before = dict(protected_reasons)
             try:
                 with transaction.atomic():
-                    row = (
+                    component_batch_ids = sorted(
+                        set(
+                            IngestionRow.objects.filter(
+                                organization=organization,
+                                source_evidence_id__in=component_ids,
+                            ).values_list("batch_id", flat=True)
+                        ),
+                        key=str,
+                    )
+                    ingestion_batches = list(
+                        IngestionBatch.objects.select_for_update()
+                        .select_related("job")
+                        .filter(
+                            organization=organization,
+                            pk__in=component_batch_ids,
+                        )
+                        .order_by("pk")
+                    )
+                    shared_batch_ids = {
+                        batch.id
+                        for batch in ingestion_batches
+                        if isinstance(batch.input_reference, dict)
+                        and batch.input_reference.get("import_asset_id")
+                        not in (None, "")
+                    }
+                    evidence_rows = list(
                         SourceEvidence.objects.select_for_update()
                         .select_related(
                             "source_signal__source_content",
                             "screenshot_asset",
                             "import_asset",
                         )
-                        .get(pk=evidence_id, organization=organization)
+                        .filter(pk__in=component_ids, organization=organization)
+                        .order_by("pk")
                     )
-                    if row.captured_at >= cutoff:
-                        values["no_op"] += 1
-                        continue
-                    RetentionService._validate_relationships(
-                        row, organization=organization
-                    )
-                    was_redacted = (
-                        row.availability
-                        == SourceEvidence.Availability.REDACTED_BY_RETENTION
-                    )
-                    protection_reason = RetentionService._protection_reason(
-                        row, active_ids=active_ids
-                    )
-                    if protection_reason is not None:
-                        values["protected"] += 1
-                        protected_reasons[protection_reason] = (
-                            protected_reasons.get(protection_reason, 0) + 1
+                    if len(evidence_rows) != len(component_ids):
+                        raise ValidationError(
+                            "Retention component changed after organization lock."
                         )
-                        continue
                     ingestion_rows = list(
                         IngestionRow.objects.select_for_update()
                         .filter(
+                            Q(source_evidence_id__in=component_ids)
+                            | Q(batch_id__in=shared_batch_ids),
                             organization=organization,
-                            source_evidence=row,
                         )
                         .order_by("batch_id", "row_number", "pk")
                     )
-                    batch_ids = sorted(
-                        {ingestion_row.batch_id for ingestion_row in ingestion_rows},
-                        key=str,
-                    )
-                    ingestion_batches = list(
-                        IngestionBatch.objects.select_for_update()
-                        .filter(organization=organization, pk__in=batch_ids)
-                        .order_by("pk")
-                    )
-                    content = row.source_signal.source_content
-                    linked_raw_copy = any(
-                        RetentionService._contains_raw_json(
-                            ingestion_row.normalized_input
-                        )
-                        for ingestion_row in ingestion_rows
-                    ) or any(
-                        RetentionService._contains_raw_json(
-                            batch.input_reference
-                        )
-                        for batch in ingestion_batches
-                    )
-                    if content is not None:
-                        linked_raw_copy = linked_raw_copy or bool(
-                            content.original_text or content.author_public_name
-                        )
-                    if was_redacted and not linked_raw_copy:
-                        values["no_op"] += 1
-                        continue
-                    if RetentionService._has_shared_raw_copy_dependency(
-                        row,
-                        organization=organization,
-                        ingestion_rows=ingestion_rows,
-                        active_ingestion_fingerprints=(
-                            active_ingestion_fingerprints
-                        ),
-                        has_unparseable_active_input=(
-                            has_unparseable_active_input
-                        ),
-                    ):
-                        values["protected"] += 1
-                        protected_reasons["SHARED_OR_ACTIVE_RAW_COPY"] = (
-                            protected_reasons.get(
-                                "SHARED_OR_ACTIVE_RAW_COPY", 0
+                    component_set = set(component_ids)
+                    rows_by_evidence: dict[object, list[IngestionRow]] = defaultdict(list)
+                    rows_by_batch: dict[object, list[IngestionRow]] = defaultdict(list)
+                    for ingestion_row in ingestion_rows:
+                        rows_by_batch[ingestion_row.batch_id].append(ingestion_row)
+                        if ingestion_row.source_evidence_id in component_set:
+                            rows_by_evidence[ingestion_row.source_evidence_id].append(
+                                ingestion_row
                             )
-                            + 1
+
+                    group_reason = None
+                    for batch in ingestion_batches:
+                        if batch.id not in shared_batch_ids:
+                            continue
+                        reference_rows = (
+                            batch.input_reference.get("rows", [])
+                            if isinstance(batch.input_reference, dict)
+                            else []
                         )
+                        reference_numbers = {
+                            item.get("row_number")
+                            for item in reference_rows
+                            if isinstance(item, dict)
+                        }
+                        linked_rows = rows_by_batch.get(batch.id, [])
+                        linked_numbers = {item.row_number for item in linked_rows}
+                        if (
+                            reference_numbers != linked_numbers
+                            or any(
+                                item.source_evidence_id not in component_set
+                                for item in linked_rows
+                            )
+                        ):
+                            group_reason = "SHARED_IMPORT_ASSET_INCONSISTENT"
+                            break
+
+                    raw_content_ids = {
+                        evidence.source_signal.source_content_id
+                        for evidence in evidence_rows
+                        if evidence.source_signal.source_content is not None
+                        and (
+                            evidence.source_signal.source_content.original_text
+                            or evidence.source_signal.source_content.author_public_name
+                        )
+                    }
+                    shared_content = False
+                    if raw_content_ids:
+                        content_members = list(
+                            SourceEvidence.objects.filter(
+                                organization=organization,
+                                source_signal__source_content_id__in=raw_content_ids,
+                            ).values_list(
+                                "source_signal__source_content_id", "id"
+                            )
+                        )
+                        members_by_content: dict[object, set[object]] = defaultdict(set)
+                        for content_id, evidence_id in content_members:
+                            members_by_content[content_id].add(evidence_id)
+                        shared_content = any(
+                            len(members) > 1 for members in members_by_content.values()
+                        )
+                        if any(
+                            not members <= component_set
+                            for members in members_by_content.values()
+                        ):
+                            group_reason = (
+                                group_reason
+                                or "SHARED_SOURCE_CONTENT_GROUP_PROTECTED"
+                            )
+
+                    individual_reasons: dict[object, str] = {}
+                    not_expired_ids: set[object] = set()
+                    for evidence in evidence_rows:
+                        if evidence.captured_at >= cutoff:
+                            not_expired_ids.add(evidence.id)
+                            continue
+                        RetentionService._validate_relationships(
+                            evidence, organization=organization
+                        )
+                        reason = RetentionService._protection_reason(
+                            evidence, active_ids=active_ids
+                        )
+                        if reason is None and RetentionService._has_shared_raw_copy_dependency(
+                            evidence,
+                            organization=organization,
+                            ingestion_rows=rows_by_evidence.get(evidence.id, []),
+                            active_ingestion_fingerprints=(
+                                active_ingestion_fingerprints
+                            ),
+                            has_unparseable_active_input=(
+                                has_unparseable_active_input
+                            ),
+                        ):
+                            reason = "SHARED_OR_ACTIVE_RAW_COPY"
+                        if reason is not None:
+                            individual_reasons[evidence.id] = reason
+
+                    is_shared_group = bool(shared_batch_ids or shared_content)
+                    if (
+                        is_shared_group
+                        and (individual_reasons or not_expired_ids)
+                        and group_reason is None
+                    ):
+                        group_reason = (
+                            "SHARED_IMPORT_ASSET_GROUP_PROTECTED"
+                            if shared_batch_ids
+                            else "SHARED_SOURCE_CONTENT_GROUP_PROTECTED"
+                        )
+                    if group_reason is not None:
+                        for evidence in evidence_rows:
+                            reason = individual_reasons.get(evidence.id, group_reason)
+                            values["protected"] += 1
+                            protected_reasons[reason] = (
+                                protected_reasons.get(reason, 0) + 1
+                            )
                         continue
-                    deleted_text, anonymized = RetentionService._redact_locked(
-                        row,
-                        organization=organization,
-                        ingestion_rows=ingestion_rows,
-                        ingestion_batches=ingestion_batches,
-                    )
-                    values["redacted"] += int(not was_redacted)
-                    values["deleted_text"] += deleted_text
-                    values["anonymized_actors"] += anonymized
-                    changed_ids.append(str(row.id))
+                    if individual_reasons:
+                        for evidence in evidence_rows:
+                            reason = individual_reasons.get(evidence.id)
+                            if reason is None:
+                                continue
+                            values["protected"] += 1
+                            protected_reasons[reason] = (
+                                protected_reasons.get(reason, 0) + 1
+                            )
+                        evidence_rows = [
+                            evidence
+                            for evidence in evidence_rows
+                            if evidence.id not in individual_reasons
+                        ]
+                    if not_expired_ids:
+                        values["no_op"] += len(not_expired_ids)
+                        evidence_rows = [
+                            evidence
+                            for evidence in evidence_rows
+                            if evidence.id not in not_expired_ids
+                        ]
+                    if not evidence_rows:
+                        continue
+
+                    actionable_evidence: list[SourceEvidence] = []
+                    actionable_rows: list[IngestionRow] = []
+                    batch_by_id = {batch.id: batch for batch in ingestion_batches}
+                    for evidence in evidence_rows:
+                        linked_rows = rows_by_evidence.get(evidence.id, [])
+                        linked_raw_copy = any(
+                            RetentionService._contains_raw_json(item.normalized_input)
+                            for item in linked_rows
+                        )
+                        for ingestion_row in linked_rows:
+                            batch = batch_by_id.get(ingestion_row.batch_id)
+                            if batch is None or not isinstance(
+                                batch.input_reference, dict
+                            ):
+                                continue
+                            reference_row = next(
+                                (
+                                    item
+                                    for item in batch.input_reference.get("rows", [])
+                                    if isinstance(item, dict)
+                                    and item.get("row_number")
+                                    == ingestion_row.row_number
+                                ),
+                                None,
+                            )
+                            linked_raw_copy = linked_raw_copy or (
+                                reference_row is not None
+                                and RetentionService._contains_raw_json(reference_row)
+                            )
+                        content = evidence.source_signal.source_content
+                        if content is not None:
+                            linked_raw_copy = linked_raw_copy or bool(
+                                content.original_text or content.author_public_name
+                            )
+                        was_redacted = (
+                            evidence.availability
+                            == SourceEvidence.Availability.REDACTED_BY_RETENTION
+                        )
+                        if was_redacted and not linked_raw_copy:
+                            values["no_op"] += 1
+                            continue
+                        actionable_evidence.append(evidence)
+                        actionable_rows.extend(linked_rows)
+                        deleted_text, anonymized = RetentionService._redact_locked(
+                            evidence,
+                            organization=organization,
+                            ingestion_rows=linked_rows,
+                        )
+                        values["redacted"] += int(not was_redacted)
+                        values["deleted_text"] += deleted_text
+                        values["anonymized_actors"] += anonymized
+                        changed_ids.append(str(evidence.id))
+
+                    if actionable_evidence:
+                        deleted_text, anonymized = (
+                            RetentionService._tombstone_batches_locked(
+                                organization=organization,
+                                ingestion_rows=actionable_rows,
+                                ingestion_batches=ingestion_batches,
+                            )
+                        )
+                        values["deleted_text"] += deleted_text
+                        values["anonymized_actors"] += anonymized
             except (DatabaseError, ValidationError):
-                values["failures"] += 1
-                failed_ids.append(str(evidence_id))
+                values = values_before
+                del changed_ids[changed_count_before:]
+                protected_reasons = protected_reasons_before
+                values["failures"] += len(component_ids)
+                failed_ids.extend(str(evidence_id) for evidence_id in component_ids)
 
         result = RetentionResult(
             **values,

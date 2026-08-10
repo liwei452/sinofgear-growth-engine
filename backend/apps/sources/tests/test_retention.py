@@ -6,6 +6,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection
+from django.db.models.query import QuerySet
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
@@ -13,7 +14,7 @@ from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
 from apps.ai.services import PromptVersionService
 from apps.assets.models import MaterialAsset
 from apps.audit.models import AuditLog
-from apps.identity.models import Membership, Role
+from apps.identity.models import Membership, Organization, Role
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
 from apps.leads.models import LeadCandidate, LeadReview, lead_history_writes
@@ -216,6 +217,17 @@ def _request_and_run_import(
     return batch
 
 
+def _make_imported_evidence_old(*, batch, cutoff):
+    evidence_rows = list(
+        SourceEvidence.objects.filter(ingestion_rows__batch=batch).order_by("pk")
+    )
+    with evidence_service_writes():
+        for evidence in evidence_rows:
+            evidence.captured_at = cutoff - timedelta(days=1)
+            evidence.save(update_fields=["captured_at", "updated_at"])
+    return evidence_rows
+
+
 @pytest.mark.django_db
 def test_cleanup_redacts_old_transient_evidence_and_preserves_fingerprint_history(
     organization, user, source_manager
@@ -304,7 +316,6 @@ def test_cleanup_tombstones_every_linked_ingestion_raw_copy(
         cutoff=cutoff,
         actor=source_manager,
     )
-
     evidence.refresh_from_db()
     content.refresh_from_db()
     batch.refresh_from_db()
@@ -335,6 +346,420 @@ def test_cleanup_tombstones_every_linked_ingestion_raw_copy(
     assert result.redacted == 1
     assert result.deleted_text == 4
     assert result.anonymized_actors == 3
+
+
+@pytest.mark.django_db
+def test_cleanup_redacts_every_independent_row_in_completed_batch_without_shared_asset(
+    organization, user, source_manager, monkeypatch
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    batch = _request_and_run_import(
+        organization=organization,
+        user=user,
+        key="retention-two-independent-rows",
+        payload={
+            "rows": [
+                {
+                    "source_url": "https://example.com/posts/independent-one",
+                    "original_text": "FIRST-INDEPENDENT-SECRET",
+                    "author_name": "FIRST-INDEPENDENT-AUTHOR",
+                },
+                {
+                    "source_url": "https://example.com/posts/independent-two",
+                    "original_text": "SECOND-INDEPENDENT-SECRET",
+                    "author_name": "SECOND-INDEPENDENT-AUTHOR",
+                },
+            ]
+        },
+        source_type=IngestionBatch.SourceType.JSON,
+        monkeypatch=monkeypatch,
+    )
+    evidence_rows = _make_imported_evidence_old(batch=batch, cutoff=cutoff)
+
+    result = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+
+    batch.refresh_from_db()
+    ingestion_rows = list(batch.rows.order_by("row_number"))
+    materialized = json.dumps(
+        {
+            "batch": batch.input_reference,
+            "rows": [row.normalized_input for row in ingestion_rows],
+        },
+        sort_keys=True,
+    )
+    for evidence in evidence_rows:
+        evidence.refresh_from_db()
+        assert evidence.availability == SourceEvidence.Availability.REDACTED_BY_RETENTION
+        assert evidence.original_text == ""
+    assert "FIRST-INDEPENDENT-SECRET" not in materialized
+    assert "SECOND-INDEPENDENT-SECRET" not in materialized
+    assert batch.input_reference["retention"]["redacted_row_numbers"] == [1, 2]
+    assert [
+        row.normalized_input["retention"]["source_evidence_id"]
+        for row in ingestion_rows
+    ] == [str(row.source_evidence_id) for row in ingestion_rows]
+    assert result.redacted == 2
+    assert result.protected == 0
+    assert result.failures == 0
+
+
+@pytest.mark.django_db
+def test_cleanup_redacts_every_csv_row_in_completed_batch_without_shared_asset(
+    organization, user, source_manager, monkeypatch
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    batch = _request_and_run_import(
+        organization=organization,
+        user=user,
+        key="retention-two-independent-csv-rows",
+        payload=(
+            "source_url,original_text,author_name\n"
+            "https://example.com/posts/csv-one,CSV-FIRST-SECRET,CSV-FIRST-AUTHOR\n"
+            "https://example.com/posts/csv-two,CSV-SECOND-SECRET,CSV-SECOND-AUTHOR"
+        ),
+        source_type=IngestionBatch.SourceType.CSV,
+        monkeypatch=monkeypatch,
+    )
+    evidence_rows = _make_imported_evidence_old(batch=batch, cutoff=cutoff)
+
+    result = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+
+    batch.refresh_from_db()
+    for evidence in evidence_rows:
+        evidence.refresh_from_db()
+        assert evidence.availability == SourceEvidence.Availability.REDACTED_BY_RETENTION
+    materialized = json.dumps(batch.input_reference, sort_keys=True)
+    assert "CSV-FIRST-SECRET" not in materialized
+    assert "CSV-SECOND-SECRET" not in materialized
+    assert batch.input_reference["retention"]["redacted_row_numbers"] == [2, 3]
+    assert result.redacted == 2
+    assert result.protected == 0
+    assert result.failures == 0
+
+
+@pytest.mark.django_db
+def test_cleanup_selectively_redacts_transient_row_in_mixed_batch_without_shared_asset(
+    organization, user, source_manager, monkeypatch
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    transient_secret = "MIXED-TRANSIENT-SECRET"
+    protected_secret = "MIXED-PROTECTED-SECRET"
+    batch = _request_and_run_import(
+        organization=organization,
+        user=user,
+        key="retention-mixed-independent-rows",
+        payload={
+            "rows": [
+                {
+                    "source_url": "https://example.com/posts/mixed-transient",
+                    "original_text": transient_secret,
+                },
+                {
+                    "source_url": "https://example.com/posts/mixed-protected",
+                    "original_text": protected_secret,
+                },
+            ]
+        },
+        source_type=IngestionBatch.SourceType.JSON,
+        monkeypatch=monkeypatch,
+    )
+    evidence_rows = _make_imported_evidence_old(batch=batch, cutoff=cutoff)
+    rows_by_number = {row.row_number: row for row in batch.rows.all()}
+    protected = rows_by_number[2].source_evidence
+    with evidence_service_writes():
+        protected.retention_class = SourceEvidence.RetentionClass.CONFIRMED
+        protected.save(update_fields=["retention_class", "updated_at"])
+
+    result = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+
+    batch.refresh_from_db()
+    for evidence in evidence_rows:
+        evidence.refresh_from_db()
+    transient = rows_by_number[1].source_evidence
+    transient.refresh_from_db()
+    protected.refresh_from_db()
+    assert transient.availability == SourceEvidence.Availability.REDACTED_BY_RETENTION
+    assert protected.availability == SourceEvidence.Availability.AVAILABLE
+    assert transient_secret not in json.dumps(batch.input_reference, sort_keys=True)
+    assert protected_secret in json.dumps(batch.input_reference, sort_keys=True)
+    assert batch.input_reference["retention"]["redacted_row_numbers"] == [1]
+    assert result.redacted == 1
+    assert result.protected == 1
+    assert result.failures == 0
+
+
+@pytest.mark.django_db
+def test_cleanup_atomically_redacts_all_rows_that_share_batch_import_asset(
+    organization, user, source_manager, monkeypatch
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    import_asset = _asset(
+        organization=organization,
+        user=user,
+        marker="shared-import-document",
+    )
+    batch = _request_and_run_import(
+        organization=organization,
+        user=user,
+        key="retention-shared-import-asset",
+        payload={
+            "import_asset_id": str(import_asset.id),
+            "rows": [
+                {
+                    "source_url": "https://example.com/posts/shared-import-one",
+                    "original_text": "SHARED-IMPORT-FIRST",
+                },
+                {
+                    "source_url": "https://example.com/posts/shared-import-two",
+                    "original_text": "SHARED-IMPORT-SECOND",
+                },
+            ],
+        },
+        source_type=IngestionBatch.SourceType.JSON,
+        monkeypatch=monkeypatch,
+    )
+    evidence_rows = _make_imported_evidence_old(batch=batch, cutoff=cutoff)
+
+    result = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+    second_result = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+
+    batch.refresh_from_db()
+    batch.full_clean()
+    for evidence in evidence_rows:
+        evidence.refresh_from_db()
+        assert evidence.availability == SourceEvidence.Availability.REDACTED_BY_RETENTION
+        assert evidence.import_asset_id is None
+    assert "import_asset_id" not in batch.input_reference
+    assert batch.input_reference["retention"]["redacted_row_numbers"] == [1, 2]
+    assert result.redacted == 2
+    assert result.protected == 0
+    assert result.failures == 0
+    assert second_result.redacted == 0
+    assert second_result.deleted_text == 0
+    assert second_result.anonymized_actors == 0
+    assert second_result.no_op == 2
+
+
+@pytest.mark.django_db
+def test_cleanup_protects_entire_shared_import_asset_batch_when_one_row_is_confirmed(
+    organization, user, source_manager, monkeypatch
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    import_asset = _asset(
+        organization=organization,
+        user=user,
+        marker="mixed-shared-import-document",
+    )
+    batch = _request_and_run_import(
+        organization=organization,
+        user=user,
+        key="retention-mixed-shared-import-asset",
+        payload={
+            "import_asset_id": str(import_asset.id),
+            "rows": [
+                {
+                    "source_url": "https://example.com/posts/shared-mixed-transient",
+                    "original_text": "SHARED-MIXED-TRANSIENT",
+                },
+                {
+                    "source_url": "https://example.com/posts/shared-mixed-confirmed",
+                    "original_text": "SHARED-MIXED-CONFIRMED",
+                },
+            ],
+        },
+        source_type=IngestionBatch.SourceType.JSON,
+        monkeypatch=monkeypatch,
+    )
+    _make_imported_evidence_old(batch=batch, cutoff=cutoff)
+    rows_by_number = {row.row_number: row for row in batch.rows.all()}
+    transient = rows_by_number[1].source_evidence
+    confirmed = rows_by_number[2].source_evidence
+    with evidence_service_writes():
+        confirmed.retention_class = SourceEvidence.RetentionClass.CONFIRMED
+        confirmed.save(update_fields=["retention_class", "updated_at"])
+    original_reference = batch.input_reference
+
+    result = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+
+    batch.refresh_from_db()
+    transient.refresh_from_db()
+    confirmed.refresh_from_db()
+    assert batch.input_reference == original_reference
+    assert batch.input_reference["import_asset_id"] == str(import_asset.id)
+    assert transient.availability == SourceEvidence.Availability.AVAILABLE
+    assert confirmed.availability == SourceEvidence.Availability.AVAILABLE
+    assert transient.import_asset_id == import_asset.id
+    assert confirmed.import_asset_id == import_asset.id
+    assert result.redacted == 0
+    assert result.protected == 2
+    assert result.failures == 0
+    assert result.protected_reasons == {
+        "NON_TRANSIENT_RETENTION_CLASS": 1,
+        "SHARED_IMPORT_ASSET_GROUP_PROTECTED": 1,
+    }
+
+
+@pytest.mark.django_db
+def test_cleanup_fails_closed_for_incomplete_shared_import_asset_batch(
+    organization, user, source_manager
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    import_asset = _asset(
+        organization=organization,
+        user=user,
+        marker="incomplete-shared-import-document",
+    )
+    evidence = _evidence(
+        organization=organization,
+        user=user,
+        marker="incomplete-shared-import",
+        captured_at=cutoff - timedelta(days=1),
+        text="INCOMPLETE-SHARED-FIRST",
+        import_asset=import_asset,
+    )
+    reference = prepare_import_reference(
+        {
+            "import_asset_id": str(import_asset.id),
+            "rows": [
+                {
+                    "source_url": evidence.source_url,
+                    "original_text": evidence.original_text,
+                },
+                {
+                    "source_url": "https://example.com/posts/incomplete-missing-row",
+                    "original_text": "INCOMPLETE-SHARED-MISSING",
+                },
+            ],
+        },
+        source_type=IngestionBatch.SourceType.JSON,
+    )
+    batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.JSON,
+        input_reference=reference,
+        idempotency_key="retention-incomplete-shared-import",
+        created_by=user,
+    )
+    normalized = dict(reference["rows"][0])
+    normalized.pop("row_number")
+    with ingestion_row_service_writes():
+        IngestionRow.objects.create(
+            organization=organization,
+            batch=batch,
+            row_number=1,
+            normalized_input=normalized,
+            outcome=IngestionRow.Outcome.ACCEPTED,
+            source_content=evidence.source_signal.source_content,
+            source_signal=evidence.source_signal,
+            source_evidence=evidence,
+        )
+
+    result = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+
+    batch.refresh_from_db()
+    evidence.refresh_from_db()
+    assert evidence.availability == SourceEvidence.Availability.AVAILABLE
+    assert evidence.original_text == "INCOMPLETE-SHARED-FIRST"
+    assert batch.input_reference == reference
+    assert result.redacted == 0
+    assert result.protected == 1
+    assert result.failures == 0
+    assert result.deleted_text == 0
+    assert result.protected_reasons == {
+        "SHARED_IMPORT_ASSET_INCONSISTENT": 1,
+    }
+
+
+@pytest.mark.django_db
+def test_cleanup_shared_import_asset_group_rolls_back_when_second_evidence_fails(
+    organization, user, source_manager, monkeypatch
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    import_asset = _asset(
+        organization=organization,
+        user=user,
+        marker="rollback-shared-import-document",
+    )
+    batch = _request_and_run_import(
+        organization=organization,
+        user=user,
+        key="retention-rollback-shared-import-asset",
+        payload={
+            "import_asset_id": str(import_asset.id),
+            "rows": [
+                {
+                    "source_url": "https://example.com/posts/rollback-shared-one",
+                    "original_text": "ROLLBACK-SHARED-FIRST",
+                },
+                {
+                    "source_url": "https://example.com/posts/rollback-shared-two",
+                    "original_text": "ROLLBACK-SHARED-SECOND",
+                },
+            ],
+        },
+        source_type=IngestionBatch.SourceType.JSON,
+        monkeypatch=monkeypatch,
+    )
+    evidence_rows = _make_imported_evidence_old(batch=batch, cutoff=cutoff)
+    original_reference = batch.input_reference
+    original_redact = RetentionService._redact_locked
+    calls = []
+
+    def fail_second(evidence, **kwargs):
+        calls.append(evidence.id)
+        if len(calls) == 2:
+            raise ValidationError("simulated second evidence failure")
+        return original_redact(evidence, **kwargs)
+
+    monkeypatch.setattr(RetentionService, "_redact_locked", fail_second)
+
+    result = RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+
+    batch.refresh_from_db()
+    for evidence in evidence_rows:
+        evidence.refresh_from_db()
+        evidence.source_signal.source_content.refresh_from_db()
+        assert evidence.availability == SourceEvidence.Availability.AVAILABLE
+        assert evidence.original_text
+        assert evidence.import_asset_id == import_asset.id
+        assert evidence.source_signal.source_content.original_text
+    assert batch.input_reference == original_reference
+    assert result.redacted == 0
+    assert result.deleted_text == 0
+    assert result.anonymized_actors == 0
+    assert result.failures == 2
 
 
 @pytest.mark.django_db
@@ -1005,8 +1430,54 @@ def test_cleanup_does_not_anonymize_source_shared_with_protected_evidence(
     assert result.anonymized_actors == 0
     assert result.protected_reasons == {
         "NON_TRANSIENT_RETENTION_CLASS": 1,
-        "SHARED_OR_ACTIVE_RAW_COPY": 1,
+        "SHARED_SOURCE_CONTENT_GROUP_PROTECTED": 1,
     }
+
+
+@pytest.mark.django_db
+def test_cleanup_redacts_all_expired_evidence_that_share_source_content_idempotently(
+    organization, user, source_manager
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    first = _evidence(
+        organization=organization,
+        user=user,
+        marker="same-content-expired",
+        captured_at=cutoff - timedelta(days=1),
+    )
+    second = EvidenceService.create(
+        organization=organization,
+        signal=first.source_signal,
+        original_text="Second evidence copy on the same content",
+        source_url="https://example.com/posts/same-content-expired?copy=2",
+        platform="MANUAL",
+        collection_method=SourceEvidence.CollectionMethod.PASTE,
+        public_published_at=cutoff - timedelta(days=1),
+        created_by=user,
+    )
+    with evidence_service_writes():
+        second.captured_at = cutoff - timedelta(days=1)
+        second.save(update_fields=["captured_at", "updated_at"])
+
+    first_result = RetentionService.cleanup(
+        organization=organization, cutoff=cutoff, actor=source_manager
+    )
+    second_result = RetentionService.cleanup(
+        organization=organization, cutoff=cutoff, actor=source_manager
+    )
+
+    first.refresh_from_db()
+    second.refresh_from_db()
+    first.source_signal.source_content.refresh_from_db()
+    assert first.availability == SourceEvidence.Availability.REDACTED_BY_RETENTION
+    assert second.availability == SourceEvidence.Availability.REDACTED_BY_RETENTION
+    assert first.source_signal.source_content.original_text == ""
+    assert first.source_signal.source_content.author_public_name == ""
+    assert first_result.redacted == 2
+    assert first_result.protected == 0
+    assert first_result.failures == 0
+    assert second_result.redacted == 0
+    assert second_result.no_op == 2
 
 
 @pytest.mark.django_db
@@ -1087,6 +1558,106 @@ def test_cleanup_history_snapshot_scans_are_constant_for_one_or_many_evidence(
     )
 
     assert one == many == 2
+
+
+@pytest.mark.django_db
+def test_analysis_history_snapshots_use_two_bounded_streaming_iterators(
+    organization, monkeypatch
+):
+    observed = []
+    original_iterator = QuerySet.iterator
+
+    def observe_iterator(queryset, *args, **kwargs):
+        if queryset.model in {Job, AIRun}:
+            observed.append((queryset.model, kwargs.get("chunk_size")))
+        return original_iterator(queryset, *args, **kwargs)
+
+    monkeypatch.setattr(QuerySet, "iterator", observe_iterator)
+
+    RetentionService._active_analysis_evidence_ids(organization=organization)
+
+    assert [model for model, _chunk_size in observed] == [Job, AIRun]
+    assert all(
+        isinstance(chunk_size, int) and 1 <= chunk_size <= 1000
+        for _model, chunk_size in observed
+    )
+
+
+@pytest.mark.django_db
+def test_retention_component_discovery_has_constant_query_count(
+    organization, other_organization, user
+):
+    cutoff = timezone.now() - timedelta(days=30)
+
+    def discover(*, scope, count):
+        evidence_ids = [
+            _evidence(
+                organization=scope,
+                user=user,
+                marker=f"component-query-{scope.id}-{index}",
+                captured_at=cutoff - timedelta(days=1),
+            ).id
+            for index in range(count)
+        ]
+        with CaptureQueriesContext(connection) as queries:
+            components = RetentionService._retention_components(
+                organization=scope,
+                candidate_ids=evidence_ids,
+            )
+        return len(queries), len(components)
+
+    one_queries, one_components = discover(scope=organization, count=1)
+    many_queries, many_components = discover(scope=other_organization, count=8)
+
+    assert one_queries == many_queries
+    assert one_components == 1
+    assert many_components == 8
+
+
+@pytest.mark.django_db
+def test_cleanup_locks_organization_then_batch_evidence_and_ingestion_rows(
+    organization, user, source_manager, monkeypatch
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    batch = _request_and_run_import(
+        organization=organization,
+        user=user,
+        key="retention-lock-order",
+        payload={
+            "rows": [
+                {
+                    "source_url": "https://example.com/posts/lock-order",
+                    "original_text": "LOCK-ORDER-RAW",
+                }
+            ]
+        },
+        source_type=IngestionBatch.SourceType.JSON,
+        monkeypatch=monkeypatch,
+    )
+    _make_imported_evidence_old(batch=batch, cutoff=cutoff)
+    locked_models = []
+    original_fetch_all = QuerySet._fetch_all
+
+    def observe_locked_fetch(queryset):
+        if queryset._result_cache is None and queryset.query.select_for_update:
+            locked_models.append(queryset.model)
+        return original_fetch_all(queryset)
+
+    monkeypatch.setattr(QuerySet, "_fetch_all", observe_locked_fetch)
+
+    RetentionService.cleanup(
+        organization=organization,
+        cutoff=cutoff,
+        actor=source_manager,
+    )
+
+    first_positions = {
+        model: locked_models.index(model)
+        for model in (Organization, IngestionBatch, SourceEvidence, IngestionRow)
+    }
+    assert first_positions[Organization] < first_positions[IngestionBatch]
+    assert first_positions[IngestionBatch] < first_positions[SourceEvidence]
+    assert first_positions[SourceEvidence] < first_positions[IngestionRow]
 
 
 @pytest.mark.django_db

@@ -99,6 +99,11 @@ def evidence(source_pair):
 
 
 @pytest.fixture
+def second_source_pair(organization, user):
+    return _make_source(organization=organization, user=user, marker="c")
+
+
+@pytest.fixture
 def other_source_pair(other_organization, user):
     return _make_source(organization=other_organization, user=user, marker="b")
 
@@ -112,12 +117,13 @@ def ai_run_factory(user):
         *,
         job_type=Job.Type.LEAD_ANALYZE,
         purpose="LEAD_ANALYZE",
+        input_snapshot=None,
     ):
         number = next(counter)
         job = JobService.create(
             organization=organization,
             job_type=job_type,
-            input_snapshot={"candidate": number},
+            input_snapshot=input_snapshot or {"candidate": number},
             idempotency_key=f"lead-analyze-{organization.id}-{number}",
             created_by=user,
         )
@@ -150,8 +156,20 @@ def ai_run_factory(user):
 
 
 @pytest.fixture
-def ai_run(ai_run_factory, organization):
-    return ai_run_factory(organization)
+def analysis_snapshot():
+    def factory(*, candidate, evidence, ontology_snapshot):
+        evidence_rows = [
+            {"id": str(item.id), "content_hash": item.content_hash}
+            for item in evidence
+        ]
+        return {
+            "organization_id": str(candidate.organization_id),
+            "lead_candidate_id": str(candidate.id),
+            "evidence": evidence_rows,
+            "ontology_snapshot": ontology_snapshot,
+        }
+
+    return factory
 
 
 @pytest.fixture
@@ -247,8 +265,33 @@ def insight_payload(
             "confidence": {"evidence": "0.9500", "company_match": "0.8000", "ai": "0.9000"},
             "ontology_snapshot": {
                 "organization_id": str(evidence.organization_id),
-                "concept_ids": [str(approved_requirement.id), str(approved_capability.id)],
-                "evidence_ids": [str(approved_capability_evidence.id)],
+                "concept_versions": [
+                    {
+                        "concept_id": str(concept.id),
+                        "code": concept.code,
+                        "concept_type": concept.concept_type,
+                        "label_zh": concept.label_zh,
+                        "label_en": concept.label_en,
+                        "version": concept.version,
+                        "status": concept.status,
+                    }
+                    for concept in (approved_requirement, approved_capability)
+                ],
+                "relation_versions": [],
+                "evidence_references": [
+                    {
+                        "evidence_id": str(approved_capability_evidence.id),
+                        "evidence_type": approved_capability_evidence.evidence_type,
+                        "source_object_type": approved_capability_evidence.source_object_type,
+                        "source_object_id": None,
+                        "source_url": approved_capability_evidence.source_url,
+                        "excerpt": approved_capability_evidence.excerpt,
+                        "captured_at": None,
+                        "version": approved_capability_evidence.version,
+                        "status": approved_capability_evidence.status,
+                    }
+                ],
+                "generated_at": "2026-08-10T00:00:00+00:00",
             },
             "requirements": [
                 {
@@ -263,3 +306,16 @@ def insight_payload(
         }
 
     return factory
+
+
+@pytest.fixture
+def ai_run(ai_run_factory, candidate, evidence, insight_payload, analysis_snapshot):
+    payload = insight_payload()
+    return ai_run_factory(
+        candidate.organization,
+        input_snapshot=analysis_snapshot(
+            candidate=candidate,
+            evidence=[evidence],
+            ontology_snapshot=payload["ontology_snapshot"],
+        ),
+    )

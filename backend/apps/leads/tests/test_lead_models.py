@@ -2,6 +2,7 @@ from decimal import Decimal
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, models, transaction
 from django.db.models.deletion import ProtectedError
 
 from apps.leads.models import (
@@ -10,7 +11,23 @@ from apps.leads.models import (
     LeadInsight,
     LeadInsightRequirement,
 )
-from apps.leads.services import LeadService, LeadStateError
+from apps.leads.services import LeadService, LeadStateError, LeadVersionConflict
+
+
+def transition(*, candidate, organization=None, **kwargs):
+    return LeadService.transition(
+        organization=organization or candidate.organization,
+        candidate=candidate,
+        **kwargs,
+    )
+
+
+def record_insight(*, candidate, organization=None, **kwargs):
+    return LeadService.record_insight(
+        organization=organization or candidate.organization,
+        candidate=candidate,
+        **kwargs,
+    )
 
 
 @pytest.mark.django_db
@@ -27,10 +44,18 @@ def test_candidate_normalizes_public_company_domain(candidate):
         "https://example.com?from=lead",
         "https://example.com/#profile",
         "127.0.0.1",
+        "127.1",
+        "0177.0.0.1",
+        "0x7f.0.0.1",
+        "2130706433",
         "8.8.8.8",
         "localhost",
         "machine.internal",
         "example.local",
+        "device.home.arpa",
+        "hidden-service.onion",
+        "reserved.example.test",
+        "reserved.example.invalid",
         "not_a_domain",
     ],
 )
@@ -72,34 +97,41 @@ def test_candidate_must_be_created_as_discovered(organization, signal, user):
 
 @pytest.mark.django_db
 def test_b1_state_service_accepts_only_defined_transitions(candidate):
-    assert LeadService.transition(candidate=candidate, to_status="ANALYZING").status == "ANALYZING"
-    assert LeadService.transition(candidate=candidate, to_status="ANALYZED").status == "ANALYZED"
-    assert LeadService.transition(candidate=candidate, to_status="REVIEWED").status == "REVIEWED"
-    assert LeadService.transition(candidate=candidate, to_status="DISMISSED").status == "DISMISSED"
-    assert LeadService.transition(candidate=candidate, to_status="DISCOVERED").status == "DISCOVERED"
+    assert transition(candidate=candidate, to_status="ANALYZING").status == "ANALYZING"
+    assert transition(candidate=candidate, to_status="ANALYZED").status == "ANALYZED"
+    assert transition(candidate=candidate, to_status="REVIEWED").status == "REVIEWED"
+    assert transition(candidate=candidate, to_status="DISMISSED").status == "DISMISSED"
+    assert transition(candidate=candidate, to_status="DISCOVERED").status == "DISCOVERED"
 
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("forbidden_status", ["READY_FOR_HANDOFF", "HANDED_OFF", "REVIEWED"])
 def test_b1_state_service_rejects_handoff_and_skipped_transitions(candidate, forbidden_status):
     with pytest.raises(LeadStateError):
-        LeadService.transition(candidate=candidate, to_status=forbidden_status)
+        transition(candidate=candidate, to_status=forbidden_status)
 
 
 @pytest.mark.django_db
 def test_new_analysis_appends_insight_and_preserves_previous(
-    candidate, evidence, ai_run, ai_run_factory, insight_payload
+    candidate, evidence, ai_run, ai_run_factory, insight_payload, analysis_snapshot
 ):
-    LeadService.transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
     first_payload = insight_payload(intent=19, company_fit=18, specificity=15, capability_fit=10, recency=10)
     second_payload = insight_payload(intent=30, company_fit=22, specificity=18, capability_fit=10, recency=5)
 
-    first = LeadService.record_insight(
+    first = record_insight(
         candidate=candidate, ai_run=ai_run, evidence=[evidence], payload=first_payload
     )
-    second = LeadService.record_insight(
+    second = record_insight(
         candidate=candidate,
-        ai_run=ai_run_factory(candidate.organization),
+        ai_run=ai_run_factory(
+            candidate.organization,
+            input_snapshot=analysis_snapshot(
+                candidate=candidate,
+                evidence=[evidence],
+                ontology_snapshot=second_payload["ontology_snapshot"],
+            ),
+        ),
         evidence=[evidence],
         payload=second_payload,
     )
@@ -114,11 +146,54 @@ def test_new_analysis_appends_insight_and_preserves_previous(
 
 
 @pytest.mark.django_db
+def test_one_audited_run_cannot_create_multiple_insights(
+    candidate, evidence, ai_run, insight_payload
+):
+    transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    record_insight(
+        candidate=candidate, ai_run=ai_run, evidence=[evidence], payload=insight_payload()
+    )
+
+    with pytest.raises(ValidationError):
+        record_insight(
+            candidate=candidate,
+            ai_run=ai_run,
+            evidence=[evidence],
+            payload=insight_payload(),
+        )
+
+    assert candidate.insights.count() == 1
+
+
+@pytest.mark.django_db
+def test_reviewed_candidate_rejects_unreviewed_insight_append(
+    candidate, evidence, ai_run, ai_run_factory, insight_payload
+):
+    transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    record_insight(
+        candidate=candidate, ai_run=ai_run, evidence=[evidence], payload=insight_payload()
+    )
+    transition(candidate=candidate, to_status=LeadCandidate.Status.REVIEWED)
+
+    with pytest.raises(LeadStateError):
+        record_insight(
+            candidate=candidate,
+            ai_run=ai_run_factory(candidate.organization),
+            evidence=[evidence],
+            payload=insight_payload(),
+        )
+
+    candidate.refresh_from_db()
+    assert candidate.status == LeadCandidate.Status.REVIEWED
+    assert candidate.insights.count() == 1
+
+
+@pytest.mark.django_db
 def test_insight_preserves_scores_explanation_confidence_and_ontology(
     candidate, evidence, ai_run, insight_payload
 ):
-    LeadService.transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
-    insight = LeadService.record_insight(
+    transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    insight = record_insight(
         candidate=candidate,
         ai_run=ai_run,
         evidence=[evidence],
@@ -153,8 +228,8 @@ def test_recording_insight_creates_traceable_append_only_evidence_and_requiremen
     approved_capability,
     approved_capability_evidence,
 ):
-    LeadService.transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
-    insight = LeadService.record_insight(
+    transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    insight = record_insight(
         candidate=candidate, ai_run=ai_run, evidence=[evidence], payload=insight_payload()
     )
 
@@ -185,10 +260,10 @@ def test_capability_gate_requires_approved_knowledge_evidence(
 ):
     payload = insight_payload()
     payload["requirements"][0].pop("capability_knowledge_evidence")
-    LeadService.transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
 
     with pytest.raises(ValidationError):
-        LeadService.record_insight(
+        record_insight(
             candidate=candidate, ai_run=ai_run, evidence=[evidence], payload=payload
         )
 
@@ -197,8 +272,8 @@ def test_capability_gate_requires_approved_knowledge_evidence(
 def test_insight_history_cannot_be_updated_or_deleted(
     candidate, evidence, ai_run, insight_payload
 ):
-    LeadService.transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
-    insight = LeadService.record_insight(
+    transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    insight = record_insight(
         candidate=candidate, ai_run=ai_run, evidence=[evidence], payload=insight_payload()
     )
 
@@ -215,8 +290,8 @@ def test_insight_history_cannot_be_updated_or_deleted(
 def test_candidate_local_insight_version_is_unique(
     candidate, evidence, ai_run, insight_payload
 ):
-    LeadService.transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
-    insight = LeadService.record_insight(
+    transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    insight = record_insight(
         candidate=candidate, ai_run=ai_run, evidence=[evidence], payload=insight_payload()
     )
 
@@ -239,20 +314,104 @@ def test_candidate_local_insight_version_is_unique(
 
 @pytest.mark.django_db
 def test_latest_insight_cannot_be_rewound(
-    candidate, evidence, ai_run, ai_run_factory, insight_payload
+    candidate, evidence, ai_run, ai_run_factory, insight_payload, analysis_snapshot
 ):
-    LeadService.transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
-    first = LeadService.record_insight(
+    transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    first = record_insight(
         candidate=candidate, ai_run=ai_run, evidence=[evidence], payload=insight_payload()
     )
-    LeadService.record_insight(
+    second_payload = insight_payload()
+    record_insight(
         candidate=candidate,
-        ai_run=ai_run_factory(candidate.organization),
+        ai_run=ai_run_factory(
+            candidate.organization,
+            input_snapshot=analysis_snapshot(
+                candidate=candidate,
+                evidence=[evidence],
+                ontology_snapshot=second_payload["ontology_snapshot"],
+            ),
+        ),
         evidence=[evidence],
-        payload=insight_payload(),
+        payload=second_payload,
     )
     candidate.refresh_from_db()
     candidate.latest_insight = first
 
     with pytest.raises(ValidationError):
         candidate.save()
+
+
+@pytest.mark.django_db
+def test_latest_insight_cannot_be_cleared_after_history_exists(
+    candidate, evidence, ai_run, insight_payload
+):
+    transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    record_insight(
+        candidate=candidate, ai_run=ai_run, evidence=[evidence], payload=insight_payload()
+    )
+    candidate.latest_insight = None
+
+    with pytest.raises(ValidationError):
+        candidate.save()
+
+
+@pytest.mark.django_db
+def test_candidate_direct_save_detects_interleaved_version_change(candidate, monkeypatch):
+    original_full_clean = LeadCandidate.full_clean
+    injected = False
+
+    def full_clean_then_interleave(instance, *args, **kwargs):
+        nonlocal injected
+        original_full_clean(instance, *args, **kwargs)
+        if not injected and instance.pk == candidate.pk:
+            injected = True
+            models.QuerySet.update(
+                LeadCandidate._base_manager.filter(pk=instance.pk),
+                company_name="Concurrent writer",
+                version=instance.version + 1,
+            )
+
+    monkeypatch.setattr(LeadCandidate, "full_clean", full_clean_then_interleave)
+    candidate.company_name = "Stale writer"
+
+    with pytest.raises(LeadVersionConflict):
+        candidate.save(update_fields=["company_name", "updated_at"])
+
+    candidate.refresh_from_db()
+    assert candidate.company_name == "ABC Packaging"
+    assert candidate.version == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "invalid_values",
+    [
+        {"intent_score": 31},
+        {"evidence_confidence": Decimal("1.1000")},
+        {"score": 99},
+        {"score_band": LeadInsight.ScoreBand.LOW},
+        {"traceable_source": False, "high_value_eligible": True},
+    ],
+)
+def test_database_rejects_inconsistent_immutable_score_rows(
+    candidate, evidence, ai_run, insight_payload, invalid_values
+):
+    transition(candidate=candidate, to_status=LeadCandidate.Status.ANALYZING)
+    insight = record_insight(
+        candidate=candidate,
+        ai_run=ai_run,
+        evidence=[evidence],
+        payload=insight_payload(
+            intent=30,
+            company_fit=25,
+            specificity=20,
+            capability_fit=15,
+            recency=10,
+        ),
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        models.QuerySet.update(
+            LeadInsight._base_manager.filter(pk=insight.pk),
+            **invalid_values,
+        )

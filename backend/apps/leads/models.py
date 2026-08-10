@@ -7,9 +7,10 @@ from urllib.parse import urlsplit
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models.expressions import BaseExpression
+from django.utils import timezone
 
 from apps.common.models import OrganizationScopedModel
 
@@ -17,6 +18,25 @@ from .scoring import EvidenceGates, ScoreDimensions, score_lead
 
 
 _lead_history_write: ContextVar[bool] = ContextVar("lead_history_write", default=False)
+
+SPECIAL_USE_DOMAIN_SUFFIXES = frozenset(
+    {
+        "localhost",
+        "local",
+        "internal",
+        "home.arpa",
+        "onion",
+        "test",
+        "invalid",
+        "lan",
+        "home",
+        "corp",
+    }
+)
+
+
+class LeadVersionConflict(ValidationError):
+    pass
 
 
 @contextmanager
@@ -52,13 +72,21 @@ def normalize_company_domain(value: str) -> str:
     try:
         ipaddress.ip_address(hostname)
     except ValueError:
-        if hostname == "localhost" or hostname.endswith((".localhost", ".local", ".internal")):
-            raise ValidationError("Company domain must be public.")
         try:
             hostname = hostname.encode("idna").decode("ascii")
         except UnicodeError as error:
             raise ValidationError("Company domain is invalid.") from error
         labels = hostname.split(".")
+        if any(
+            hostname == suffix or hostname.endswith(f".{suffix}")
+            for suffix in SPECIAL_USE_DOMAIN_SUFFIXES
+        ):
+            raise ValidationError("Company domain must be public.")
+        if labels and all(
+            re.fullmatch(r"(?:0x[0-9a-f]+|0[0-7]+|[0-9]+)", label) is not None
+            for label in labels
+        ):
+            raise ValidationError("Company domain must not use an encoded IP address.")
         if len(labels) < 2 or len(hostname) > 253 or any(
             not label
             or len(label) > 63
@@ -262,17 +290,13 @@ class LeadCandidate(OrganizationScopedModel):
                     )
                 if self.version != persisted["version"]:
                     errors["version"] = "Candidate version is managed automatically."
-                if (
-                    self.latest_insight_id
-                    and self.latest_insight_id != persisted["latest_insight_id"]
-                    and persisted["latest_insight_id"] is not None
-                ):
-                    current_version = LeadInsight._base_manager.filter(
-                        pk=persisted["latest_insight_id"]
-                    ).values_list("version", flat=True).first()
-                    next_version = latest_values["version"] if latest_values else None
-                    if next_version is None or next_version <= current_version:
-                        errors["latest_insight"] = "Latest insight cannot move backward in history."
+                greatest_insight_id = LeadInsight._base_manager.filter(
+                    candidate_id=self.pk
+                ).order_by("-version", "-id").values_list("id", flat=True).first()
+                if greatest_insight_id is not None and self.latest_insight_id != greatest_insight_id:
+                    errors["latest_insight"] = (
+                        "Latest insight must remain the greatest candidate-local version."
+                    )
         if errors:
             raise ValidationError(errors)
 
@@ -280,16 +304,45 @@ class LeadCandidate(OrganizationScopedModel):
     def save(self, *args, **kwargs):
         adding = self._state.adding
         self.full_clean(validate_unique=False, validate_constraints=False)
-        if not adding:
-            persisted_version = type(self)._base_manager.values_list("version", flat=True).get(pk=self.pk)
-            self.version = persisted_version + 1
-            update_fields = kwargs.get("update_fields")
-            if update_fields is not None:
-                fields = set(update_fields) | {"version", "updated_at"}
-                if "company_domain" in fields:
-                    fields.add("company_domain")
-                kwargs["update_fields"] = list(fields)
-        return super().save(*args, **kwargs)
+        if adding:
+            return super().save(*args, **kwargs)
+        if kwargs.get("force_insert"):
+            raise ValueError("Cannot force insert an existing lead candidate.")
+
+        expected_version = self.version
+        next_version = expected_version + 1
+        updated_at = timezone.now()
+        requested_fields = kwargs.get("update_fields")
+        if requested_fields is None:
+            selected = {
+                field.name
+                for field in self._meta.concrete_fields
+                if not field.primary_key and field.name != "created_at"
+            }
+        else:
+            selected = {
+                field_name.removesuffix("_id") for field_name in requested_fields
+            } | {"version", "updated_at"}
+
+        self.version = next_version
+        self.updated_at = updated_at
+        values = {
+            field.attname: getattr(self, field.attname)
+            for field in self._meta.concrete_fields
+            if not field.primary_key
+            and field.name != "created_at"
+            and field.name in selected
+        }
+        database = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        queryset = type(self)._base_manager.using(database).filter(
+            pk=self.pk, version=expected_version
+        )
+        if models.QuerySet.update(queryset, **values) != 1:
+            self.version = expected_version
+            raise LeadVersionConflict("Lead candidate version changed before persistence.")
+        self._state.db = database
+        self._state.adding = False
+        return None
 
 
 class LeadInsight(ImmutableLeadHistory):
@@ -338,7 +391,72 @@ class LeadInsight(ImmutableLeadHistory):
         ordering = ["candidate_id", "version", "id"]
         constraints = [
             models.UniqueConstraint(fields=["candidate", "version"], name="leads_unique_insight_version"),
+            models.UniqueConstraint(fields=["ai_run"], name="leads_unique_insight_ai_run"),
             models.CheckConstraint(condition=models.Q(version__gte=1), name="leads_insight_version_positive"),
+            models.CheckConstraint(
+                condition=models.Q(
+                    intent_score__gte=0,
+                    intent_score__lte=30,
+                    company_fit_score__gte=0,
+                    company_fit_score__lte=25,
+                    specificity_score__gte=0,
+                    specificity_score__lte=20,
+                    capability_fit_score__gte=0,
+                    capability_fit_score__lte=15,
+                    recency_score__gte=0,
+                    recency_score__lte=10,
+                    score__gte=0,
+                    score__lte=100,
+                ),
+                name="leads_insight_scores_bounded",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    score=(
+                        models.F("intent_score")
+                        + models.F("company_fit_score")
+                        + models.F("specificity_score")
+                        + models.F("capability_fit_score")
+                        + models.F("recency_score")
+                    )
+                ),
+                name="leads_insight_score_sum",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(score__gte=80, score_band="HIGH")
+                    | models.Q(score__gte=60, score__lt=80, score_band="WATCH")
+                    | models.Q(score__gte=40, score__lt=60, score_band="OBSERVE")
+                    | models.Q(score__lt=40, score_band="LOW")
+                ),
+                name="leads_insight_band_matches_score",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(high_value_eligible=False)
+                    | models.Q(
+                        high_value_eligible=True,
+                        score_band="HIGH",
+                        traceable_source=True,
+                        explicit_need_or_company_match=True,
+                        capability_evidence=True,
+                        audited_run=True,
+                        ontology_snapshot_complete=True,
+                    )
+                ),
+                name="leads_insight_high_value_gated",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    evidence_confidence__gte=0,
+                    evidence_confidence__lte=1,
+                    company_match_confidence__gte=0,
+                    company_match_confidence__lte=1,
+                    ai_confidence__gte=0,
+                    ai_confidence__lte=1,
+                ),
+                name="leads_insight_confidence_bounded",
+            ),
         ]
 
     def clean(self):

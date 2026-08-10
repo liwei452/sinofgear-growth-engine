@@ -11,6 +11,7 @@ export type AppRouteComponents = {
   Login: Component
   Shell: Component
   Dashboard: Component
+  Promotion: Component
   Products: Component
   Knowledge: Component
   ContentFactory: Component
@@ -21,7 +22,6 @@ export type AppRouteComponents = {
   Analytics: Component
   LeadRadar: Component
   CompanyProfile: Component
-  Placeholder: Component
 }
 
 type RouterOptions = {
@@ -60,7 +60,7 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
     {
       path: "promotion",
       name: "promotion",
-      component: options.components.Placeholder,
+      component: options.components.Promotion,
       meta: { title: "推广" },
     },
     {

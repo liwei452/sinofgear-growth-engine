@@ -1,5 +1,5 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
-import { render, screen, within } from "@testing-library/vue"
+import { render, screen, waitFor, within } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
 import { createMemoryHistory, createRouter } from "vue-router"
 import { afterEach, expect, it, vi } from "vitest"
@@ -62,6 +62,12 @@ function successfulFetch(path: string): Promise<Response> {
   if (path === "/api/v1/jobs?status=SUCCEEDED") {
     return Promise.resolve(json({ next: null, previous: null, results: [completedJob] }))
   }
+  if (path === "/api/v1/jobs?status=RUNNING") {
+    return Promise.resolve(json({ next: null, previous: null, results: [runningJob] }))
+  }
+  if (path === "/api/v1/jobs?status=QUEUED" || path === "/api/v1/jobs?status=RETRY_QUEUED") {
+    return Promise.resolve(json({ next: null, previous: null, results: [] }))
+  }
   if (path === "/api/v1/jobs") {
     return Promise.resolve(json({ next: null, previous: null, results: [runningJob] }))
   }
@@ -79,7 +85,12 @@ function successfulFetch(path: string): Promise<Response> {
 
 async function renderDashboard(
   fetchMock: ReturnType<typeof vi.fn> = vi.fn(successfulFetch),
-  permissions = ["leads.read", "jobs.read", "products.read", "knowledge.read", "assets.read"],
+  permissions = [
+    "leads.read", "jobs.read",
+    "products.read", "products.manage",
+    "knowledge.read", "knowledge.create",
+    "assets.read", "assets.manage",
+  ],
 ) {
   vi.stubGlobal("fetch", fetchMock)
   const router = createRouter({
@@ -120,25 +131,61 @@ it("renders four honest decision-inbox regions from organization-scoped live dat
   expect(screen.queryByText("SOURCE_IMPORT")).not.toBeInTheDocument()
   expect(screen.queryByText("RUNNING")).not.toBeInTheDocument()
   expect(queryClient.getQueryState(["dashboard", "org-1", "decisions"])).toBeDefined()
-  expect(queryClient.getQueryState(["dashboard", "org-1", "active-jobs"])).toBeDefined()
+  for (const status of ["QUEUED", "RUNNING", "RETRY_QUEUED"]) {
+    expect(queryClient.getQueryState(["dashboard", "org-1", "active-jobs", status])).toBeDefined()
+  }
   expect(queryClient.getQueryState(["dashboard", "org-1", "recent-results"])).toBeDefined()
 })
 
-it("keeps the other regions usable when one summary query fails", async () => {
-  const fetchMock = vi.fn((path: string) => path === "/api/v1/jobs"
-    ? Promise.resolve(json({ detail: "unavailable" }, 503))
-    : successfulFetch(path))
+it("finds an older active job through status-filtered endpoints despite twenty newer terminal jobs", async () => {
+  const newerTerminalJobs = Array.from({ length: 20 }, (_, index) => ({
+    ...completedJob,
+    job_id: `newer-terminal-${index}`,
+  }))
+  const fetchMock = vi.fn((path: string) => {
+    if (path === "/api/v1/jobs") {
+      return Promise.resolve(json({ next: null, previous: null, results: newerTerminalJobs }))
+    }
+    if (path === "/api/v1/jobs?status=RUNNING") {
+      return Promise.resolve(json({ next: null, previous: null, results: [runningJob] }))
+    }
+    if (path === "/api/v1/jobs?status=QUEUED" || path === "/api/v1/jobs?status=RETRY_QUEUED") {
+      return Promise.resolve(json({ next: null, previous: null, results: [] }))
+    }
+    return successfulFetch(path)
+  })
+  await renderDashboard(fetchMock)
+
+  expect(await screen.findByText("正在筛选公开线索")).toBeVisible()
+  expect(screen.queryByText("当前没有正在执行的 AI 任务。")).not.toBeInTheDocument()
+  expect(fetchMock).not.toHaveBeenCalledWith("/api/v1/jobs", expect.any(Object))
+})
+
+it("keeps successful active statuses and other regions usable when one active-status query fails", async () => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path === "/api/v1/jobs?status=RUNNING") return Promise.resolve(json({ detail: "unavailable" }, 503))
+    if (path === "/api/v1/jobs?status=QUEUED") {
+      return Promise.resolve(json({
+        next: null,
+        previous: null,
+        results: [{ ...runningJob, job_id: "job-queued", status: "QUEUED" }],
+      }))
+    }
+    return successfulFetch(path)
+  })
   const user = userEvent.setup()
   await renderDashboard(fetchMock)
 
   const runningRegion = await screen.findByRole("region", { name: "AI 正在执行" })
-  expect(await within(runningRegion).findByRole("alert")).toHaveTextContent("AI 执行情况暂时无法加载")
+  expect(await within(runningRegion).findByRole("alert")).toHaveTextContent("部分 AI 执行状态暂时无法确认")
+  expect(await within(runningRegion).findByText("正在筛选公开线索")).toBeVisible()
+  expect(within(runningRegion).queryByText("当前没有正在执行的 AI 任务。")).not.toBeInTheDocument()
   expect(await screen.findByText("北方传动")).toBeVisible()
   expect(await screen.findByText("公开线索筛选已完成")).toBeVisible()
   expect(await screen.findByText("还缺可用素材")).toBeVisible()
 
-  await user.click(within(runningRegion).getByRole("button", { name: "重新加载执行情况" }))
-  expect(fetchMock).toHaveBeenCalledWith("/api/v1/jobs", expect.any(Object))
+  await user.click(within(runningRegion).getByRole("button", { name: "重新加载未确认状态" }))
+  expect(fetchMock).toHaveBeenCalledWith("/api/v1/jobs?status=RUNNING", expect.any(Object))
 })
 
 it("does not request or imply data the current user cannot read", async () => {
@@ -149,4 +196,51 @@ it("does not request or imply data the current user cannot read", async () => {
   expect(screen.getByText("你没有查看 AI 任务的权限。")).toBeVisible()
   expect(screen.getByText("当前权限下无法检查公司资料完整度。")).toBeVisible()
   expect(fetchMock).not.toHaveBeenCalled()
+})
+
+it.each([
+  { read: "products.read", action: "查看产品库", forbidden: "补充产品" },
+  { read: "knowledge.read", action: "查看知识库", forbidden: "补充知识" },
+  { read: "assets.read", action: "查看素材库", forbidden: "补充素材" },
+])("uses read-only company-gap guidance for $read", async ({ read, action, forbidden }) => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path === "/api/v1/knowledge/concepts") return Promise.resolve(json({ results: [] }))
+    if (path === "/api/v1/products" || path === "/api/v1/assets") {
+      return Promise.resolve(json({ next: null, previous: null, results: [] }))
+    }
+    return successfulFetch(path)
+  })
+  await renderDashboard(fetchMock, [read])
+
+  expect(await screen.findByRole("link", { name: action })).toBeVisible()
+  expect(screen.queryByRole("link", { name: forbidden })).not.toBeInTheDocument()
+  expect(screen.getByText(/如需补充，请联系管理员/)).toBeVisible()
+})
+
+it("updates company-gap actions when mutation permissions change", async () => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path === "/api/v1/knowledge/concepts") return Promise.resolve(json({ results: [] }))
+    if (path === "/api/v1/products" || path === "/api/v1/assets") {
+      return Promise.resolve(json({ next: null, previous: null, results: [] }))
+    }
+    return successfulFetch(path)
+  })
+  const readPermissions = ["products.read", "knowledge.read", "assets.read"]
+  const { queryClient } = await renderDashboard(fetchMock, readPermissions)
+
+  expect(await screen.findByRole("link", { name: "查看产品库" })).toBeVisible()
+  expect(screen.getByRole("link", { name: "查看知识库" })).toBeVisible()
+  expect(screen.getByRole("link", { name: "查看素材库" })).toBeVisible()
+
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, userWith([
+    ...readPermissions,
+    "products.manage", "knowledge.create", "assets.manage",
+  ]))
+
+  await waitFor(() => {
+    expect(screen.getByRole("link", { name: "补充产品" })).toBeVisible()
+    expect(screen.getByRole("link", { name: "补充知识" })).toBeVisible()
+    expect(screen.getByRole("link", { name: "补充素材" })).toBeVisible()
+  })
+  expect(screen.queryByRole("link", { name: /查看.+库/ })).not.toBeInTheDocument()
 })

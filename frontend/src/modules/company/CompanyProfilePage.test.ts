@@ -1,5 +1,5 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
-import { render, screen, within } from "@testing-library/vue"
+import { render, screen, waitFor, within } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
 import { createMemoryHistory, createRouter } from "vue-router"
 import { afterEach, expect, it, vi } from "vitest"
@@ -26,7 +26,11 @@ function page(results: unknown[]): Response {
 
 async function renderCompany(
   fetchMock: ReturnType<typeof vi.fn>,
-  permissions = ["products.read", "knowledge.read", "assets.read"],
+  permissions = [
+    "products.read", "products.manage",
+    "knowledge.read", "knowledge.create",
+    "assets.read", "assets.manage",
+  ],
 ) {
   vi.stubGlobal("fetch", fetchMock)
   const router = createRouter({
@@ -105,6 +109,46 @@ it("permission-gates every source and editor link", async () => {
   expect(await screen.findByText("你没有查看产品资料的权限。")).toBeVisible()
   expect(screen.getByText("你没有查看素材的权限。")).toBeVisible()
   expect(screen.queryByRole("link", { name: /产品/ })).not.toBeInTheDocument()
-  expect(await screen.findByRole("link", { name: "去知识库补充" })).toHaveAttribute("href", "/knowledge")
+  expect(await screen.findByRole("link", { name: "查看知识库" })).toHaveAttribute("href", "/knowledge")
+  expect(screen.getByText(/如需补充，请联系管理员/)).toBeVisible()
   expect(fetchMock).toHaveBeenCalledTimes(1)
+})
+
+it.each([
+  { read: "products.read", action: "查看产品库", path: "/products" },
+  { read: "knowledge.read", action: "查看知识库", path: "/knowledge" },
+  { read: "assets.read", action: "查看素材库", path: "/assets" },
+])("uses read-only wording for $read without implying mutation authority", async ({ read, action, path }) => {
+  const fetchMock = vi.fn((requestPath: string) => requestPath === "/api/v1/knowledge/concepts"
+    ? Promise.resolve(json({ results: [] }))
+    : Promise.resolve(page([])))
+  await renderCompany(fetchMock, [read])
+
+  expect(await screen.findByRole("link", { name: action })).toHaveAttribute("href", path)
+  expect(screen.queryByRole("link", { name: /补充|管理/ })).not.toBeInTheDocument()
+  expect(screen.getByText(/如需补充，请联系管理员/)).toBeVisible()
+})
+
+it("updates source actions when the current user's permissions change", async () => {
+  const fetchMock = vi.fn((path: string) => path === "/api/v1/knowledge/concepts"
+    ? Promise.resolve(json({ results: [] }))
+    : Promise.resolve(page([])))
+  const readPermissions = ["products.read", "knowledge.read", "assets.read"]
+  const { queryClient } = await renderCompany(fetchMock, readPermissions)
+
+  expect(await screen.findByRole("link", { name: "查看产品库" })).toBeVisible()
+  expect(screen.getByRole("link", { name: "查看知识库" })).toBeVisible()
+  expect(screen.getByRole("link", { name: "查看素材库" })).toBeVisible()
+
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, userWith([
+    ...readPermissions,
+    "products.manage", "knowledge.create", "assets.manage",
+  ]))
+
+  await waitFor(() => {
+    expect(screen.getByRole("link", { name: "去产品库补充" })).toBeVisible()
+    expect(screen.getByRole("link", { name: "去知识库补充" })).toBeVisible()
+    expect(screen.getByRole("link", { name: "去素材库补充" })).toBeVisible()
+  })
+  expect(screen.queryByRole("link", { name: /查看.+库/ })).not.toBeInTheDocument()
 })

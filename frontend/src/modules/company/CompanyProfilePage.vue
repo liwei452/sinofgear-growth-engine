@@ -15,6 +15,9 @@ const has = (permission: string): boolean => permissions.value.includes(permissi
 const canReadProducts = computed(() => has("products.read"))
 const canReadKnowledge = computed(() => has("knowledge.read"))
 const canReadAssets = computed(() => has("assets.read"))
+const canManageProducts = computed(() => has("products.manage"))
+const canCreateKnowledge = computed(() => has("knowledge.create"))
+const canManageAssets = computed(() => has("assets.manage"))
 
 const productsQuery = useQuery({
   queryKey: computed(() => productQueryKeys.list(organizationId.value, {})),
@@ -75,11 +78,15 @@ function assetCountLabel(count: number): string {
           </p>
           <div v-else class="profile-empty-copy">
             <strong>还没有产品资料</strong>
-            <p>先记录真实产品、制造能力与交付范围。</p>
+            <p v-if="canManageProducts">先记录真实产品、制造能力与交付范围。</p>
+            <p v-else>如需补充，请联系管理员。</p>
           </div>
           <RouterLink class="text-link" to="/products">
-            {{ productsQuery.data.value?.results.length ? "管理产品资料" : "去产品库补充" }}
+            {{ productsQuery.data.value?.results.length
+              ? (canManageProducts ? "管理产品资料" : "查看产品资料")
+              : (canManageProducts ? "去产品库补充" : "查看产品库") }}
           </RouterLink>
+          <p v-if="productsQuery.data.value?.results.length && !canManageProducts" class="muted">如需补充或编辑，请联系管理员。</p>
         </template>
       </section>
 
@@ -103,11 +110,15 @@ function assetCountLabel(count: number): string {
           </p>
           <div v-else class="profile-empty-copy">
             <strong>还没有公司知识</strong>
-            <p>补充经过确认的卖点、工艺、标准和市场术语。</p>
+            <p v-if="canCreateKnowledge">补充经过确认的卖点、工艺、标准和市场术语。</p>
+            <p v-else>如需补充，请联系管理员。</p>
           </div>
           <RouterLink class="text-link" to="/knowledge">
-            {{ knowledgeQuery.data.value?.length ? "管理公司知识" : "去知识库补充" }}
+            {{ knowledgeQuery.data.value?.length
+              ? (canCreateKnowledge ? "管理公司知识" : "查看公司知识")
+              : (canCreateKnowledge ? "去知识库补充" : "查看知识库") }}
           </RouterLink>
+          <p v-if="knowledgeQuery.data.value?.length && !canCreateKnowledge" class="muted">如需补充或编辑，请联系管理员。</p>
         </template>
       </section>
 
@@ -131,11 +142,15 @@ function assetCountLabel(count: number): string {
           </p>
           <div v-else class="profile-empty-copy">
             <strong>还没有可用素材</strong>
-            <p>上传真实图片、视频或文档，不在这里重复上传表单。</p>
+            <p v-if="canManageAssets">上传真实图片、视频或文档，不在这里重复上传表单。</p>
+            <p v-else>如需补充，请联系管理员。</p>
           </div>
           <RouterLink class="text-link" to="/assets">
-            {{ assetsQuery.data.value?.results.length ? "管理素材" : "去素材库补充" }}
+            {{ assetsQuery.data.value?.results.length
+              ? (canManageAssets ? "管理素材" : "查看素材")
+              : (canManageAssets ? "去素材库补充" : "查看素材库") }}
           </RouterLink>
+          <p v-if="assetsQuery.data.value?.results.length && !canManageAssets" class="muted">如需补充或编辑，请联系管理员。</p>
         </template>
       </section>
     </div>

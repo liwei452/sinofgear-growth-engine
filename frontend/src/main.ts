@@ -7,7 +7,6 @@ import { queryClient } from "./app/queryClient"
 import { createAppRouter } from "./app/router"
 import LoginPage from "./modules/auth/LoginPage.vue"
 import DashboardPage from "./modules/dashboard/DashboardPage.vue"
-import PlaceholderPage from "./shared/components/PlaceholderPage.vue"
 import "./styles/tokens.css"
 import "./styles/base.css"
 
@@ -16,6 +15,7 @@ const router = createAppRouter(queryClient, {
     Login: LoginPage,
     Shell: AppShell,
     Dashboard: DashboardPage,
+    Promotion: defineAsyncComponent(() => import("./modules/promotion/PromotionTransitionPage.vue")),
     Products: defineAsyncComponent(() => import("./modules/products/ProductLibraryPage.vue")),
     Knowledge: defineAsyncComponent(() => import("./modules/knowledge/KnowledgeLibraryPage.vue")),
     ContentFactory: defineAsyncComponent(() => import("./modules/content/ContentFactoryPage.vue")),
@@ -26,7 +26,6 @@ const router = createAppRouter(queryClient, {
     Analytics: defineAsyncComponent(() => import("./modules/analytics/AnalyticsPage.vue")),
     LeadRadar: defineAsyncComponent(() => import("./modules/leads/LeadRadarPage.vue")),
     CompanyProfile: defineAsyncComponent(() => import("./modules/company/CompanyProfilePage.vue")),
-    Placeholder: PlaceholderPage,
   },
 })
 

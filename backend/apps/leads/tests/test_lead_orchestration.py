@@ -268,6 +268,9 @@ def test_new_analysis_job_appends_version_without_overwriting_history(
         evidence_ids=[evidence.id],
         actor=user,
     )
+    candidate.refresh_from_db()
+    assert candidate.status == LeadCandidate.Status.ANALYZING
+    assert candidate.analysis_lease_token is not None
     second_prompt = PromptVersionService.create(
         purpose="LEAD_ANALYZE",
         code="lead-analysis-second",
@@ -298,6 +301,99 @@ def test_new_analysis_job_appends_version_without_overwriting_history(
     assert insights[0].ai_run_id == first_run.id
     assert insights[1].ai_run_id == second_run.id
     assert first_run.output_json["need_summary_en"] != second_run.output_json["need_summary_en"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "manual_status",
+    [LeadCandidate.Status.REVIEWED, LeadCandidate.Status.DISMISSED],
+)
+def test_active_reanalysis_lease_blocks_manual_transition(
+    candidate,
+    evidence,
+    approved_requirement,
+    approved_capability,
+    user,
+    manual_status,
+):
+    first_snapshot, prompt, job = _analysis_context(candidate, evidence, user)
+    output = _valid_output(snapshot=first_snapshot, evidence_id=evidence.id)
+    provider_registry.register("lead-sequence", SequenceProvider([output]), replace=True)
+    execute_lead_analysis_job(job.id, prompt.id)
+
+    build_analysis_snapshot(
+        candidate=candidate,
+        evidence_ids=[evidence.id],
+        actor=user,
+    )
+    candidate.refresh_from_db()
+    lease = candidate.analysis_lease_token
+
+    with pytest.raises(LeadStateError, match="active analysis lease"):
+        LeadService.transition(
+            organization=candidate.organization,
+            candidate=candidate,
+            to_status=manual_status,
+            expected_version=candidate.version,
+        )
+
+    candidate.refresh_from_db()
+    assert candidate.status == LeadCandidate.Status.ANALYZING
+    assert candidate.analysis_lease_token == lease
+
+
+@pytest.mark.django_db
+def test_failed_reanalysis_restores_analyzed_and_retry_reacquires_lease(
+    candidate,
+    evidence,
+    approved_requirement,
+    approved_capability,
+    user,
+):
+    first_snapshot, prompt, first_job = _analysis_context(candidate, evidence, user)
+    first_output = _valid_output(snapshot=first_snapshot, evidence_id=evidence.id)
+    provider_registry.register(
+        "lead-sequence", SequenceProvider([first_output]), replace=True
+    )
+    execute_lead_analysis_job(first_job.id, prompt.id)
+
+    second_snapshot = build_analysis_snapshot(
+        candidate=candidate,
+        evidence_ids=[evidence.id],
+        actor=user,
+    )
+    second_job = JobService.create(
+        organization=candidate.organization,
+        job_type=Job.Type.LEAD_ANALYZE,
+        input_snapshot=second_snapshot,
+        idempotency_key=f"retry-reanalysis-{candidate.id}",
+        created_by=user,
+    )
+    valid = _valid_output(snapshot=second_snapshot, evidence_id=evidence.id)
+    invalid = deepcopy(valid)
+    invalid["reasons"][0]["evidence_ids"] = []
+    provider_registry.register(
+        "lead-sequence",
+        SequenceProvider([invalid, invalid, valid]),
+        replace=True,
+    )
+
+    failed = execute_lead_analysis_job(second_job.id, prompt.id)
+
+    candidate.refresh_from_db()
+    assert failed.status == AIRun.Status.FAILED
+    assert candidate.status == LeadCandidate.Status.ANALYZED
+    assert candidate.analysis_lease_token is None
+    assert candidate.insights.count() == 1
+
+    JobService.retry(second_job.id)
+    succeeded = execute_lead_analysis_job(second_job.id, prompt.id)
+
+    candidate.refresh_from_db()
+    assert succeeded.status == AIRun.Status.SUCCEEDED
+    assert candidate.status == LeadCandidate.Status.ANALYZED
+    assert candidate.analysis_lease_token is None
+    assert candidate.insights.count() == 2
 
 
 @pytest.mark.django_db

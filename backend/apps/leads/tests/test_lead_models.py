@@ -17,6 +17,11 @@ from apps.leads.services import LeadService, LeadStateError, LeadVersionConflict
 
 
 def transition(*, candidate, organization=None, **kwargs):
+    if kwargs.get("to_status") == LeadCandidate.Status.ANALYZING:
+        return LeadService.begin_analysis(
+            organization=organization or candidate.organization,
+            candidate=candidate,
+        )
     return LeadService.transition(
         organization=organization or candidate.organization,
         candidate=candidate,
@@ -167,21 +172,49 @@ def test_candidate_analysis_lease_context_allows_service_lifecycle(candidate):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_database_rejects_discovered_candidate_with_analysis_lease(candidate):
+@pytest.mark.parametrize(
+    ("status", "lease"),
+    [
+        (LeadCandidate.Status.DISCOVERED, uuid4()),
+        (LeadCandidate.Status.ANALYZING, None),
+        (LeadCandidate.Status.ANALYZED, uuid4()),
+    ],
+)
+def test_database_enforces_exact_analysis_lease_status_invariant(
+    candidate, status, lease
+):
     with pytest.raises(IntegrityError), transaction.atomic():
         models.QuerySet.update(
             LeadCandidate._base_manager.filter(pk=candidate.pk),
-            analysis_lease_token=uuid4(),
+            status=status,
+            analysis_lease_token=lease,
         )
 
 
 @pytest.mark.django_db
-def test_b1_state_service_accepts_only_defined_transitions(candidate):
-    assert transition(candidate=candidate, to_status="ANALYZING").status == "ANALYZING"
-    assert transition(candidate=candidate, to_status="ANALYZED").status == "ANALYZED"
-    assert transition(candidate=candidate, to_status="REVIEWED").status == "REVIEWED"
-    assert transition(candidate=candidate, to_status="DISMISSED").status == "DISMISSED"
-    assert transition(candidate=candidate, to_status="DISCOVERED").status == "DISCOVERED"
+def test_public_state_service_cannot_enter_analyzing(candidate):
+    with pytest.raises(LeadStateError, match="begin_analysis"):
+        LeadService.transition(
+            organization=candidate.organization,
+            candidate=candidate,
+            to_status=LeadCandidate.Status.ANALYZING,
+        )
+
+    candidate.refresh_from_db()
+    assert candidate.status == LeadCandidate.Status.DISCOVERED
+    assert candidate.analysis_lease_token is None
+
+
+@pytest.mark.django_db
+def test_begin_analysis_atomically_enters_analyzing_with_lease(candidate):
+    started = LeadService.begin_analysis(
+        organization=candidate.organization,
+        candidate=candidate,
+        expected_version=candidate.version,
+    )
+
+    assert started.status == LeadCandidate.Status.ANALYZING
+    assert started.analysis_lease_token is not None
 
 
 @pytest.mark.django_db

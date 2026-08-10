@@ -17,6 +17,11 @@ from apps.leads.services import LeadService
 
 
 def transition(*, candidate, organization=None, **kwargs):
+    if kwargs.get("to_status") == LeadCandidate.Status.ANALYZING:
+        return LeadService.begin_analysis(
+            organization=organization or candidate.organization,
+            candidate=candidate,
+        )
     return LeadService.transition(
         organization=organization or candidate.organization,
         candidate=candidate,

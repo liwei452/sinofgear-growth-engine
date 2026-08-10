@@ -252,7 +252,9 @@ class LeadCandidate(OrganizationScopedModel):
     B1_TRANSITIONS = {
         Status.DISCOVERED: frozenset({Status.ANALYZING}),
         Status.ANALYZING: frozenset({Status.ANALYZED}),
-        Status.ANALYZED: frozenset({Status.REVIEWED, Status.DISMISSED}),
+        Status.ANALYZED: frozenset(
+            {Status.ANALYZING, Status.REVIEWED, Status.DISMISSED}
+        ),
         Status.REVIEWED: frozenset({Status.DISMISSED}),
         Status.DISMISSED: frozenset({Status.DISCOVERED}),
     }
@@ -300,8 +302,14 @@ class LeadCandidate(OrganizationScopedModel):
             models.CheckConstraint(condition=models.Q(version__gte=1), name="leads_candidate_version_positive"),
             models.CheckConstraint(
                 condition=(
-                    models.Q(analysis_lease_token__isnull=True)
-                    | models.Q(status__in=["ANALYZING", "ANALYZED"])
+                    models.Q(
+                        status="ANALYZING",
+                        analysis_lease_token__isnull=False,
+                    )
+                    | (
+                        ~models.Q(status="ANALYZING")
+                        & models.Q(analysis_lease_token__isnull=True)
+                    )
                 ),
                 name="leads_candidate_lease_status_valid",
             ),
@@ -326,6 +334,12 @@ class LeadCandidate(OrganizationScopedModel):
                 )
             if self.status != self.Status.DISCOVERED:
                 errors["status"] = "Lead candidates must be created as DISCOVERED."
+        if (self.status == self.Status.ANALYZING) != (
+            self.analysis_lease_token is not None
+        ):
+            errors.setdefault("analysis_lease_token", (
+                "ANALYZING status and an analysis lease must exist together."
+            ))
         if self.latest_insight_id:
             _related_organization_error(self, "latest_insight", errors)
             latest_values = LeadInsight._base_manager.filter(pk=self.latest_insight_id).values(

@@ -120,8 +120,7 @@ class LeadService:
             LeadCandidate.Status.ANALYZED,
         }:
             raise LeadStateError("Lead must be discovered or analyzed before analysis starts.")
-        if locked.status == LeadCandidate.Status.DISCOVERED:
-            locked.status = LeadCandidate.Status.ANALYZING
+        locked.status = LeadCandidate.Status.ANALYZING
         locked.analysis_lease_token = uuid4()
         with lead_analysis_lease_writes():
             locked.save(
@@ -147,6 +146,12 @@ class LeadService:
         )
         if locked.version != expected:
             raise LeadVersionConflict("Lead candidate version is stale.")
+        if locked.analysis_lease_token is not None:
+            raise LeadStateError(
+                "Lead candidate has an active analysis lease; manual transitions are disabled."
+            )
+        if to_status == LeadCandidate.Status.ANALYZING:
+            raise LeadStateError("Use begin_analysis to enter ANALYZING.")
         if to_status not in LeadCandidate.B1_TRANSITIONS.get(locked.status, frozenset()):
             raise LeadStateError(f"B1 cannot transition from {locked.status} to {to_status}.")
         locked.status = to_status
@@ -344,7 +349,7 @@ class LeadService:
             locked_candidate.status = LeadCandidate.Status.ANALYZED
         update_fields = ["latest_insight", "status", "updated_at"]
         lease_context = nullcontext()
-        if audited_output is not None:
+        if locked_candidate.analysis_lease_token is not None:
             locked_candidate.analysis_lease_token = None
             update_fields.append("analysis_lease_token")
             lease_context = lead_analysis_lease_writes()
@@ -508,12 +513,13 @@ class LeadService:
             or str(candidate.analysis_lease_token) != str(analysis_lease_token)
         ):
             return
-        if (
-            started_from == LeadCandidate.Status.DISCOVERED
-            and candidate.status == LeadCandidate.Status.ANALYZING
-        ):
+        if candidate.status != LeadCandidate.Status.ANALYZING:
+            return
+        if started_from == LeadCandidate.Status.DISCOVERED:
             candidate.status = LeadCandidate.Status.DISCOVERED
-        elif started_from != LeadCandidate.Status.ANALYZED:
+        elif started_from == LeadCandidate.Status.ANALYZED:
+            candidate.status = LeadCandidate.Status.ANALYZED
+        else:
             return
         candidate.analysis_lease_token = None
         with lead_analysis_lease_writes():
@@ -545,8 +551,7 @@ class LeadService:
         )
         if candidate.status != expected_status:
             raise LeadStateError("Lead candidate is not recoverable for retry.")
-        if started_from == LeadCandidate.Status.DISCOVERED:
-            candidate.status = LeadCandidate.Status.ANALYZING
+        candidate.status = LeadCandidate.Status.ANALYZING
         candidate.analysis_lease_token = analysis_lease_token
         with lead_analysis_lease_writes():
             candidate.save(

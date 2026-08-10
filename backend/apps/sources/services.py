@@ -531,6 +531,7 @@ class _RetentionComponent:
     asset_ids: tuple[object, ...]
     asset_batch_ids: tuple[object, ...]
     shares_source_content: bool
+    has_unproven_screenshot_identity: bool
 
 
 class RetentionService:
@@ -690,139 +691,214 @@ class RetentionService:
     def _retention_components(
         *, organization, candidate_ids
     ) -> list[_RetentionComponent]:
-        """Build transitive raw-data components from immutable asset identity."""
+        """Build only candidate-reachable transitive raw-data components."""
         candidate_ids = tuple(candidate_ids)
+        if not candidate_ids:
+            return []
         candidate_set = set(candidate_ids)
-        asset_batches = list(
-            IngestionBatch.objects.filter(
-                organization=organization,
-                request_import_asset_id__isnull=False,
-            ).order_by("pk")
-        )
-        asset_ids = {
-            batch.request_import_asset_id for batch in asset_batches
-        }
-        asset_rows = list(
-            IngestionRow.objects.filter(
-                organization=organization,
-                batch_id__in={batch.id for batch in asset_batches},
-            ).order_by("batch_id", "row_number", "pk")
-        )
-        seed_evidence_ids = candidate_set | {
-            row.source_evidence_id
-            for row in asset_rows
-            if row.source_evidence_id is not None
-        }
-        evidence_rows = list(
-            SourceEvidence.objects.filter(organization=organization)
-            .filter(
-                Q(pk__in=seed_evidence_ids)
-                | Q(import_asset_id__in=asset_ids)
-            )
-            .select_related("source_signal__source_content")
-            .order_by("pk")
-        )
-        content_ids = {
-            evidence.source_signal.source_content_id
-            for evidence in evidence_rows
-            if evidence.source_signal.source_content_id is not None
-        }
-        if content_ids:
-            evidence_by_id = {evidence.id: evidence for evidence in evidence_rows}
-            for evidence in (
-                SourceEvidence.objects.filter(
-                    organization=organization,
-                    source_signal__source_content_id__in=content_ids,
-                )
-                .select_related("source_signal__source_content")
-                .order_by("pk")
-            ):
-                evidence_by_id[evidence.id] = evidence
-            evidence_rows = list(evidence_by_id.values())
+        adjacency: dict[tuple[str, object], set[tuple[str, object]]] = defaultdict(set)
+        unproven_nodes: set[tuple[str, object]] = set()
 
-        parent = {evidence.id: evidence.id for evidence in evidence_rows}
-
-        def find(evidence_id):
-            while parent[evidence_id] != evidence_id:
-                parent[evidence_id] = parent[parent[evidence_id]]
-                evidence_id = parent[evidence_id]
-            return evidence_id
-
-        def union(evidence_ids):
-            ordered = sorted(
-                {evidence_id for evidence_id in evidence_ids if evidence_id in parent},
-                key=str,
-            )
-            if len(ordered) < 2:
+        def connect(left, right):
+            if left[1] is None or right[1] is None:
                 return
-            root = find(ordered[0])
-            for evidence_id in ordered[1:]:
-                other = find(evidence_id)
-                if root != other:
-                    parent[other] = root
+            adjacency[left].add(right)
+            adjacency[right].add(left)
 
-        by_content: dict[object, list[object]] = defaultdict(list)
-        for evidence in evidence_rows:
-            content_id = evidence.source_signal.source_content_id
-            if content_id is not None:
-                by_content[content_id].append(evidence.id)
-        for evidence_ids in by_content.values():
-            union(evidence_ids)
+        def chunks(values):
+            ordered = sorted(set(values), key=str)
+            size = RetentionService._HISTORY_ITERATOR_CHUNK_SIZE
+            for offset in range(0, len(ordered), size):
+                yield ordered[offset : offset + size]
 
-        evidence_by_asset: dict[object, list[object]] = defaultdict(list)
-        batch_asset_by_id = {
-            batch.id: batch.request_import_asset_id for batch in asset_batches
+        discovered = {
+            "e": set(candidate_ids),
+            "a": set(),
+            "c": set(),
+            "b": set(),
         }
-        for ingestion_row in asset_rows:
-            if ingestion_row.source_evidence_id is not None:
-                evidence_by_asset[batch_asset_by_id[ingestion_row.batch_id]].append(
-                    ingestion_row.source_evidence_id
+        processed = {kind: set() for kind in discovered}
+
+        def discover(kind, value):
+            if value is not None:
+                discovered[kind].add(value)
+
+        def consume_rows(queryset):
+            for batch_id, evidence_id, screenshot_id, unproven in queryset:
+                batch_node = ("b", batch_id)
+                evidence_node = ("e", evidence_id)
+                asset_node = ("a", screenshot_id)
+                connect(batch_node, evidence_node)
+                connect(batch_node, asset_node)
+                discover("b", batch_id)
+                discover("e", evidence_id)
+                discover("a", screenshot_id)
+                if unproven:
+                    unproven_nodes.add(batch_node)
+                    if evidence_id is not None:
+                        unproven_nodes.add(evidence_node)
+
+        while any(discovered[kind] - processed[kind] for kind in discovered):
+            pending_evidence = discovered["e"] - processed["e"]
+            for chunk in chunks(pending_evidence):
+                for evidence_id, content_id, screenshot_id, import_id in (
+                    SourceEvidence.objects.filter(
+                        organization=organization,
+                        pk__in=chunk,
+                    )
+                    .order_by("pk")
+                    .values_list(
+                        "pk",
+                        "source_signal__source_content_id",
+                        "screenshot_asset_id",
+                        "import_asset_id",
+                    )
+                ):
+                    evidence_node = ("e", evidence_id)
+                    connect(evidence_node, ("c", content_id))
+                    connect(evidence_node, ("a", screenshot_id))
+                    connect(evidence_node, ("a", import_id))
+                    discover("c", content_id)
+                    discover("a", screenshot_id)
+                    discover("a", import_id)
+                consume_rows(
+                    IngestionRow.objects.filter(
+                        organization=organization,
+                        source_evidence_id__in=chunk,
+                    )
+                    .order_by("batch_id", "row_number", "pk")
+                    .values_list(
+                        "batch_id",
+                        "source_evidence_id",
+                        "request_screenshot_asset_id",
+                        "request_screenshot_identity_unproven",
+                    )
                 )
-        for evidence in evidence_rows:
-            if evidence.import_asset_id is not None:
-                evidence_by_asset[evidence.import_asset_id].append(evidence.id)
-        for evidence_ids in evidence_by_asset.values():
-            union(evidence_ids)
+            processed["e"].update(pending_evidence)
 
-        evidence_components: dict[object, list[object]] = defaultdict(list)
-        for evidence_id in parent:
-            evidence_components[find(evidence_id)].append(evidence_id)
-        batches_by_asset: dict[object, list[object]] = defaultdict(list)
-        for batch in asset_batches:
-            batches_by_asset[batch.request_import_asset_id].append(batch.id)
+            pending_assets = discovered["a"] - processed["a"]
+            for chunk in chunks(pending_assets):
+                for evidence_id, screenshot_id, import_id in (
+                    SourceEvidence.objects.filter(organization=organization)
+                    .filter(
+                        Q(screenshot_asset_id__in=chunk)
+                        | Q(import_asset_id__in=chunk)
+                    )
+                    .order_by("pk")
+                    .values_list("pk", "screenshot_asset_id", "import_asset_id")
+                ):
+                    evidence_node = ("e", evidence_id)
+                    connect(evidence_node, ("a", screenshot_id))
+                    connect(evidence_node, ("a", import_id))
+                    discover("e", evidence_id)
+                for batch_id, import_id in (
+                    IngestionBatch.objects.filter(
+                        organization=organization,
+                        request_import_asset_id__in=chunk,
+                    )
+                    .order_by("pk")
+                    .values_list("pk", "request_import_asset_id")
+                ):
+                    connect(("b", batch_id), ("a", import_id))
+                    discover("b", batch_id)
+                consume_rows(
+                    IngestionRow.objects.filter(
+                        organization=organization,
+                        request_screenshot_asset_id__in=chunk,
+                    )
+                    .order_by("batch_id", "row_number", "pk")
+                    .values_list(
+                        "batch_id",
+                        "source_evidence_id",
+                        "request_screenshot_asset_id",
+                        "request_screenshot_identity_unproven",
+                    )
+                )
+            processed["a"].update(pending_assets)
 
+            pending_contents = discovered["c"] - processed["c"]
+            for chunk in chunks(pending_contents):
+                for evidence_id, content_id in (
+                    SourceEvidence.objects.filter(
+                        organization=organization,
+                        source_signal__source_content_id__in=chunk,
+                    )
+                    .order_by("pk")
+                    .values_list("pk", "source_signal__source_content_id")
+                ):
+                    connect(("e", evidence_id), ("c", content_id))
+                    discover("e", evidence_id)
+            processed["c"].update(pending_contents)
+
+            pending_batches = discovered["b"] - processed["b"]
+            for chunk in chunks(pending_batches):
+                for batch_id, import_id in (
+                    IngestionBatch.objects.filter(
+                        organization=organization,
+                        pk__in=chunk,
+                    )
+                    .order_by("pk")
+                    .values_list("pk", "request_import_asset_id")
+                ):
+                    connect(("b", batch_id), ("a", import_id))
+                    discover("a", import_id)
+                consume_rows(
+                    IngestionRow.objects.filter(
+                        organization=organization,
+                        batch_id__in=chunk,
+                    )
+                    .order_by("batch_id", "row_number", "pk")
+                    .values_list(
+                        "batch_id",
+                        "source_evidence_id",
+                        "request_screenshot_asset_id",
+                        "request_screenshot_identity_unproven",
+                    )
+                )
+            processed["b"].update(pending_batches)
+
+        seen = set()
         components = []
-        for evidence_ids in evidence_components.values():
-            component_set = set(evidence_ids)
-            component_candidates = component_set & candidate_set
+        for candidate_id in sorted(candidate_set, key=str):
+            seed = ("e", candidate_id)
+            if seed in seen:
+                continue
+            frontier = [seed]
+            nodes = set()
+            while frontier:
+                node = frontier.pop()
+                if node in nodes:
+                    continue
+                nodes.add(node)
+                frontier.extend(adjacency.get(node, ()))
+            seen.update(nodes)
+            evidence_ids = {value for kind, value in nodes if kind == "e"}
+            component_candidates = evidence_ids & candidate_set
             if not component_candidates:
                 continue
-            component_asset_ids = {
-                asset_id
-                for asset_id, members in evidence_by_asset.items()
-                if component_set.intersection(members)
-            }
-            component_content_ids = {
-                content_id
-                for content_id, members in by_content.items()
-                if len(component_set.intersection(members)) > 1
-            }
+            content_nodes = {node for node in nodes if node[0] == "c"}
             components.append(
                 _RetentionComponent(
                     candidate_ids=tuple(sorted(component_candidates, key=str)),
-                    evidence_ids=tuple(sorted(component_set, key=str)),
-                    asset_ids=tuple(sorted(component_asset_ids, key=str)),
-                    asset_batch_ids=tuple(
+                    evidence_ids=tuple(sorted(evidence_ids, key=str)),
+                    asset_ids=tuple(
                         sorted(
-                            {
-                                batch_id
-                                for asset_id in component_asset_ids
-                                for batch_id in batches_by_asset[asset_id]
-                            },
+                            {value for kind, value in nodes if kind == "a"},
                             key=str,
                         )
                     ),
-                    shares_source_content=bool(component_content_ids),
+                    asset_batch_ids=tuple(
+                        sorted(
+                            {value for kind, value in nodes if kind == "b"},
+                            key=str,
+                        )
+                    ),
+                    shares_source_content=any(
+                        len(adjacency[node]) > 1 for node in content_nodes
+                    ),
+                    has_unproven_screenshot_identity=bool(
+                        nodes.intersection(unproven_nodes)
+                    ),
                 )
             )
         return sorted(
@@ -1154,11 +1230,7 @@ class RetentionService:
                         )
                         .order_by("pk")
                     )
-                    shared_batch_ids = {
-                        batch.id
-                        for batch in ingestion_batches
-                        if batch.request_import_asset_id in set(component.asset_ids)
-                    }
+                    shared_batch_ids = set(component.asset_batch_ids)
                     evidence_rows = list(
                         SourceEvidence.objects.select_for_update()
                         .select_related(
@@ -1192,12 +1264,23 @@ class RetentionService:
                                 ingestion_row
                             )
 
-                    group_reason = None
+                    group_reason = (
+                        "SHARED_SCREENSHOT_ASSET_IDENTITY_UNPROVEN"
+                        if component.has_unproven_screenshot_identity
+                        else None
+                    )
                     if len(locked_assets) != len(component.asset_ids):
                         group_reason = "SHARED_IMPORT_ASSET_INCONSISTENT"
                     for batch in ingestion_batches:
                         if batch.id not in shared_batch_ids:
                             continue
+                        if (
+                            batch.job_id is not None
+                            and batch.job.status
+                            in RetentionService._ACTIVE_JOB_STATUSES
+                        ):
+                            group_reason = "SHARED_RAW_GROUP_ACTIVE"
+                            break
                         reference = batch.input_reference
                         if batch.source_type == IngestionBatch.SourceType.API:
                             group_reason = "SHARED_IMPORT_ASSET_INCONSISTENT"
@@ -1235,7 +1318,8 @@ class RetentionService:
                         if (
                             reference_numbers != linked_numbers
                             or (
-                                not is_tombstoned
+                                batch.request_import_asset_id is not None
+                                and not is_tombstoned
                                 and str(current_asset_id)
                                 != str(batch.request_import_asset_id)
                             )
@@ -1527,15 +1611,45 @@ class SourceIngestionRequestService:
         monitoring_target = SourceIngestionRequestService._target(
             organization=organization, target_id=monitoring_target_id
         )
-        import_asset = SourceIngestionRequestService._asset(
-            organization=organization, asset_id=import_asset_id
-        )
         safe_reference = deepcopy(prepared_reference)
-        if import_asset is not None:
-            safe_reference["import_asset_id"] = str(import_asset.id)
+        if import_asset_id is not None:
+            safe_reference["import_asset_id"] = str(import_asset_id)
         if source_type != IngestionBatch.SourceType.API:
             from .importers import validate_prepared_import_reference
             validate_prepared_import_reference(safe_reference, source_type=source_type)
+
+        requested_assets = SourceIngestionRequestService._lock_requested_assets(
+            organization=organization,
+            safe_reference=safe_reference,
+        )
+        existing_batch = (
+            IngestionBatch.objects.select_for_update()
+            .filter(organization=organization, idempotency_key=idempotency_key)
+            .first()
+        )
+        if existing_batch is not None:
+            if not SourceIngestionRequestService._same_request(
+                batch=existing_batch,
+                source_type=source_type,
+                monitoring_target=monitoring_target,
+                safe_reference=safe_reference,
+            ):
+                raise SourceIdempotencyConflictError(
+                    "The idempotency key is already bound to a different prepared import."
+                )
+            return SourceIngestionRequestService._bound_job(
+                batch=existing_batch,
+                organization=organization,
+            )
+
+        SourceIngestionRequestService._validate_requested_assets(
+            requested_assets=requested_assets,
+            safe_reference=safe_reference,
+        )
+        SourceIngestionRequestService._reject_retained_asset_reuse(
+            organization=organization,
+            requested_asset_ids=set(requested_assets),
+        )
         retained_evidence_by_row = (
             SourceIngestionRequestService._redacted_evidence_by_row(
                 organization=organization,
@@ -1580,12 +1694,10 @@ class SourceIngestionRequestService:
                 )
 
         if batch.job_id is not None:
-            job = Job.objects.get(pk=batch.job_id, organization=organization)
-            if not source_import_job_matches_batch(job=job, batch=batch):
-                raise SourceIdempotencyConflictError(
-                    "The idempotency key is already bound to a different prepared import."
-                )
-            return batch, job
+            return SourceIngestionRequestService._bound_job(
+                batch=batch,
+                organization=organization,
+            )
 
         request_snapshot = source_import_job_snapshot(batch)
         try:
@@ -1616,6 +1728,93 @@ class SourceIngestionRequestService:
                 lambda: execute_source_import.delay(job_id, batch_id)
             )
         return batch, job
+
+    @staticmethod
+    def _bound_job(*, batch, organization):
+        if batch.job_id is None:
+            raise SourceIdempotencyConflictError(
+                "The idempotency key is already bound to an incomplete import request."
+            )
+        job = Job.objects.get(pk=batch.job_id, organization=organization)
+        if not source_import_job_matches_batch(job=job, batch=batch):
+            raise SourceIdempotencyConflictError(
+                "The idempotency key is already bound to a different prepared import."
+            )
+        return batch, job
+
+    @staticmethod
+    def _lock_requested_assets(*, organization, safe_reference):
+        requested_ids = IngestionService._required_asset_ids(safe_reference)
+        if requested_ids is None:
+            raise ValidationError(
+                {"payload": "One or more attached assets are unavailable."}
+            )
+        if not requested_ids:
+            return MappingProxyType({})
+        locked = {
+            str(asset.id): asset
+            for asset in MaterialAsset.objects.select_for_update()
+            .filter(
+                organization=organization,
+                pk__in=requested_ids,
+            )
+            .order_by("pk")
+        }
+        return MappingProxyType(locked)
+
+    @staticmethod
+    def _validate_requested_assets(*, requested_assets, safe_reference):
+        requested_ids = IngestionService._required_asset_ids(safe_reference)
+        if requested_ids is None or set(requested_assets) != requested_ids:
+            raise ValidationError(
+                {"payload": "One or more attached assets are unavailable."}
+            )
+        if any(
+            asset.status != MaterialAsset.Status.ACTIVE
+            for asset in requested_assets.values()
+        ):
+            raise ValidationError(
+                {"payload": "One or more attached assets are unavailable."}
+            )
+        screenshot_ids = {
+            str(row["screenshot_asset_id"])
+            for row in safe_reference.get("rows", [])
+            if isinstance(row, dict)
+            and row.get("screenshot_asset_id") not in (None, "")
+        }
+        if any(
+            requested_assets[asset_id].asset_type
+            != MaterialAsset.AssetType.IMAGE
+            for asset_id in screenshot_ids
+        ):
+            raise ValidationError(
+                {"payload": "One or more attached assets are unavailable."}
+            )
+
+    @staticmethod
+    def _reject_retained_asset_reuse(*, organization, requested_asset_ids):
+        if not requested_asset_ids:
+            return
+        retained = SourceEvidence.Availability.REDACTED_BY_RETENTION
+        screenshot_reused = IngestionRow.objects.filter(
+            organization=organization,
+            request_screenshot_asset_id__in=requested_asset_ids,
+            source_evidence__availability=retained,
+        ).exists()
+        import_reused = IngestionBatch.objects.filter(
+            organization=organization,
+            request_import_asset_id__in=requested_asset_ids,
+            rows__source_evidence__availability=retained,
+        ).exists()
+        if screenshot_reused or import_reused:
+            raise ValidationError(
+                {
+                    "payload": (
+                        "An attached asset belongs to expired retained source data "
+                        "and cannot be used in a new import request."
+                    )
+                }
+            )
 
     @staticmethod
     def _redacted_evidence_by_row(*, organization, safe_reference):
@@ -1680,29 +1879,6 @@ class SourceIngestionRequestService:
                 {"monitoring_target_id": "Monitoring target is unavailable for this organization."}
             )
         return target
-
-    @staticmethod
-    def _asset(*, organization, asset_id):
-        if asset_id is None:
-            return None
-        try:
-            asset = (
-                MaterialAsset.objects.select_for_update()
-                .filter(
-                    pk=asset_id,
-                    organization=organization,
-                    status=MaterialAsset.Status.ACTIVE,
-                )
-                .first()
-            )
-        except (TypeError, ValueError):
-            asset = None
-        if asset is None:
-            raise ValidationError(
-                {"import_asset_id": "Import asset is unavailable for this organization."}
-            )
-        return asset
-
 
 def _normalized_row_input(row) -> dict[str, object]:
     return {

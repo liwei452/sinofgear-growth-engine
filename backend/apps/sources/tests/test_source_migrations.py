@@ -97,3 +97,107 @@ def test_request_identity_migration_backfills_plain_and_already_retained_batches
             )
     finally:
         MigrationExecutor(connection).migrate(latest)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_screenshot_identity_migration_backfills_and_fails_closed():
+    before = ("sources", "0002_ingestion_request_identity")
+    after = ("sources", "0003_ingestion_row_screenshot_identity")
+    executor = MigrationExecutor(connection)
+    latest = executor.loader.graph.leaf_nodes()
+    screenshot_id = uuid4()
+    snapshot_screenshot_id = uuid4()
+
+    try:
+        executor.migrate([before])
+        old_apps = executor.loader.project_state([before]).apps
+        organization_model = old_apps.get_model("identity", "Organization")
+        batch_model = old_apps.get_model("sources", "IngestionBatch")
+        row_model = old_apps.get_model("sources", "IngestionRow")
+        job_model = old_apps.get_model("jobs", "Job")
+        organization = organization_model.objects.create(
+            name="Screenshot identity migration",
+            slug="screenshot-identity-migration",
+        )
+        proven_batch = batch_model.objects.create(
+            organization=organization,
+            source_type="JSON",
+            input_reference={"rows": []},
+            idempotency_key="migration-proven-screenshot",
+            prepared_reference_sha256="a" * 64,
+        )
+        proven = row_model.objects.create(
+            organization=organization,
+            batch=proven_batch,
+            row_number=1,
+            normalized_input={"screenshot_asset_id": str(screenshot_id)},
+            outcome="FAILED",
+        )
+        unknown_batch = batch_model.objects.create(
+            organization=organization,
+            source_type="SCREENSHOT",
+            input_reference={"rows": []},
+            idempotency_key="migration-unknown-screenshot",
+            prepared_reference_sha256="b" * 64,
+        )
+        unknown = row_model.objects.create(
+            organization=organization,
+            batch=unknown_batch,
+            row_number=1,
+            normalized_input={
+                "screenshot_asset_id": None,
+                "retention": {"status": "REDACTED_BY_RETENTION"},
+            },
+            outcome="DUPLICATE",
+        )
+        snapshot_job = job_model.objects.create(
+            organization=organization,
+            type="SOURCE_IMPORT",
+            input_snapshot={
+                "input_reference": {
+                    "rows": [
+                        {
+                            "row_number": 1,
+                            "screenshot_asset_id": str(snapshot_screenshot_id),
+                        }
+                    ]
+                }
+            },
+            idempotency_key="migration-snapshot-screenshot",
+        )
+        snapshot_batch = batch_model.objects.create(
+            organization=organization,
+            source_type="SCREENSHOT",
+            input_reference={"rows": []},
+            idempotency_key="migration-snapshot-screenshot",
+            prepared_reference_sha256="c" * 64,
+            job=snapshot_job,
+        )
+        snapshot_row = row_model.objects.create(
+            organization=organization,
+            batch=snapshot_batch,
+            row_number=1,
+            normalized_input={
+                "screenshot_asset_id": None,
+                "retention": {"status": "REDACTED_BY_RETENTION"},
+            },
+            outcome="DUPLICATE",
+        )
+
+        executor = MigrationExecutor(connection)
+        executor.migrate([after])
+        migrated = executor.loader.project_state([after]).apps.get_model(
+            "sources", "IngestionRow"
+        )
+
+        proven = migrated.objects.get(pk=proven.pk)
+        unknown = migrated.objects.get(pk=unknown.pk)
+        snapshot_row = migrated.objects.get(pk=snapshot_row.pk)
+        assert proven.request_screenshot_asset_id == screenshot_id
+        assert not proven.request_screenshot_identity_unproven
+        assert unknown.request_screenshot_asset_id is None
+        assert unknown.request_screenshot_identity_unproven
+        assert snapshot_row.request_screenshot_asset_id == snapshot_screenshot_id
+        assert not snapshot_row.request_screenshot_identity_unproven
+    finally:
+        MigrationExecutor(connection).migrate(latest)

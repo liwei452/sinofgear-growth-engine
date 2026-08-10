@@ -824,6 +824,17 @@ class IngestionRow(ServiceWriteModel):
     batch = models.ForeignKey(IngestionBatch, on_delete=models.PROTECT, related_name="rows")
     row_number = models.PositiveIntegerField()
     normalized_input = models.JSONField()
+    request_screenshot_asset_id = models.UUIDField(
+        null=True,
+        blank=True,
+        editable=False,
+        db_index=True,
+    )
+    request_screenshot_identity_unproven = models.BooleanField(
+        default=False,
+        editable=False,
+        db_index=True,
+    )
     outcome = models.CharField(max_length=16, choices=Outcome.choices)
     error = models.JSONField(null=True, blank=True)
     source_content = models.ForeignKey(
@@ -863,6 +874,57 @@ class IngestionRow(ServiceWriteModel):
         self.normalized_input = sanitize_source_json(self.normalized_input)
         self.error = sanitize_source_json(self.error)
         errors: dict[str, str] = {}
+        normalized_screenshot_id = (
+            self.normalized_input.get("screenshot_asset_id")
+            if isinstance(self.normalized_input, dict)
+            else None
+        )
+        if self._state.adding:
+            if (
+                self.request_screenshot_asset_id is not None
+                and normalized_screenshot_id is not None
+                and str(self.request_screenshot_asset_id)
+                != str(normalized_screenshot_id)
+            ):
+                errors["request_screenshot_asset_id"] = (
+                    "Screenshot asset identity must match the original row input."
+                )
+            if self.request_screenshot_asset_id is None:
+                self.request_screenshot_asset_id = normalized_screenshot_id or None
+        elif self.pk:
+            persisted = (
+                type(self)._base_manager.filter(pk=self.pk)
+                .values(
+                    "request_screenshot_asset_id",
+                    "request_screenshot_identity_unproven",
+                )
+                .first()
+            )
+            if persisted is not None and (
+                self.request_screenshot_asset_id
+                != persisted["request_screenshot_asset_id"]
+                or self.request_screenshot_identity_unproven
+                != persisted["request_screenshot_identity_unproven"]
+            ):
+                errors["request_screenshot_asset_id"] = (
+                    "Original screenshot asset identity is immutable."
+                )
+        if (
+            normalized_screenshot_id is not None
+            and self.request_screenshot_asset_id is not None
+            and str(normalized_screenshot_id)
+            != str(self.request_screenshot_asset_id)
+        ):
+            errors["request_screenshot_asset_id"] = (
+                "Screenshot asset identity conflicts with the original row input."
+            )
+        if (
+            self.request_screenshot_asset_id is not None
+            and self.request_screenshot_identity_unproven
+        ):
+            errors["request_screenshot_identity_unproven"] = (
+                "A proven screenshot identity cannot also be marked unproven."
+            )
         for field_name in (
             "batch",
             "source_content",

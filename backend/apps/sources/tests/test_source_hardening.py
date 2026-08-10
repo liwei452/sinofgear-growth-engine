@@ -321,6 +321,91 @@ def test_batch_persists_and_guards_immutable_original_request_identity(organizat
 
 
 @pytest.mark.django_db
+def test_ingestion_row_persists_and_guards_original_screenshot_identity(organization):
+    screenshot_asset_id = "00000000-0000-0000-0000-000000000091"
+    batch = IngestionBatch.objects.create(
+        organization=organization,
+        source_type=IngestionBatch.SourceType.JSON,
+        input_reference=prepare_import_reference(
+            {
+                "rows": [
+                    {
+                        "source_url": "https://e.test/immutable-screenshot",
+                        "original_text": "Original screenshot request",
+                        "screenshot_asset_id": screenshot_asset_id,
+                    }
+                ]
+            },
+            source_type=IngestionBatch.SourceType.JSON,
+        ),
+        idempotency_key="immutable-screenshot-identity",
+    )
+    row = IngestionRow(
+        organization=organization,
+        batch=batch,
+        row_number=1,
+        normalized_input={"screenshot_asset_id": screenshot_asset_id},
+        outcome=IngestionRow.Outcome.FAILED,
+    )
+    with ingestion_row_service_writes():
+        row.save()
+    assert str(row.request_screenshot_asset_id) == screenshot_asset_id
+
+    row.normalized_input = {
+        "screenshot_asset_id": None,
+        "retention": {"status": "REDACTED_BY_RETENTION"},
+    }
+    with ingestion_row_service_writes():
+        row.save(update_fields=["normalized_input", "updated_at"])
+    row.refresh_from_db()
+    assert str(row.request_screenshot_asset_id) == screenshot_asset_id
+
+    row.request_screenshot_asset_id = (
+        "00000000-0000-0000-0000-000000000092"
+    )
+    with ingestion_row_service_writes(), pytest.raises(
+        ValidationError, match="immutable"
+    ):
+        row.save(update_fields=["request_screenshot_asset_id", "updated_at"])
+
+    row.refresh_from_db()
+    row.request_screenshot_asset_id = (
+        "00000000-0000-0000-0000-000000000093"
+    )
+    with ingestion_row_service_writes(), pytest.raises(
+        ValidationError, match="immutable"
+    ):
+        IngestionRow.objects.bulk_update(
+            [row], ["request_screenshot_asset_id"]
+        )
+
+    row.refresh_from_db()
+    with ingestion_row_service_writes(), pytest.raises(
+        ValidationError, match="immutable"
+    ):
+        IngestionRow.objects.filter(pk=row.pk).update(
+            request_screenshot_asset_id=(
+                "00000000-0000-0000-0000-000000000094"
+            )
+        )
+
+    mismatched = IngestionRow(
+        organization=organization,
+        batch=batch,
+        row_number=2,
+        normalized_input={"screenshot_asset_id": screenshot_asset_id},
+        request_screenshot_asset_id=(
+            "00000000-0000-0000-0000-000000000095"
+        ),
+        outcome=IngestionRow.Outcome.FAILED,
+    )
+    with ingestion_row_service_writes(), pytest.raises(
+        ValidationError, match="conflicts with the original"
+    ):
+        IngestionRow.objects.bulk_create([mismatched])
+
+
+@pytest.mark.django_db
 def test_batch_tombstone_writer_cannot_be_called_as_arbitrary_json_mutation(
     organization,
 ):

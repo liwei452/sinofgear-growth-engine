@@ -15,7 +15,111 @@ function renderAnalytics(fetch:ReturnType<typeof vi.fn>,permissions=["tracking.r
   return client
 }
 
-it("shows exact campaign and platform provenance with the click total and filters",async()=>{const fetch=vi.fn((path:string)=>Promise.resolve(json(path.startsWith("/api/v1/analytics")?{count:1,total_clicks:17,next:null,previous:null,results:[{date:"2026-08-10",campaign_id:"campaign-visible",platform_id:"platform-visible",country:"DE",product_id:"prod",clicks:17}]}:{next:null,previous:null,results:[]})));renderAnalytics(fetch);expect(await screen.findByLabelText("总点击数")).toHaveTextContent("17");const table=screen.getByRole("table",{name:"渠道点击明细"});expect(table).toHaveTextContent("campaign-visible");expect(table).toHaveTextContent("platform-visible");for(const label of ["活动","平台","产品","国家代码"])expect(screen.getByLabelText(label)).toBeInTheDocument()})
+it("explains the result before metrics and keeps operations collapsed",async()=>{
+  const fetch=vi.fn((path:string)=>Promise.resolve(json(path.startsWith("/api/v1/analytics")
+    ?{count:1,total_clicks:17,next:null,previous:null,results:[{date:"2026-08-10",campaign_id:"campaign-uuid",platform_id:"platform-uuid",country:"DE",product_id:"product-uuid",clicks:17}]}
+    :{next:null,previous:null,results:[]})))
+  renderAnalytics(fetch)
+
+  expect(await screen.findByRole("heading",{name:"效果"})).toBeVisible()
+  const conclusion=screen.getByRole("region",{name:"AI 结论"})
+  const metrics=screen.getByRole("region",{name:"关键指标"})
+  const trend=screen.getByRole("region",{name:"点击趋势"})
+  const nextStep=screen.getByRole("region",{name:"下一步建议"})
+  const operations=screen.getByRole("group",{name:"运营详情"})
+  expect(await within(conclusion).findByText(/数据还不足以判断哪个平台效果最好/)).toBeVisible()
+  expect(conclusion).toHaveTextContent("不能据此判断点击变化的原因")
+  expect(conclusion.compareDocumentPosition(metrics)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(metrics.compareDocumentPosition(trend)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(trend.compareDocumentPosition(nextStep)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(operations).not.toHaveAttribute("open")
+})
+
+it("uses real names when available and never promotes an unresolved id as a name",async()=>{
+  const fetch=vi.fn((path:string)=>{
+    if(path.startsWith("/api/v1/analytics"))return Promise.resolve(json({count:2,total_clicks:20,next:null,previous:null,results:[
+      {date:"2026-08-09",campaign_id:"campaign-1",platform_id:"platform-1",country:"DE",product_id:"product-1",clicks:8},
+      {date:"2026-08-10",campaign_id:"campaign-missing",platform_id:"platform-1",country:"DE",product_id:"product-1",clicks:12},
+    ]}))
+    if(path==="/api/v1/campaigns")return Promise.resolve(json({next:null,previous:null,results:[{id:"campaign-1",name:"德国客户推广"}]}))
+    if(path==="/api/v1/platforms")return Promise.resolve(json({results:[{id:"platform-1",name:"领英",code:"LINKEDIN",capabilities:[]}]}))
+    if(path==="/api/v1/products")return Promise.resolve(json({next:null,previous:null,results:[{id:"product-1",name_zh:"精密齿轮",name_en:"Precision Gear"}]}))
+    return Promise.resolve(json({next:null,previous:null,results:[]}))
+  })
+  renderAnalytics(fetch,["tracking.read","campaigns.read","memberships.read","products.read"])
+
+  const details=await screen.findByRole("table",{name:"渠道点击明细"})
+  expect(details).toHaveTextContent("德国客户推广")
+  expect(details).toHaveTextContent("领英")
+  expect(details).toHaveTextContent("精密齿轮")
+  expect(details).toHaveTextContent("名称暂不可用")
+  expect(details).not.toHaveTextContent("campaign-missing")
+})
+
+it("does not compare platforms measured on different date windows",async()=>{
+  const fetch=vi.fn((path:string)=>Promise.resolve(json(path.startsWith("/api/v1/analytics")?{
+    count:4,total_clicks:40,next:null,previous:null,results:[
+      {date:"2026-08-01",campaign_id:"c",platform_id:"platform-a",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-02",campaign_id:"c",platform_id:"platform-a",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-03",campaign_id:"c",platform_id:"platform-b",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-04",campaign_id:"c",platform_id:"platform-b",country:"DE",product_id:"p",clicks:10},
+    ],
+  }:{next:null,previous:null,results:[]})))
+  renderAnalytics(fetch)
+
+  const conclusion=screen.getByRole("region",{name:"AI 结论"})
+  expect(await within(conclusion).findByText(/数据还不足以判断哪个平台效果最好/)).toBeVisible()
+})
+
+it("does not treat one summary page as the complete comparison",async()=>{
+  const fetch=vi.fn((path:string)=>Promise.resolve(json(path.startsWith("/api/v1/analytics")?{
+    count:5,total_clicks:50,next:"/api/v1/analytics/channel-summary?cursor=next",previous:null,results:[
+      {date:"2026-08-01",campaign_id:"c",platform_id:"a",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-02",campaign_id:"c",platform_id:"a",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-01",campaign_id:"c",platform_id:"b",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-02",campaign_id:"c",platform_id:"b",country:"DE",product_id:"p",clicks:10},
+    ],
+  }:{next:null,previous:null,results:[]})))
+  renderAnalytics(fetch)
+
+  const conclusion=screen.getByRole("region",{name:"AI 结论"})
+  expect(await within(conclusion).findByText(/数据还不足以判断哪个平台效果最好/)).toBeVisible()
+  expect(screen.getByText("当前页涉及平台")).toBeVisible()
+})
+
+it("reports a tie without naming a leading platform",async()=>{
+  const fetch=vi.fn((path:string)=>Promise.resolve(json(path.startsWith("/api/v1/analytics")?{
+    count:4,total_clicks:40,next:null,previous:null,results:[
+      {date:"2026-08-01",campaign_id:"c",platform_id:"a",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-02",campaign_id:"c",platform_id:"a",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-01",campaign_id:"c",platform_id:"b",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-02",campaign_id:"c",platform_id:"b",country:"DE",product_id:"p",clicks:10},
+    ],
+  }:{next:null,previous:null,results:[]})))
+  renderAnalytics(fetch)
+
+  const conclusion=screen.getByRole("region",{name:"AI 结论"})
+  expect(await within(conclusion).findByText(/点击数据持平，无法区分/)).toBeVisible()
+  expect(conclusion).not.toHaveTextContent("点击数较高")
+})
+
+it("resolves campaign and product names from safe later pages",async()=>{
+  const fetch=vi.fn((path:string)=>{
+    if(path.startsWith("/api/v1/analytics"))return Promise.resolve(json({count:1,total_clicks:5,next:null,previous:null,results:[{date:"2026-08-01",campaign_id:"campaign-2",platform_id:"platform-1",country:"DE",product_id:"product-2",clicks:5}]}))
+    if(path==="/api/v1/campaigns")return Promise.resolve(json({next:"/api/v1/campaigns?cursor=c2",previous:null,results:[]}))
+    if(path==="/api/v1/campaigns?cursor=c2")return Promise.resolve(json({next:null,previous:"/api/v1/campaigns",results:[{id:"campaign-2",name:"第二页活动"}]}))
+    if(path==="/api/v1/products")return Promise.resolve(json({next:"/api/v1/products?cursor=p2",previous:null,results:[]}))
+    if(path==="/api/v1/products?cursor=p2")return Promise.resolve(json({next:null,previous:"/api/v1/products",results:[{id:"product-2",name_zh:"第二页产品"}]}))
+    if(path==="/api/v1/platforms")return Promise.resolve(json({results:[{id:"platform-1",name:"领英",code:"LINKEDIN",capabilities:[]}]}))
+    return Promise.resolve(json({next:null,previous:null,results:[]}))
+  })
+  renderAnalytics(fetch,["tracking.read","campaigns.read","memberships.read","products.read"])
+
+  expect(await screen.findByText("第二页活动")).toBeVisible()
+  expect(await screen.findByText("第二页产品")).toBeVisible()
+})
+
+it("shows the click total and filters without exposing unresolved provenance ids",async()=>{const fetch=vi.fn((path:string)=>Promise.resolve(json(path.startsWith("/api/v1/analytics")?{count:1,total_clicks:17,next:null,previous:null,results:[{date:"2026-08-10",campaign_id:"campaign-visible",platform_id:"platform-visible",country:"DE",product_id:"prod",clicks:17}]}:{next:null,previous:null,results:[]})));renderAnalytics(fetch);expect(await screen.findByLabelText("总点击数")).toHaveTextContent("17");const table=screen.getByRole("table",{name:"渠道点击明细"});expect(table).toHaveTextContent("名称暂不可用");expect(table).not.toHaveTextContent("campaign-visible");expect(table).not.toHaveTextContent("platform-visible");for(const label of ["活动","平台","产品","国家代码"])expect(screen.getByLabelText(label)).toBeInTheDocument()})
 
 it("fails closed without tracking.read and exposes mutations only with tracking.manage",async()=>{const fetch=vi.fn();renderAnalytics(fetch,["publishing.read"]);expect(screen.getByRole("alert")).toHaveTextContent("没有分析权限");expect(screen.queryByRole("button",{name:"创建追踪链接"})).not.toBeInTheDocument();expect(fetch).not.toHaveBeenCalled()})
 

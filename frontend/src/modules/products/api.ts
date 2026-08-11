@@ -1,4 +1,4 @@
-import { ApiError, apiRequest, apiRequestWithMeta } from "../../api/client"
+import { ApiError, apiRequest, apiRequestWithMeta, type ApiRequestOptions } from "../../api/client"
 
 export type ProductStatus = "DRAFT" | "ACTIVE" | "ARCHIVED"
 export type ProductConceptRole = "TYPE" | "MATERIAL" | "PROCESS" | "STANDARD" | "APPLICATION" | "PARAMETER" | "CAPABILITY"
@@ -111,16 +111,22 @@ export function safeProductPageUrl(value: string | null): string | null {
   return `${target.pathname}${target.search}`
 }
 
-export async function listProducts(filters: ProductFilters = {}): Promise<ProductPage> {
-  const page = await apiRequest<ProductPage>(listUrl(filters))
+export async function listProducts(
+  filters: ProductFilters = {},
+  options: Pick<ApiRequestOptions, "signal"> = {},
+): Promise<ProductPage> {
+  const page = await apiRequest<ProductPage>(listUrl(filters), options)
   if (!page) throw new ApiError(0, "产品列表响应为空，请重试。")
   return page
 }
 
-export async function getProductPage(url: string): Promise<ProductPage> {
+export async function getProductPage(
+  url: string,
+  options: Pick<ApiRequestOptions, "signal"> = {},
+): Promise<ProductPage> {
   const safeUrl = safeProductPageUrl(url)
   if (!safeUrl) throw new ApiError(0, "分页地址无效，请从产品列表重新开始。")
-  const page = await apiRequest<ProductPage>(safeUrl)
+  const page = await apiRequest<ProductPage>(safeUrl, { signal: options.signal })
   if (!page) throw new ApiError(0, "产品列表响应为空，请重试。")
   return page
 }

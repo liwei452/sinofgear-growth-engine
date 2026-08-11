@@ -1,4 +1,4 @@
-import { ApiError, apiRequest } from "../../api/client"
+import { ApiError, apiRequest, type ApiRequestOptions } from "../../api/client"
 import { getCursorPage, type CursorPage } from "../content/api"
 
 export type Asset = { id:string; asset_type:string; original_filename:string; mime_type:string; size_bytes:number; checksum:string; language:string; status:string; tags:string[]; metadata_json:Record<string,unknown>; created_at:string; products:Array<{id:string;name_en:string;status:string}> }
@@ -7,7 +7,7 @@ const path = "/api/v1/assets"
 const required = <T>(value:T|undefined):T => { if(value===undefined) throw new ApiError(0,"服务响应不完整，请重试。"); return value }
 const query = (filters:AssetFilters) => { const params=new URLSearchParams(); Object.entries(filters).forEach(([key,value])=>{if(value)params.set(key,value)}); return `${path}${params.size?`?${params}`:""}` }
 export const assetKeys={all:(organizationId:string)=>["assets",organizationId] as const,list:(organizationId:string,filters:AssetFilters)=>[...assetKeys.all(organizationId),"list",filters] as const}
-export const listAssets=async(filters:AssetFilters={}):Promise<CursorPage<Asset>>=>required(await apiRequest<CursorPage<Asset>>(query(filters)))
+export const listAssets=async(filters:AssetFilters={},options:Pick<ApiRequestOptions,"signal">={}):Promise<CursorPage<Asset>>=>required(await apiRequest<CursorPage<Asset>>(query(filters),options))
 export const getAssetPage=(url:string)=>getCursorPage<Asset>(url,path)
 const casefold = (value:string) => value.normalize("NFKC").trim().toLocaleLowerCase().replaceAll("ß","ss").replaceAll("ς","σ")
 export const normalizeAssetTags = (tags:string[]) => [...new Set(tags.map(casefold).filter(Boolean))]

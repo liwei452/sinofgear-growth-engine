@@ -117,8 +117,10 @@ export async function getCursorPage<T>(
   return required(await apiRequest<CursorPage<T>>(safe, options))
 }
 
-export const listCampaigns = async (): Promise<CursorPage<Campaign>> =>
-  required(await apiRequest<CursorPage<Campaign>>("/api/v1/campaigns"))
+export const listCampaigns = async (
+  options: Pick<ApiRequestOptions, "signal"> = {},
+): Promise<CursorPage<Campaign>> =>
+  required(await apiRequest<CursorPage<Campaign>>("/api/v1/campaigns", { signal: options.signal }))
 export const listApprovedBriefConcepts = async (): Promise<CursorPage<BriefConcept>> =>
   required(await apiRequest<CursorPage<BriefConcept>>(
     "/api/v1/knowledge/concepts?status=APPROVED&page_size=50",

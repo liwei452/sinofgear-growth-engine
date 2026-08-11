@@ -1,4 +1,4 @@
-import { ApiError, apiRequest } from "../../api/client"
+import { ApiError, apiRequest, type ApiRequestOptions } from "../../api/client"
 
 export type KnowledgeStatus = "SUGGESTED" | "APPROVED" | "REJECTED" | "DEPRECATED"
 export type KnowledgeScope = "SYSTEM" | "ORGANIZATION"
@@ -92,6 +92,7 @@ export type AliasResolution = {
 
 type ListResponse<T> = { results: T[] }
 export type ReviewAction = "submit-review" | "approve" | "reject" | "deprecate"
+type ListOptions = Pick<ApiRequestOptions, "signal"> & { status?: KnowledgeStatus }
 
 export const knowledgeQueryKeys = {
   all: (organizationId: string) => ["knowledge", organizationId] as const,
@@ -103,16 +104,17 @@ export const knowledgeQueryKeys = {
   evidence: (organizationId: string) => ["knowledge", organizationId, "evidence"] as const,
 }
 
-async function list<T>(path: string): Promise<T[]> {
-  const response = await apiRequest<ListResponse<T>>(path)
+async function list<T>(path: string, options: ListOptions = {}): Promise<T[]> {
+  const suffix = options.status ? `?status=${encodeURIComponent(options.status)}` : ""
+  const response = await apiRequest<ListResponse<T>>(`${path}${suffix}`, { signal: options.signal })
   if (!response) throw new ApiError(0, "知识库响应为空，请重试。")
   return response.results
 }
 
-export const listConcepts = () => list<KnowledgeConcept>("/api/v1/knowledge/concepts")
+export const listConcepts = (options: ListOptions = {}) => list<KnowledgeConcept>("/api/v1/knowledge/concepts", options)
 export const listAliases = () => list<KnowledgeAlias>("/api/v1/knowledge/aliases")
 export const listRelations = () => list<KnowledgeRelation>("/api/v1/knowledge/relations")
-export const listEvidence = () => list<KnowledgeEvidence>("/api/v1/knowledge/evidence")
+export const listEvidence = (options: ListOptions = {}) => list<KnowledgeEvidence>("/api/v1/knowledge/evidence", options)
 
 export async function createConcept(input: ConceptInput): Promise<KnowledgeConcept> {
   const concept = await apiRequest<KnowledgeConcept>("/api/v1/knowledge/concepts", {

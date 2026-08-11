@@ -280,6 +280,128 @@ it("loads safe later active-product pages before deciding capability gaps", asyn
   expect(fetchMock).toHaveBeenCalledWith("/api/v1/products?status=ACTIVE&cursor=page-2", expect.objectContaining({ signal: expect.any(AbortSignal) }))
 })
 
+it.each([
+  { label: "invalid", next: "https://evil.example/api/v1/products?cursor=2" },
+  { label: "cycle", next: "/api/v1/products?status=ACTIVE" },
+])("treats $label product pagination as unknown instead of missing", async ({ next }) => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path === "/api/v1/products?status=ACTIVE") return Promise.resolve(json({ next, previous: null, results: [] }))
+    if (path.startsWith("/api/v1/knowledge/")) return Promise.resolve(json({ results: [] }))
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  await renderCompany(fetchMock, ["products.read", "knowledge.read"])
+
+  const coverage = screen.getByRole("region", { name: "资料完整度" })
+  expect(await within(coverage).findByText("已确认 1 项，另有资料暂无法判断")).toBeVisible()
+  expect(coverage).toHaveTextContent("部分资料暂不可用")
+  expect(coverage).not.toHaveTextContent("已覆盖 1 项，共 8 项")
+  const gaps = screen.getByRole("region", { name: "建议补充" })
+  expect(gaps).not.toHaveTextContent("补充产品")
+  expect(gaps).not.toHaveTextContent("补充能力")
+  expect(gaps).not.toHaveTextContent("补充行业")
+  expect(gaps).not.toHaveTextContent("补充工艺")
+  expect(gaps).not.toHaveTextContent("补充标准")
+})
+
+it("caps product pagination as unknown instead of inventing gaps", async () => {
+  let productCalls = 0
+  const fetchMock = vi.fn((path: string) => {
+    if (path.startsWith("/api/v1/products")) {
+      productCalls += 1
+      const cursor = new URL(path, "http://localhost").searchParams.get("cursor")
+      const pageNumber = cursor ? Number(cursor) : 1
+      return Promise.resolve(json({
+        next: `/api/v1/products?status=ACTIVE&cursor=${pageNumber + 1}`,
+        previous: null,
+        results: [],
+      }))
+    }
+    if (path.startsWith("/api/v1/knowledge/")) return Promise.resolve(json({ results: [] }))
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  await renderCompany(fetchMock, ["products.read", "knowledge.read"])
+
+  expect(await screen.findByText("已确认 1 项，另有资料暂无法判断")).toBeVisible()
+  expect(productCalls).toBe(100)
+  expect(screen.getByRole("region", { name: "建议补充" })).not.toHaveTextContent(/补充产品|补充能力|补充行业|补充工艺|补充标准/)
+})
+
+it("does not turn a failed product source into product or composite gaps", async () => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path.startsWith("/api/v1/products")) return Promise.resolve(json({ detail: "offline" }, 503))
+    if (path.startsWith("/api/v1/knowledge/")) return Promise.resolve(json({ results: [] }))
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  await renderCompany(fetchMock, ["products.read", "knowledge.read"])
+
+  expect(await screen.findByText("已确认 1 项，另有资料暂无法判断")).toBeVisible()
+  const gaps = screen.getByRole("region", { name: "建议补充" })
+  expect(gaps).not.toHaveTextContent(/补充产品|补充能力|补充行业|补充工艺|补充标准/)
+  expect(gaps).toHaveTextContent("补充证据")
+})
+
+it("does not turn a failed knowledge contributor into composite or evidence gaps", async () => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path.startsWith("/api/v1/products")) return Promise.resolve(page([]))
+    if (path.startsWith("/api/v1/knowledge/concepts")) return Promise.resolve(json({ detail: "offline" }, 503))
+    if (path.startsWith("/api/v1/knowledge/evidence")) return Promise.resolve(json({ results: [] }))
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  await renderCompany(fetchMock, ["products.read", "knowledge.read"])
+
+  expect(await screen.findByText("已确认 1 项，另有资料暂无法判断")).toBeVisible()
+  const gaps = screen.getByRole("region", { name: "建议补充" })
+  expect(gaps).toHaveTextContent("补充产品")
+  expect(gaps).not.toHaveTextContent(/补充能力|补充行业|补充工艺|补充标准|补充证据/)
+})
+
+it.each([
+  { label: "products only", permissions: ["products.read"], expected: ["补充产品", "补充能力", "补充行业", "补充工艺", "补充标准"], count: 5 },
+  { label: "knowledge only", permissions: ["knowledge.read"], expected: ["补充能力", "补充行业", "补充工艺", "补充标准", "补充证据"], count: 5 },
+  { label: "neither source", permissions: [], expected: [], count: 0 },
+])("uses only readable contributors for $label category readiness", async ({ permissions, expected, count }) => {
+  const fetchMock = vi.fn((path: string) => path.startsWith("/api/v1/knowledge/")
+    ? Promise.resolve(json({ results: [] }))
+    : Promise.resolve(page([])))
+  await renderCompany(fetchMock, permissions)
+
+  const gaps = screen.getByRole("region", { name: "建议补充" })
+  await waitFor(() => expect(gaps).toHaveTextContent(`${count} 项`))
+  for (const title of expected) expect(gaps).toHaveTextContent(title)
+})
+
+it("prevents an initial cursor cycle from refetching or double-counting products", async () => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path === "/api/v1/products?status=ACTIVE") return Promise.resolve(json({
+      next: "/api/v1/products?status=ACTIVE", previous: null,
+      results: [{ id: "product-1", status: "ACTIVE", name_zh: "唯一产品", manufacturing_capabilities: [], inspection_capabilities: [], concept_links: [] }],
+    }))
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  await renderCompany(fetchMock, ["products.read"])
+
+  expect(await screen.findByText("已安全加载前 1 个启用产品")).toBeVisible()
+  expect(within(screen.getByRole("region", { name: "产品" })).getAllByText("唯一产品")).toHaveLength(1)
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+})
+
+it("deduplicates products by id across complete pages", async () => {
+  const product = { id: "product-1", status: "ACTIVE", name_zh: "重复产品", manufacturing_capabilities: [], inspection_capabilities: [], concept_links: [] }
+  const fetchMock = vi.fn((path: string) => {
+    if (path === "/api/v1/products?status=ACTIVE") return Promise.resolve(json({ next: "/api/v1/products?cursor=2&status=ACTIVE", previous: null, results: [product] }))
+    if (path === "/api/v1/products?cursor=2&status=ACTIVE") return Promise.resolve(json({
+      next: null, previous: "/api/v1/products?status=ACTIVE",
+      results: [product, { ...product, id: "product-2", name_zh: "第二产品" }],
+    }))
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  await renderCompany(fetchMock, ["products.read"])
+
+  expect(await screen.findByText("已读取全部 2 个启用产品")).toBeVisible()
+  expect(within(screen.getByRole("region", { name: "产品" })).getAllByText("重复产品")).toHaveLength(1)
+  expect(screen.getByText("第二产品")).toBeVisible()
+})
+
 it("summarizes only currently available company data and links to existing editors", async () => {
   const fetchMock = vi.fn((path: string) => {
     if (path === "/api/v1/products?status=ACTIVE") return Promise.resolve(page([{ id: "p1", status: "ACTIVE" }, { id: "p2", status: "ACTIVE" }]))

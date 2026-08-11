@@ -32,8 +32,17 @@ function normalizedProductCursorKey(value: string): string {
 
 async function loadCompanyProducts(signal: AbortSignal): Promise<{ items: Product[]; complete: boolean }> {
   let page = await listProducts({ status: "ACTIVE" }, { signal })
-  const items = [...page.results]
-  const visited = new Set<string>()
+  const items: Product[] = []
+  const seenProductIds = new Set<string>()
+  const appendProducts = (products: Product[]) => {
+    for (const product of products) {
+      if (seenProductIds.has(product.id)) continue
+      seenProductIds.add(product.id)
+      items.push(product)
+    }
+  }
+  appendProducts(page.results)
+  const visited = new Set<string>([normalizedProductCursorKey("/api/v1/products?status=ACTIVE")])
   let loadedPages = 1
   while (page.next) {
     const next = safeProductPageUrl(page.next)
@@ -44,7 +53,7 @@ async function loadCompanyProducts(signal: AbortSignal): Promise<{ items: Produc
     if (visited.has(cursorKey)) return { items, complete: false }
     visited.add(cursorKey)
     page = await getProductPage(next, { signal })
-    items.push(...page.results)
+    appendProducts(page.results)
     loadedPages += 1
   }
   return { items, complete: true }
@@ -121,54 +130,94 @@ const processes = computed(() => unique([...conceptLabels(["PROCESS"]), ...linke
 const standards = computed(() => unique([...conceptLabels(["STANDARD"]), ...linkedLabels(["STANDARD"])]))
 const evidenceCount = computed(() => new Set(evidence.value.map((item) => item.id)).size)
 
-const coverage = computed(() => [
-  Boolean(organizationId.value && organizationName.value !== "公司名称暂不可用"),
-  products.value.length > 0,
-  capabilities.value.length > 0,
-  industries.value.length > 0,
-  processes.value.length > 0,
-  standards.value.length > 0,
-  evidenceCount.value > 0,
-  assets.value.length > 0,
-].filter(Boolean).length)
-const canConfirmEverySource = computed(() => canReadProducts.value && canReadKnowledge.value && canReadAssets.value)
-const sourcesPending = computed(() => (
-  (canReadProducts.value && productsQuery.isPending.value)
-  || (canReadKnowledge.value && (knowledgeQuery.isPending.value || evidenceQuery.isPending.value))
-  || (canReadAssets.value && assetsQuery.isPending.value)
+type Readiness = "ready" | "pending" | "unknown" | "unavailable"
+const sourceReadiness = (readable: boolean, pending: boolean, complete: boolean): Readiness => {
+  if (!readable) return "unavailable"
+  if (pending) return "pending"
+  return complete ? "ready" : "unknown"
+}
+const combineReadiness = (...sources: Readiness[]): Readiness => {
+  const readable = sources.filter((source) => source !== "unavailable")
+  if (!readable.length) return "unavailable"
+  if (readable.includes("pending")) return "pending"
+  return readable.includes("unknown") ? "unknown" : "ready"
+}
+const productSourceReadiness = computed<Readiness>(() => sourceReadiness(
+  canReadProducts.value,
+  productsQuery.isPending.value,
+  productsQuery.isSuccess.value && productsQuery.data.value?.complete === true,
 ))
-const sourceFailed = computed(() => (
-  (canReadProducts.value && productsQuery.isError.value)
-  || (canReadKnowledge.value && (knowledgeQuery.isError.value || evidenceQuery.isError.value))
-  || (canReadAssets.value && assetsQuery.isError.value)
+const knowledgeSourceReadiness = computed<Readiness>(() => sourceReadiness(
+  canReadKnowledge.value,
+  knowledgeQuery.isPending.value,
+  knowledgeQuery.isSuccess.value,
 ))
+const evidenceSourceReadiness = computed<Readiness>(() => sourceReadiness(
+  canReadKnowledge.value,
+  evidenceQuery.isPending.value,
+  evidenceQuery.isSuccess.value,
+))
+const assetSourceReadiness = computed<Readiness>(() => sourceReadiness(
+  canReadAssets.value,
+  assetsQuery.isPending.value,
+  assetsQuery.isSuccess.value && !assetsQuery.data.value?.next,
+))
+const compositeReadiness = computed<Readiness>(() => combineReadiness(
+  productSourceReadiness.value,
+  knowledgeSourceReadiness.value,
+))
+const categoryReadiness = computed(() => ({
+  identity: "ready" as Readiness,
+  products: productSourceReadiness.value,
+  capabilities: compositeReadiness.value,
+  industries: compositeReadiness.value,
+  processes: compositeReadiness.value,
+  standards: compositeReadiness.value,
+  evidence: combineReadiness(knowledgeSourceReadiness.value, evidenceSourceReadiness.value),
+  assets: assetSourceReadiness.value,
+}))
+const categoryPresence = computed(() => ({
+  identity: Boolean(organizationId.value && organizationName.value !== "公司名称暂不可用"),
+  products: products.value.length > 0,
+  capabilities: capabilities.value.length > 0,
+  industries: industries.value.length > 0,
+  processes: processes.value.length > 0,
+  standards: standards.value.length > 0,
+  evidence: evidenceCount.value > 0,
+  assets: assets.value.length > 0,
+}))
+const coverage = computed(() => Object.values(categoryPresence.value).filter(Boolean).length)
+const readinessValues = computed(() => Object.values(categoryReadiness.value))
+const sourcesPending = computed(() => readinessValues.value.includes("pending"))
+const sourceFailed = computed(() => readinessValues.value.includes("unknown"))
+const hasUnavailableCategories = computed(() => readinessValues.value.includes("unavailable"))
+const hasKnownGaps = computed(() => Object.entries(categoryReadiness.value).some(([category, readiness]) => (
+  readiness === "ready" && !categoryPresence.value[category as keyof typeof categoryPresence.value]
+)))
 const coverageText = computed(() => {
   if (sourcesPending.value) return "正在核对真实资料"
-  if (sourceFailed.value) return `当前可确认 ${coverage.value} 项；读取失败的资料未计为缺失`
-  return canConfirmEverySource.value
-    ? `已覆盖 ${coverage.value} 项，共 8 项`
-    : `当前可确认 ${coverage.value} 项；无权限的资料未计为缺失`
+  if (sourceFailed.value) return `已确认 ${coverage.value} 项，另有资料暂无法判断`
+  return hasUnavailableCategories.value
+    ? `当前可确认 ${coverage.value} 项；无权限的资料未计为缺失`
+    : `已覆盖 ${coverage.value} 项，共 8 项`
 })
 const coverageStatusLabel = computed(() => {
   if (sourcesPending.value) return "正在核对"
   if (sourceFailed.value) return "部分资料暂不可用"
-  return coverage.value === 8 ? "资料已覆盖" : "仍有可补充项"
+  if (coverage.value === 8 && !hasUnavailableCategories.value) return "资料已覆盖"
+  return hasKnownGaps.value ? "仍有可补充项" : "可见资料已核对"
 })
 
 type Gap = { title: string; explanation: string; to: string; action: string; allowed: boolean }
 const gaps = computed<Gap[]>(() => {
   const result: Gap[] = []
-  const productsReady = canReadProducts.value && productsQuery.isSuccess.value
-  const knowledgeReady = canReadKnowledge.value && knowledgeQuery.isSuccess.value
-  const evidenceReady = canReadKnowledge.value && evidenceQuery.isSuccess.value
-  const assetsReady = canReadAssets.value && assetsQuery.isSuccess.value
-  if (productsReady && !products.value.length) result.push({ title: "补充产品", explanation: "让 AI 知道实际销售的产品和交付范围。", to: "/products", action: "去产品库补充产品", allowed: canManageProducts.value })
-  if (productsReady && knowledgeReady && !capabilities.value.length) result.push({ title: "补充能力", explanation: "记录制造与检测能力，避免 AI 猜测。", to: "/products", action: "去产品库补充能力", allowed: canManageProducts.value })
-  if (knowledgeReady && !industries.value.length) result.push({ title: "补充行业", explanation: "记录真实服务行业，帮助 AI 缩小目标范围。", to: "/knowledge", action: "去知识库补充行业", allowed: canCreateKnowledge.value })
-  if (knowledgeReady && !processes.value.length) result.push({ title: "补充工艺", explanation: "记录已确认的加工工艺。", to: "/knowledge", action: "去知识库补充工艺", allowed: canCreateKnowledge.value })
-  if (knowledgeReady && !standards.value.length) result.push({ title: "补充标准", explanation: "记录适用标准，减少对外表达风险。", to: "/knowledge", action: "去知识库补充标准", allowed: canCreateKnowledge.value })
-  if (knowledgeReady && evidenceReady && !evidenceCount.value) result.push({ title: "补充证据", explanation: "为产品、能力和标准补充可追溯依据。", to: "/knowledge", action: "去知识库补充证据", allowed: canCreateKnowledge.value })
-  if (assetsReady && !assets.value.length) result.push({ title: "上传素材", explanation: "上传真实图片、视频或文档供内容使用。", to: "/assets", action: "去素材库上传素材", allowed: canManageAssets.value })
+  if (categoryReadiness.value.products === "ready" && !products.value.length) result.push({ title: "补充产品", explanation: "让 AI 知道实际销售的产品和交付范围。", to: "/products", action: "去产品库补充产品", allowed: canManageProducts.value })
+  if (categoryReadiness.value.capabilities === "ready" && !capabilities.value.length) result.push({ title: "补充能力", explanation: "记录制造与检测能力，避免 AI 猜测。", to: "/products", action: "去产品库补充能力", allowed: canManageProducts.value })
+  if (categoryReadiness.value.industries === "ready" && !industries.value.length) result.push({ title: "补充行业", explanation: "记录真实服务行业，帮助 AI 缩小目标范围。", to: "/knowledge", action: "去知识库补充行业", allowed: canCreateKnowledge.value })
+  if (categoryReadiness.value.processes === "ready" && !processes.value.length) result.push({ title: "补充工艺", explanation: "记录已确认的加工工艺。", to: "/knowledge", action: "去知识库补充工艺", allowed: canCreateKnowledge.value })
+  if (categoryReadiness.value.standards === "ready" && !standards.value.length) result.push({ title: "补充标准", explanation: "记录适用标准，减少对外表达风险。", to: "/knowledge", action: "去知识库补充标准", allowed: canCreateKnowledge.value })
+  if (categoryReadiness.value.evidence === "ready" && !evidenceCount.value) result.push({ title: "补充证据", explanation: "为产品、能力和标准补充可追溯依据。", to: "/knowledge", action: "去知识库补充证据", allowed: canCreateKnowledge.value })
+  if (categoryReadiness.value.assets === "ready" && !assets.value.length) result.push({ title: "上传素材", explanation: "上传真实图片、视频或文档供内容使用。", to: "/assets", action: "去素材库上传素材", allowed: canManageAssets.value })
   return result
 })
 
@@ -224,10 +273,11 @@ function refetchCapabilities() {
         <p v-else-if="productsQuery.isPending.value" role="status">正在读取产品资料…</p>
         <div v-else-if="productsQuery.isError.value" role="alert"><p>产品资料暂时无法读取。</p><button type="button" @click="productsQuery.refetch()">重新加载产品资料</button></div>
         <template v-else>
+          <p v-if="productSourceReadiness === 'unknown'" role="alert">产品资料未完整加载，当前是否存在缺口暂无法判断。</p>
           <p v-if="products.length">{{ productCountLabel(products.length) }}</p>
           <div v-if="products.length" class="tag-list"><span v-for="(name, index) in productNames" :key="`${name}-${index}`">{{ name }}</span></div>
-          <div v-else><strong>还没有产品资料</strong><p>{{ canManageProducts ? "先记录真实产品和交付范围。" : "如需补充，请联系管理员。" }}</p></div>
-          <RouterLink class="text-link" to="/products">{{ products.length ? (canManageProducts ? "管理产品资料" : "查看产品资料") : (canManageProducts ? "去产品库补充" : "查看产品库") }}</RouterLink>
+          <div v-else-if="productSourceReadiness === 'ready'"><strong>还没有产品资料</strong><p>{{ canManageProducts ? "先记录真实产品和交付范围。" : "如需补充，请联系管理员。" }}</p></div>
+          <RouterLink class="text-link" to="/products">{{ productSourceReadiness === "unknown" ? "查看产品库" : products.length ? (canManageProducts ? "管理产品资料" : "查看产品资料") : (canManageProducts ? "去产品库补充" : "查看产品库") }}</RouterLink>
           <p v-if="products.length && !canManageProducts" class="muted">如需补充或编辑，请联系管理员。</p>
         </template>
       </section>
@@ -235,37 +285,37 @@ function refetchCapabilities() {
       <section class="knowledge-card" role="region" aria-label="能力">
         <div class="card-title"><AppIcon name="settings" /><h2>能力</h2></div>
         <p v-if="!canReadProducts && !canReadKnowledge">你没有查看能力资料的权限。</p>
-        <p v-else-if="(canReadProducts && productsQuery.isPending.value) || (canReadKnowledge && knowledgeQuery.isPending.value)" role="status">正在读取能力资料…</p>
-        <div v-else-if="(canReadProducts && productsQuery.isError.value) || (canReadKnowledge && knowledgeQuery.isError.value)" role="alert"><p>部分能力资料暂时无法读取。</p><button type="button" @click="refetchCapabilities">重新加载能力资料</button></div>
+        <p v-else-if="categoryReadiness.capabilities === 'pending'" role="status">正在读取能力资料…</p>
+        <div v-else-if="categoryReadiness.capabilities === 'unknown'" role="alert"><p>部分能力资料暂时无法读取，当前是否存在缺口暂无法判断。</p><button type="button" @click="refetchCapabilities">重新加载能力资料</button></div>
         <div v-else-if="capabilities.length" class="tag-list"><span v-for="item in capabilities" :key="item">{{ item }}</span></div>
         <p v-else>还没有已确认的制造或检测能力。</p>
       </section>
 
       <section class="knowledge-card" role="region" aria-label="行业">
         <div class="card-title"><AppIcon name="globe" /><h2>行业</h2></div>
-        <p v-if="!canReadProducts && !canReadKnowledge">你没有查看行业资料的权限。</p><p v-else-if="(canReadProducts && productsQuery.isPending.value) || (canReadKnowledge && knowledgeQuery.isPending.value)" role="status">正在读取行业资料…</p><div v-else-if="(canReadProducts && productsQuery.isError.value) || (canReadKnowledge && knowledgeQuery.isError.value)" role="alert"><p>部分行业资料暂时无法读取。</p><button @click="refetchCapabilities">重新加载行业资料</button></div><div v-else-if="industries.length" class="tag-list"><span v-for="item in industries" :key="item">{{ item }}</span></div><p v-else>还没有已确认的目标行业。</p>
+        <p v-if="!canReadProducts && !canReadKnowledge">你没有查看行业资料的权限。</p><p v-else-if="categoryReadiness.industries === 'pending'" role="status">正在读取行业资料…</p><div v-else-if="categoryReadiness.industries === 'unknown'" role="alert"><p>部分行业资料暂时无法读取，当前是否存在缺口暂无法判断。</p><button @click="refetchCapabilities">重新加载行业资料</button></div><div v-else-if="industries.length" class="tag-list"><span v-for="item in industries" :key="item">{{ item }}</span></div><p v-else>还没有已确认的目标行业。</p>
       </section>
 
       <section class="knowledge-card" role="region" aria-label="工艺">
         <div class="card-title"><AppIcon name="settings" /><h2>工艺</h2></div>
-        <p v-if="!canReadProducts && !canReadKnowledge">你没有查看工艺资料的权限。</p><p v-else-if="(canReadProducts && productsQuery.isPending.value) || (canReadKnowledge && knowledgeQuery.isPending.value)" role="status">正在读取工艺资料…</p><div v-else-if="(canReadProducts && productsQuery.isError.value) || (canReadKnowledge && knowledgeQuery.isError.value)" role="alert"><p>部分工艺资料暂时无法读取。</p><button @click="refetchCapabilities">重新加载工艺资料</button></div><div v-else-if="processes.length" class="tag-list"><span v-for="item in processes" :key="item">{{ item }}</span></div><p v-else>还没有已确认的加工工艺。</p>
+        <p v-if="!canReadProducts && !canReadKnowledge">你没有查看工艺资料的权限。</p><p v-else-if="categoryReadiness.processes === 'pending'" role="status">正在读取工艺资料…</p><div v-else-if="categoryReadiness.processes === 'unknown'" role="alert"><p>部分工艺资料暂时无法读取，当前是否存在缺口暂无法判断。</p><button @click="refetchCapabilities">重新加载工艺资料</button></div><div v-else-if="processes.length" class="tag-list"><span v-for="item in processes" :key="item">{{ item }}</span></div><p v-else>还没有已确认的加工工艺。</p>
       </section>
 
       <section class="knowledge-card" role="region" aria-label="标准">
         <div class="card-title"><AppIcon name="check" /><h2>标准</h2></div>
-        <p v-if="!canReadProducts && !canReadKnowledge">你没有查看标准资料的权限。</p><p v-else-if="(canReadProducts && productsQuery.isPending.value) || (canReadKnowledge && knowledgeQuery.isPending.value)" role="status">正在读取标准资料…</p><div v-else-if="(canReadProducts && productsQuery.isError.value) || (canReadKnowledge && knowledgeQuery.isError.value)" role="alert"><p>部分标准资料暂时无法读取。</p><button @click="refetchCapabilities">重新加载标准资料</button></div><div v-else-if="standards.length" class="tag-list"><span v-for="item in standards" :key="item">{{ item }}</span></div><p v-else>还没有已确认的适用标准。</p>
+        <p v-if="!canReadProducts && !canReadKnowledge">你没有查看标准资料的权限。</p><p v-else-if="categoryReadiness.standards === 'pending'" role="status">正在读取标准资料…</p><div v-else-if="categoryReadiness.standards === 'unknown'" role="alert"><p>部分标准资料暂时无法读取，当前是否存在缺口暂无法判断。</p><button @click="refetchCapabilities">重新加载标准资料</button></div><div v-else-if="standards.length" class="tag-list"><span v-for="item in standards" :key="item">{{ item }}</span></div><p v-else>还没有已确认的适用标准。</p>
       </section>
 
       <section class="knowledge-card" role="region" aria-label="证据覆盖">
         <div class="card-title"><AppIcon name="document" /><h2>证据覆盖</h2></div>
-        <p v-if="!canReadKnowledge">你没有查看证据资料的权限。</p><p v-else-if="evidenceQuery.isPending.value || knowledgeQuery.isPending.value" role="status">正在读取证据资料…</p><div v-else-if="evidenceQuery.isError.value || knowledgeQuery.isError.value" role="alert"><p>证据资料暂时无法读取。</p><button @click="evidenceQuery.refetch(); knowledgeQuery.refetch()">重新加载证据资料</button></div><template v-else><p v-if="concepts.length">当前可见 {{ concepts.length }} 条知识</p><strong v-else>还没有公司知识</strong><p v-if="evidenceCount">当前可确认 {{ evidenceCount }} 条证据依据。</p><p v-else>还没有可追溯的证据依据。</p></template>
+        <p v-if="!canReadKnowledge">你没有查看证据资料的权限。</p><p v-else-if="categoryReadiness.evidence === 'pending'" role="status">正在读取证据资料…</p><div v-else-if="categoryReadiness.evidence === 'unknown'" role="alert"><p>证据资料暂时无法读取，当前是否存在缺口暂无法判断。</p><button @click="evidenceQuery.refetch(); knowledgeQuery.refetch()">重新加载证据资料</button></div><template v-else><p v-if="concepts.length">当前可见 {{ concepts.length }} 条知识</p><strong v-else>还没有公司知识</strong><p v-if="evidenceCount">当前可确认 {{ evidenceCount }} 条证据依据。</p><p v-else>还没有可追溯的证据依据。</p></template>
         <RouterLink v-if="canReadKnowledge" class="text-link" to="/knowledge">{{ concepts.length || evidenceCount ? (canCreateKnowledge ? "管理公司知识" : "查看知识库") : (canCreateKnowledge ? "去知识库补充" : "查看知识库") }}</RouterLink>
         <p v-if="canReadKnowledge && !canCreateKnowledge" class="muted">如需补充或编辑，请联系管理员。</p>
       </section>
 
       <section class="knowledge-card" role="region" aria-label="素材">
         <div class="card-title"><AppIcon name="document" /><h2>素材</h2></div>
-        <p v-if="!canReadAssets">你没有查看素材的权限。</p><p v-else-if="assetsQuery.isPending.value" role="status">正在读取素材…</p><div v-else-if="assetsQuery.isError.value" role="alert"><p>素材暂时无法读取。</p><button type="button" @click="assetsQuery.refetch()">重新加载素材</button></div>
+        <p v-if="!canReadAssets">你没有查看素材的权限。</p><p v-else-if="categoryReadiness.assets === 'pending'" role="status">正在读取素材…</p><div v-else-if="categoryReadiness.assets === 'unknown'" role="alert"><p>素材暂时无法完整读取，当前是否存在缺口暂无法判断。</p><button type="button" @click="assetsQuery.refetch()">重新加载素材</button></div>
         <template v-else><p v-if="assets.length">{{ assetCountLabel(assets.length) }}</p><div v-else><strong>还没有可用素材</strong><p>{{ canManageAssets ? "上传真实图片、视频或文档。" : "如需补充，请联系管理员。" }}</p></div><RouterLink class="text-link" to="/assets">{{ assets.length ? (canManageAssets ? "管理素材" : "查看素材") : (canManageAssets ? "去素材库补充" : "查看素材库") }}</RouterLink><p v-if="assets.length && !canManageAssets" class="muted">如需补充或编辑，请联系管理员。</p></template>
       </section>
     </div>

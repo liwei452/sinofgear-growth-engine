@@ -66,7 +66,7 @@ export function isActiveImportJob(status: Job["status"]): boolean {
   return status === "QUEUED" || status === "RUNNING" || status === "RETRY_QUEUED"
 }
 
-function required<T>(value: T | undefined, message = "The server returned no data. Please try again."): T {
+function required<T>(value: T | undefined, message = "暂时没有获取到数据，请稍后重试。"): T {
   if (value === undefined) throw new ApiError(0, message)
   return value
 }
@@ -133,47 +133,47 @@ function isIsoDateTime(value: string): boolean {
 }
 
 function validateRow(raw: unknown, row: number, screenshotRequired = false): ImportPreviewMessage | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return invalid(row, "This row must be an object.")
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return invalid(row, "每一行都需要填写为一条来源信息。")
   const record = raw as Record<string, unknown>
   if (typeof record.source_url !== "string" || !safePublicHttpUrl(record.source_url)) {
-    return invalid(row, "Provide a public HTTP or HTTPS source URL.")
+    return invalid(row, "请填写可公开访问的链接。")
   }
   if (typeof record.original_text !== "string" || !record.original_text.trim()) {
-    return invalid(row, "Provide the public source text.")
+    return invalid(row, "请填写公开来源中的原文内容。")
   }
   if (record.original_text.length > maxOriginalTextChars) {
-    return invalid(row, `Shorten the public source text to ${maxOriginalTextChars} characters.`)
+    return invalid(row, `原文内容不能超过 ${maxOriginalTextChars} 个字符。`)
   }
   const platform = record.platform ?? "MANUAL"
   if (typeof platform !== "string" || !platform.trim() || platform.trim().length > 32) {
-    return invalid(row, "Provide a platform name of at most 32 characters.")
+    return invalid(row, "平台名称请控制在 32 个字符以内。")
   }
   const signalType = record.signal_type ?? "MENTION"
   if (typeof signalType !== "string" || !supportedSignalTypes.has(signalType.trim().toUpperCase())) {
-    return invalid(row, "Use a supported public signal type.")
+    return invalid(row, "请选择支持的线索类型。")
   }
   const authorName = record.author_name ?? ""
   if (typeof authorName !== "string" || authorName.length > 255) {
-    return invalid(row, "Use a public author name of at most 255 characters.")
+    return invalid(row, "作者名称请控制在 255 个字符以内。")
   }
   const publishedAt = record.published_at
   if (publishedAt !== undefined && publishedAt !== null && publishedAt !== ""
     && (typeof publishedAt !== "string" || !isIsoDateTime(publishedAt))) {
-    return invalid(row, "Use an ISO 8601 publication timestamp.")
+    return invalid(row, "请使用有效的发布时间。")
   }
   const screenshotAssetId = record.screenshot_asset_id
   if (screenshotRequired && (screenshotAssetId === undefined || screenshotAssetId === null || screenshotAssetId === "")) {
-    return invalid(row, "Attach the private screenshot asset.")
+    return invalid(row, "请添加截图。")
   }
   if (screenshotAssetId !== undefined && screenshotAssetId !== null && screenshotAssetId !== "" && !isUuid(screenshotAssetId)) {
-    return invalid(row, "Attach a valid private screenshot asset.")
+    return invalid(row, "请添加有效的截图。")
   }
   return null
 }
 
 function previewRows(rows: unknown[], startRow: number, screenshotRequired = false): ImportPreview {
   if (rows.length > maxImportRows) {
-    return { validRows: 0, invalidRows: 1, messages: [invalid(null, `Reduce the import to ${maxImportRows} rows or fewer.`)] }
+    return { validRows: 0, invalidRows: 1, messages: [invalid(null, `一次最多导入 ${maxImportRows} 条。`)] }
   }
   const messages = rows.flatMap((row, index) => {
     const issue = validateRow(row, startRow + index, screenshotRequired)
@@ -201,7 +201,7 @@ function parseCsv(text: string): { headers: string[]; rows: string[][] } | Impor
       continue
     }
     if (character === '"') {
-      if (field) return invalid(rows.length + 1, "CSV quotes must start at the beginning of a field.")
+      if (field) return invalid(rows.length + 1, "导入表格中，引号需要从字段开头开始。")
       quoted = true
     } else if (character === ",") {
       row.push(field)
@@ -215,7 +215,7 @@ function parseCsv(text: string): { headers: string[]; rows: string[][] } | Impor
       field += character
     }
   }
-  if (quoted) return invalid(rows.length + 1, "CSV contains an unclosed quoted field.")
+  if (quoted) return invalid(rows.length + 1, "导入表格中有未结束的引号。")
   if (field || row.length) {
     row.push(field.replace(/\r$/, ""))
     rows.push(row)
@@ -228,16 +228,16 @@ function previewCsv(text: string): ImportPreview {
   const parsed = parseCsv(text.replace(/^\uFEFF/, ""))
   if ("row" in parsed) return { validRows: 0, invalidRows: 1, messages: [parsed] }
   if (!parsed.headers.length || parsed.headers.some((header) => !supportedCsvHeaders.has(header)) || new Set(parsed.headers).size !== parsed.headers.length) {
-    return { validRows: 0, invalidRows: 1, messages: [invalid(1, "CSV must include unique supported headers.")] }
+    return { validRows: 0, invalidRows: 1, messages: [invalid(1, "导入表格需使用支持且不重复的列名。")] }
   }
   if (parsed.rows.length > maxImportRows) {
-    return { validRows: 0, invalidRows: 1, messages: [invalid(null, `Reduce the import to ${maxImportRows} rows or fewer.`)] }
+    return { validRows: 0, invalidRows: 1, messages: [invalid(null, `一次最多导入 ${maxImportRows} 条。`)] }
   }
   const messages: ImportPreviewMessage[] = []
   let validRows = 0
   parsed.rows.forEach((values, index) => {
     if (values.length > parsed.headers.length) {
-      messages.push(invalid(index + 2, "Remove values without matching CSV headers."))
+      messages.push(invalid(index + 2, "请删除没有对应列名的内容。"))
       return
     }
     const issue = validateRow(
@@ -252,7 +252,7 @@ function previewCsv(text: string): ImportPreview {
 
 function previewJson(text: string): ImportPreview {
   const payload = jsonPayload(text)
-  if (!payload) return { validRows: 0, invalidRows: 1, messages: [invalid(null, "JSON must contain a rows list.")] }
+  if (!payload) return { validRows: 0, invalidRows: 1, messages: [invalid(null, "导入数据需要包含来源列表。")] }
   return previewRows(payload.rows as unknown[], 1)
 }
 
@@ -282,7 +282,7 @@ export function previewImport(draft: ImportDraft): ImportPreview {
     case "PASTE": {
       const rows = draft.text.split(/\r?\n/).flatMap((line) => line.trim() ? [line] : [])
       if (rows.length > maxImportRows) {
-        return { validRows: 0, invalidRows: 1, messages: [invalid(null, `Reduce the import to ${maxImportRows} rows or fewer.`)] }
+        return { validRows: 0, invalidRows: 1, messages: [invalid(null, `一次最多导入 ${maxImportRows} 条。`)] }
       }
       const messages: ImportPreviewMessage[] = []
       let validRows = 0
@@ -303,9 +303,9 @@ export function previewImport(draft: ImportDraft): ImportPreview {
 }
 
 function ingestionPayload(draft: ImportDraft): IngestionBatchCreate {
-  if (!supportedImportModes.has(draft.mode)) throw new Error("Unsupported import mode")
+  if (!supportedImportModes.has(draft.mode)) throw new Error("暂不支持这种导入方式。")
   const preview = previewImport(draft)
-  if (!preview.validRows || preview.invalidRows) throw new Error("Import contains invalid rows.")
+  if (!preview.validRows || preview.invalidRows) throw new Error("导入内容中有不符合要求的记录。")
   switch (draft.mode) {
     case "URL":
       return {
@@ -332,7 +332,7 @@ function ingestionPayload(draft: ImportDraft): IngestionBatchCreate {
       }
     case "JSON": {
       const payload = jsonPayload(draft.text)
-      if (!payload) throw new Error("Import contains invalid rows.")
+      if (!payload) throw new Error("导入内容中有不符合要求的记录。")
       return {
         source_type: "JSON",
         idempotency_key: draft.idempotencyKey,
@@ -357,7 +357,7 @@ export async function getLeadCandidatePage(
   options: LeadReadOptions = {},
 ): Promise<LeadCandidatePage> {
   const safeUrl = safeLeadPageUrl(pageUrl)
-  if (!safeUrl) throw new ApiError(0, "Unsafe lead cursor.")
+  if (!safeUrl) throw new ApiError(0, "页面地址无效，请返回列表后重试。")
   return required(await apiRequest<LeadCandidatePage>(safeUrl, options))
 }
 

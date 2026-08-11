@@ -158,12 +158,35 @@ it("returns row-indexed preview errors without network access", () => {
   expect(fetchMock).not.toHaveBeenCalled()
 })
 
+it("uses Chinese guidance for every local import validation error", () => {
+  const messages = [
+    previewImport({ mode: "URL", sourceUrl: "javascript:alert(1)", originalText: "Need gears", idempotencyKey: "guide-url" }).messages[0]?.message,
+    previewImport({ mode: "CSV", text: "source_url,source_url\nhttps://example.test/post,Need gears", idempotencyKey: "guide-csv" }).messages[0]?.message,
+    previewImport({ mode: "JSON", text: "{not json", idempotencyKey: "guide-json" }).messages[0]?.message,
+    previewImport({ mode: "PASTE", text: Array.from({ length: 10_001 }, () => "https://example.test/post\tNeed gears").join("\n"), idempotencyKey: "guide-limit" }).messages[0]?.message,
+    previewImport({ mode: "JSON", text: '{"rows":[{"source_url":"https://example.test/post","original_text":"Need gears","published_at":"not-a-date"}]}', idempotencyKey: "guide-time" }).messages[0]?.message,
+    previewImport({ mode: "JSON", text: '{"rows":[{"source_url":"https://example.test/post","original_text":"Need gears","signal_type":"INVALID"}]}', idempotencyKey: "guide-signal" }).messages[0]?.message,
+    previewImport({ mode: "SCREENSHOT", sourceUrl: "https://example.test/post", originalText: "Need gears", screenshotAssetId: "not-a-uuid", idempotencyKey: "guide-shot" }).messages[0]?.message,
+  ]
+
+  expect(messages).toEqual([
+    "请填写可公开访问的链接。",
+    "导入表格需使用支持且不重复的列名。",
+    "导入数据需要包含来源列表。",
+    "一次最多导入 10000 条。",
+    "请使用有效的发布时间。",
+    "请选择支持的线索类型。",
+    "请添加有效的截图。",
+  ])
+  expect(messages.join("")).not.toMatch(/[A-Za-z_]/)
+})
+
 it("rejects unsupported import modes before making a request", async () => {
   const fetchMock = vi.fn()
   vi.stubGlobal("fetch", fetchMock)
 
   await expect(createIngestionBatch({ mode: "API", idempotencyKey: "unsupported" } as never))
-    .rejects.toThrow("Unsupported import mode")
+    .rejects.toThrow("暂不支持这种导入方式。")
   expect(fetchMock).not.toHaveBeenCalled()
 })
 
@@ -178,7 +201,7 @@ it("rejects unsafe row URLs at the request boundary without making a request", a
     { mode: "JSON", text: '{"rows":[{"source_url":"javascript:alert(1)","original_text":"Need gears"}]}', idempotencyKey: "bad-json" },
   ] as const
 
-  for (const draft of drafts) await expect(createIngestionBatch(draft)).rejects.toThrow("invalid rows")
+  for (const draft of drafts) await expect(createIngestionBatch(draft)).rejects.toThrow("导入内容中有不符合要求的记录。")
   expect(fetchMock).not.toHaveBeenCalled()
 })
 
@@ -244,7 +267,7 @@ it("rejects calendar-invalid timestamps and accepts Django-compatible timezone b
     { mode: "JSON", text: '{"rows":[{"source_url":"https://example.test/short","original_text":"Need gears","published_at":"2026-02-28T10:00:00+1"}]}', idempotencyKey: "bad-short-offset" },
   ] as const
 
-  for (const draft of drafts) await expect(createIngestionBatch(draft)).rejects.toThrow("invalid rows")
+  for (const draft of drafts) await expect(createIngestionBatch(draft)).rejects.toThrow("导入内容中有不符合要求的记录。")
   expect(fetchMock).not.toHaveBeenCalled()
 })
 

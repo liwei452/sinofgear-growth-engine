@@ -1,5 +1,5 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
-import { render, screen, within } from "@testing-library/vue"
+import { render, screen, waitFor, within } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { currentUserQueryOptions } from "../auth/auth"
@@ -99,8 +99,26 @@ it("reports a tie without naming a leading platform",async()=>{
   renderAnalytics(fetch)
 
   const conclusion=screen.getByRole("region",{name:"AI 结论"})
-  expect(await within(conclusion).findByText(/点击数据持平，无法区分/)).toBeVisible()
+  expect(await within(conclusion).findByText(/最高点击数并列，暂无唯一领先平台/)).toBeVisible()
   expect(conclusion).not.toHaveTextContent("点击数较高")
+})
+
+it("reports a highest-click tie across three platforms without implying all are equal",async()=>{
+  const fetch=vi.fn((path:string)=>Promise.resolve(json(path.startsWith("/api/v1/analytics")?{
+    count:6,total_clicks:50,next:null,previous:null,results:[
+      {date:"2026-08-01",campaign_id:"c",platform_id:"a",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-02",campaign_id:"c",platform_id:"a",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-01",campaign_id:"c",platform_id:"b",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-02",campaign_id:"c",platform_id:"b",country:"DE",product_id:"p",clicks:10},
+      {date:"2026-08-01",campaign_id:"c",platform_id:"c",country:"DE",product_id:"p",clicks:5},
+      {date:"2026-08-02",campaign_id:"c",platform_id:"c",country:"DE",product_id:"p",clicks:5},
+    ],
+  }:{next:null,previous:null,results:[]})))
+  renderAnalytics(fetch)
+
+  const conclusion=screen.getByRole("region",{name:"AI 结论"})
+  expect(await within(conclusion).findByText(/最高点击数并列，暂无唯一领先平台/)).toBeVisible()
+  expect(conclusion).not.toHaveTextContent("三个平台持平")
 })
 
 it("resolves campaign and product names from safe later pages",async()=>{
@@ -117,6 +135,56 @@ it("resolves campaign and product names from safe later pages",async()=>{
 
   expect(await screen.findByText("第二页活动")).toBeVisible()
   expect(await screen.findByText("第二页产品")).toBeVisible()
+})
+
+it("deduplicates semantically identical campaign cursors after normalization",async()=>{
+  let campaignCalls=0
+  const fetch=vi.fn((path:string)=>{
+    if(path.startsWith("/api/v1/analytics"))return Promise.resolve(json({count:1,total_clicks:5,next:null,previous:null,results:[{date:"2026-08-01",campaign_id:"campaign-page-2",platform_id:"platform",country:"DE",product_id:"product",clicks:5}]}))
+    if(path==="/api/v1/campaigns"){
+      campaignCalls+=1
+      return Promise.resolve(json({next:"/api/v1/campaigns?b=2&a=1",previous:null,results:[]}))
+    }
+    if(path==="/api/v1/campaigns?b=2&a=1"){
+      campaignCalls+=1
+      return Promise.resolve(json({next:"/api/v1/campaigns?a=1&b=2",previous:null,results:[{id:"campaign-page-2",name:"规范游标活动"}]}))
+    }
+    if(path==="/api/v1/campaigns?a=1&b=2"){
+      campaignCalls+=1
+      return Promise.resolve(json({next:"/api/v1/campaigns?b=2&a=1",previous:null,results:[{id:"campaign-page-2",name:"规范游标活动"}]}))
+    }
+    return Promise.resolve(json({next:null,previous:null,results:[]}))
+  })
+  renderAnalytics(fetch,["tracking.read","campaigns.read"])
+
+  expect(await screen.findByText("规范游标活动")).toBeVisible()
+  await new Promise((resolve)=>setTimeout(resolve,0))
+  expect(campaignCalls).toBe(2)
+})
+
+it("caps unique campaign cursors and safely leaves names beyond the limit unresolved",async()=>{
+  let campaignCalls=0
+  const fetch=vi.fn((path:string)=>{
+    if(path.startsWith("/api/v1/analytics"))return Promise.resolve(json({count:1,total_clicks:5,next:null,previous:null,results:[{date:"2026-08-01",campaign_id:"campaign-page-120",platform_id:"platform",country:"DE",product_id:"product",clicks:5}]}))
+    if(path.startsWith("/api/v1/campaigns")){
+      campaignCalls+=1
+      const current=path==="/api/v1/campaigns"?1:Number(new URL(path,"https://app.test").searchParams.get("cursor"))
+      return Promise.resolve(json({
+        next:current<150?`/api/v1/campaigns?cursor=${current+1}`:null,
+        previous:null,
+        results:current===120?[{id:"campaign-page-120",name:"超限活动"}]:[],
+      }))
+    }
+    return Promise.resolve(json({next:null,previous:null,results:[]}))
+  })
+  renderAnalytics(fetch,["tracking.read","campaigns.read"])
+
+  await waitFor(()=>expect(campaignCalls).toBeGreaterThanOrEqual(100))
+  await new Promise((resolve)=>setTimeout(resolve,0))
+  expect(campaignCalls).toBe(100)
+  const table=screen.getByRole("table",{name:"渠道点击明细"})
+  expect(table).toHaveTextContent("名称暂不可用")
+  expect(table).not.toHaveTextContent("超限活动")
 })
 
 it("shows the click total and filters without exposing unresolved provenance ids",async()=>{const fetch=vi.fn((path:string)=>Promise.resolve(json(path.startsWith("/api/v1/analytics")?{count:1,total_clicks:17,next:null,previous:null,results:[{date:"2026-08-10",campaign_id:"campaign-visible",platform_id:"platform-visible",country:"DE",product_id:"prod",clicks:17}]}:{next:null,previous:null,results:[]})));renderAnalytics(fetch);expect(await screen.findByLabelText("总点击数")).toHaveTextContent("17");const table=screen.getByRole("table",{name:"渠道点击明细"});expect(table).toHaveTextContent("名称暂不可用");expect(table).not.toHaveTextContent("campaign-visible");expect(table).not.toHaveTextContent("platform-visible");for(const label of ["活动","平台","产品","国家代码"])expect(screen.getByLabelText(label)).toBeInTheDocument()})

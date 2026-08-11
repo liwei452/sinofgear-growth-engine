@@ -8,7 +8,7 @@ import StatusBadge from "../../shared/components/StatusBadge.vue"
 import { assetKeys, listAssets } from "../assets/api"
 import { currentUserQueryOptions } from "../auth/auth"
 import { knowledgeQueryKeys, listConcepts, listEvidence, type ConceptType } from "../knowledge/api"
-import { listProducts, productQueryKeys } from "../products/api"
+import { getProductPage, listProducts, productQueryKeys, safeProductPageUrl, type Product } from "../products/api"
 
 const currentUserQuery = useQuery(currentUserQueryOptions())
 const organizationId = computed(() => currentUserQuery.data.value?.organization.id ?? "")
@@ -22,9 +22,37 @@ const canManageProducts = computed(() => has("products.manage"))
 const canCreateKnowledge = computed(() => has("knowledge.create"))
 const canManageAssets = computed(() => has("assets.manage"))
 
+const MAX_COMPANY_PRODUCT_PAGES = 100
+function normalizedProductCursorKey(value: string): string {
+  const target = new URL(value, window.location.origin)
+  target.searchParams.sort()
+  const query = target.searchParams.toString()
+  return `${target.pathname}${query ? `?${query}` : ""}`
+}
+
+async function loadCompanyProducts(signal: AbortSignal): Promise<{ items: Product[]; complete: boolean }> {
+  let page = await listProducts({ status: "ACTIVE" }, { signal })
+  const items = [...page.results]
+  const visited = new Set<string>()
+  let loadedPages = 1
+  while (page.next) {
+    const next = safeProductPageUrl(page.next)
+    if (!next || loadedPages >= MAX_COMPANY_PRODUCT_PAGES) {
+      return { items, complete: false }
+    }
+    const cursorKey = normalizedProductCursorKey(next)
+    if (visited.has(cursorKey)) return { items, complete: false }
+    visited.add(cursorKey)
+    page = await getProductPage(next, { signal })
+    items.push(...page.results)
+    loadedPages += 1
+  }
+  return { items, complete: true }
+}
+
 const productsQuery = useQuery({
-  queryKey: computed(() => productQueryKeys.list(organizationId.value, { status: "ACTIVE" })),
-  queryFn: ({ signal }) => listProducts({ status: "ACTIVE" }, { signal }),
+  queryKey: computed(() => [...productQueryKeys.list(organizationId.value, { status: "ACTIVE" }), "company-profile-all"]),
+  queryFn: ({ signal }) => loadCompanyProducts(signal),
   enabled: computed(() => Boolean(organizationId.value) && canReadProducts.value),
   retry: false,
 })
@@ -47,23 +75,37 @@ const assetsQuery = useQuery({
   retry: false,
 })
 
-const products = computed(() => (productsQuery.data.value?.results ?? [])
-  .filter((item) => item.status === "ACTIVE"))
-const concepts = computed(() => (knowledgeQuery.data.value ?? [])
-  .filter((item) => item.status === "APPROVED"))
-const assets = computed(() => (assetsQuery.data.value?.results ?? [])
-  .filter((item) => item.status === "ACTIVE"))
-const evidence = computed(() => (evidenceQuery.data.value ?? [])
-  .filter((item) => item.status === "APPROVED"))
+const products = computed(() => canReadProducts.value
+  ? (productsQuery.data.value?.items ?? []).filter((item) => item.status === "ACTIVE")
+  : [])
+const approvedConcepts = computed(() => canReadKnowledge.value
+  ? (knowledgeQuery.data.value ?? []).filter((item) => item.status === "APPROVED")
+  : [])
+const assets = computed(() => canReadAssets.value
+  ? (assetsQuery.data.value?.results ?? []).filter((item) => item.status === "ACTIVE")
+  : [])
+const linkedConceptIds = computed(() => new Set(products.value.flatMap((item) =>
+  (item.concept_links ?? []).map((link) => link.concept.id))))
+const concepts = computed(() => approvedConcepts.value.filter((item) => (
+  (item.scope === "ORGANIZATION" && item.organization === organizationId.value)
+  || (item.scope === "SYSTEM" && linkedConceptIds.value.has(item.id))
+)))
+const linkedEvidenceIds = computed(() => new Set(concepts.value.flatMap((concept) => concept.evidence ?? [])))
+const evidence = computed(() => canReadKnowledge.value
+  ? (evidenceQuery.data.value ?? []).filter((item) => item.status === "APPROVED" && (
+    item.organization === organizationId.value
+    || (item.organization === null && linkedEvidenceIds.value.has(item.id))
+  ))
+  : [])
 const unique = (values: Array<string | null | undefined>) => [...new Set(
   values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)),
 )]
 const conceptLabels = (types: ConceptType[]) => unique(concepts.value
   .filter((concept) => types.includes(concept.concept_type))
   .map((concept) => concept.label_zh || concept.label_en))
-const linkedLabels = (roles: string[]) => unique(products.value.flatMap((item) =>
+const linkedLabels = (types: ConceptType[]) => unique(products.value.flatMap((item) =>
   (item.concept_links ?? [])
-    .filter((link) => roles.includes(link.role))
+    .filter((link) => types.includes(link.concept.concept_type as ConceptType))
     .map((link) => link.concept?.label_zh || link.concept?.label_en),
 ))
 const productNames = computed(() => products.value.map((item) =>
@@ -74,7 +116,7 @@ const capabilities = computed(() => unique([
   ...conceptLabels(["CAPABILITY"]),
   ...linkedLabels(["CAPABILITY"]),
 ]))
-const industries = computed(() => conceptLabels(["INDUSTRY"]))
+const industries = computed(() => unique([...conceptLabels(["INDUSTRY"]), ...linkedLabels(["INDUSTRY", "APPLICATION"])]))
 const processes = computed(() => unique([...conceptLabels(["PROCESS"]), ...linkedLabels(["PROCESS"])]))
 const standards = computed(() => unique([...conceptLabels(["STANDARD"]), ...linkedLabels(["STANDARD"])]))
 const evidenceCount = computed(() => new Set(evidence.value.map((item) => item.id)).size)
@@ -107,6 +149,11 @@ const coverageText = computed(() => {
     ? `已覆盖 ${coverage.value} 项，共 8 项`
     : `当前可确认 ${coverage.value} 项；无权限的资料未计为缺失`
 })
+const coverageStatusLabel = computed(() => {
+  if (sourcesPending.value) return "正在核对"
+  if (sourceFailed.value) return "部分资料暂不可用"
+  return coverage.value === 8 ? "资料已覆盖" : "仍有可补充项"
+})
 
 type Gap = { title: string; explanation: string; to: string; action: string; allowed: boolean }
 const gaps = computed<Gap[]>(() => {
@@ -125,7 +172,11 @@ const gaps = computed<Gap[]>(() => {
   return result
 })
 
-function productCountLabel(count: number): string { return `当前页有 ${count} 个产品` }
+function productCountLabel(count: number): string {
+  return productsQuery.data.value?.complete
+    ? `已读取全部 ${count} 个启用产品`
+    : `已安全加载前 ${count} 个启用产品`
+}
 function assetCountLabel(count: number): string { return `当前页有 ${count} 份素材` }
 function refetchCapabilities() {
   if (canReadProducts.value) void productsQuery.refetch()
@@ -145,7 +196,7 @@ function refetchCapabilities() {
 
     <section class="coverage-card" role="region" aria-label="资料完整度">
       <div><p class="eyebrow">真实资料覆盖</p><h2>{{ coverageText }}</h2><p>检查身份、产品、能力、行业、工艺、标准、证据和素材八类资料。</p></div>
-      <StatusBadge :tone="coverage === 8 && !sourcesPending && !sourceFailed ? 'success' : 'warning'" :label="sourcesPending ? '正在核对' : coverage === 8 && !sourceFailed ? '资料已覆盖' : '仍有可补充项'" />
+      <StatusBadge :tone="coverage === 8 && !sourcesPending && !sourceFailed ? 'success' : 'warning'" :label="coverageStatusLabel" />
     </section>
 
     <section class="gap-panel" role="region" aria-label="建议补充">
@@ -192,17 +243,17 @@ function refetchCapabilities() {
 
       <section class="knowledge-card" role="region" aria-label="行业">
         <div class="card-title"><AppIcon name="globe" /><h2>行业</h2></div>
-        <p v-if="!canReadKnowledge">你没有查看行业知识的权限。</p><p v-else-if="knowledgeQuery.isPending.value" role="status">正在读取行业资料…</p><div v-else-if="knowledgeQuery.isError.value" role="alert"><p>行业资料暂时无法读取。</p><button @click="knowledgeQuery.refetch()">重新加载行业资料</button></div><div v-else-if="industries.length" class="tag-list"><span v-for="item in industries" :key="item">{{ item }}</span></div><p v-else>还没有已确认的目标行业。</p>
+        <p v-if="!canReadProducts && !canReadKnowledge">你没有查看行业资料的权限。</p><p v-else-if="(canReadProducts && productsQuery.isPending.value) || (canReadKnowledge && knowledgeQuery.isPending.value)" role="status">正在读取行业资料…</p><div v-else-if="(canReadProducts && productsQuery.isError.value) || (canReadKnowledge && knowledgeQuery.isError.value)" role="alert"><p>部分行业资料暂时无法读取。</p><button @click="refetchCapabilities">重新加载行业资料</button></div><div v-else-if="industries.length" class="tag-list"><span v-for="item in industries" :key="item">{{ item }}</span></div><p v-else>还没有已确认的目标行业。</p>
       </section>
 
       <section class="knowledge-card" role="region" aria-label="工艺">
         <div class="card-title"><AppIcon name="settings" /><h2>工艺</h2></div>
-        <p v-if="!canReadKnowledge">你没有查看工艺知识的权限。</p><p v-else-if="knowledgeQuery.isPending.value" role="status">正在读取工艺资料…</p><div v-else-if="knowledgeQuery.isError.value" role="alert"><p>工艺资料暂时无法读取。</p><button @click="knowledgeQuery.refetch()">重新加载工艺资料</button></div><div v-else-if="processes.length" class="tag-list"><span v-for="item in processes" :key="item">{{ item }}</span></div><p v-else>还没有已确认的加工工艺。</p>
+        <p v-if="!canReadProducts && !canReadKnowledge">你没有查看工艺资料的权限。</p><p v-else-if="(canReadProducts && productsQuery.isPending.value) || (canReadKnowledge && knowledgeQuery.isPending.value)" role="status">正在读取工艺资料…</p><div v-else-if="(canReadProducts && productsQuery.isError.value) || (canReadKnowledge && knowledgeQuery.isError.value)" role="alert"><p>部分工艺资料暂时无法读取。</p><button @click="refetchCapabilities">重新加载工艺资料</button></div><div v-else-if="processes.length" class="tag-list"><span v-for="item in processes" :key="item">{{ item }}</span></div><p v-else>还没有已确认的加工工艺。</p>
       </section>
 
       <section class="knowledge-card" role="region" aria-label="标准">
         <div class="card-title"><AppIcon name="check" /><h2>标准</h2></div>
-        <p v-if="!canReadKnowledge">你没有查看标准知识的权限。</p><p v-else-if="knowledgeQuery.isPending.value" role="status">正在读取标准资料…</p><div v-else-if="knowledgeQuery.isError.value" role="alert"><p>标准资料暂时无法读取。</p><button @click="knowledgeQuery.refetch()">重新加载标准资料</button></div><div v-else-if="standards.length" class="tag-list"><span v-for="item in standards" :key="item">{{ item }}</span></div><p v-else>还没有已确认的适用标准。</p>
+        <p v-if="!canReadProducts && !canReadKnowledge">你没有查看标准资料的权限。</p><p v-else-if="(canReadProducts && productsQuery.isPending.value) || (canReadKnowledge && knowledgeQuery.isPending.value)" role="status">正在读取标准资料…</p><div v-else-if="(canReadProducts && productsQuery.isError.value) || (canReadKnowledge && knowledgeQuery.isError.value)" role="alert"><p>部分标准资料暂时无法读取。</p><button @click="refetchCapabilities">重新加载标准资料</button></div><div v-else-if="standards.length" class="tag-list"><span v-for="item in standards" :key="item">{{ item }}</span></div><p v-else>还没有已确认的适用标准。</p>
       </section>
 
       <section class="knowledge-card" role="region" aria-label="证据覆盖">

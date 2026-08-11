@@ -17,9 +17,10 @@ import {
   getPlatformContent,
   listCampaigns,
   listPlatforms,
+  safeCursorUrl,
 } from "../content/api"
 import { getPublishTask, getPublishTaskPage, listPublishTasks } from "../publishing/api"
-import { getProductPage, listProducts } from "../products/api"
+import { getProductPage, listProducts, safeProductPageUrl } from "../products/api"
 import {
   analyticsKeys,
   createShortLink,
@@ -99,14 +100,29 @@ const published = useQuery({
   enabled: computed(() => enabled.value && canManage.value),
 })
 
+const MAX_NAME_PAGES = 100
+
+function normalizedCursorKey(value: string): string {
+  const target = new URL(value, window.location.origin)
+  target.searchParams.sort()
+  const query = target.searchParams.toString()
+  return `${target.pathname}${query ? `?${query}` : ""}`
+}
+
 async function loadAllCampaigns(signal: AbortSignal) {
   let page = await listCampaigns({ signal })
   const values = [...page.results]
   const visited = new Set<string>()
-  while (page.next && !visited.has(page.next)) {
-    visited.add(page.next)
-    page = await getCursorPage(page.next, "/api/v1/campaigns", { signal })
+  let loadedPages = 1
+  while (page.next && loadedPages < MAX_NAME_PAGES) {
+    const next = safeCursorUrl(page.next, "/api/v1/campaigns")
+    if (!next) break
+    const cursorKey = normalizedCursorKey(next)
+    if (visited.has(cursorKey)) break
+    visited.add(cursorKey)
+    page = await getCursorPage(next, "/api/v1/campaigns", { signal })
     values.push(...page.results)
+    loadedPages += 1
   }
   return values
 }
@@ -115,10 +131,16 @@ async function loadAllProducts(signal: AbortSignal) {
   let page = await listProducts({}, { signal })
   const values = [...page.results]
   const visited = new Set<string>()
-  while (page.next && !visited.has(page.next)) {
-    visited.add(page.next)
-    page = await getProductPage(page.next, { signal })
+  let loadedPages = 1
+  while (page.next && loadedPages < MAX_NAME_PAGES) {
+    const next = safeProductPageUrl(page.next)
+    if (!next) break
+    const cursorKey = normalizedCursorKey(next)
+    if (visited.has(cursorKey)) break
+    visited.add(cursorKey)
+    page = await getProductPage(next, { signal })
     values.push(...page.results)
+    loadedPages += 1
   }
   return values
 }
@@ -191,7 +213,7 @@ const conclusion = computed(() => {
     return "数据还不足以判断哪个平台效果最好，也不能据此判断点击变化的原因。先积累至少两个平台、多个日期的可比较点击数据。"
   }
   if (comparablePlatforms.value.length > 1 && comparablePlatforms.value[0][1] === comparablePlatforms.value[1][1]) {
-    return "当前可比较平台的点击数据持平，无法区分哪个平台表现更高，也不能据此判断点击变化的原因。"
+    return "最高点击数并列，暂无唯一领先平台；无法区分并列平台哪个表现更高，也不能据此判断点击变化的原因。"
   }
   const [leading] = comparablePlatforms.value
   return `在当前筛选的可比较点击数据中，${displayPlatform(leading[0])}记录的点击数较高。这只是已有点击汇总，不能据此判断点击变化的原因。`

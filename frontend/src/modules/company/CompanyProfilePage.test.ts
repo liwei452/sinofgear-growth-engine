@@ -62,10 +62,10 @@ it("shows what AI knows, computes coverage from real data, and prioritizes missi
       concept_links: [],
     }]))
     if (path === "/api/v1/knowledge/concepts?status=APPROVED") return Promise.resolve(json({ results: [
-      { id: "k1", status: "APPROVED", concept_type: "INDUSTRY", label_zh: "工业机器人", label_en: "Robotics", evidence: ["产品手册"] },
-      { id: "k2", status: "APPROVED", concept_type: "PROCESS", label_zh: "磨齿", label_en: "Grinding", evidence: [] },
+      { id: "k1", scope: "ORGANIZATION", organization: "org-1", status: "APPROVED", concept_type: "INDUSTRY", label_zh: "工业机器人", label_en: "Robotics", evidence: ["产品手册"] },
+      { id: "k2", scope: "ORGANIZATION", organization: "org-1", status: "APPROVED", concept_type: "PROCESS", label_zh: "磨齿", label_en: "Grinding", evidence: [] },
     ] }))
-    if (path === "/api/v1/knowledge/evidence?status=APPROVED") return Promise.resolve(json({ results: [{ id: "e1", status: "APPROVED" }] }))
+    if (path === "/api/v1/knowledge/evidence?status=APPROVED") return Promise.resolve(json({ results: [{ id: "e1", organization: "org-1", status: "APPROVED" }] }))
     if (path === "/api/v1/assets?status=ACTIVE") return Promise.resolve(page([{ id: "a1", status: "ACTIVE" }]))
     throw new Error(`Unexpected request: ${path}`)
   })
@@ -112,6 +112,43 @@ it("aborts company source requests when the organization changes and never rende
 
   expect(await screen.findByText("新组织")).toBeVisible()
   expect(screen.queryByText("旧组织产品")).not.toBeInTheDocument()
+})
+
+it("drops each revoked source from cached composite facts and ignores its late response", async () => {
+  let resolveProducts!: (value: Response) => void
+  const fetchMock = vi.fn((path: string) => {
+    if (path.startsWith("/api/v1/products")) {
+      return new Promise<Response>((resolve) => { resolveProducts = resolve })
+    }
+    if (path.startsWith("/api/v1/knowledge/concepts")) return Promise.resolve(json({ results: [{
+      id: "org-capability", scope: "ORGANIZATION", organization: "org-1", status: "APPROVED",
+      concept_type: "CAPABILITY", label_zh: "知识能力", label_en: "", evidence: [],
+    }] }))
+    if (path.startsWith("/api/v1/knowledge/evidence")) return Promise.resolve(json({ results: [] }))
+    return Promise.resolve(page([]))
+  })
+  const { queryClient } = await renderCompany(fetchMock)
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4))
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, userWith(["knowledge.read", "assets.read"]))
+  expect(await within(screen.getByRole("region", { name: "能力" })).findByText("知识能力")).toBeVisible()
+  resolveProducts(page([{
+    id: "late-product", status: "ACTIVE", name_zh: "迟到产品",
+    manufacturing_capabilities: ["迟到产品能力"], inspection_capabilities: [], concept_links: [],
+  }]))
+
+  await waitFor(() => {
+    expect(screen.queryByText("迟到产品")).not.toBeInTheDocument()
+    expect(screen.queryByText("迟到产品能力")).not.toBeInTheDocument()
+    expect(screen.getByText("知识能力")).toBeVisible()
+  })
+
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, userWith(["products.read", "assets.read"]))
+  await waitFor(() => {
+    expect(screen.getByText("迟到产品")).toBeVisible()
+    expect(screen.getByText("迟到产品能力")).toBeVisible()
+    expect(screen.queryByText("知识能力")).not.toBeInTheDocument()
+  })
 })
 
 it("retries only company sources the user is allowed to read", async () => {
@@ -170,10 +207,86 @@ it("does not count rejected evidence referenced by an approved concept", async (
   expect(screen.getByRole("region", { name: "建议补充" })).toHaveTextContent("补充证据")
 })
 
+it("uses organization knowledge and only product-linked system facts and evidence", async () => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path.startsWith("/api/v1/products")) return Promise.resolve(page([{
+      id: "product-1", organization: "org-1", status: "ACTIVE", name_zh: "公司产品",
+      manufacturing_capabilities: [], inspection_capabilities: [],
+      concept_links: [{
+        id: "link-1", role: "CAPABILITY", version: 1,
+        concept: { id: "system-linked", code: "SYS_CAP", concept_type: "CAPABILITY", label_zh: "产品关联系统能力", label_en: "", version: 1 },
+      }],
+    }]))
+    if (path.startsWith("/api/v1/knowledge/concepts")) return Promise.resolve(json({ results: [
+      { id: "system-unlinked", scope: "SYSTEM", organization: null, status: "APPROVED", concept_type: "INDUSTRY", label_zh: "未关联全局行业", label_en: "", evidence: ["system-unlinked-evidence"] },
+      { id: "system-linked", scope: "SYSTEM", organization: null, status: "APPROVED", concept_type: "CAPABILITY", label_zh: "产品关联系统能力", label_en: "", evidence: ["system-linked-evidence"] },
+      { id: "other-org", scope: "ORGANIZATION", organization: "org-2", status: "APPROVED", concept_type: "STANDARD", label_zh: "其他组织标准", label_en: "", evidence: [] },
+      { id: "current-org", scope: "ORGANIZATION", organization: "org-1", status: "APPROVED", concept_type: "PROCESS", label_zh: "本组织工艺", label_en: "", evidence: [] },
+    ] }))
+    if (path.startsWith("/api/v1/knowledge/evidence")) return Promise.resolve(json({ results: [
+      { id: "system-unlinked-evidence", organization: null, status: "APPROVED" },
+      { id: "system-linked-evidence", organization: null, status: "APPROVED" },
+      { id: "current-org-evidence", organization: "org-1", status: "APPROVED" },
+      { id: "other-org-evidence", organization: "org-2", status: "APPROVED" },
+    ] }))
+    return Promise.resolve(page([]))
+  })
+  await renderCompany(fetchMock)
+
+  expect(await screen.findByText("产品关联系统能力")).toBeVisible()
+  expect(screen.getByText("本组织工艺")).toBeVisible()
+  expect(screen.queryByText("未关联全局行业")).not.toBeInTheDocument()
+  expect(screen.queryByText("其他组织标准")).not.toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "证据覆盖" })).toHaveTextContent("当前可确认 2 条证据依据")
+})
+
+it("shows product-linked ontology facts without requiring direct knowledge access", async () => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path.startsWith("/api/v1/products")) return Promise.resolve(page([{
+      id: "product-1", status: "ACTIVE", name_zh: "行业产品",
+      manufacturing_capabilities: [], inspection_capabilities: [],
+      concept_links: [{
+        id: "link-1", role: "APPLICATION", version: 1,
+        concept: { id: "system-industry", code: "SYS_IND", concept_type: "INDUSTRY", label_zh: "产品关联行业", label_en: "", version: 1 },
+      }],
+    }]))
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  await renderCompany(fetchMock, ["products.read"])
+
+  expect(await within(screen.getByRole("region", { name: "行业" })).findByText("产品关联行业")).toBeVisible()
+  expect(fetchMock.mock.calls.every(([path]) => String(path).startsWith("/api/v1/products"))).toBe(true)
+})
+
+it("loads safe later active-product pages before deciding capability gaps", async () => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path === "/api/v1/products?status=ACTIVE") return Promise.resolve(json({
+      next: "/api/v1/products?status=ACTIVE&cursor=page-2", previous: null,
+      results: [{ id: "product-1", status: "ACTIVE", name_zh: "第一页产品", manufacturing_capabilities: [], inspection_capabilities: [], concept_links: [] }],
+    }))
+    if (path === "/api/v1/products?status=ACTIVE&cursor=page-2") return Promise.resolve(json({
+      next: null, previous: "/api/v1/products?status=ACTIVE",
+      results: [{ id: "product-2", status: "ACTIVE", name_zh: "第二页产品", manufacturing_capabilities: ["后页磨齿能力"], inspection_capabilities: [], concept_links: [] }],
+    }))
+    if (path.includes("/knowledge/")) return Promise.resolve(json({ results: [] }))
+    return Promise.resolve(page([]))
+  })
+  await renderCompany(fetchMock)
+
+  expect(await screen.findByText("第二页产品")).toBeVisible()
+  expect(screen.getByText("后页磨齿能力")).toBeVisible()
+  expect(screen.getByRole("region", { name: "产品" })).toHaveTextContent("已读取全部 2 个启用产品")
+  expect(screen.getByRole("region", { name: "建议补充" })).not.toHaveTextContent("补充能力")
+  expect(fetchMock).toHaveBeenCalledWith("/api/v1/products?status=ACTIVE&cursor=page-2", expect.objectContaining({ signal: expect.any(AbortSignal) }))
+})
+
 it("summarizes only currently available company data and links to existing editors", async () => {
   const fetchMock = vi.fn((path: string) => {
     if (path === "/api/v1/products?status=ACTIVE") return Promise.resolve(page([{ id: "p1", status: "ACTIVE" }, { id: "p2", status: "ACTIVE" }]))
-    if (path === "/api/v1/knowledge/concepts?status=APPROVED") return Promise.resolve(json({ results: [{ id: "k1", status: "APPROVED" }] }))
+    if (path === "/api/v1/knowledge/concepts?status=APPROVED") return Promise.resolve(json({ results: [{
+      id: "k1", scope: "ORGANIZATION", organization: "org-1", status: "APPROVED",
+      concept_type: "PRODUCT_TYPE", label_zh: "公司知识", label_en: "", evidence: [],
+    }] }))
     if (path === "/api/v1/knowledge/evidence?status=APPROVED") return Promise.resolve(json({ results: [] }))
     if (path === "/api/v1/assets?status=ACTIVE") return Promise.resolve(page([{ id: "a1", status: "ACTIVE" }, { id: "a2", status: "ACTIVE" }, { id: "a3", status: "ACTIVE" }]))
     throw new Error(`Unexpected request: ${path}`)
@@ -181,7 +294,7 @@ it("summarizes only currently available company data and links to existing edito
   await renderCompany(fetchMock)
 
   expect(await screen.findByRole("heading", { name: "AI 对公司的了解" })).toBeVisible()
-  expect(await screen.findByText("当前页有 2 个产品")).toBeVisible()
+  expect(await screen.findByText("已读取全部 2 个启用产品")).toBeVisible()
   expect(await screen.findByText("当前可见 1 条知识")).toBeVisible()
   expect(await screen.findByText("当前页有 3 份素材")).toBeVisible()
   expect(screen.getByRole("link", { name: "管理产品资料" })).toHaveAttribute("href", "/products")
@@ -205,7 +318,10 @@ it("shows honest empty guidance instead of invented company facts", async () => 
 it("contains a failed source locally and lets the user retry it", async () => {
   const fetchMock = vi.fn((path: string) => {
     if (path.startsWith("/api/v1/products")) return Promise.resolve(json({ detail: "offline" }, 503))
-    if (path.startsWith("/api/v1/knowledge/concepts")) return Promise.resolve(json({ results: [{ id: "k1", status: "APPROVED" }] }))
+    if (path.startsWith("/api/v1/knowledge/concepts")) return Promise.resolve(json({ results: [{
+      id: "k1", scope: "ORGANIZATION", organization: "org-1", status: "APPROVED",
+      concept_type: "PRODUCT_TYPE", label_zh: "公司知识", label_en: "", evidence: [],
+    }] }))
     if (path.startsWith("/api/v1/knowledge/evidence")) return Promise.resolve(json({ results: [] }))
     return Promise.resolve(page([{ id: "a1", status: "ACTIVE" }]))
   })
@@ -215,6 +331,8 @@ it("contains a failed source locally and lets the user retry it", async () => {
   const productRegion = await screen.findByRole("region", { name: "产品" })
   expect(await within(productRegion).findByRole("alert")).toHaveTextContent("产品资料暂时无法读取")
   expect(await screen.findByText("当前可见 1 条知识")).toBeVisible()
+  expect(screen.getByRole("region", { name: "资料完整度" })).toHaveTextContent("部分资料暂不可用")
+  expect(screen.getByRole("region", { name: "资料完整度" })).not.toHaveTextContent("仍有可补充项")
   expect(await screen.findByText("当前页有 1 份素材")).toBeVisible()
   await user.click(within(productRegion).getByRole("button", { name: "重新加载产品资料" }))
   expect(fetchMock).toHaveBeenCalledWith("/api/v1/products?status=ACTIVE", expect.any(Object))

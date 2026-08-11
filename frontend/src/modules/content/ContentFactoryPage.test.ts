@@ -845,6 +845,120 @@ it("advances a real draft through ready and hidden polling to approval for its m
   expect(screen.getByRole("button", { name: "查看高级记录" })).toHaveAttribute("aria-expanded", "false")
 })
 
+it("restores the current brief's running generation from the server after a remount", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const currentBrief = {
+    ...brief("READY"),
+    id: "9f15f0d6-f28b-41ac-a31e-b246df7b4d56",
+    version: 4,
+  }
+  const matchingJob = {
+    job_id: "c8e67868-d908-402d-a2e6-5a7c1c6079f8", type: "CONTENT_GENERATE", status: "RUNNING", progress: 38,
+    attempt: 1, max_attempts: 3, created_at: "2026-08-11T01:00:00Z", finished_at: null, error: null,
+    result_reference: null,
+    source_reference: { brief_id: currentBrief.id, brief_version: currentBrief.version },
+  }
+  let submitted = false
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === `/api/v1/content-briefs/${currentBrief.id}/generate-master-content` && options?.method === "POST") {
+      submitted = true
+      return new Response(JSON.stringify({ job_id: matchingJob.job_id, status: "QUEUED" }), { status: 202, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50") {
+      return new Response(JSON.stringify({ next: null, previous: null, results: submitted ? [matchingJob] : [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === `/api/v1/jobs/${matchingJob.job_id}`) {
+      return new Response(JSON.stringify(matchingJob), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    return new Response(JSON.stringify(baseResponse(path, [currentBrief])), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const permissions = ["campaigns.read", "content.manage", "content.read", "jobs.read"]
+  const user = userEvent.setup()
+  const first = renderPage(permissions, "ordinary")
+
+  await user.click(await screen.findByRole("button", { name: "生成推广内容" }))
+  expect(await screen.findByText("正在生成")).toBeVisible()
+  first.unmount()
+
+  const second = renderPage(permissions, "ordinary")
+  expect(await screen.findByText("正在生成")).toBeVisible()
+  expect(screen.getByRole("button", { name: "生成推广内容" })).toBeDisabled()
+  expect(screen.getByRole("button", { name: "查看高级记录" })).toHaveAttribute("aria-expanded", "false")
+  await user.click(screen.getByRole("button", { name: "生成推广内容" }))
+  expect(fetchMock.mock.calls.filter(([path, options]) => String(path).endsWith("/generate-master-content") && options?.method === "POST")).toHaveLength(1)
+  second.unmount()
+})
+
+it("restores only the latest failed job for the current brief and ignores unrelated jobs", async () => {
+  const currentBrief = {
+    ...brief("READY"),
+    id: "3e42cc89-e937-43f4-bb36-98b333e64906",
+    version: 2,
+  }
+  const unrelated = {
+    job_id: "73b85c2c-e6cf-4fac-b3cf-e52f830cfe2a", type: "CONTENT_GENERATE", status: "RUNNING", progress: 70,
+    attempt: 1, max_attempts: 3, created_at: "2026-08-11T03:00:00Z", finished_at: null, error: null, result_reference: null,
+    source_reference: { brief_id: "2127b472-b0e3-4dad-ad9b-1d5c74aa5570", brief_version: 7 },
+  }
+  const missingReference = {
+    ...unrelated, job_id: "7078aef4-a20a-4e69-b1ea-a472729d9b79", created_at: "2026-08-11T02:00:00Z", source_reference: null,
+  }
+  const matchingFailed = {
+    ...unrelated,
+    job_id: "089c1318-5f67-4d60-8f40-c3e12f212923", status: "FAILED", progress: 46,
+    created_at: "2026-08-11T01:00:00Z", finished_at: "2026-08-11T01:01:00Z", error: { message: "provider failed" },
+    source_reference: { brief_id: currentBrief.id, brief_version: currentBrief.version },
+  }
+  const fetchMock = vi.fn(async (path: string) => {
+    const body = path === "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50"
+      ? { next: null, previous: null, results: [unrelated, missingReference, matchingFailed] }
+      : baseResponse(path, [currentBrief])
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  renderPage(["campaigns.read", "content.manage", "content.read", "jobs.read", "jobs.manage"], "ordinary")
+
+  expect(await screen.findByText("生成未完成")).toBeVisible()
+  expect(screen.getByRole("button", { name: "再次尝试" })).toBeVisible()
+  expect(screen.getByRole("button", { name: "生成推广内容" })).toBeDisabled()
+  expect(fetchMock.mock.calls.some(([path]) => path === `/api/v1/jobs/${unrelated.job_id}`)).toBe(false)
+  expect(fetchMock.mock.calls.some(([path]) => path === `/api/v1/jobs/${missingReference.job_id}`)).toBe(false)
+})
+
+it("continues through server job pages until it finds the current brief's latest job", async () => {
+  const currentBrief = {
+    ...brief("READY"),
+    id: "29389f7c-bfe5-4417-a580-3d1d5eb3de50",
+    version: 6,
+  }
+  const unrelated = {
+    job_id: "35e67a40-2a83-4cb1-aeb1-b0655761e863", type: "CONTENT_GENERATE", status: "FAILED", progress: 20,
+    attempt: 1, max_attempts: 3, created_at: "2026-08-11T03:00:00Z", finished_at: "2026-08-11T03:01:00Z",
+    error: { message: "unrelated" }, result_reference: null,
+    source_reference: { brief_id: "e1029fbb-ceea-4030-aef5-5b8ab56d944a", brief_version: 1 },
+  }
+  const matching = {
+    ...unrelated,
+    job_id: "3f85f431-3d57-4eea-967c-aec556691584", created_at: "2026-08-11T02:00:00Z",
+    source_reference: { brief_id: currentBrief.id, brief_version: currentBrief.version },
+  }
+  const next = "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50&cursor=second"
+  const fetchMock = vi.fn(async (path: string) => {
+    const body = path === "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50"
+      ? { next, previous: null, results: [unrelated] }
+      : path === next
+        ? { next: null, previous: "/api/v1/jobs", results: [matching] }
+        : baseResponse(path, [currentBrief])
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  renderPage(["campaigns.read", "content.manage", "content.read", "jobs.read", "jobs.manage"], "ordinary")
+
+  expect(await screen.findByText("生成未完成")).toBeVisible()
+  expect(fetchMock.mock.calls.filter(([path]) => path === next)).toHaveLength(1)
+})
+
 it("traps focus in the draft editor, closes on Escape, and restores the opener", async () => {
   vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(baseResponse(path, [brief()])), {
     status: 200, headers: { "Content-Type": "application/json" },

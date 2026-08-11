@@ -1,6 +1,7 @@
 import importlib
 
 import pytest
+from uuid import uuid4
 from django.apps import apps as django_apps
 from django.test.utils import CaptureQueriesContext
 from django.db import connection
@@ -45,10 +46,90 @@ def test_job_permissions_and_safe_response(
     assert detail.status_code == 200
     assert set(detail.json()) == {
         "job_id", "type", "status", "progress", "attempt", "max_attempts",
-        "created_at", "finished_at", "error", "result_reference",
+        "created_at", "finished_at", "error", "result_reference", "source_reference",
     }
     assert "must-not-leak" not in str(detail.json())
     assert cancel.status_code == (200 if can_manage else 403)
+
+
+@pytest.mark.django_db
+def test_content_job_list_and_detail_return_only_a_valid_brief_source_reference(
+    api_organizations, api_roles,
+):
+    own, _ = api_organizations
+    brief_id = uuid4()
+    job = JobService.create(
+        organization=own,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot={
+            "brief_id": str(brief_id), "brief_version": 3,
+            "prompt": "must-not-leak", "customer_text": "must-not-leak",
+        },
+    )
+    _, client = member_client(
+        organization=own,
+        role=api_roles[Role.Code.READ_ONLY],
+        username="jobs-source-reference",
+    )
+
+    detail = client.get(f"/api/v1/jobs/{job.id}").json()
+    listed = next(
+        item for item in client.get("/api/v1/jobs", {"job_id": job.id}).json()["results"]
+        if item["job_id"] == str(job.id)
+    )
+
+    assert detail["source_reference"] == {
+        "brief_id": str(brief_id), "brief_version": 3,
+    }
+    assert listed["source_reference"] == detail["source_reference"]
+    assert "must-not-leak" not in str(detail)
+    assert set(detail["source_reference"]) == {"brief_id", "brief_version"}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        {},
+        {"brief_id": "not-a-uuid", "brief_version": 1},
+        {"brief_id": str(uuid4()), "brief_version": 0},
+        {"brief_id": str(uuid4()), "brief_version": "2"},
+        {"brief_id": str(uuid4()), "brief_version": True},
+    ],
+)
+def test_content_job_malformed_source_reference_is_safely_null(
+    api_organizations, api_roles, snapshot,
+):
+    own, _ = api_organizations
+    job = JobService.create(
+        organization=own,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot={**snapshot, "case": str(uuid4())},
+    )
+    _, client = member_client(
+        organization=own,
+        role=api_roles[Role.Code.READ_ONLY],
+        username=f"jobs-malformed-reference-{job.id}",
+    )
+
+    assert client.get(f"/api/v1/jobs/{job.id}").json()["source_reference"] is None
+
+
+@pytest.mark.django_db
+def test_non_content_job_never_exposes_a_source_reference(api_organizations, api_roles):
+    own, _ = api_organizations
+    job = JobService.create(
+        organization=own,
+        job_type=Job.Type.SOURCE_IMPORT,
+        input_snapshot={"brief_id": str(uuid4()), "brief_version": 2},
+    )
+    _, client = member_client(
+        organization=own,
+        role=api_roles[Role.Code.READ_ONLY],
+        username="jobs-non-content-reference",
+    )
+
+    assert client.get(f"/api/v1/jobs/{job.id}").json()["source_reference"] is None
 
 
 @pytest.mark.django_db
@@ -148,6 +229,13 @@ def test_jobs_openapi_contract(api_organizations, api_roles):
     assert "get" in schema["paths"]["/api/v1/jobs/{job_id}"]
     assert "post" in schema["paths"]["/api/v1/jobs/{job_id}/retry"]
     assert "post" in schema["paths"]["/api/v1/jobs/{job_id}/cancel"]
+    source_reference = schema["components"]["schemas"]["Job"]["properties"]["source_reference"]
+    assert source_reference["nullable"] is True
+    reference_name = source_reference["allOf"][0]["$ref"].rsplit("/", 1)[-1]
+    reference_schema = schema["components"]["schemas"][reference_name]
+    assert set(reference_schema["properties"]) == {"brief_id", "brief_version"}
+    assert reference_schema["properties"]["brief_id"]["format"] == "uuid"
+    assert reference_schema["properties"]["brief_version"]["minimum"] == 1
 
 
 @pytest.mark.django_db

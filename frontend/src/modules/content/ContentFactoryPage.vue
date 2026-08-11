@@ -71,6 +71,11 @@ const platformsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.plat
 const assetsQuery = useQuery({ queryKey: computed(() => assetKeys.list(organizationId.value, promotionAssetFilters.value)), queryFn: () => listAssets(promotionAssetFilters.value), enabled: computed(() => enabled.value && has("assets.read")) })
 const conceptsQuery = useQuery({ queryKey: conceptQueryKey, queryFn: () => ordinaryCreation.value ? listApprovedBriefConcepts() : listBriefConcepts(), enabled: computed(() => enabled.value && has("knowledge.read")) })
 const jobsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.jobs(organizationId.value)), queryFn: () => listJobs(), enabled: computed(() => enabled.value && canObserveJobs.value) })
+const recoveryJobsQuery = useQuery({
+  queryKey: computed(() => [...contentQueryKeys.jobs(organizationId.value), "ordinary-recovery"]),
+  queryFn: () => listJobs({ type: "CONTENT_GENERATE", page_size: 50 }),
+  enabled: computed(() => enabled.value && ordinaryExperience.value && canReadJobs.value),
+})
 const masterQuery = useQuery({ queryKey: computed(() => contentQueryKeys.masterContents(organizationId.value, {})), queryFn: () => listMasterContents(), enabled: computed(() => enabled.value && has("content.read")) })
 
 const campaigns = useCursorCollection(campaignsQuery.data, "/api/v1/campaigns", organizationId, (item) => item.id)
@@ -79,6 +84,7 @@ const productPages = useCursorCollection(productsQuery.data, "/api/v1/products",
 const platformPages = useCursorCollection(platformsQuery.data, "/api/v1/platforms", organizationId, (item) => item.id)
 const assetPages = useCursorCollection(assetsQuery.data, "/api/v1/assets", organizationId, (item) => item.id)
 const jobPages = useCursorCollection(jobsQuery.data, "/api/v1/jobs", organizationId, (item) => item.job_id)
+const recoveryJobPages = useCursorCollection(recoveryJobsQuery.data, "/api/v1/jobs", organizationId, (item) => item.job_id)
 const masterPages = useCursorCollection(masterQuery.data, "/api/v1/master-contents", organizationId, (item) => item.id)
 const visibleCampaigns = computed(() => canReadCampaigns.value ? campaigns.items.value : [])
 const briefs = computed(() => canReadCampaigns.value ? briefPages.items.value : [])
@@ -94,13 +100,21 @@ const jobs = computed(() => {
   const combined = [...(canObserveJobs.value ? jobPages.items.value : []), ...liveJobs.value]
   return [...new Map(combined.map((job) => [job.job_id, job])).values()]
 })
-const activeJobStatuses = new Set(["QUEUED", "RUNNING", "RETRY_QUEUED"])
+const activeJobStatuses = new Set<Job["status"]>(["QUEUED", "RUNNING", "RETRY_QUEUED"])
+const recoverableJobStatuses = new Set<Job["status"]>([...activeJobStatuses, "FAILED", "SUCCEEDED"])
 const trackedJob = computed(() => trackedGeneration.value
-  ? liveJobs.value.find((job) => job.job_id === trackedGeneration.value?.jobId) ?? null
+  ? [...liveJobs.value, ...recoveryJobPages.items.value, ...jobPages.items.value]
+      .find((job) => job.job_id === trackedGeneration.value?.jobId) ?? null
   : null)
 const generationInFlight = computed(() => Boolean(
   trackedGeneration.value && activeJobStatuses.has(trackedJob.value?.status ?? trackedGeneration.value.status),
 ))
+const generationSubmissionBlocked = computed(() => generationInFlight.value || Boolean(
+  trackedJob.value && ["FAILED", "SUCCEEDED"].includes(trackedJob.value.status),
+))
+const ordinaryRecoveryError = computed(() => ordinaryExperience.value && recoveryJobsQuery.isError.value
+  ? "生成记录暂时无法恢复，请重新检查后再试。"
+  : recoveryJobPages.error.value)
 const visibleJobError = computed(() => jobError.value || (jobsQuery.isError.value ? "生成记录暂时无法更新，请重新加载后再试。" : ""))
 const visibleJobPageError = computed(() => jobPages.error.value
   ? ordinaryExperience.value ? "生成记录下一页暂时无法加载，请重新加载后再试。" : jobPages.error.value
@@ -183,6 +197,45 @@ function canPollJob(id: string): boolean {
   )
 }
 
+function matchesCurrentBrief(job: Job, brief: ContentBrief): boolean {
+  return job.type === "CONTENT_GENERATE"
+    && job.source_reference?.brief_id === brief.id
+    && job.source_reference.brief_version === brief.version
+}
+
+function restoreOrdinaryGeneration(): void {
+  if (!ordinaryExperience.value || !canReadJobs.value) return
+  const brief = latestBrief.value
+  if (!brief) return
+  if (trackedGeneration.value && (
+    trackedGeneration.value.briefId !== brief.id
+    || trackedGeneration.value.briefVersion !== brief.version
+  )) {
+    stopPolling(trackedGeneration.value.jobId)
+    trackedGeneration.value = null
+  }
+  const recovered = recoveryJobPages.items.value.find((job) => (
+    matchesCurrentBrief(job, brief) && recoverableJobStatuses.has(job.status)
+  ))
+  if (recovered) {
+    trackedGeneration.value = {
+      jobId: recovered.job_id,
+      briefId: brief.id,
+      briefVersion: brief.version,
+      status: recovered.status,
+    }
+    if (activeJobStatuses.has(recovered.status)) beginPolling(recovered.job_id)
+    else stopPolling(recovered.job_id)
+    if (recovered.status === "SUCCEEDED" && !currentMaster.value && canReadContent.value) {
+      void masterQuery.refetch()
+    }
+    return
+  }
+  if (!recoveryJobPages.loading.value && recoveryJobPages.next.value) {
+    void recoveryJobPages.loadMore()
+  }
+}
+
 function isActiveOrganization(scope: string): boolean {
   return !disposed && Boolean(scope) && organizationId.value === scope
 }
@@ -261,7 +314,7 @@ async function startGeneration(brief: ContentBrief): Promise<void> {
       }
     }
     if (!liveJobs.value.some((job) => job.job_id === accepted.job_id)) {
-      upsertJob({ job_id: accepted.job_id, type: "CONTENT_GENERATE", status: accepted.status, progress: 0, attempt: 1, max_attempts: 3, created_at: new Date().toISOString(), finished_at: null, error: null, result_reference: null })
+      upsertJob({ job_id: accepted.job_id, type: "CONTENT_GENERATE", status: accepted.status, progress: 0, attempt: 1, max_attempts: 3, created_at: new Date().toISOString(), finished_at: null, error: null, result_reference: null, source_reference: { brief_id: brief.id, brief_version: brief.version } })
     }
     beginPolling(accepted.job_id)
   } catch (error) {
@@ -412,6 +465,7 @@ watch(canReadJobs, (current, previous) => {
   trackedGeneration.value = null
   jobError.value = ""
   jobPages.reset()
+  recoveryJobPages.reset()
   cancelAndClear(contentQueryKeys.jobs(organizationId.value))
 }, { flush: "sync" })
 
@@ -428,6 +482,12 @@ watch(editingBrief, () => {
   productPages.reset()
   assetPages.reset()
 }, { flush: "sync" })
+
+watch(
+  [ordinaryExperience, canReadJobs, latestBrief, () => recoveryJobPages.items.value, () => recoveryJobPages.next.value],
+  restoreOrdinaryGeneration,
+  { immediate: true },
+)
 
 watch(canReadContent, (current, previous) => {
   if (!previous || current) return
@@ -473,7 +533,7 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
         <GuidedStepCard :number="4" title="确认方案" description="检查方案后，再交给有权限的同事确认。" :state="guidedState(4)">
           <div v-if="latestBrief" class="card-actions"><button v-if="latestBrief.status === 'DRAFT' && has('campaigns.manage')" type="button" @click="openBriefEditor(latestBrief)">查看并修改方案</button><button v-if="latestBrief.status === 'DRAFT' && has('campaigns.review')" class="primary-action" type="button" :disabled="actionId === latestBrief.id" @click="ready(latestBrief)">确认方案可生成</button><p v-else-if="latestBrief.status === 'DRAFT'" class="muted">方案正在等待有权限的同事确认。</p></div>
         </GuidedStepCard>
-        <GuidedStepCard :number="5" title="生成内容" description="确认方案后，才会提交真实的内容生成任务。" :state="guidedState(5)"><p v-if="trackedJob" role="status">{{ jobStatusLabel(trackedJob) }}<span v-if="activeJobStatuses.has(trackedJob.status)"> · {{ trackedJob.progress }}%</span></p><p v-if="jobError" role="alert">{{ jobError }} <button v-if="trackedGeneration" type="button" @click="beginPolling(trackedGeneration.jobId)">重新检查生成进度</button></p><button v-if="latestBrief?.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId) || generationInFlight" @click="startGeneration(latestBrief)">生成推广内容</button><p v-else class="muted">需要内容管理权限才能生成。</p></GuidedStepCard>
+        <GuidedStepCard :number="5" title="生成内容" description="确认方案后，才会提交真实的内容生成任务。" :state="guidedState(5)"><p v-if="trackedJob" role="status">{{ jobStatusLabel(trackedJob) }}<span v-if="activeJobStatuses.has(trackedJob.status)"> · {{ trackedJob.progress }}%</span></p><p v-if="jobError" role="alert">{{ jobError }} <button v-if="trackedGeneration" type="button" @click="beginPolling(trackedGeneration.jobId)">重新检查生成进度</button></p><p v-if="ordinaryRecoveryError" role="alert">{{ ordinaryRecoveryError }} <button type="button" @click="recoveryJobsQuery.refetch()">重新检查生成记录</button></p><button v-if="trackedJob?.status === 'FAILED' && has('jobs.manage')" type="button" @click="jobAction(trackedJob, 'retry')">再次尝试</button><button v-if="latestBrief?.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId) || generationSubmissionBlocked" @click="startGeneration(latestBrief)">生成推广内容</button><p v-else class="muted">需要内容管理权限才能生成。</p></GuidedStepCard>
         <GuidedStepCard :number="6" title="批准发布" description="查看生成结果、填写拒绝原因或批准进入发布流程。" :state="guidedState(6)"><a class="primary-action button-link" href="/reviews">查看并确认</a></GuidedStepCard>
       </ol>
 

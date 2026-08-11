@@ -37,6 +37,7 @@ export type Job = {
   job_id: string; type: string; status: JobStatus; progress: number; attempt: number
   max_attempts: number; created_at: string; finished_at: string | null
   error: { code?: string; message?: string } | null; result_reference: Record<string, unknown> | null
+  source_reference: { brief_id: string; brief_version: number } | null
 }
 export type ContentStatus = "DRAFT" | "IN_REVIEW" | "APPROVED" | "REJECTED" | "PUBLISHED" | "ARCHIVED"
 export type MasterPayload = { title: string; body: string; cta: string; concept_codes: string[] }
@@ -145,7 +146,7 @@ export const listAssets = async (): Promise<CursorPage<Asset>> =>
   required(await apiRequest<CursorPage<Asset>>("/api/v1/assets"))
 
 export const listJobs = async (
-  filters: { status?: JobStatus; job_id?: string } = {},
+  filters: { type?: string; status?: JobStatus; job_id?: string; page_size?: number } = {},
   options: Pick<ApiRequestOptions, "signal"> = {},
 ): Promise<CursorPage<Job>> =>
   required(await apiRequest<CursorPage<Job>>(queryUrl("/api/v1/jobs", filters), options))

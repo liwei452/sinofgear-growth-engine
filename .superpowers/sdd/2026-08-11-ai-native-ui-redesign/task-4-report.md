@@ -75,3 +75,53 @@
 - `eslint .`：通过，无警告或错误。
 - `vite build`：通过，168 个模块完成构建。
 - `git diff --check`：通过。
+
+## 修复轮次 2（跨页面生成恢复）
+
+### 必要性与契约边界
+
+普通页此前只能在同一组件实例中记住刚提交的任务；刷新、路由重进或 remount 后，内存关联会丢失。现有 Job 模型虽持久化了生成输入中的 `brief_id` 与 `brief_version`，公开 API 却没有返回这两个字段，而排队、运行、失败和取消任务的 `result_reference` 均可能为 `null`，因此前端无法可靠区分当前需求任务与同组织内的无关任务。
+
+本轮增加 nullable `source_reference`，但严格限定为：
+
+- 仅 `CONTENT_GENERATE` 任务可派生；其他任务固定返回 `null`。
+- 仅从服务端持久化输入中白名单读取 `brief_id` 和 `brief_version`。
+- `brief_id` 必须是有效 UUID，`brief_version` 必须是非布尔的正整数；缺失或畸形安全返回 `null`。
+- 不返回完整 `input_snapshot`、prompt、用户文本或任何其他键；不改变 `jobs.read` 权限、组织隔离、过滤器或列表范围。
+
+### 前端恢复
+
+- 普通页在高级记录收起时使用独立恢复查询，仅请求 `CONTENT_GENERATE`，每页最多 50 条；若当前页没有严格匹配，会沿服务端 cursor 继续读取，找到最新匹配任务后停止。
+- 任务只有在 `source_reference.brief_id === latestBrief.id` 且版本也相等时才可恢复；无引用、畸形引用、其他需求和其他版本均忽略。
+- remount 后可恢复排队/运行任务并继续真实轮询，生成按钮保持禁用；恢复最近失败任务时展示“再次尝试”并走原有 retry API；恢复成功任务时刷新 MasterContent，最终步骤仍只由严格匹配 id/version 的 MasterContent 决定。
+- 新提交任务仍即时显示，但其运行时对象也携带同样的白名单引用；组织切换、权限撤销和组件卸载继续清理轮询。
+
+### RED / GREEN
+
+- 后端 RED：新增列表、详情、隐私白名单、畸形输入、非内容任务和 OpenAPI 断言后，`12 failed / 5 passed`，失败原因均为 `source_reference` 缺失。
+- 后端 GREEN：最小 serializer 派生实现后，聚焦 Job API 为 `17 passed`；完整 jobs 测试为 `37 passed`。
+- 前端 RED：新增 remount 恢复和无关任务隔离后，`2 failed / 33 passed`；失败原因是普通页未读取服务端任务。分页分支另独立验证为 `1 failed / 35 passed`。
+- 前端 GREEN：实现严格匹配与恢复后，ContentFactoryPage 为 `36 passed`；相关 3 文件为 `59 passed`；全量前端为 `41 files / 394 tests passed`。
+
+### 修改文件
+
+- `backend/apps/jobs/serializers.py`
+- `backend/apps/jobs/tests/test_job_api.py`
+- `frontend/src/api/generated/schema.ts`（由既有脚本生成）
+- `frontend/src/modules/content/api.ts`
+- `frontend/src/modules/content/ContentFactoryPage.vue`
+- `frontend/src/modules/content/ContentFactoryPage.test.ts`
+- `.superpowers/sdd/2026-08-11-ai-native-ui-redesign/task-4-report.md`
+
+### 验证命令与结果
+
+- `python -m pytest apps/jobs/tests/test_job_api.py -q`：17 passed。
+- `python -m pytest apps/jobs/tests -q`：37 passed。
+- `vitest --run ContentFactoryPage.test.ts ContentBriefWizard.test.ts PromotionPage.test.ts`：3 files / 59 tests passed。
+- `vitest --run`：41 files / 394 tests passed。
+- `node scripts/generate-api.mjs check`：生成 API artifact 与后端 OpenAPI 一致。
+- `ruff check apps/jobs/serializers.py apps/jobs/tests/test_job_api.py`：通过。
+- `vue-tsc --noEmit`：通过。
+- `eslint .`：通过。
+- `vite build`：通过。
+- `git diff --check`：通过。

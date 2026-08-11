@@ -125,3 +125,36 @@
 - `eslint .`：通过。
 - `vite build`：通过。
 - `git diff --check`：通过。
+
+## 修复轮次 3（恢复扫描闭环）
+
+### 修复内容
+
+- 普通模式不再把“尚未判定是否存在旧生成任务”当作“可以新建任务”。当前 READY 需求出现后，恢复扫描从首个请求开始到 cursor 穷尽期间持续锁定“生成推广内容”；只有确认所有页面都没有严格匹配项后才解锁。
+- 恢复请求或任一分页失败时进入显式错误状态，按钮继续锁定并提供“重新检查生成记录”。重试会从第一页重新扫描，直到匹配、完整穷尽或再次失败。
+- 用显式异步状态机替代依赖多个 watcher 的分页推进。状态机只查询 `CONTENT_GENERATE`，严格匹配当前 `brief_id/version`，逐页跟随经同源同路径校验的 cursor，并用已访问 cursor 集合与 100 页安全上限阻止无限循环。
+- 首页和后续页共享 `AbortSignal`。组织、当前需求、权限或模式变化以及组件卸载时会中止旧扫描；作用域代次检查确保迟到响应不能恢复旧任务或错误解锁新需求。
+- 生成处理函数自身也检查恢复锁，避免仅依赖按钮禁用造成竞态提交。
+
+### RED / GREEN
+
+- RED：新增 5 个恢复场景后，旧实现为 `4 failed / 1 passed`。失败分别证明初始请求 pending 时按钮可点击、恢复错误后按钮可点击、分页尚未穷尽时按钮可点击，以及当前需求切换没有取消并重启扫描。
+- GREEN：实现显式恢复状态机后，新增场景 `5 passed`，ContentFactoryPage 全部 `41 passed`；前端全量为 `41 files / 399 tests passed`。
+
+### 修改文件
+
+- `frontend/src/modules/content/api.ts`
+- `frontend/src/modules/content/ContentFactoryPage.vue`
+- `frontend/src/modules/content/ContentFactoryPage.test.ts`
+- `.superpowers/sdd/2026-08-11-ai-native-ui-redesign/task-4-report.md`
+
+### 验证命令与结果
+
+- `vitest run src/modules/content/ContentFactoryPage.test.ts`：41 passed。
+- `vitest run src/modules/content/api.test.ts`：3 passed。
+- `vitest run`：41 files / 399 tests passed。
+- `node scripts/generate-api.mjs check`：生成 API artifact 与后端 OpenAPI 一致。
+- `vue-tsc --noEmit`：通过。
+- `eslint .`：通过。
+- `vite build`：通过，168 个模块完成构建。
+- `git diff --check`：通过。

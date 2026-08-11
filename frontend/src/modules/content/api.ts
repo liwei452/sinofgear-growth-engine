@@ -107,10 +107,14 @@ export function safeCursorUrl(value: string | null, exactPath: string): string |
   return `${target.pathname}${target.search}`
 }
 
-export async function getCursorPage<T>(url: string, exactPath: string): Promise<CursorPage<T>> {
+export async function getCursorPage<T>(
+  url: string,
+  exactPath: string,
+  options: Pick<ApiRequestOptions, "signal"> = {},
+): Promise<CursorPage<T>> {
   const safe = safeCursorUrl(url, exactPath)
   if (!safe) throw new ApiError(0, "分页地址无效，请从列表重新开始。")
-  return required(await apiRequest<CursorPage<T>>(safe))
+  return required(await apiRequest<CursorPage<T>>(safe, options))
 }
 
 export const listCampaigns = async (): Promise<CursorPage<Campaign>> =>

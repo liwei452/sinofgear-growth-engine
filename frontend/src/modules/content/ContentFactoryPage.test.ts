@@ -845,6 +845,138 @@ it("advances a real draft through ready and hidden polling to approval for its m
   expect(screen.getByRole("button", { name: "查看高级记录" })).toHaveAttribute("aria-expanded", "false")
 })
 
+it("keeps generation locked while the ordinary recovery scan is still pending", async () => {
+  const currentBrief = { ...brief("READY"), id: "a3d6b1fc-6c13-4f52-a798-7f80631d7443", version: 3 }
+  let resolveRecovery!: (response: Response) => void
+  const pendingRecovery = new Promise<Response>((resolve) => { resolveRecovery = resolve })
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50") return pendingRecovery
+    if (path.endsWith("/generate-master-content") && options?.method === "POST") {
+      return new Response(JSON.stringify({ job_id: "unexpected", status: "QUEUED" }), { status: 202, headers: { "Content-Type": "application/json" } })
+    }
+    return new Response(JSON.stringify(baseResponse(path, [currentBrief])), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["campaigns.read", "content.manage", "content.read", "jobs.read"], "ordinary")
+
+  const generate = await screen.findByRole("button", { name: "生成推广内容" })
+  expect(generate).toBeDisabled()
+  await user.click(generate)
+  expect(fetchMock.mock.calls.some(([path, options]) => String(path).endsWith("/generate-master-content") && options?.method === "POST")).toBe(false)
+
+  resolveRecovery(new Response(JSON.stringify({ next: null, previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+  await waitFor(() => expect(generate).toBeEnabled())
+})
+
+it("keeps generation locked after a recovery error until retry exhausts the scan", async () => {
+  const currentBrief = { ...brief("READY"), id: "e74f298f-5458-47e7-9482-319dd66ad554", version: 2 }
+  let recoveryAttempts = 0
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50") {
+      recoveryAttempts += 1
+      return recoveryAttempts === 1
+        ? new Response(JSON.stringify({ detail: "temporary failure" }), { status: 503, headers: { "Content-Type": "application/json" } })
+        : new Response(JSON.stringify({ next: null, previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    return new Response(JSON.stringify(baseResponse(path, [currentBrief])), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["campaigns.read", "content.manage", "content.read", "jobs.read"], "ordinary")
+
+  const retry = await screen.findByRole("button", { name: "重新检查生成记录" })
+  const generate = screen.getByRole("button", { name: "生成推广内容" })
+  expect(generate).toBeDisabled()
+  await user.click(retry)
+  await waitFor(() => expect(recoveryAttempts).toBe(2))
+  await waitFor(() => expect(generate).toBeEnabled())
+})
+
+it("scans three recovery pages before restoring the current generation", async () => {
+  const currentBrief = { ...brief("READY"), id: "c4ebdcda-d963-4691-876e-d69b0bd70e1a", version: 8 }
+  const unrelated = {
+    job_id: "c8038619-f384-4c0c-b244-8ce0d3274457", type: "CONTENT_GENERATE", status: "FAILED", progress: 12,
+    attempt: 1, max_attempts: 3, created_at: "2026-08-11T03:00:00Z", finished_at: "2026-08-11T03:01:00Z",
+    error: { message: "unrelated" }, result_reference: null,
+    source_reference: { brief_id: "9750530a-c203-4ee6-845f-6771dfc15dd7", brief_version: 1 },
+  }
+  const matching = {
+    ...unrelated,
+    job_id: "07d60091-287c-441a-9e86-9655f41849bc",
+    source_reference: { brief_id: currentBrief.id, brief_version: currentBrief.version },
+  }
+  const second = "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50&cursor=second"
+  const third = "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50&cursor=third"
+  const fetchMock = vi.fn(async (path: string) => {
+    const body = path === "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50"
+      ? { next: second, previous: null, results: [unrelated] }
+      : path === second
+        ? { next: third, previous: "/api/v1/jobs", results: [unrelated] }
+        : path === third
+          ? { next: null, previous: second, results: [matching] }
+          : baseResponse(path, [currentBrief])
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  renderPage(["campaigns.read", "content.manage", "content.read", "jobs.read", "jobs.manage"], "ordinary")
+
+  expect(await screen.findByText("生成未完成")).toBeVisible()
+  expect(fetchMock.mock.calls.filter(([path]) => path === second)).toHaveLength(1)
+  expect(fetchMock.mock.calls.filter(([path]) => path === third)).toHaveLength(1)
+  expect(screen.getByRole("button", { name: "生成推广内容" })).toBeDisabled()
+})
+
+it("does not unlock generation until every recovery page has no current match", async () => {
+  const currentBrief = { ...brief("READY"), id: "bd08a04e-224b-4f41-9b8b-ae43f6ddcd67", version: 5 }
+  const second = "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50&cursor=last"
+  let resolveLast!: (response: Response) => void
+  const lastPage = new Promise<Response>((resolve) => { resolveLast = resolve })
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50") {
+      return new Response(JSON.stringify({ next: second, previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === second) return lastPage
+    return new Response(JSON.stringify(baseResponse(path, [currentBrief])), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  renderPage(["campaigns.read", "content.manage", "content.read", "jobs.read"], "ordinary")
+
+  const generate = await screen.findByRole("button", { name: "生成推广内容" })
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => path === second)).toBe(true))
+  expect(generate).toBeDisabled()
+  resolveLast(new Response(JSON.stringify({ next: null, previous: "/api/v1/jobs", results: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+  await waitFor(() => expect(generate).toBeEnabled())
+})
+
+it("aborts an old recovery scan and starts a clean scan when the latest brief changes", async () => {
+  const firstBrief = { ...brief("READY"), id: "fa224e41-7077-4dd4-ab45-0959647eb3be", version: 1 }
+  const nextBrief = { ...firstBrief, id: "58e89e3e-92c0-4454-96c4-2e8727fb19f5", version: 2, updated_at: "2026-08-11T04:00:00Z" }
+  let recoveryCalls = 0
+  let firstSignal: AbortSignal | null = null
+  const neverSettles = new Promise<Response>(() => undefined)
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50") {
+      recoveryCalls += 1
+      if (recoveryCalls === 1) {
+        firstSignal = options?.signal ?? null
+        return neverSettles
+      }
+      return new Response(JSON.stringify({ next: null, previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    return new Response(JSON.stringify(baseResponse(path, [firstBrief])), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const view = renderPage(["campaigns.read", "content.manage", "content.read", "jobs.read"], "ordinary")
+
+  expect(await screen.findByRole("button", { name: "生成推广内容" })).toBeDisabled()
+  view.queryClient.setQueryData(contentQueryKeys.briefs("org-1"), { next: null, previous: null, results: [nextBrief] })
+
+  await waitFor(() => expect(recoveryCalls).toBe(2))
+  expect(firstSignal?.aborted).toBe(true)
+  await waitFor(() => expect(screen.getByRole("button", { name: "生成推广内容" })).toBeEnabled())
+})
+
 it("restores the current brief's running generation from the server after a remount", async () => {
   document.cookie = "csrftoken=csrf-value; path=/"
   const currentBrief = {

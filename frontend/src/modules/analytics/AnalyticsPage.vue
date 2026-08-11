@@ -7,7 +7,7 @@ import AppIcon from "../../shared/components/AppIcon.vue"
 import NextStepPanel from "../../shared/components/NextStepPanel.vue"
 import OperationModal from "../../shared/components/OperationModal.vue"
 import StatusBadge from "../../shared/components/StatusBadge.vue"
-import { ordinaryPlatform } from "../../shared/presentation/ordinary"
+import { formatOrdinaryError, ordinaryPlatform } from "../../shared/presentation/ordinary"
 import { currentUserQueryOptions } from "../auth/auth"
 import {
   contentQueryKeys,
@@ -277,9 +277,7 @@ const create = useMutation({
   },
 })
 
-const err = (value: unknown) => value instanceof ApiError
-  ? value.userMessage
-  : "分析数据暂时无法加载，请稍后重试。"
+const err = (value: unknown) => formatOrdinaryError(value)
 async function copy(value: string) {
   try {
     await navigator.clipboard.writeText(value)

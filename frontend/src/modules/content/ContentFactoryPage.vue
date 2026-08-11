@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { useQuery, useQueryClient } from "@tanstack/vue-query"
 
 import { ApiError } from "../../api/client"
+import { formatOrdinaryError } from "../../shared/presentation/ordinary"
 import { currentUserQueryOptions } from "../auth/auth"
 import { listProducts, productQueryKeys } from "../products/api"
 import { assetKeys, listAssets } from "../assets/api"
@@ -188,6 +189,7 @@ function openProposal(): void {
 }
 
 function safeError(error: unknown): string {
+  if (ordinaryExperience.value) return formatOrdinaryError(error)
   if (error instanceof ApiError) return error.status === 409
     ? "状态已经变化，已为你刷新最新信息。"
     : error.userMessage
@@ -195,6 +197,7 @@ function safeError(error: unknown): string {
 }
 
 function queryError(error: unknown, label: string): string {
+  if (ordinaryExperience.value) return `${label}没有加载成功，请稍后重试。`
   return error instanceof ApiError ? error.userMessage : `${label}没有加载成功，请重试。`
 }
 

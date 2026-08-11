@@ -393,7 +393,6 @@ a {
   min-width: 0;
   margin: 0 auto;
   padding: clamp(24px, 5vw, 54px) clamp(18px, 4vw, 42px);
-  overflow-wrap: anywhere;
 }
 
 .page-stack {

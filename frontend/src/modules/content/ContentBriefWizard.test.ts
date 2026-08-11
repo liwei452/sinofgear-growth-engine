@@ -177,14 +177,62 @@ it("renders missing linked provenance as a removable unavailable placeholder", a
   renderWizard({ brief: missingDraft })
 
   await user.click(screen.getByRole("button", { name: "下一步" }))
-  const placeholder = screen.getByLabelText("历史关联产品 product-outside-page（不可用，仅可移除）")
+  const placeholder = screen.getByLabelText("历史产品 1（名称暂不可用）（不可用，仅可移除）")
   expect(placeholder).toBeChecked()
+  expect(screen.getByText("内部ID")).toBeInTheDocument()
   await user.click(placeholder)
   await user.click(screen.getByRole("button", { name: "下一步" }))
   await user.click(screen.getByRole("button", { name: "下一步" }))
   await user.click(screen.getByRole("button", { name: "保存需求草稿" }))
 
   expect(patchBriefMock).toHaveBeenCalledWith("brief-1", expect.objectContaining({ product_ids: ["product-1"] }))
+})
+
+it("keeps missing relationship UUIDs private in the ordinary wizard and still removes by ID", async () => {
+  const productUuid = "11111111-1111-4111-8111-111111111111"
+  const assetUuid = "22222222-2222-4222-8222-222222222222"
+  const conceptUuid = "33333333-3333-4333-8333-333333333333"
+  const uuidDraft: ContentBrief = {
+    ...draft,
+    product_ids: ["product-1", productUuid],
+    asset_ids: [assetUuid],
+    concept_links: [{ role: "STANDARD", concept_id: conceptUuid }],
+  }
+  patchBriefMock.mockResolvedValueOnce(uuidDraft)
+  const user = userEvent.setup()
+  renderWizard({ brief: uuidDraft, experience: "ordinary" })
+
+  const missingProduct = screen.getByLabelText("历史产品 1（名称暂不可用）（不可用，仅可移除）")
+  expect(missingProduct).toBeChecked()
+  expect(document.body).not.toHaveTextContent(productUuid)
+  await user.click(screen.getByRole("button", { name: "保存产品并继续" }))
+  await user.click(screen.getByRole("button", { name: "保存目标并查看素材" }))
+
+  const missingAsset = screen.getByLabelText("历史素材 1（名称暂不可用）（不可用，仅可移除）")
+  const missingConcept = screen.getByLabelText("历史知识 1（名称暂不可用）（不可用，仅可移除）")
+  expect(missingAsset).toBeChecked()
+  expect(missingConcept).toBeChecked()
+  expect(document.body).not.toHaveTextContent(assetUuid)
+  expect(document.body).not.toHaveTextContent(conceptUuid)
+  await user.click(screen.getByRole("button", { name: "查看并确认方案" }))
+  expect(document.body).not.toHaveTextContent(productUuid)
+  expect(document.body).not.toHaveTextContent(assetUuid)
+  expect(document.body).not.toHaveTextContent(conceptUuid)
+
+  await user.click(screen.getByRole("button", { name: "上一步" }))
+  await user.click(screen.getByLabelText("历史素材 1（名称暂不可用）（不可用，仅可移除）"))
+  await user.click(screen.getByLabelText("历史知识 1（名称暂不可用）（不可用，仅可移除）"))
+  await user.click(screen.getByRole("button", { name: "上一步" }))
+  await user.click(screen.getByRole("button", { name: "上一步" }))
+  await user.click(screen.getByLabelText("历史产品 1（名称暂不可用）（不可用，仅可移除）"))
+  await user.click(screen.getByRole("button", { name: "保存产品并继续" }))
+  await user.click(screen.getByRole("button", { name: "保存目标并查看素材" }))
+  await user.click(screen.getByRole("button", { name: "查看并确认方案" }))
+  await user.click(screen.getByRole("button", { name: "保存修改方案" }))
+
+  expect(patchBriefMock).toHaveBeenCalledWith("brief-1", expect.objectContaining({
+    product_ids: ["product-1"], asset_ids: [], concept_links: [],
+  }))
 })
 
 it("does not offer inactive or unapproved relationships during ordinary creation", async () => {
@@ -237,8 +285,34 @@ it("returns ordinary server field errors to their real step and restores focus",
   await user.click(screen.getByRole("button", { name: "保存修改方案" }))
 
   expect(await screen.findByRole("heading", { name: "告诉 AI 目标" })).toBeVisible()
-  expect(screen.getByText("落地页与当前组织不匹配。")).toBeVisible()
+  expect(screen.getByText("该项内容未通过检查，请修改后重试。")).toBeVisible()
+  expect(document.body).not.toHaveTextContent("落地页与当前组织不匹配。")
   expect(screen.getByLabelText("落地页（可选）")).toHaveFocus()
+})
+
+it("translates ordinary validation details instead of exposing server fields or English recovery text", async () => {
+  const privateUuid = "44444444-4444-4444-8444-444444444444"
+  patchBriefMock.mockRejectedValueOnce(new ApiError(400, "English userMessage must stay private", "PERMISSION_DENIED", {
+    fieldErrors: {
+      product_ids: [`Invalid product UUID ${privateUuid}`],
+      internal_validation_path: ["Contact your administrator and retry"],
+    },
+  }))
+  const user = userEvent.setup()
+  renderWizard({ experience: "ordinary" })
+
+  await user.click(screen.getByRole("button", { name: "保存产品并继续" }))
+  await user.click(screen.getByRole("button", { name: "保存目标并查看素材" }))
+  await user.click(screen.getByRole("button", { name: "查看并确认方案" }))
+  await user.click(screen.getByRole("button", { name: "保存修改方案" }))
+
+  expect(await screen.findByText("该项内容未通过检查，请修改后重试。")).toBeVisible()
+  expect(document.body).not.toHaveTextContent("product_ids")
+  expect(document.body).not.toHaveTextContent("internal_validation_path")
+  expect(document.body).not.toHaveTextContent("English userMessage")
+  expect(document.body).not.toHaveTextContent("Contact your administrator")
+  expect(document.body).not.toHaveTextContent("PERMISSION_DENIED")
+  expect(document.body).not.toHaveTextContent(privateUuid)
 })
 
 it("validates an ordinary landing page before leaving the goal step", async () => {
@@ -281,9 +355,9 @@ it("lets ordinary editors remove unavailable and missing material provenance", a
   await user.click(screen.getByRole("button", { name: "保存目标并查看素材" }))
   for (const label of [
     "old-photo.png（不可用，仅可移除）",
-    "历史关联素材 asset-missing（不可用，仅可移除）",
+    "历史素材 1（名称暂不可用）（不可用，仅可移除）",
     "Old standard (STANDARD)（不可用，仅可移除）",
-    "历史关联知识 concept-missing（不可用，仅可移除）",
+    "历史知识 1（名称暂不可用）（不可用，仅可移除）",
   ]) await user.click(screen.getByLabelText(label))
   await user.click(screen.getByRole("button", { name: "查看并确认方案" }))
   await user.click(screen.getByRole("button", { name: "保存修改方案" }))

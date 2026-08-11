@@ -123,9 +123,12 @@ it("orders judgment, reasons, source evidence, uncertainty, decision, and CRM ex
   const uncertainty = screen.getByRole("heading", { name: "不确定项" })
   const decision = screen.getByRole("heading", { name: "人工决定" })
   const handoff = screen.getByRole("heading", { name: "CRM 与导出" })
-  for (const [before, after] of [[judgment, explanation], [explanation, evidence], [evidence, uncertainty], [uncertainty, decision], [decision, handoff]]) {
-    expect(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  const mainSections = [judgment, explanation, evidence, uncertainty, decision, handoff]
+    .map((heading) => heading.closest(".detail-section")!)
+  for (let index = 0; index < mainSections.length - 1; index += 1) {
+    expect(mainSections[index]?.nextElementSibling).toBe(mainSections[index + 1])
   }
+  expect(mainSections.at(-1)?.nextElementSibling).toBe(screen.getByText("高级审计信息").closest("details"))
   expect(explanation.compareDocumentPosition(original) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   expect(screen.getByRole("link", { name: "打开公开来源" })).toHaveAttribute("target", "_blank")
   expect(screen.getByRole("link", { name: "打开公开来源" })).toHaveAttribute("rel", "noopener noreferrer")
@@ -204,6 +207,34 @@ it("gates analyze, review, and handoff controls independently", async () => {
   await userEvent.click(screen.getByRole("button", { name: "交给 CRM" }))
   expect(screen.getByText("CRM 尚未配置，当前不会发送客户资料。")).toBeVisible()
   expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("handoff"), expect.anything())
+})
+
+it("keeps CRM export inside the detail modal and restores its trigger on Escape and close", async () => {
+  const reviewedDetail = {
+    ...detail,
+    status: "REVIEWED",
+    permitted_actions: ["DISMISS", "REQUEST_MORE_EVIDENCE"],
+  }
+  renderDialog(["leads.read", "leads.handoff"], vi.fn(async () => json(reviewedDetail)))
+  const opener = await screen.findByRole("button", { name: "交给 CRM" })
+
+  await userEvent.click(opener)
+
+  expect(screen.getAllByRole("dialog")).toHaveLength(1)
+  expect(screen.getByRole("heading", { name: "CRM 与导出" })).toHaveFocus()
+  expect(screen.queryByText("We need replacement helical gears, 200 pcs.")).not.toBeInTheDocument()
+  await userEvent.tab()
+  expect(screen.getByRole("button", { name: "返回机会依据" })).toHaveFocus()
+
+  await userEvent.keyboard("{Escape}")
+  expect(screen.getAllByRole("dialog")).toHaveLength(1)
+  expect(await screen.findByText("We need replacement helical gears, 200 pcs.")).toBeVisible()
+  expect(screen.getByRole("button", { name: "交给 CRM" })).toHaveFocus()
+
+  await userEvent.click(screen.getByRole("button", { name: "交给 CRM" }))
+  await userEvent.click(screen.getByRole("button", { name: "关闭" }))
+  expect(screen.getAllByRole("dialog")).toHaveLength(1)
+  expect(screen.getByRole("button", { name: "交给 CRM" })).toHaveFocus()
 })
 
 it("removes cached evidence and audit immediately when read permission is withdrawn", async () => {
@@ -322,6 +353,58 @@ it("submits only backend-supported correction fields with the exact version and 
     reason: "Public company page confirms these fields.",
   })
   expect(Object.keys(requests[0]?.correction as object)).toEqual(["company_name", "company_domain", "country_hint"])
+})
+
+it.each([
+  {
+    action: "CONFIRM", opener: "确认值得跟进", submit: "确认值得跟进",
+    initial: detail, nextStatus: "REVIEWED", nextActions: ["DISMISS"], expectedFocus: "暂不跟进",
+  },
+  {
+    action: "CORRECT", opener: "纠正信息", submit: "确认纠正",
+    initial: detail, nextStatus: "REVIEWED", nextActions: ["DISMISS"], expectedFocus: "暂不跟进",
+  },
+  {
+    action: "DISMISS", opener: "暂不跟进", submit: "确认暂不跟进",
+    initial: detail, nextStatus: "DISMISSED", nextActions: ["REOPEN"], expectedFocus: "重新打开",
+  },
+  {
+    action: "REOPEN", opener: "重新打开", submit: "确认重新打开",
+    initial: { ...detail, status: "DISMISSED", permitted_actions: ["REOPEN"] },
+    nextStatus: "ANALYZED", nextActions: ["CONFIRM"], expectedFocus: "确认值得跟进",
+  },
+] as const)("restores stable focus after a successful $action state change", async ({
+  opener, submit, initial, nextStatus, nextActions, expectedFocus,
+}) => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let detailReads = 0
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/lead-reviews") {
+      return json({
+        review_id: "review-focus", lead_candidate_id: "lead-1", candidate_status: nextStatus,
+        candidate_version: 3, insight_id: null, insight_version: null,
+      }, 201)
+    }
+    detailReads += 1
+    return json(detailReads === 1 ? initial : {
+      ...initial,
+      status: nextStatus,
+      version: 3,
+      permitted_actions: nextActions,
+    })
+  })
+  renderDialog(["leads.read", "leads.review"], fetchMock)
+
+  await userEvent.click(await screen.findByRole("button", { name: opener }))
+  if (opener === "纠正信息") {
+    await userEvent.clear(screen.getByLabelText("公司名称"))
+    await userEvent.type(screen.getByLabelText("公司名称"), "Corrected focus company")
+  }
+  await userEvent.type(screen.getByLabelText("处理原因"), `Focus recovery for ${opener}.`)
+  await userEvent.click(screen.getByRole("button", { name: submit }))
+
+  await screen.findByText("处理结果已保存")
+  await waitFor(() => expect(screen.getByRole("button", { name: expectedFocus })).toHaveFocus())
 })
 
 it("preserves typed review input on 409, refetches, and resubmits against the latest version", async () => {
@@ -623,6 +706,36 @@ it("shows every review reason and correction in the collapsed audit history", as
   expect(within(audit).getByText("Corrected identity.")).toBeVisible()
   expect(within(audit).getByText("Need a public capability page.")).toBeVisible()
   expect(within(audit).getByText(/ABC Packaging GmbH/)).toBeVisible()
+})
+
+it("localizes audit keys without hiding their recorded values", async () => {
+  const auditDetail = {
+    ...detail,
+    latest_insight: {
+      ...detail.latest_insight,
+      dimensions: { ...detail.latest_insight.dimensions, unknown_metric: 7 },
+      ai_audit: {
+        ...detail.latest_insight.ai_audit,
+        unknown_private_key: "opaque-value",
+        nested_record: { private_nested_key: "nested-value" },
+      },
+    },
+  }
+  renderDialog(["leads.read"], vi.fn(async () => json(auditDetail)))
+  const audit = (await screen.findByText("高级审计信息")).closest("details")!
+  await userEvent.click(within(audit).getByText("高级审计信息"))
+
+  for (const label of ["购买意向", "公司匹配", "需求明确度", "能力匹配", "时效性", "其他指标"]) {
+    expect(within(audit).getByText(label)).toBeVisible()
+  }
+  for (const label of ["分析记录编号", "运行状态", "分析模板", "模板版本", "分析模型", "未识别字段 1"]) {
+    expect(within(audit).getByText(new RegExp(label))).toBeVisible()
+  }
+  expect(audit).toHaveTextContent("run-1")
+  expect(audit).toHaveTextContent("opaque-value")
+  expect(audit).toHaveTextContent("nested-value")
+  expect(audit).not.toHaveTextContent(/intent|company_fit|specificity|capability_fit|recency|unknown_metric/)
+  expect(audit).not.toHaveTextContent(/ai_run_id|prompt_code|prompt_version|unknown_private_key|private_nested_key/)
 })
 
 it("cancels an obsolete detail request and ignores its late result", async () => {

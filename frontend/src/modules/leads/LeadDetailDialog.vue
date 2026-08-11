@@ -42,6 +42,9 @@ const activeJobId = ref<string | null>(null)
 const handoffOpen = ref(false)
 const reviewHeading = ref<HTMLElement | null>(null)
 const decisionSection = ref<HTMLElement | null>(null)
+const decisionHeading = ref<HTMLElement | null>(null)
+const handoffRegion = ref<HTMLElement | null>(null)
+const crmHandoffButton = ref<HTMLButtonElement | null>(null)
 let reviewOpener: HTMLElement | null = null
 let reviewOpenerLabel = ""
 let pollTimer: ReturnType<typeof setTimeout> | undefined
@@ -221,8 +224,12 @@ function restoreReviewFocus(opener: HTMLElement | null, label: string): void {
     opener.focus()
     return
   }
-  const replacement = [...(decisionSection.value?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
-    .find((button) => button.textContent?.trim() === label)
+  const availableActions = [...(decisionSection.value?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
+    .filter((button) => !button.disabled)
+  const replacement = availableActions.find((button) => button.textContent?.trim() === label)
+    ?? availableActions[0]
+    ?? decisionHeading.value
+    ?? document.getElementById("lead-detail-title")
   replacement?.focus()
 }
 
@@ -238,13 +245,26 @@ function cancelReview(): void {
   void nextTick(() => restoreReviewFocus(opener, openerLabel))
 }
 
+function focusHandoffHeading(): void {
+  handoffRegion.value?.querySelector<HTMLElement>("#lead-handoff-title")?.focus()
+}
+
 function openHandoff(): void {
   if (!canHandoff.value || !handoffEligible.value || !detail.value) return
   handoffOpen.value = true
+  void nextTick(focusHandoffHeading)
 }
 
 function closeHandoff(): void {
   handoffOpen.value = false
+  void nextTick(() => (crmHandoffButton.value ?? document.getElementById("lead-detail-title"))?.focus())
+}
+
+function handoffKeydown(event: KeyboardEvent): void {
+  if (event.key !== "Escape") return
+  event.preventDefault()
+  event.stopPropagation()
+  closeHandoff()
 }
 
 function handoffRequested(): void {
@@ -458,6 +478,47 @@ function auditJson(value: unknown): string {
   try { return JSON.stringify(value, null, 2) } catch { return "无法显示" }
 }
 
+const dimensionLabels: Record<string, string> = {
+  intent: "购买意向",
+  company_fit: "公司匹配",
+  specificity: "需求明确度",
+  capability_fit: "能力匹配",
+  recency: "时效性",
+}
+
+const auditKeyLabels: Record<string, string> = {
+  ai_run_id: "分析记录编号",
+  status: "运行状态",
+  prompt_code: "分析模板",
+  prompt_version: "模板版本",
+  model: "分析模型",
+  provider: "服务提供方",
+  started_at: "开始时间",
+  finished_at: "完成时间",
+  input_snapshot: "输入摘要",
+  output_json: "输出摘要",
+}
+
+function dimensionLabel(name: string): string {
+  return dimensionLabels[name] ?? "其他指标"
+}
+
+function localizedAuditJson(value: unknown): string {
+  let unknownKeyIndex = 0
+
+  function localizeKeys(current: unknown): unknown {
+    if (Array.isArray(current)) return current.map(localizeKeys)
+    if (!current || typeof current !== "object") return current
+
+    return Object.fromEntries(Object.entries(current as Record<string, unknown>).map(([key, nestedValue]) => {
+      const label = auditKeyLabels[key] ?? `未识别字段 ${++unknownKeyIndex}`
+      return [label, localizeKeys(nestedValue)]
+    }))
+  }
+
+  return auditJson(localizeKeys(value))
+}
+
 watch(() => [props.open, props.organizationId, props.candidateId] as const, (current, previous) => {
   if (previous?.[1] && previous[2]) {
     void queryClient.cancelQueries({ queryKey: leadKeys.detail(previous[1], previous[2]), exact: true })
@@ -492,15 +553,24 @@ onBeforeUnmount(() => {
 
 <template>
   <OperationModal v-if="open" title="机会依据" title-id="lead-detail-title" @close="closeDialog">
-    <article class="lead-detail">
+    <article class="lead-detail" @keydown="handoffOpen ? handoffKeydown($event) : undefined">
       <header class="dialog-header">
-        <p class="eyebrow">证据优先</p>
-        <button type="button" aria-label="关闭机会依据" @click="closeDialog">×</button>
+        <p class="eyebrow">{{ handoffOpen ? "本地导出" : "证据优先" }}</p>
+        <button type="button" :aria-label="handoffOpen ? '返回机会依据' : '关闭机会依据'" @click="handoffOpen ? closeHandoff() : closeDialog()">×</button>
       </header>
       <p class="live-message" role="status" aria-live="polite">{{ message }}</p>
       <p v-if="alert" class="form-alert" role="alert">{{ alert }}</p>
 
-      <p v-if="!canRead" class="state-panel" role="status">当前账号不能查看机会依据</p>
+      <section v-if="handoffOpen && detail" ref="handoffRegion" class="handoff-subview">
+        <LeadHandoffPanel
+          :detail="detail"
+          :can-handoff="canHandoff"
+          :connector-configured="connectorConfigured"
+          @close="closeHandoff"
+          @handoff="handoffRequested"
+        />
+      </section>
+      <p v-else-if="!canRead" class="state-panel" role="status">当前账号不能查看机会依据</p>
       <p v-else-if="detailQuery.isPending.value && !detail" role="status" aria-live="polite">正在加载机会依据…</p>
       <section v-else-if="detailQuery.isError.value && !detail" class="state-panel" role="alert">
         <h3>机会依据没有加载成功</h3>
@@ -559,7 +629,7 @@ onBeforeUnmount(() => {
         </section>
 
         <section ref="decisionSection" class="detail-section decision-section" aria-labelledby="human-decision-title">
-          <h3 id="human-decision-title">人工决定</h3>
+          <h3 id="human-decision-title" ref="decisionHeading" tabindex="-1">人工决定</h3>
           <div v-if="!selectedAction" class="action-grid">
             <button v-if="canAnalyze && permittedActions.has('ANALYZE')" type="button" :disabled="!canStartAnalysis" @click="startAnalysis">{{ analyzing ? "正在分析…" : recoveryState === "ready" ? "按最新版本重新提交" : "重新分析" }}</button>
             <p v-if="canAnalyze && permittedActions.has('ANALYZE') && !usableEvidence.length" class="handoff-note">没有可用于分析的公开证据。请先补充仍可访问的公开原文。</p>
@@ -585,14 +655,21 @@ onBeforeUnmount(() => {
           </form>
         </section>
 
+        <section v-if="canHandoff" class="detail-section handoff-section" aria-labelledby="crm-export-title">
+          <h3 id="crm-export-title">CRM 与导出</h3>
+          <p v-if="handoffEligible">可下载包含来源证据的本地文件；CRM 连接器尚未配置，不会自动发送客户资料。</p>
+          <p v-else>完成人工决定后，可在这里导出资料或查看 CRM 接入方式。</p>
+          <button ref="crmHandoffButton" class="primary-action" type="button" :disabled="!handoffEligible" @click="openHandoff">交给 CRM</button>
+        </section>
+
         <details class="detail-section audit-section">
           <summary>高级审计信息</summary>
           <section v-if="insight" aria-labelledby="score-dimensions-title">
             <h4 id="score-dimensions-title">评分维度</h4>
-            <dl class="audit-grid"><div v-for="(value, name) in insight.dimensions" :key="name"><dt>{{ name }}</dt><dd>{{ value }}</dd></div></dl>
+            <dl class="audit-grid"><div v-for="(value, name) in insight.dimensions" :key="name"><dt>{{ dimensionLabel(name) }}</dt><dd>{{ value }}</dd></div></dl>
             <h4>AI 版本</h4>
             <p>洞察版本 {{ insight.version }}</p>
-            <pre>{{ auditJson(insight.ai_audit) }}</pre>
+            <pre>{{ localizedAuditJson(insight.ai_audit) }}</pre>
           </section>
           <section aria-labelledby="review-history-title">
             <h4 id="review-history-title">处理历史</h4>
@@ -605,24 +682,9 @@ onBeforeUnmount(() => {
             </article>
           </section>
         </details>
-
-        <section v-if="canHandoff" class="detail-section handoff-section" aria-labelledby="crm-export-title">
-          <h3 id="crm-export-title">CRM 与导出</h3>
-          <p v-if="handoffEligible">可下载包含来源证据的本地文件；CRM 连接器尚未配置，不会自动发送客户资料。</p>
-          <p v-else>完成人工决定后，可在这里导出资料或查看 CRM 接入方式。</p>
-          <button class="primary-action" type="button" :disabled="!handoffEligible" @click="openHandoff">交给 CRM</button>
-        </section>
       </template>
     </article>
   </OperationModal>
-  <LeadHandoffPanel
-    v-if="handoffOpen && detail"
-    :detail="detail"
-    :can-handoff="canHandoff"
-    :connector-configured="connectorConfigured"
-    @close="closeHandoff"
-    @handoff="handoffRequested"
-  />
 </template>
 
 <style scoped>

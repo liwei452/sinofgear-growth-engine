@@ -67,6 +67,7 @@ function stubObjectUrls(createObjectURL: ReturnType<typeof vi.fn>, revokeObjectU
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   document.body.innerHTML = ""
 })
 
@@ -127,4 +128,47 @@ it("downloads allowlisted JSON and revokes its object URL", async () => {
   expect(JSON.parse(json).source_evidence[0].content).toContain("replacement helical gears")
   expect(json).not.toContain("private audit input")
   expect(revokeObjectURL).toHaveBeenCalledWith("blob:lead-json")
+})
+
+it.each([
+  ["vertical tab", "\u000b=SUM(A1:A2)"],
+  ["form feed", "\f+1"],
+  ["unit separator", "\u001f-1"],
+  ["non-breaking space", "\u00a0@cmd"],
+  ["C1 next line", "\u0085=1"],
+  ["Unicode em space", "\u2003+1"],
+  ["byte-order mark", "\uFEFF-1"],
+  ["mixed controls", "\u0000\u00a0\u001f@payload"],
+])("blocks CSV formulas hidden behind %s", async (_label, content) => {
+  const createObjectURL = vi.fn(() => "blob:lead-csv-probe")
+  const revokeObjectURL = vi.fn()
+  stubObjectUrls(createObjectURL, revokeObjectURL)
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined)
+  const probe = {
+    ...leadDetail,
+    evidence: [{ ...leadDetail.evidence[0], original_text: content }],
+  } satisfies LeadCandidateDetail
+
+  downloadLeadCsv(probe)
+
+  const csv = await readBlob(createObjectURL.mock.calls[0]?.[0] as Blob)
+  expect(csv).toContain(`"'${content}"`)
+})
+
+it("does not alter a normal multiline field whose later line starts with a formula marker", async () => {
+  const createObjectURL = vi.fn(() => "blob:lead-csv-multiline")
+  const revokeObjectURL = vi.fn()
+  stubObjectUrls(createObjectURL, revokeObjectURL)
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined)
+  const content = "Ordinary first line\n=literal on later line"
+  const probe = {
+    ...leadDetail,
+    evidence: [{ ...leadDetail.evidence[0], original_text: content }],
+  } satisfies LeadCandidateDetail
+
+  downloadLeadCsv(probe)
+
+  const csv = await readBlob(createObjectURL.mock.calls[0]?.[0] as Blob)
+  expect(csv).toContain(`"${content}"`)
+  expect(csv).not.toContain(`"'${content}"`)
 })

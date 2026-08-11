@@ -123,7 +123,13 @@ export function buildLeadExport(detail: LeadCandidateDetail): LeadExportV1 {
 }
 
 function protectCsvFormula(value: string): string {
-  return /^[\t\r\n ]*[=+\-@]/.test(value) ? `'${value}` : value
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0
+    const isControl = codePoint <= 31 || (codePoint >= 127 && codePoint <= 159)
+    if (isControl || /[\s\p{White_Space}]/u.test(character)) continue
+    return "=+-@".includes(character) ? `'${value}` : value
+  }
+  return value
 }
 
 function csvCell(value: unknown): string {

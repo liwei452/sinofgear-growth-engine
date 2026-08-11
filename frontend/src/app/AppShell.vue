@@ -157,6 +157,10 @@ function switchNavigationMode(): void {
   }
 }
 
+function focusMainContent(): void {
+  void nextTick(() => contentElement.value?.focus())
+}
+
 function onKeydown(event: KeyboardEvent) {
   if (!isNarrowViewport.value || !navOpen.value) return
   if (event.key === "Escape") {
@@ -199,6 +203,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-shell">
+    <a class="skip-link" href="#main-content" @click="focusMainContent">跳到主要内容</a>
     <aside
       id="primary-sidebar"
       ref="sidebarElement"
@@ -288,7 +293,7 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <main ref="contentElement" class="content-area" tabindex="-1">
+      <main id="main-content" ref="contentElement" class="content-area" tabindex="-1">
         <p v-if="currentUser.isPending.value" class="state-message" role="status" aria-live="polite">
           正在确认登录状态…
         </p>

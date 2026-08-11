@@ -116,6 +116,19 @@ it("keeps ordinary mode usable when browser storage throws", async () => {
   expect(screen.getByRole("link", { name: "今天" })).toBeVisible()
 })
 
+it("keeps an in-memory mode change usable when browser storage rejects writes", async () => {
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new Error("storage full")
+  })
+  const user = userEvent.setup()
+  await renderShell()
+
+  await user.click(screen.getByRole("button", { name: "打开高级功能" }))
+
+  expect(screen.getByRole("link", { name: "知识库" })).toBeVisible()
+  expect(screen.getByRole("button", { name: "返回普通功能" })).toBeVisible()
+})
+
 it("reveals permitted administration routes in advanced mode and persists the preference", async () => {
   const user = userEvent.setup()
   await renderShell()

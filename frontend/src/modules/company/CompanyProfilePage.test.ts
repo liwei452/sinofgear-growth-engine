@@ -525,6 +525,7 @@ it("summarizes only currently available company data and links to existing edito
   expect(screen.getByRole("link", { name: "去知识库补充" })).toHaveAttribute("href", "/knowledge")
   expect(screen.getByRole("link", { name: "管理素材" })).toHaveAttribute("href", "/assets")
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument()
+  expect(document.body).not.toHaveTextContent(/Ontology|SourceSignal|PERMISSION_DENIED|IN_REVIEW/)
 })
 
 it("shows honest empty guidance instead of invented company facts", async () => {

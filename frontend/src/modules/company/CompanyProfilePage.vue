@@ -241,7 +241,7 @@ function refetchCapabilities() {
 </script>
 
 <template>
-  <main class="page-stack company-profile-page">
+  <div class="page-stack company-profile-page">
     <header class="company-profile-header">
       <div>
         <p class="eyebrow">我的公司</p>
@@ -331,7 +331,7 @@ function refetchCapabilities() {
         <template v-else><p v-if="assets.length">{{ assetCountLabel(assets.length) }}</p><div v-else><strong>还没有可用素材</strong><p>{{ canManageAssets ? "上传真实图片、视频或文档。" : "如需补充，请联系管理员。" }}</p></div><RouterLink class="text-link" to="/assets">{{ assets.length ? (canManageAssets ? "管理素材" : "查看素材") : (canManageAssets ? "去素材库补充" : "查看素材库") }}</RouterLink><p v-if="assets.length && !canManageAssets" class="muted">如需补充或编辑，请联系管理员。</p></template>
       </section>
     </div>
-  </main>
+  </div>
 </template>
 
 <style scoped>

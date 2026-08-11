@@ -104,6 +104,7 @@ it("explains collect then filter and labels summaries as current loaded results"
   for (const label of ["等待分析", "高价值待决定", "需要补证据", "已经处理"]) {
     expect(screen.getAllByText(label)[0]).toBeVisible()
   }
+  expect(document.body).not.toHaveTextContent(/LeadCandidate|LeadInsight|SourceSignal|AIRun|Ontology|ANALYZED/)
 })
 
 it("separates value, evidence sufficiency, and inferred company identity", async () => {

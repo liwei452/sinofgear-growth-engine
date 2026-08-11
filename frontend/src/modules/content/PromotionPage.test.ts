@@ -85,6 +85,9 @@ it("opens the real content brief wizard when the available data is ready", async
 
   expect(screen.getByRole("dialog")).toBeInTheDocument()
   expect(screen.getByRole("heading", { name: "制定推广方案" })).toBeInTheDocument()
+  expect(screen.getByRole("heading", { name: "制定推广方案" })).toHaveFocus()
+  await user.click(screen.getByRole("button", { name: "关闭" }))
+  expect(action).toHaveFocus()
 })
 
 it("keeps the proposal action honest when permission or required data is missing", async () => {

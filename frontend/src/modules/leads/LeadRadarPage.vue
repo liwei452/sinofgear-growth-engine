@@ -254,7 +254,7 @@ function selectCandidate(candidateId: string): void {
 </script>
 
 <template>
-  <main class="lead-radar" aria-labelledby="lead-radar-title">
+  <div class="lead-radar" aria-labelledby="lead-radar-title">
     <header class="page-header">
       <div>
         <p class="eyebrow">从公开信息中发现需求</p>
@@ -389,7 +389,7 @@ function selectCandidate(candidateId: string): void {
       :open="Boolean(selectedCandidateId)"
       @close="selectedCandidateId = null"
     />
-  </main>
+  </div>
 </template>
 
 <style scoped>

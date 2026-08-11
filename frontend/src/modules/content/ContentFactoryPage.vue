@@ -565,7 +565,7 @@ onBeforeUnmount(() => { disposed = true; cancelOrdinaryRecovery(); for (const ti
 </script>
 
 <template>
-  <main class="page-stack content-factory" aria-labelledby="factory-title">
+  <div class="page-stack content-factory" aria-labelledby="factory-title">
     <template v-if="ordinaryExperience">
       <header class="promotion-header">
         <div><p class="eyebrow">AI 推广助手</p><h1 id="factory-title">你今天想推广什么？</h1><p>从现有产品和资料出发，AI 会陪你整理方案；只有你确认后，才会进入执行。</p></div>
@@ -616,7 +616,7 @@ onBeforeUnmount(() => { disposed = true; cancelOrdinaryRecovery(); for (const ti
     </template>
 
     <ContentBriefWizard v-if="wizardOpen || editingBrief" :experience="experience" :brief="editingBrief" :campaigns="visibleCampaigns" :products="ordinaryCreation ? eligibleProducts : visibleProducts" :platforms="platformPages.items.value" :assets="ordinaryCreation ? eligibleAssets : visibleAssets" :concepts="ordinaryCreation ? approvedConcepts : visibleConcepts" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
-  </main>
+  </div>
 </template>
 
 <style scoped>

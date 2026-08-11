@@ -33,6 +33,7 @@ it("explains the result before metrics and keeps operations collapsed",async()=>
   expect(metrics.compareDocumentPosition(trend)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   expect(trend.compareDocumentPosition(nextStep)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   expect(operations).not.toHaveAttribute("open")
+  expect(document.body).not.toHaveTextContent(/Campaign|MasterContent|PlatformContent|AIRun|PromptVersion|IN_REVIEW/)
 })
 
 it("uses real names when available and never promotes an unresolved id as a name",async()=>{

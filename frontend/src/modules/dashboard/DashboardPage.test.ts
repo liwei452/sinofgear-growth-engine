@@ -109,6 +109,7 @@ it("renders three decision-cockpit regions from organization-scoped live data", 
   expect(await screen.findByText("当前展示的完成任务")).toBeVisible()
   expect(screen.queryByText("SOURCE_IMPORT")).not.toBeInTheDocument()
   expect(screen.queryByText("RUNNING")).not.toBeInTheDocument()
+  expect(document.body).not.toHaveTextContent(/LeadCandidate|LeadInsight|SourceSignal|AIRun|Ontology/)
   expect(queryClient.getQueryState(["dashboard", "org-1", "decisions"])).toBeDefined()
   for (const status of ["QUEUED", "RUNNING", "RETRY_QUEUED"]) {
     expect(queryClient.getQueryState(["dashboard", "org-1", "active-jobs", status])).toBeDefined()

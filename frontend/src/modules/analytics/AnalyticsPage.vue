@@ -319,7 +319,7 @@ watch(org, () => {
 </script>
 
 <template>
-  <main class="page-stack analytics-page">
+  <div class="page-stack analytics-page">
     <header class="page-header">
       <div>
         <p class="eyebrow">AI 效果解读</p>
@@ -476,7 +476,7 @@ watch(org, () => {
         </form>
       </OperationModal>
     </template>
-  </main>
+  </div>
 </template>
 
 <style scoped>

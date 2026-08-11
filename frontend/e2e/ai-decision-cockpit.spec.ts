@@ -58,7 +58,7 @@ async function createCandidateFixtureFromEvidence(
 }
 
 test("ordinary cockpit has exactly five entries and opens a decision on the correct page", async ({ page }) => {
-  await login(page, "phasea_e2e_operator")
+  await login(page, "phasea_e2e_reviewer")
   await expect(page.getByRole("heading", { name: /今天(?:至少)?有 \d+ 件事需要你决定/ })).toBeVisible()
 
   const navigation = page.getByRole("navigation", { name: "主导航" })
@@ -200,7 +200,7 @@ for (const viewport of [
 ] as const) {
   test(`ordinary shell and routes stay bounded at ${viewport.name} ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
-    await login(page, "phasea_e2e_operator")
+    await login(page, "phasea_e2e_reviewer")
 
     const sidebar = page.getByTestId("app-sidebar")
     if (viewport.width <= 860) {

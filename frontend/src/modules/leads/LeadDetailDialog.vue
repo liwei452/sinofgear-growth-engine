@@ -260,6 +260,10 @@ function closeHandoff(): void {
   void nextTick(() => (crmHandoffButton.value ?? document.getElementById("lead-detail-title"))?.focus())
 }
 
+function restoreSafeDetailFocus(): void {
+  void nextTick(() => document.getElementById("lead-detail-title")?.focus())
+}
+
 function handoffKeydown(event: KeyboardEvent): void {
   if (event.key !== "Escape") return
   event.preventDefault()
@@ -520,11 +524,15 @@ function localizedAuditJson(value: unknown): string {
 }
 
 watch(() => [props.open, props.organizationId, props.candidateId] as const, (current, previous) => {
+  const wasInHandoff = handoffOpen.value
   if (previous?.[1] && previous[2]) {
     void queryClient.cancelQueries({ queryKey: leadKeys.detail(previous[1], previous[2]), exact: true })
     void queryClient.cancelQueries({ queryKey: leadKeys.jobs(previous[1]) })
   }
-  if (!previous || current.some((value, index) => value !== previous[index])) resetTransient()
+  if (!previous || current.some((value, index) => value !== previous[index])) {
+    resetTransient()
+    if (wasInHandoff && current[0]) restoreSafeDetailFocus()
+  }
 }, { immediate: true, flush: "sync" })
 
 watch(canRead, (current, previous) => {
@@ -539,7 +547,10 @@ watch(canRead, (current, previous) => {
 }, { flush: "sync" })
 
 watch(canHandoff, (current) => {
-  if (!current) handoffOpen.value = false
+  if (!current && handoffOpen.value) {
+    handoffOpen.value = false
+    restoreSafeDetailFocus()
+  }
 }, { flush: "sync" })
 
 onBeforeUnmount(() => {

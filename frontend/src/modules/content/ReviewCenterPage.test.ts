@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { currentUserQueryOptions, type CurrentUser } from "../auth/auth"
+import "../../styles/tokens.css"
 import ReviewCenterPage from "./ReviewCenterPage.vue"
 
 const currentUser = (permissions: string[]): CurrentUser => ({
@@ -63,6 +64,17 @@ function renderPage(permissions: string[]) {
 }
 
 afterEach(() => { vi.unstubAllGlobals(); document.cookie = "csrftoken=; Max-Age=0; path=/" })
+
+it("uses the shared SinofGear blue token for the selected review tab", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
+    path.startsWith("/api/v1/master-contents") ? page([]) : common(path),
+  ), { status: 200, headers: { "Content-Type": "application/json" } })))
+  renderPage(["content.read"])
+
+  const selected = await screen.findByRole("tab", { name: "通用文案" })
+  expect(getComputedStyle(selected).borderBottomColor).toBe("var(--sg-brand)")
+  expect(getComputedStyle(document.documentElement).getPropertyValue("--sg-brand").trim()).toBe("#005ba8")
+})
 
 it("shows plain content fields and a safe, collapsed AI audit summary", async () => {
   vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(

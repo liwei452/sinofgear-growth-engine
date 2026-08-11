@@ -72,27 +72,28 @@ const unavailableConcepts = computed(() => props.concepts.filter((concept) =>
 const missingConceptIds = computed(() => [...originalConceptIds].filter((id) =>
   conceptIds.value.includes(id) && !props.concepts.some((concept) => concept.id === id),
 ))
-const missingProductLabels = new Map(
-  [...originalProductIds]
-    .filter((id) => !props.products.some((product) => product.id === id))
-    .map((id, index) => [id, `历史产品 ${index + 1}（名称暂不可用）`]),
-)
-const missingAssetLabels = new Map(
-  [...originalAssetIds]
-    .filter((id) => !props.assets.some((asset) => asset.id === id))
-    .map((id, index) => [id, `历史素材 ${index + 1}（名称暂不可用）`]),
-)
-const missingConceptLabels = new Map(
-  [...originalConceptIds]
-    .filter((id) => !props.concepts.some((concept) => concept.id === id))
-    .map((id, index) => [id, `历史知识 ${index + 1}（名称暂不可用）`]),
-)
-const missingProducts = computed(() => missingProductIds.value.map((id) => ({ id, label: missingProductLabels.get(id) ?? "历史产品（名称暂不可用）" })))
-const missingAssets = computed(() => missingAssetIds.value.map((id) => ({ id, label: missingAssetLabels.get(id) ?? "历史素材（名称暂不可用）" })))
-const missingConcepts = computed(() => missingConceptIds.value.map((id) => ({ id, label: missingConceptLabels.get(id) ?? "历史知识（名称暂不可用）" })))
+const missingProductLabels = new Map<string, string>()
+const missingAssetLabels = new Map<string, string>()
+const missingConceptLabels = new Map<string, string>()
+function stableMissingLabel(labels: Map<string, string>, id: string, kind: string): string {
+  const existing = labels.get(id)
+  if (existing) return existing
+  const label = `${kind} ${labels.size + 1}（名称暂不可用）`
+  labels.set(id, label)
+  return label
+}
+const missingProducts = computed(() => missingProductIds.value.map((id) => ({
+  id, label: stableMissingLabel(missingProductLabels, id, "历史产品"),
+})))
+const missingAssets = computed(() => missingAssetIds.value.map((id) => ({
+  id, label: stableMissingLabel(missingAssetLabels, id, "历史素材"),
+})))
+const missingConcepts = computed(() => missingConceptIds.value.map((id) => ({
+  id, label: stableMissingLabel(missingConceptLabels, id, "历史知识"),
+})))
 function productLabel(id: string): string {
   const product = props.products.find((item) => item.id === id)
-  return product?.name_zh || product?.name_en || missingProductLabels.get(id) || "历史产品（名称暂不可用）"
+  return product?.name_zh || product?.name_en || stableMissingLabel(missingProductLabels, id, "历史产品")
 }
 const existingConceptRoles = new Map(
   props.brief?.concept_links.map((link) => [link.concept_id, link.role]) ?? [],
@@ -471,5 +472,6 @@ async function submit(): Promise<void> {
 </template>
 
 <style scoped>
-.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.wizard-dialog{width:min(820px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:#fff}.wizard-dialog header,.wizard-dialog footer{display:flex;justify-content:space-between;gap:1rem}.wizard-dialog section,.wizard-dialog label{display:grid;gap:.45rem}.wizard-dialog section{gap:1rem}.wizard-progress{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;padding:0;list-style:none}.wizard-progress li{padding:.55rem;border-radius:.6rem;background:#f1f4f7;color:#607083;text-align:center}.wizard-progress li[aria-current=step]{background:#e5f2ec;color:#174d39;font-weight:800}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.preset-row{display:flex;flex-wrap:wrap;gap:.5rem}.preset-row button[aria-pressed=true]{border-color:#245b47;background:#e5f2ec;color:#174d39}.wizard-dialog footer{justify-content:flex-end;position:sticky;bottom:-1.5rem;padding:1rem 0 0;background:#fff}.form-alert{padding:.75rem;border-radius:.7rem;background:#fff0ed;color:#79291d}.field-error{color:#79291d;font-size:.9rem}fieldset{display:grid;gap:.5rem;border:1px solid #d8dee8;border-radius:.75rem}@media(max-width:650px){.form-grid,.wizard-progress{grid-template-columns:1fr}.wizard-progress li:not([aria-current=step]){display:none}}@media(prefers-reduced-motion:reduce){.wizard-dialog{scroll-behavior:auto}}
+.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.wizard-dialog{width:min(820px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:var(--sg-surface)}.wizard-dialog header,.wizard-dialog footer{display:flex;justify-content:space-between;gap:1rem}.wizard-dialog section,.wizard-dialog label{display:grid;gap:.45rem}.wizard-dialog section{gap:1rem}.wizard-progress{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;padding:0;list-style:none}.wizard-progress li{padding:.55rem;border-radius:.6rem;background:var(--sg-status-neutral-tint);color:var(--sg-muted);text-align:center}.wizard-progress li[aria-current=step]{background:var(--sg-brand-tint);color:var(--sg-brand);font-weight:800}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.preset-row{display:flex;flex-wrap:wrap;gap:.5rem}.preset-row button[aria-pressed=true]{border-color:var(--sg-brand);background:var(--sg-brand-tint);color:var(--sg-brand)}.wizard-dialog footer{justify-content:flex-end;position:sticky;bottom:-1.5rem;padding:1rem 0 0;background:var(--sg-surface)}.form-alert{padding:.75rem;border-radius:.7rem;background:var(--sg-status-danger-tint);color:var(--sg-status-danger)}.field-error{color:var(--sg-status-danger);font-size:.9rem}fieldset{display:grid;gap:.5rem;border:1px solid var(--sg-line);border-radius:.75rem}@media(max-width:650px){.form-grid,.wizard-progress{grid-template-columns:1fr}.wizard-progress li:not([aria-current=step]){display:none}}@media(prefers-reduced-motion:reduce){.wizard-dialog{scroll-behavior:auto}}
+.wizard-progress li[aria-current=step]{background-color:var(--sg-brand-tint)}
 </style>

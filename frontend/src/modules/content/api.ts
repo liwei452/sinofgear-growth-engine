@@ -121,12 +121,17 @@ export const listCampaigns = async (
   options: Pick<ApiRequestOptions, "signal"> = {},
 ): Promise<CursorPage<Campaign>> =>
   required(await apiRequest<CursorPage<Campaign>>("/api/v1/campaigns", { signal: options.signal }))
-export const listApprovedBriefConcepts = async (): Promise<CursorPage<BriefConcept>> =>
+export const listApprovedBriefConcepts = async (
+  options: Pick<ApiRequestOptions, "signal"> = {},
+): Promise<CursorPage<BriefConcept>> =>
   required(await apiRequest<CursorPage<BriefConcept>>(
     "/api/v1/knowledge/concepts?status=APPROVED&page_size=50",
+    options,
   ))
-export const listBriefConcepts = async (): Promise<CursorPage<BriefConcept>> =>
-  required(await apiRequest<CursorPage<BriefConcept>>("/api/v1/knowledge/concepts?page_size=50"))
+export const listBriefConcepts = async (
+  options: Pick<ApiRequestOptions, "signal"> = {},
+): Promise<CursorPage<BriefConcept>> =>
+  required(await apiRequest<CursorPage<BriefConcept>>("/api/v1/knowledge/concepts?page_size=50", options))
 export const createCampaign = async (input: { name: string; description: string }): Promise<Campaign> =>
   required(await apiRequest<Campaign>("/api/v1/campaigns", { method: "POST", body: { ...input, status: "DRAFT", product_ids: [] } }))
 export const listBriefs = async (filters: { status?: string; campaign?: string } = {}): Promise<CursorPage<ContentBrief>> =>
@@ -166,11 +171,17 @@ export const generateMaster = async (briefId: string): Promise<{ job_id: string;
     `/api/v1/content-briefs/${briefId}/generate-master-content`, { method: "POST", body: {} },
   ))
 
-export async function listMasterContents(filters: ContentFilters = {}): Promise<CursorPage<MasterContent>> {
-  return required(await apiRequest<CursorPage<MasterContent>>(queryUrl("/api/v1/master-contents", filters)))
+export async function listMasterContents(
+  filters: ContentFilters = {},
+  options: Pick<ApiRequestOptions, "signal"> = {},
+): Promise<CursorPage<MasterContent>> {
+  return required(await apiRequest<CursorPage<MasterContent>>(queryUrl("/api/v1/master-contents", filters), options))
 }
-export async function listPlatformContents(filters: ContentFilters = {}): Promise<CursorPage<PlatformContent>> {
-  return required(await apiRequest<CursorPage<PlatformContent>>(queryUrl("/api/v1/platform-contents", filters)))
+export async function listPlatformContents(
+  filters: ContentFilters = {},
+  options: Pick<ApiRequestOptions, "signal"> = {},
+): Promise<CursorPage<PlatformContent>> {
+  return required(await apiRequest<CursorPage<PlatformContent>>(queryUrl("/api/v1/platform-contents", filters), options))
 }
 export const getMasterContent = async (id: string): Promise<MasterContent> =>
   required(await apiRequest<MasterContent>(`/api/v1/master-contents/${id}`))

@@ -237,6 +237,29 @@ it("keeps CRM export inside the detail modal and restores its trigger on Escape 
   expect(screen.getByRole("button", { name: "交给 CRM" })).toHaveFocus()
 })
 
+it.each(["permission", "organization"] as const)(
+  "returns focus to the safe detail title when the CRM view closes after a %s change",
+  async (change) => {
+    const reviewedDetail = {
+      ...detail,
+      status: "REVIEWED",
+      permitted_actions: ["DISMISS", "REQUEST_MORE_EVIDENCE"],
+    }
+    const view = renderDialog(["leads.read", "leads.handoff"], vi.fn(async () => json(reviewedDetail)))
+    await userEvent.click(await screen.findByRole("button", { name: "交给 CRM" }))
+    expect(screen.getByRole("heading", { name: "CRM 与导出" })).toHaveFocus()
+
+    if (change === "permission") {
+      view.queryClient.setQueryData(currentUserQueryOptions().queryKey, userWith(["leads.read"]))
+    } else {
+      await view.rerender({ organizationId: "org-2" })
+    }
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "机会依据" })).toHaveFocus())
+    expect(screen.queryByRole("button", { name: "返回机会依据" })).not.toBeInTheDocument()
+  },
+)
+
 it("removes cached evidence and audit immediately when read permission is withdrawn", async () => {
   const view = renderDialog()
   await screen.findByText("We need replacement helical gears, 200 pcs.")

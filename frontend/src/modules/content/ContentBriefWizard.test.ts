@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { beforeEach, expect, it, vi } from "vitest"
 
 import { ApiError } from "../../api/client"
+import "../../styles/tokens.css"
 import type { Product, ProductStatus } from "../products/api"
 import ContentBriefWizard from "./ContentBriefWizard.vue"
 import type { Asset, BriefConcept, ContentBrief } from "./api"
@@ -66,6 +67,15 @@ async function submitDraft(user: ReturnType<typeof userEvent.setup>) {
 }
 
 beforeEach(() => patchBriefMock.mockReset())
+
+it("uses the shared SinofGear blue tokens for the current ordinary wizard step", () => {
+  renderWizard({ experience: "ordinary" })
+  const current = document.querySelector<HTMLElement>(".wizard-progress [aria-current='step']")!
+
+  expect(getComputedStyle(current).backgroundColor).toBe("var(--sg-brand-tint)")
+  expect(getComputedStyle(current).color).toBe("var(--sg-brand)")
+  expect(getComputedStyle(document.documentElement).getPropertyValue("--sg-brand").trim()).toBe("#005ba8")
+})
 
 it("normalizes relationship aliases, returns to step two, and focuses a real product checkbox", async () => {
   patchBriefMock.mockRejectedValueOnce(new ApiError(400, "请求未能完成", undefined, {
@@ -190,6 +200,37 @@ it("renders missing linked provenance as a removable unavailable placeholder", a
   await user.click(screen.getByRole("button", { name: "保存需求草稿" }))
 
   expect(patchBriefMock).toHaveBeenCalledWith("brief-1", expect.objectContaining({ product_ids: ["product-1"] }))
+})
+
+it("assigns stable distinct numbers when multiple linked products become missing after mount", async () => {
+  const changingDraft: ContentBrief = {
+    ...draft,
+    product_ids: ["product-1", "product-later-1", "product-later-2"],
+  }
+  const view = renderWizard({
+    brief: changingDraft,
+    products: [
+      product("product-1", "精密齿轮", "ACTIVE"),
+      product("product-later-1", "稍后缺失一", "ACTIVE"),
+      product("product-later-2", "稍后缺失二", "ACTIVE"),
+    ],
+  })
+
+  await view.rerender({ products: [product("product-1", "精密齿轮", "ACTIVE")] })
+  await userEvent.click(screen.getByRole("button", { name: "下一步" }))
+
+  expect(screen.getByLabelText("历史产品 1（名称暂不可用）（不可用，仅可移除）")).toBeChecked()
+  expect(screen.getByLabelText("历史产品 2（名称暂不可用）（不可用，仅可移除）")).toBeChecked()
+
+  await view.rerender({ products: [
+    product("product-1", "精密齿轮", "ACTIVE"),
+    product("product-later-1", "稍后缺失一", "ACTIVE"),
+  ] })
+  expect(screen.getByLabelText("历史产品 2（名称暂不可用）（不可用，仅可移除）")).toBeChecked()
+
+  await view.rerender({ products: [product("product-1", "精密齿轮", "ACTIVE")] })
+  expect(screen.getByLabelText("历史产品 1（名称暂不可用）（不可用，仅可移除）")).toBeChecked()
+  expect(screen.getByLabelText("历史产品 2（名称暂不可用）（不可用，仅可移除）")).toBeChecked()
 })
 
 it("keeps missing relationship UUIDs private in the ordinary wizard and still removes by ID", async () => {

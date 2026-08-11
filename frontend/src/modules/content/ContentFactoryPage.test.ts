@@ -7,6 +7,7 @@ import { currentUserQueryOptions, type CurrentUser } from "../auth/auth"
 import { assetKeys } from "../assets/api"
 import { productQueryKeys } from "../products/api"
 import { contentQueryKeys } from "./api"
+import "../../styles/tokens.css"
 import ContentFactoryPage from "./ContentFactoryPage.vue"
 
 const currentUser = (permissions: string[]): CurrentUser => ({
@@ -56,6 +57,17 @@ afterEach(() => {
   vi.unstubAllGlobals()
   vi.useRealTimers()
   document.cookie = "csrftoken=; Max-Age=0; path=/"
+})
+
+it("uses the shared SinofGear blue tint for the ordinary promotion header", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(baseResponse(path)), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
+  const view = renderPage([], "ordinary")
+
+  await screen.findByRole("heading", { name: "你今天想推广什么？" })
+  expect(getComputedStyle(view.container.querySelector(".promotion-header")!).backgroundColor).toBe("var(--sg-brand-tint)")
+  expect(getComputedStyle(document.documentElement).getPropertyValue("--sg-brand-tint").trim()).toBe("#e8f2fa")
 })
 
 it("keeps the existing professional page available in advanced mode", async () => {
@@ -537,6 +549,49 @@ it.each([
 
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument())
   if (queryKey) expect(view.queryClient.getQueryData(queryKey())).toBeUndefined()
+})
+
+it("aborts and clears the captured all-concepts query when knowledge access is revoked during editing", async () => {
+  const draft = brief()
+  let resolveConcepts!: (response: Response) => void
+  const deferredConcepts = new Promise<Response>((resolve) => { resolveConcepts = resolve })
+  let allConceptsSignal: AbortSignal | undefined
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === "/api/v1/content-briefs") return new Response(JSON.stringify({ next: null, previous: null, results: [draft] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/knowledge/concepts?page_size=50") {
+      allConceptsSignal = options?.signal ?? undefined
+      return deferredConcepts
+    }
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const permissions = ["campaigns.read", "campaigns.manage", "products.read", "assets.read", "knowledge.read", "memberships.read"]
+  const view = renderPage(permissions, "ordinary")
+  const allConceptsKey = [...contentQueryKeys.briefs("org-1"), "all-concepts"]
+
+  await userEvent.click(await screen.findByRole("button", { name: "查看并修改方案" }))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+    "/api/v1/knowledge/concepts?page_size=50",
+    expect.objectContaining({ signal: expect.anything() }),
+  ))
+  view.queryClient.setQueryData(allConceptsKey, {
+    next: null, previous: null, results: [{ id: "private-concept", label_zh: "不应保留" }],
+  })
+
+  view.queryClient.setQueryData(
+    currentUserQueryOptions().queryKey,
+    currentUser(permissions.filter((permission) => permission !== "knowledge.read")),
+  )
+
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument())
+  expect(allConceptsSignal?.aborted).toBe(true)
+  expect(view.queryClient.getQueryData(allConceptsKey)).toBeUndefined()
+  resolveConcepts(new Response(JSON.stringify({ next: null, previous: null, results: [{ id: "late-private-concept" }] }), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  }))
+  await deferredConcepts
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(view.queryClient.getQueryData(allConceptsKey)).toBeUndefined()
 })
 
 it("removes the product recovery action as soon as products.read is revoked", async () => {

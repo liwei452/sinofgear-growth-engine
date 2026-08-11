@@ -42,7 +42,7 @@ const permissions = [
   "assets.read", "assets.manage", "campaigns.read", "campaigns.manage",
   "campaigns.review", "content.read", "content.manage", "content.review",
   "jobs.read", "jobs.manage", "memberships.read", "publishing.read",
-  "tracking.read", "tracking.manage", "leads.read", "leads.manage", "sources.manage",
+  "tracking.read", "tracking.manage", "leads.read", "leads.review", "leads.manage", "sources.manage",
 ]
 
 const currentUser: CurrentUser = {

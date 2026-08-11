@@ -173,7 +173,9 @@ const categoryReadiness = computed(() => ({
   industries: compositeReadiness.value,
   processes: compositeReadiness.value,
   standards: compositeReadiness.value,
-  evidence: combineReadiness(knowledgeSourceReadiness.value, evidenceSourceReadiness.value),
+  evidence: canReadKnowledge.value
+    ? combineReadiness(productSourceReadiness.value, knowledgeSourceReadiness.value, evidenceSourceReadiness.value)
+    : "unavailable" as Readiness,
   assets: assetSourceReadiness.value,
 }))
 const categoryPresence = computed(() => ({
@@ -308,7 +310,12 @@ function refetchCapabilities() {
 
       <section class="knowledge-card" role="region" aria-label="证据覆盖">
         <div class="card-title"><AppIcon name="document" /><h2>证据覆盖</h2></div>
-        <p v-if="!canReadKnowledge">你没有查看证据资料的权限。</p><p v-else-if="categoryReadiness.evidence === 'pending'" role="status">正在读取证据资料…</p><div v-else-if="categoryReadiness.evidence === 'unknown'" role="alert"><p>证据资料暂时无法读取，当前是否存在缺口暂无法判断。</p><button @click="evidenceQuery.refetch(); knowledgeQuery.refetch()">重新加载证据资料</button></div><template v-else><p v-if="concepts.length">当前可见 {{ concepts.length }} 条知识</p><strong v-else>还没有公司知识</strong><p v-if="evidenceCount">当前可确认 {{ evidenceCount }} 条证据依据。</p><p v-else>还没有可追溯的证据依据。</p></template>
+        <p v-if="!canReadKnowledge">你没有查看证据资料的权限。</p>
+        <template v-else>
+          <p v-if="knowledgeSourceReadiness === 'ready' && concepts.length">当前可见 {{ concepts.length }} 条知识</p><strong v-else-if="knowledgeSourceReadiness === 'ready'">还没有公司知识</strong>
+          <p v-if="categoryReadiness.evidence === 'pending'" role="status">正在读取证据资料…</p><div v-else-if="categoryReadiness.evidence === 'unknown'" role="alert"><p>证据资料暂时无法完整读取，当前是否存在缺口暂无法判断。</p><button @click="refetchCapabilities(); evidenceQuery.refetch()">重新加载证据资料</button></div>
+          <p v-if="evidenceSourceReadiness === 'ready' && evidenceCount">当前可确认 {{ evidenceCount }} 条证据依据。</p><p v-else-if="categoryReadiness.evidence === 'ready'">还没有可追溯的证据依据。</p>
+        </template>
         <RouterLink v-if="canReadKnowledge" class="text-link" to="/knowledge">{{ concepts.length || evidenceCount ? (canCreateKnowledge ? "管理公司知识" : "查看知识库") : (canCreateKnowledge ? "去知识库补充" : "查看知识库") }}</RouterLink>
         <p v-if="canReadKnowledge && !canCreateKnowledge" class="muted">如需补充或编辑，请联系管理员。</p>
       </section>

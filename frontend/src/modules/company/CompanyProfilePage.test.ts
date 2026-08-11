@@ -238,6 +238,7 @@ it("uses organization knowledge and only product-linked system facts and evidenc
   expect(screen.queryByText("未关联全局行业")).not.toBeInTheDocument()
   expect(screen.queryByText("其他组织标准")).not.toBeInTheDocument()
   expect(screen.getByRole("region", { name: "证据覆盖" })).toHaveTextContent("当前可确认 2 条证据依据")
+  expect(screen.getByRole("region", { name: "建议补充" })).not.toHaveTextContent("补充证据")
 })
 
 it("shows product-linked ontology facts without requiring direct knowledge access", async () => {
@@ -301,6 +302,7 @@ it.each([
   expect(gaps).not.toHaveTextContent("补充行业")
   expect(gaps).not.toHaveTextContent("补充工艺")
   expect(gaps).not.toHaveTextContent("补充标准")
+  expect(gaps).not.toHaveTextContent("补充证据")
 })
 
 it("caps product pagination as unknown instead of inventing gaps", async () => {
@@ -323,10 +325,10 @@ it("caps product pagination as unknown instead of inventing gaps", async () => {
 
   expect(await screen.findByText("已确认 1 项，另有资料暂无法判断")).toBeVisible()
   expect(productCalls).toBe(100)
-  expect(screen.getByRole("region", { name: "建议补充" })).not.toHaveTextContent(/补充产品|补充能力|补充行业|补充工艺|补充标准/)
+  expect(screen.getByRole("region", { name: "建议补充" })).not.toHaveTextContent(/补充产品|补充能力|补充行业|补充工艺|补充标准|补充证据/)
 })
 
-it("does not turn a failed product source into product or composite gaps", async () => {
+it("does not turn a failed product source into product, composite, or evidence gaps", async () => {
   const fetchMock = vi.fn((path: string) => {
     if (path.startsWith("/api/v1/products")) return Promise.resolve(json({ detail: "offline" }, 503))
     if (path.startsWith("/api/v1/knowledge/")) return Promise.resolve(json({ results: [] }))
@@ -336,8 +338,27 @@ it("does not turn a failed product source into product or composite gaps", async
 
   expect(await screen.findByText("已确认 1 项，另有资料暂无法判断")).toBeVisible()
   const gaps = screen.getByRole("region", { name: "建议补充" })
-  expect(gaps).not.toHaveTextContent(/补充产品|补充能力|补充行业|补充工艺|补充标准/)
-  expect(gaps).toHaveTextContent("补充证据")
+  expect(gaps).not.toHaveTextContent(/补充产品|补充能力|补充行业|补充工艺|补充标准|补充证据/)
+})
+
+it("keeps evidence pending while a readable product source is pending", async () => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path.startsWith("/api/v1/products")) return new Promise<Response>(() => undefined)
+    if (path.startsWith("/api/v1/knowledge/")) return Promise.resolve(json({ results: [] }))
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  const { queryClient } = await renderCompany(fetchMock, ["products.read", "knowledge.read"])
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+  await waitFor(() => {
+    const knowledgeQueries = queryClient.getQueryCache().findAll({ queryKey: ["knowledge", "org-1"] })
+    expect(knowledgeQueries).toHaveLength(2)
+    expect(knowledgeQueries.every((query) => query.state.status === "success")).toBe(true)
+  })
+  const gaps = screen.getByRole("region", { name: "建议补充" })
+  expect(gaps).toHaveTextContent("0 项")
+  expect(gaps).not.toHaveTextContent("补充证据")
+  expect(screen.getByRole("region", { name: "资料完整度" })).toHaveTextContent("正在核对真实资料")
 })
 
 it("does not turn a failed knowledge contributor into composite or evidence gaps", async () => {

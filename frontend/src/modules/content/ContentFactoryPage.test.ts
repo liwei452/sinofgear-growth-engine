@@ -54,6 +54,7 @@ function renderPage(permissions: string[], experience?: "ordinary" | "advanced")
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.useRealTimers()
   document.cookie = "csrftoken=; Max-Age=0; path=/"
 })
 
@@ -752,6 +753,96 @@ it.each([
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   expect(screen.queryByText("已从可生成需求创建新的草稿版本，请检查并保存。")).not.toBeInTheDocument()
   expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+})
+
+it("keeps a new draft current when an older promotion already has generated content", async () => {
+  const oldReady = { ...brief("READY"), id: "brief-old", version: 99, updated_at: "2026-08-01T00:00:00Z" }
+  const newDraft = { ...brief("DRAFT"), id: "brief-new", campaign_id: "campaign-new", version: 1, updated_at: "2026-08-11T00:00:00Z" }
+  const oldMaster = {
+    id: "master-old", brief_id: "brief-old", brief_version: 99, generation_job_id: "job-old", ai_run_id: "run-old",
+    lineage_id: "lineage-old", previous_version_id: null, version: 1,
+    payload: { title: "旧推广内容", body: "旧内容", cta: "询价", concept_codes: [] }, provenance: {},
+    status: "IN_REVIEW", is_current_head: true, created_by_id: 1, created_at: "", updated_at: "",
+  }
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    const body = path === "/api/v1/content-briefs" ? { next: null, previous: null, results: [oldReady, newDraft] }
+      : path === "/api/v1/master-contents" ? { next: null, previous: null, results: [oldMaster] }
+        : baseResponse(path)
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } })
+  }))
+  renderPage(["campaigns.read", "campaigns.manage", "campaigns.review", "content.read", "products.read", "memberships.read"], "ordinary")
+
+  expect(await screen.findByRole("region", { name: "确认方案" })).toHaveAttribute("aria-current", "step")
+  expect(screen.queryByRole("region", { name: "批准发布" })).not.toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "查看并修改方案" })).toBeVisible()
+})
+
+it("polls a submitted ordinary job while advanced records stay collapsed and prevents duplicate generation", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let resolveJob!: (response: Response) => void
+  const jobDetail = new Promise<Response>((resolve) => { resolveJob = resolve })
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path.endsWith("/generate-master-content") && options?.method === "POST") {
+      return new Response(JSON.stringify({ job_id: "job-ordinary", status: "QUEUED" }), { status: 202, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/jobs/job-ordinary") return jobDetail
+    return new Response(JSON.stringify(baseResponse(path, [brief("READY")])), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  const view = renderPage(["campaigns.read", "content.manage", "content.read", "jobs.read"], "ordinary")
+
+  const generate = await screen.findByRole("button", { name: "生成推广内容" })
+  await user.click(generate)
+  expect(await screen.findByText("等待开始")).toBeVisible()
+  expect(screen.getByRole("button", { name: "生成推广内容" })).toBeDisabled()
+  expect(screen.getByRole("button", { name: "查看高级记录" })).toHaveAttribute("aria-expanded", "false")
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/jobs/job-ordinary", expect.anything()))
+  await user.click(screen.getByRole("button", { name: "生成推广内容" }))
+  expect(fetchMock.mock.calls.filter(([path, options]) => String(path).endsWith("/generate-master-content") && options?.method === "POST")).toHaveLength(1)
+
+  view.unmount()
+  resolveJob(new Response(JSON.stringify({ job_id: "job-ordinary", type: "CONTENT_GENERATE", status: "CANCELED", progress: 0, attempt: 1, max_attempts: 3, created_at: "", finished_at: "", error: null, result_reference: null }), { status: 200, headers: { "Content-Type": "application/json" } }))
+})
+
+it("advances a real draft through ready and hidden polling to approval for its matching result", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let ready = false
+  let complete = false
+  const readyBrief = { ...brief("READY"), id: "brief-flow", version: 2, updated_at: "2026-08-11T00:00:00Z" }
+  const draftBrief = { ...readyBrief, status: "DRAFT" }
+  const matchingMaster = {
+    id: "master-flow", brief_id: "brief-flow", brief_version: 2, generation_job_id: "job-flow", ai_run_id: "run-flow",
+    lineage_id: "lineage-flow", previous_version_id: null, version: 1,
+    payload: { title: "本次推广内容", body: "内容", cta: "询价", concept_codes: [] }, provenance: {},
+    status: "IN_REVIEW", is_current_head: true, created_by_id: 1, created_at: "", updated_at: "",
+  }
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === "/api/v1/content-briefs/brief-flow/ready" && options?.method === "POST") {
+      ready = true
+      return new Response(JSON.stringify(readyBrief), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/content-briefs/brief-flow/generate-master-content" && options?.method === "POST") {
+      return new Response(JSON.stringify({ job_id: "job-flow", status: "QUEUED" }), { status: 202, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/jobs/job-flow") {
+      complete = true
+      return new Response(JSON.stringify({ job_id: "job-flow", type: "CONTENT_GENERATE", status: "SUCCEEDED", progress: 100, attempt: 1, max_attempts: 3, created_at: "", finished_at: "", error: null, result_reference: { type: "master_content", id: "master-flow", version: 1 } }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/content-briefs") return new Response(JSON.stringify({ next: null, previous: null, results: [ready ? readyBrief : draftBrief] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/master-contents") return new Response(JSON.stringify({ next: null, previous: null, results: complete ? [matchingMaster] : [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["campaigns.read", "campaigns.review", "content.manage", "content.read", "jobs.read"], "ordinary")
+
+  await user.click(await screen.findByRole("button", { name: "确认方案可生成" }))
+  await user.click(await screen.findByRole("button", { name: "生成推广内容" }))
+
+  expect(await screen.findByRole("region", { name: "批准发布" })).toHaveAttribute("aria-current", "step")
+  expect(screen.getByRole("link", { name: "查看并确认" })).toHaveAttribute("href", "/reviews")
+  expect(screen.getByRole("button", { name: "查看高级记录" })).toHaveAttribute("aria-expanded", "false")
 })
 
 it("traps focus in the draft editor, closes on Escape, and restores the opener", async () => {

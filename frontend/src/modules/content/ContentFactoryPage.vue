@@ -45,6 +45,8 @@ const actionError = ref("")
 const jobError = ref("")
 const actionId = ref("")
 const liveJobs = ref<Job[]>([])
+type TrackedGeneration = { jobId: string; briefId: string; briefVersion: number; status: Job["status"] }
+const trackedGeneration = ref<TrackedGeneration | null>(null)
 const editingBrief = ref<ContentBrief | null>(null)
 const advancedRecordsOpen = ref(false)
 const timers = new Set<ReturnType<typeof setTimeout>>()
@@ -52,11 +54,12 @@ const pollingJobs = new Map<string, string>()
 const jobTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let disposed = false
 const ordinaryExperience = computed(() => props.experience === "ordinary")
-const promotionProductFilters = computed(() => ordinaryExperience.value ? { status: "ACTIVE" } as const : {})
-const promotionAssetFilters = computed(() => ordinaryExperience.value ? { status: "ACTIVE" } as const : {})
+const ordinaryCreation = computed(() => ordinaryExperience.value && !editingBrief.value)
+const promotionProductFilters = computed(() => ordinaryCreation.value ? { status: "ACTIVE" } as const : {})
+const promotionAssetFilters = computed(() => ordinaryCreation.value ? { status: "ACTIVE" } as const : {})
 const conceptQueryKey = computed(() => [
   ...contentQueryKeys.briefs(organizationId.value),
-  ordinaryExperience.value ? "approved-concepts" : "all-concepts",
+  ordinaryCreation.value ? "approved-concepts" : "all-concepts",
 ])
 const showAdvancedRecords = computed(() => props.experience === "advanced" || advancedRecordsOpen.value)
 const canObserveJobs = computed(() => canReadJobs.value && showAdvancedRecords.value)
@@ -66,7 +69,7 @@ const briefsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.briefs(
 const productsQuery = useQuery({ queryKey: computed(() => productQueryKeys.list(organizationId.value, promotionProductFilters.value)), queryFn: () => listProducts(promotionProductFilters.value), enabled: computed(() => enabled.value && has("products.read")) })
 const platformsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.platforms(organizationId.value)), queryFn: listPlatformPage, enabled: computed(() => enabled.value && has("memberships.read")) })
 const assetsQuery = useQuery({ queryKey: computed(() => assetKeys.list(organizationId.value, promotionAssetFilters.value)), queryFn: () => listAssets(promotionAssetFilters.value), enabled: computed(() => enabled.value && has("assets.read")) })
-const conceptsQuery = useQuery({ queryKey: conceptQueryKey, queryFn: () => ordinaryExperience.value ? listApprovedBriefConcepts() : listBriefConcepts(), enabled: computed(() => enabled.value && has("knowledge.read")) })
+const conceptsQuery = useQuery({ queryKey: conceptQueryKey, queryFn: () => ordinaryCreation.value ? listApprovedBriefConcepts() : listBriefConcepts(), enabled: computed(() => enabled.value && has("knowledge.read")) })
 const jobsQuery = useQuery({ queryKey: computed(() => contentQueryKeys.jobs(organizationId.value)), queryFn: () => listJobs(), enabled: computed(() => enabled.value && canObserveJobs.value) })
 const masterQuery = useQuery({ queryKey: computed(() => contentQueryKeys.masterContents(organizationId.value, {})), queryFn: () => listMasterContents(), enabled: computed(() => enabled.value && has("content.read")) })
 
@@ -87,11 +90,17 @@ const eligibleProducts = computed(() => canReadProducts.value ? productPages.ite
 const eligibleAssets = computed(() => canReadAssets.value ? assetPages.items.value.filter((asset) => asset.status === "ACTIVE") : [])
 const approvedConcepts = computed(() => canReadKnowledge.value ? (conceptsQuery.data.value?.results ?? []).filter((concept) => concept.status === "APPROVED") : [])
 const jobs = computed(() => {
-  if (!canObserveJobs.value) return []
-  const combined = [...jobPages.items.value, ...liveJobs.value]
+  if (!canObserveJobs.value && !trackedGeneration.value) return []
+  const combined = [...(canObserveJobs.value ? jobPages.items.value : []), ...liveJobs.value]
   return [...new Map(combined.map((job) => [job.job_id, job])).values()]
 })
 const activeJobStatuses = new Set(["QUEUED", "RUNNING", "RETRY_QUEUED"])
+const trackedJob = computed(() => trackedGeneration.value
+  ? liveJobs.value.find((job) => job.job_id === trackedGeneration.value?.jobId) ?? null
+  : null)
+const generationInFlight = computed(() => Boolean(
+  trackedGeneration.value && activeJobStatuses.has(trackedJob.value?.status ?? trackedGeneration.value.status),
+))
 const visibleJobError = computed(() => jobError.value || (jobsQuery.isError.value ? "生成记录暂时无法更新，请重新加载后再试。" : ""))
 const visibleJobPageError = computed(() => jobPages.error.value
   ? ordinaryExperience.value ? "生成记录下一页暂时无法加载，请重新加载后再试。" : jobPages.error.value
@@ -111,11 +120,22 @@ const proposalBlocker = computed(() => {
   return ""
 })
 const canOpenProposal = computed(() => !proposalBlocker.value)
-const latestBrief = computed(() => briefs.value.reduce<ContentBrief | null>((latest, item) => (
-  !latest || item.version > latest.version || item.updated_at > latest.updated_at ? item : latest
-), null))
+const latestBrief = computed(() => [...briefs.value].sort((left, right) => {
+  const updatedDifference = Date.parse(right.updated_at) - Date.parse(left.updated_at)
+  if (updatedDifference) return updatedDifference
+  const createdDifference = Date.parse(right.created_at) - Date.parse(left.created_at)
+  if (createdDifference) return createdDifference
+  return right.version - left.version
+})[0] ?? null)
+const currentMaster = computed(() => {
+  const brief = latestBrief.value
+  if (!brief) return null
+  return visibleMasterContents.value.find((master) => (
+    master.brief_id === brief.id && master.brief_version === brief.version
+  )) ?? null
+})
 const guidedStep = computed(() => {
-  if (visibleMasterContents.value.length) return 6
+  if (currentMaster.value) return 6
   if (latestBrief.value?.status === "READY") return 5
   if (latestBrief.value) return 4
   return 1
@@ -157,6 +177,12 @@ function upsertJob(job: Job): void {
   liveJobs.value = [job, ...liveJobs.value.filter((item) => item.job_id !== job.job_id)]
 }
 
+function canPollJob(id: string): boolean {
+  return canObserveJobs.value || Boolean(
+    ordinaryExperience.value && canReadJobs.value && trackedGeneration.value?.jobId === id,
+  )
+}
+
 function isActiveOrganization(scope: string): boolean {
   return !disposed && Boolean(scope) && organizationId.value === scope
 }
@@ -170,13 +196,15 @@ function isActiveCampaignManagementSession(scope: string, membershipId: string, 
 }
 
 async function pollJob(id: string, scope: string): Promise<void> {
-  if (!canObserveJobs.value || !isActiveOrganization(scope) || pollingJobs.get(id) !== scope) return
+  if (!canPollJob(id) || !isActiveOrganization(scope) || pollingJobs.get(id) !== scope) return
   try {
     const job = await getJob(id)
-    if (!canObserveJobs.value || !isActiveOrganization(scope) || pollingJobs.get(id) !== scope) return
+    if (!canPollJob(id) || !isActiveOrganization(scope) || pollingJobs.get(id) !== scope) return
     upsertJob(job)
+    if (trackedGeneration.value?.jobId === id) trackedGeneration.value.status = job.status
     if (job.status === "SUCCEEDED") {
-      await queryClient.invalidateQueries({ queryKey: contentQueryKeys.masterContents(scope, {}) })
+      if (canReadContent.value) await masterQuery.refetch()
+      else await queryClient.invalidateQueries({ queryKey: contentQueryKeys.masterContents(scope, {}) })
       if (!isActiveOrganization(scope) || pollingJobs.get(id) !== scope) return
       stopPolling(id)
       return
@@ -204,7 +232,7 @@ function stopPolling(id: string): void {
 
 function beginPolling(id: string): void {
   const scope = organizationId.value
-  if (!canObserveJobs.value || !isActiveOrganization(scope) || pollingJobs.get(id) === scope) return
+  if (!canPollJob(id) || !isActiveOrganization(scope) || pollingJobs.get(id) === scope) return
   if (pollingJobs.has(id)) stopPolling(id)
   pollingJobs.set(id, scope)
   void pollJob(id, scope)
@@ -213,20 +241,26 @@ function beginPolling(id: string): void {
 async function refreshJob(id: string): Promise<void> {
   const scope = organizationId.value
   const job = await getJob(id)
-  if (!canObserveJobs.value || !isActiveOrganization(scope)) return
+  if (!canPollJob(id) || !isActiveOrganization(scope)) return
   upsertJob(job)
+  if (trackedGeneration.value?.jobId === id) trackedGeneration.value.status = job.status
   if (activeJobStatuses.has(job.status)) beginPolling(job.job_id)
 }
 
 async function startGeneration(brief: ContentBrief): Promise<void> {
-  if (brief.status !== "READY" || !has("content.manage") || actionId.value) return
+  if (brief.status !== "READY" || !has("content.manage") || actionId.value || generationInFlight.value) return
   actionId.value = brief.id
   jobError.value = ""
   const scope = organizationId.value
   try {
     const accepted = await generateMaster(brief.id)
     if (!isActiveOrganization(scope)) return
-    if (!jobs.value.some((job) => job.job_id === accepted.job_id)) {
+    if (ordinaryExperience.value) {
+      trackedGeneration.value = {
+        jobId: accepted.job_id, briefId: brief.id, briefVersion: brief.version, status: accepted.status,
+      }
+    }
+    if (!liveJobs.value.some((job) => job.job_id === accepted.job_id)) {
       upsertJob({ job_id: accepted.job_id, type: "CONTENT_GENERATE", status: accepted.status, progress: 0, attempt: 1, max_attempts: 3, created_at: new Date().toISOString(), finished_at: null, error: null, result_reference: null })
     }
     beginPolling(accepted.job_id)
@@ -284,6 +318,7 @@ async function jobAction(job: Job, action: "cancel" | "retry"): Promise<void> {
     const updated = action === "cancel" ? await cancelJob(job.job_id) : await retryJob(job.job_id)
     if (!isActiveOrganization(scope)) return
     upsertJob(updated)
+    if (trackedGeneration.value?.jobId === updated.job_id) trackedGeneration.value.status = updated.status
     if (activeJobStatuses.has(updated.status)) beginPolling(updated.job_id)
     else stopPolling(updated.job_id)
   } catch (error) {
@@ -315,6 +350,7 @@ watch(organizationId, (current, previous) => {
   if (!previous || current === previous) return
   for (const id of [...pollingJobs.keys()]) stopPolling(id)
   liveJobs.value = []
+  trackedGeneration.value = null
   wizardOpen.value = false
   editingBrief.value = null
   notice.value = ""
@@ -373,6 +409,7 @@ watch(canReadJobs, (current, previous) => {
   if (!previous || current) return
   for (const id of [...pollingJobs.keys()]) stopPolling(id)
   liveJobs.value = []
+  trackedGeneration.value = null
   jobError.value = ""
   jobPages.reset()
   cancelAndClear(contentQueryKeys.jobs(organizationId.value))
@@ -380,9 +417,16 @@ watch(canReadJobs, (current, previous) => {
 
 watch(canObserveJobs, (current, previous) => {
   if (!previous || current) return
-  for (const id of [...pollingJobs.keys()]) stopPolling(id)
-  liveJobs.value = []
-  jobError.value = ""
+  for (const id of [...pollingJobs.keys()]) if (!canPollJob(id)) stopPolling(id)
+  if (!ordinaryExperience.value) {
+    liveJobs.value = []
+    jobError.value = ""
+  }
+}, { flush: "sync" })
+
+watch(editingBrief, () => {
+  productPages.reset()
+  assetPages.reset()
 }, { flush: "sync" })
 
 watch(canReadContent, (current, previous) => {
@@ -429,7 +473,7 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
         <GuidedStepCard :number="4" title="确认方案" description="检查方案后，再交给有权限的同事确认。" :state="guidedState(4)">
           <div v-if="latestBrief" class="card-actions"><button v-if="latestBrief.status === 'DRAFT' && has('campaigns.manage')" type="button" @click="openBriefEditor(latestBrief)">查看并修改方案</button><button v-if="latestBrief.status === 'DRAFT' && has('campaigns.review')" class="primary-action" type="button" :disabled="actionId === latestBrief.id" @click="ready(latestBrief)">确认方案可生成</button><p v-else-if="latestBrief.status === 'DRAFT'" class="muted">方案正在等待有权限的同事确认。</p></div>
         </GuidedStepCard>
-        <GuidedStepCard :number="5" title="生成内容" description="确认方案后，才会提交真实的内容生成任务。" :state="guidedState(5)"><button v-if="latestBrief?.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId)" @click="startGeneration(latestBrief)">生成推广内容</button><p v-else class="muted">需要内容管理权限才能生成。</p></GuidedStepCard>
+        <GuidedStepCard :number="5" title="生成内容" description="确认方案后，才会提交真实的内容生成任务。" :state="guidedState(5)"><p v-if="trackedJob" role="status">{{ jobStatusLabel(trackedJob) }}<span v-if="activeJobStatuses.has(trackedJob.status)"> · {{ trackedJob.progress }}%</span></p><p v-if="jobError" role="alert">{{ jobError }} <button v-if="trackedGeneration" type="button" @click="beginPolling(trackedGeneration.jobId)">重新检查生成进度</button></p><button v-if="latestBrief?.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId) || generationInFlight" @click="startGeneration(latestBrief)">生成推广内容</button><p v-else class="muted">需要内容管理权限才能生成。</p></GuidedStepCard>
         <GuidedStepCard :number="6" title="批准发布" description="查看生成结果、填写拒绝原因或批准进入发布流程。" :state="guidedState(6)"><a class="primary-action button-link" href="/reviews">查看并确认</a></GuidedStepCard>
       </ol>
 
@@ -457,7 +501,7 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
       <section v-if="has('jobs.read')" aria-labelledby="jobs-title"><h2 id="jobs-title">生成任务</h2><p v-if="visibleJobError" role="alert">{{ visibleJobError }} <button type="button" @click="reloadJobs">重新加载生成记录</button></p><div v-if="jobs.length" class="card-grid"><article v-for="(job, index) in jobs" :key="job.job_id" class="workflow-card"><div class="card-heading"><h3>{{ ordinaryExperience ? `第 ${index + 1} 项生成记录` : `任务 ${job.job_id}` }}</h3><span class="status-chip">{{ jobStatusLabel(job) }}</span></div><p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p><p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p><p v-else-if="job.status === 'FAILED'" role="alert">{{ ordinaryExperience ? '这次没有生成完成，你可以再次尝试。' : job.error?.message || '生成未完成，可以重试。' }}</p><div class="card-actions"><button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">{{ ordinaryExperience ? '停止生成' : '取消任务' }}</button><button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">{{ ordinaryExperience ? '再次尝试' : '重新尝试' }}</button></div></article></div><p v-else class="muted">提交生成后，进度会显示在这里。</p><p v-if="visibleJobPageError" role="alert">{{ visibleJobPageError }} <button type="button" @click="jobPages.loadMore">{{ ordinaryExperience ? '重新加载更多生成记录' : '重试' }}</button></p><button v-else-if="jobPages.next.value" type="button" @click="jobPages.loadMore">加载更多生成任务</button></section>
     </template>
 
-    <ContentBriefWizard v-if="wizardOpen || editingBrief" :experience="experience" :brief="editingBrief" :campaigns="visibleCampaigns" :products="ordinaryExperience ? eligibleProducts : visibleProducts" :platforms="platformPages.items.value" :assets="ordinaryExperience ? eligibleAssets : visibleAssets" :concepts="ordinaryExperience ? approvedConcepts : visibleConcepts" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
+    <ContentBriefWizard v-if="wizardOpen || editingBrief" :experience="experience" :brief="editingBrief" :campaigns="visibleCampaigns" :products="ordinaryCreation ? eligibleProducts : visibleProducts" :platforms="platformPages.items.value" :assets="ordinaryCreation ? eligibleAssets : visibleAssets" :concepts="ordinaryCreation ? approvedConcepts : visibleConcepts" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
   </main>
 </template>
 

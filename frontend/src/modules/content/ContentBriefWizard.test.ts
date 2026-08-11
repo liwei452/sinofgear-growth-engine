@@ -210,10 +210,85 @@ it("does not offer inactive or unapproved relationships during ordinary creation
 })
 
 it("uses beginner presets in product goal material confirmation order", async () => {
+  const user = userEvent.setup()
   renderWizard({ experience: "ordinary" })
 
   expect(screen.getByRole("heading", { name: "选择产品" })).toBeVisible()
   expect(screen.getByLabelText("精密齿轮")).toBeVisible()
   expect(screen.queryByLabelText("目标国家（必填）")).not.toBeInTheDocument()
   expect(screen.queryByRole("textbox", { name: /聊天|对话|问 AI/ })).not.toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "保存产品并继续" }))
+  expect(screen.getByRole("heading", { name: "告诉 AI 目标" })).toBeVisible()
+  await user.click(screen.getByRole("button", { name: "保存目标并查看素材" }))
+  expect(screen.getByRole("heading", { name: "查看可用素材" })).toBeVisible()
+  expect(screen.getByRole("button", { name: "查看并确认方案" })).toBeVisible()
+})
+
+it("returns ordinary server field errors to their real step and restores focus", async () => {
+  patchBriefMock.mockRejectedValueOnce(new ApiError(400, "请求未能完成", undefined, {
+    fieldErrors: { landing_page_url: ["落地页与当前组织不匹配。"] },
+  }))
+  const user = userEvent.setup()
+  renderWizard({ experience: "ordinary" })
+
+  await user.click(screen.getByRole("button", { name: "保存产品并继续" }))
+  await user.click(screen.getByRole("button", { name: "保存目标并查看素材" }))
+  await user.click(screen.getByRole("button", { name: "查看并确认方案" }))
+  await user.click(screen.getByRole("button", { name: "保存修改方案" }))
+
+  expect(await screen.findByRole("heading", { name: "告诉 AI 目标" })).toBeVisible()
+  expect(screen.getByText("落地页与当前组织不匹配。")).toBeVisible()
+  expect(screen.getByLabelText("落地页（可选）")).toHaveFocus()
+})
+
+it("validates an ordinary landing page before leaving the goal step", async () => {
+  const user = userEvent.setup()
+  renderWizard({ experience: "ordinary" })
+
+  await user.click(screen.getByRole("button", { name: "保存产品并继续" }))
+  const landingPage = screen.getByLabelText("落地页（可选）")
+  await user.clear(landingPage)
+  await user.type(landingPage, "ftp://example.com")
+  await user.click(screen.getByRole("button", { name: "保存目标并查看素材" }))
+
+  expect(screen.getByRole("heading", { name: "告诉 AI 目标" })).toBeVisible()
+  expect(screen.getByText("请输入 http 或 https 开头的网址。")).toBeVisible()
+  expect(landingPage).toHaveFocus()
+})
+
+it("lets ordinary editors remove unavailable and missing material provenance", async () => {
+  const staleDraft: ContentBrief = {
+    ...draft,
+    product_ids: ["product-1", "product-archived"],
+    asset_ids: ["asset-archived", "asset-missing"],
+    concept_links: [
+      { role: "STANDARD", concept_id: "concept-rejected" },
+      { role: "STANDARD", concept_id: "concept-missing" },
+    ],
+  }
+  patchBriefMock.mockResolvedValueOnce(staleDraft)
+  const user = userEvent.setup()
+  renderWizard({
+    experience: "ordinary",
+    brief: staleDraft,
+    products: [product("product-1", "精密齿轮", "ACTIVE"), product("product-archived", "旧产品", "ARCHIVED")],
+    assets: [asset("asset-archived", "old-photo.png", "ARCHIVED")],
+    concepts: [{ id: "concept-rejected", code: "OLD", concept_type: "STANDARD", label_zh: "旧标准", label_en: "Old standard", status: "REJECTED" }],
+  })
+
+  await user.click(screen.getByLabelText("旧产品（不可用，仅可移除）"))
+  await user.click(screen.getByRole("button", { name: "保存产品并继续" }))
+  await user.click(screen.getByRole("button", { name: "保存目标并查看素材" }))
+  for (const label of [
+    "old-photo.png（不可用，仅可移除）",
+    "历史关联素材 asset-missing（不可用，仅可移除）",
+    "Old standard (STANDARD)（不可用，仅可移除）",
+    "历史关联知识 concept-missing（不可用，仅可移除）",
+  ]) await user.click(screen.getByLabelText(label))
+  await user.click(screen.getByRole("button", { name: "查看并确认方案" }))
+  await user.click(screen.getByRole("button", { name: "保存修改方案" }))
+
+  expect(patchBriefMock).toHaveBeenCalledWith("brief-1", expect.objectContaining({
+    product_ids: ["product-1"], asset_ids: [], concept_links: [],
+  }))
 })

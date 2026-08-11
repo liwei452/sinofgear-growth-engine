@@ -96,14 +96,31 @@ const fieldAliases: Record<string, string> = {
   product_ids: "products", products: "products",
   platform_ids: "platforms", target_platforms: "platforms", platforms: "platforms",
   asset_ids: "assets", assets: "assets",
+  concept_ids: "concepts", concept_links: "concepts", concepts: "concepts",
 }
-const fieldSteps: Record<string, number> = {
-  campaign: 1, campaign_name: 1,
-  products: 2, platforms: 2, assets: 2,
-  target_country: 3, customer_type: 3, content_objective: 3, cta: 3,
-  landing_page_url: 3, language: 3, selling_points: 3, advantages: 3,
-  keywords: 3, prohibited_claims: 3,
-}
+const fieldSteps = computed<Record<string, number>>(() => ordinaryExperience.value
+  ? {
+      products: 1,
+      platforms: 2, target_country: 2, customer_type: 2, content_objective: 2,
+      cta: 2, landing_page_url: 2, language: 2,
+      assets: 3, concepts: 3, selling_points: 3, advantages: 3,
+      keywords: 3, prohibited_claims: 3,
+    }
+  : {
+      campaign: 1, campaign_name: 1,
+      products: 2, platforms: 2, assets: 2, concepts: 2,
+      target_country: 3, customer_type: 3, content_objective: 3, cta: 3,
+      landing_page_url: 3, language: 3, selling_points: 3, advantages: 3,
+      keywords: 3, prohibited_claims: 3,
+    })
+const nextActionLabel = computed(() => {
+  if (!ordinaryExperience.value) return "下一步"
+  return step.value === 1
+    ? "保存产品并继续"
+    : step.value === 2
+      ? "保存目标并查看素材"
+      : "查看并确认方案"
+})
 
 useModalFocus({ backdrop, dialog, initialFocus: title, close: () => emit("close") })
 
@@ -133,7 +150,7 @@ async function applyServerFieldErrors(error: ApiError): Promise<boolean> {
   for (const [rawField, messages] of Object.entries(error.fieldErrors)) {
     const field = fieldAliases[rawField] ?? rawField
     const message = messages.join(" ")
-    if (fieldSteps[field]) {
+    if (fieldSteps.value[field]) {
       fieldErrors[field] = fieldErrors[field] ? `${fieldErrors[field]} ${message}` : message
       if (!knownFields.includes(field)) knownFields.push(field)
     } else {
@@ -141,9 +158,9 @@ async function applyServerFieldErrors(error: ApiError): Promise<boolean> {
     }
   }
   if (knownFields.length) {
-    const targetStep = Math.min(...knownFields.map((field) => fieldSteps[field]))
+    const targetStep = Math.min(...knownFields.map((field) => fieldSteps.value[field]))
     step.value = targetStep
-    const targetField = knownFields.find((field) => fieldSteps[field] === targetStep)
+    const targetField = knownFields.find((field) => fieldSteps.value[field] === targetStep)
     alert.value = summaryMessages.length
       ? `请检查以下问题：${summaryMessages.join(" ")}`
       : "请检查标出的字段后重试。"
@@ -198,6 +215,12 @@ async function validateOrdinaryStep(): Promise<boolean> {
       if (!form[key].trim()) fieldErrors[key] = "请选择一项。"
     }
     if (!platformIds.value.length) fieldErrors.platforms = "请选择至少一个推广渠道。"
+    if (form.landing_page_url) {
+      try {
+        const url = new URL(form.landing_page_url)
+        if (!(url.protocol === "http:" || url.protocol === "https:")) throw new Error()
+      } catch { fieldErrors.landing_page_url = "请输入 http 或 https 开头的网址。" }
+    }
     if (Object.keys(fieldErrors).length) {
       alert.value = "请完成推广目标和渠道选择。"
       await focusFirstError()
@@ -208,12 +231,6 @@ async function validateOrdinaryStep(): Promise<boolean> {
     if (!list(form.selling_points).length) fieldErrors.selling_points = "请选择或填写至少一个卖点。"
     if (!list(form.advantages).length) fieldErrors.advantages = "请选择或填写至少一个优势。"
     if (!list(form.keywords).length) fieldErrors.keywords = "请填写至少一个关键词。"
-    if (form.landing_page_url) {
-      try {
-        const url = new URL(form.landing_page_url)
-        if (!("http:" === url.protocol || "https:" === url.protocol)) throw new Error()
-      } catch { fieldErrors.landing_page_url = "请输入 http 或 https 开头的网址。" }
-    }
     if (Object.keys(fieldErrors).length) {
       alert.value = "请补全用于生成方案的必要信息。"
       await focusFirstError()
@@ -347,7 +364,7 @@ async function submit(): Promise<void> {
           </ol>
           <section v-if="step === 1" aria-labelledby="ordinary-product-step">
             <h3 id="ordinary-product-step">选择产品</h3><p>从当前组织的可用产品中选择，后续方案只使用真实产品资料。</p>
-            <fieldset data-field="products"><legend>这次推广什么？</legend><span v-if="fieldErrors.products" class="field-error">{{ fieldErrors.products }}</span><label v-for="item in availableProducts" :key="item.id"><input v-model="productIds" type="checkbox" :value="item.id" :aria-label="item.name_zh || item.name_en"> {{ item.name_zh || item.name_en }}</label><label v-for="item in unavailableProducts" :key="`unavailable-${item.id}`"><input type="checkbox" checked :aria-label="`${item.name_zh || item.name_en}（不可用，仅可移除）`" @change="removeProduct(item.id)"> {{ item.name_zh || item.name_en }} <small>不可用，仅可移除</small></label><button v-if="more.products" type="button" @click="emit('loadMore', 'products')">加载更多产品</button><span v-if="pageErrors.products" role="alert">{{ pageErrors.products }} <button type="button" @click="emit('loadMore', 'products')">重试</button></span></fieldset>
+            <fieldset data-field="products"><legend>这次推广什么？</legend><span v-if="fieldErrors.products" class="field-error">{{ fieldErrors.products }}</span><label v-for="item in availableProducts" :key="item.id"><input v-model="productIds" type="checkbox" :value="item.id" :aria-label="item.name_zh || item.name_en"> {{ item.name_zh || item.name_en }}</label><label v-for="item in unavailableProducts" :key="`unavailable-${item.id}`"><input type="checkbox" checked :aria-label="`${item.name_zh || item.name_en}（不可用，仅可移除）`" @change="removeProduct(item.id)"> {{ item.name_zh || item.name_en }} <small>不可用，仅可移除</small></label><label v-for="id in missingProductIds" :key="`missing-${id}`"><input type="checkbox" checked :aria-label="`历史关联产品 ${id}（不可用，仅可移除）`" @change="removeProduct(id)"> 历史关联产品 {{ id }} <small>不可用，仅可移除</small></label><button v-if="more.products" type="button" @click="emit('loadMore', 'products')">加载更多产品</button><span v-if="pageErrors.products" role="alert">{{ pageErrors.products }} <button type="button" @click="emit('loadMore', 'products')">重试</button></span></fieldset>
           </section>
           <section v-else-if="step === 2" aria-labelledby="ordinary-goal-step">
             <h3 id="ordinary-goal-step">告诉 AI 目标</h3><p>使用明确选项约束方案，不会模拟自由聊天。</p>
@@ -363,8 +380,8 @@ async function submit(): Promise<void> {
           </section>
           <section v-else-if="step === 3" aria-labelledby="ordinary-material-step">
             <h3 id="ordinary-material-step">查看可用素材</h3><p>素材和知识均来自已加载的真实资料；不选择也不会虚构来源。</p>
-            <fieldset v-if="availableAssets.length || unavailableAssets.length || missingAssetIds.length || more.assets" data-field="assets"><legend>可选素材</legend><label v-for="item in availableAssets" :key="item.id"><input v-model="assetIds" type="checkbox" :value="item.id"> {{ item.original_filename }}</label><button v-if="more.assets" type="button" @click="emit('loadMore', 'assets')">加载更多素材</button></fieldset>
-            <fieldset v-if="availableConcepts.length || unavailableConcepts.length || missingConceptIds.length" data-field="concepts"><legend>已批准知识（可选）</legend><label v-for="item in availableConcepts" :key="item.id"><input v-model="conceptIds" type="checkbox" :value="item.id" :aria-label="`${item.label_en || item.label_zh} (${item.concept_type})`"> {{ item.label_zh || item.label_en }}</label></fieldset>
+            <fieldset v-if="availableAssets.length || unavailableAssets.length || missingAssetIds.length || more.assets || fieldErrors.assets" data-field="assets"><legend>可选素材</legend><span v-if="fieldErrors.assets" class="field-error">{{ fieldErrors.assets }}</span><label v-for="item in availableAssets" :key="item.id"><input v-model="assetIds" type="checkbox" :value="item.id"> {{ item.original_filename }}</label><label v-for="item in unavailableAssets" :key="`unavailable-${item.id}`"><input type="checkbox" checked :aria-label="`${item.original_filename}（不可用，仅可移除）`" @change="removeAsset(item.id)"> {{ item.original_filename }} <small>不可用，仅可移除</small></label><label v-for="id in missingAssetIds" :key="`missing-${id}`"><input type="checkbox" checked :aria-label="`历史关联素材 ${id}（不可用，仅可移除）`" @change="removeAsset(id)"> 历史关联素材 {{ id }} <small>不可用，仅可移除</small></label><button v-if="more.assets" type="button" @click="emit('loadMore', 'assets')">加载更多素材</button><span v-if="pageErrors.assets" role="alert">{{ pageErrors.assets }} <button type="button" @click="emit('loadMore', 'assets')">重试</button></span></fieldset>
+            <fieldset v-if="availableConcepts.length || unavailableConcepts.length || missingConceptIds.length || fieldErrors.concepts" data-field="concepts"><legend>已批准知识（可选）</legend><span v-if="fieldErrors.concepts" class="field-error">{{ fieldErrors.concepts }}</span><label v-for="item in availableConcepts" :key="item.id"><input v-model="conceptIds" type="checkbox" :value="item.id" :aria-label="`${item.label_en || item.label_zh} (${item.concept_type})`"> {{ item.label_zh || item.label_en }}</label><label v-for="item in unavailableConcepts" :key="`unavailable-${item.id}`"><input type="checkbox" checked :aria-label="`${item.label_en || item.label_zh} (${item.concept_type})（不可用，仅可移除）`" @change="removeConcept(item.id)"> {{ item.label_zh || item.label_en }} <small>不可用，仅可移除</small></label><label v-for="id in missingConceptIds" :key="`missing-${id}`"><input type="checkbox" checked :aria-label="`历史关联知识 ${id}（不可用，仅可移除）`" @change="removeConcept(id)"> 历史关联知识 {{ id }} <small>不可用，仅可移除</small></label></fieldset>
             <fieldset><legend>方案重点</legend><div class="preset-row"><button v-for="value in ['精密制造','稳定交付','支持定制']" :key="value" type="button" :aria-pressed="list(form.selling_points).includes(value)" @click="usePreset('selling_points', value)">{{ value }}</button></div><label>补充卖点（简短填写）<input v-model="form.selling_points" data-field="selling_points"><span v-if="fieldErrors.selling_points" class="field-error">{{ fieldErrors.selling_points }}</span></label><div class="preset-row"><button v-for="value in ['质量可追溯','交付周期清晰','工程支持']" :key="value" type="button" :aria-pressed="list(form.advantages).includes(value)" @click="usePreset('advantages', value)">{{ value }}</button></div><label>补充优势（简短填写）<input v-model="form.advantages" data-field="advantages"><span v-if="fieldErrors.advantages" class="field-error">{{ fieldErrors.advantages }}</span></label><label>关键词（逗号分隔）<input v-model="form.keywords" data-field="keywords"><span v-if="fieldErrors.keywords" class="field-error">{{ fieldErrors.keywords }}</span></label><label>不能使用的说法（可选）<input v-model="form.prohibited_claims" data-field="prohibited_claims"></label></fieldset>
           </section>
           <section v-else aria-labelledby="ordinary-confirm-step"><h3 id="ordinary-confirm-step">确认方案</h3><dl><div><dt>产品</dt><dd>{{ productIds.map(id => products.find(item => item.id === id)?.name_zh || id).join('、') }}</dd></div><div><dt>目标</dt><dd>{{ form.target_country }} · {{ form.customer_type }} · {{ form.content_objective }}</dd></div><div><dt>渠道与素材</dt><dd>{{ platformIds.length }} 个渠道 · {{ assetIds.length }} 份素材</dd></div><div><dt>方案重点</dt><dd>{{ form.selling_points }}；{{ form.advantages }}</dd></div></dl><p>确认后会保存真实推广方案，等待有权限的同事审核；此处不会假装已经调用 AI 模型。</p></section>
@@ -417,7 +434,7 @@ async function submit(): Promise<void> {
 
         <footer>
           <button v-if="step > 1" type="button" :disabled="busy" @click="step -= 1">上一步</button>
-          <button v-if="step < 4" class="primary-action" type="button" :disabled="busy" @click="next">{{ busy ? "正在处理…" : "下一步" }}</button>
+          <button v-if="step < 4" class="primary-action" type="button" :disabled="busy" @click="next">{{ busy ? "正在处理…" : nextActionLabel }}</button>
           <button v-else class="primary-action" type="button" :disabled="busy" @click="submit">{{ busy ? "正在保存…" : ordinaryExperience ? (brief ? "保存修改方案" : "保存推广方案") : brief ? "保存需求草稿" : "创建需求草稿" }}</button>
         </footer>
       </section>

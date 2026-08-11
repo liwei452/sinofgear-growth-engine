@@ -125,7 +125,7 @@ describe("protected routing", () => {
 
     await appRouter.push("/promotion")
     expect(await screen.findByRole("heading", { name: "你今天想推广什么？" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "让 AI 给我方案" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "选择产品并继续" })).toBeInTheDocument()
     expect(appRouter.currentRoute.value.meta.title).toBe("推广")
   })
 

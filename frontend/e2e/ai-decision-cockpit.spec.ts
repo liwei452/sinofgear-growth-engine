@@ -7,6 +7,7 @@ type SeedUser =
   | "phasea_e2e_operator"
   | "phasea_e2e_reviewer"
   | "phasea_e2e_viewer"
+  | "phaseb1_e2e_foreign"
 
 type EvidencePage = {
   results: Array<{ id: string; original_text: string; source_url: string }>
@@ -56,65 +57,37 @@ async function createCandidateFixtureFromEvidence(
   return (await response.json() as { id: string }).id
 }
 
-async function completeBeginnerPromotion(page: Page): Promise<void> {
-  await page.getByRole("link", { name: "推广", exact: true }).click()
-  await expect(page.getByRole("heading", { name: "你今天想推广什么？" })).toBeVisible()
-  await expect(page.getByRole("list", { name: "推广流程" })).toContainText("选择推广目标")
-  await expect(page.getByRole("list", { name: "推广流程" })).toContainText("确认 AI 方案")
-  await expect(page.getByRole("list", { name: "推广流程" })).toContainText("批准后执行")
-  await expect(page.getByRole("heading", { name: "内容需求" })).toHaveCount(0)
-
-  await page.getByRole("button", { name: "让 AI 给我方案" }).click()
-  const wizard = page.getByRole("dialog", { name: "创建内容任务" })
-  await wizard.getByLabel("快速新建活动").check()
-  await wizard.getByLabel("活动名称（必填）").fill("Task 11D Browser Promotion")
-  await wizard.getByLabel("活动说明").fill("A real beginner promotion journey created by browser acceptance.")
-  const campaignResponse = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === "/api/v1/campaigns"
-      && response.request().method() === "POST",
-  )
-  await wizard.getByRole("button", { name: "下一步" }).click()
-  expect((await campaignResponse).status()).toBe(201)
-
-  await wizard.getByRole("group", { name: "产品（至少一个）" }).getByRole("checkbox").first().check()
-  await wizard.getByRole("group", { name: "平台（至少一个）" }).getByRole("checkbox").first().check()
-  await wizard.getByRole("button", { name: "下一步" }).click()
-
-  for (const [label, value] of [
-    ["目标国家（必填）", "Germany"],
-    ["客户类型（必填）", "Packaging machinery OEM"],
-    ["内容目标（必填）", "Qualified industrial inquiries"],
-    ["行动号召（必填）", "Request a quote"],
-    ["落地页（必填）", "https://example.invalid/task-11d-gears"],
-    ["语言（必填）", "en"],
-    ["卖点", "DIN precision"],
-    ["优势", "Grinding expertise"],
-    ["关键词", "replacement helical gear"],
-    ["禁用说法", "never wears"],
-  ] as const) await wizard.getByLabel(label, { exact: true }).fill(value)
-  await wizard.getByRole("button", { name: "下一步" }).click()
-
-  const briefResponse = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === "/api/v1/content-briefs"
-      && response.request().method() === "POST",
-  )
-  await wizard.getByRole("button", { name: "创建需求草稿" }).click()
-  expect((await briefResponse).status()).toBe(201)
-  await expect(page.getByRole("status")).toContainText("推广方案已保存，等待有权限的同事确认。")
-}
-
-test("ordinary cockpit has five entries and completes a beginner promotion", async ({ page }) => {
+test("ordinary cockpit has exactly five entries and opens a decision on the correct page", async ({ page }) => {
   await login(page, "phasea_e2e_operator")
-  await expect(page.getByRole("heading", { name: "今天需要你决定" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: /今天(?:至少)?有 \d+ 件事需要你决定/ })).toBeVisible()
 
   const navigation = page.getByRole("navigation", { name: "主导航" })
   await expect(navigation.getByRole("link")).toHaveCount(5)
-  for (const name of ["今天", "推广", "客户机会", "效果", "公司资料"]) {
+  for (const name of ["今天", "推广", "客户机会", "效果", "我的公司"]) {
     await expect(navigation.getByRole("link", { name, exact: true })).toBeVisible()
   }
   await expect(navigation.getByRole("link", { name: "知识库", exact: true })).toHaveCount(0)
 
-  await completeBeginnerPromotion(page)
+  const decisions = page.getByRole("region", { name: "需要你决定" })
+  await decisions.getByRole("button", { name: "查看并决定" }).first().click()
+  await expect(page).toHaveURL(/\/lead-radar$/)
+  await expect(page.getByRole("heading", { name: "客户机会", level: 1 })).toBeVisible()
+})
+
+test("ordinary results state a conclusion and My Company exposes a real missing-information task", async ({ page }) => {
+  await login(page, "phasea_e2e_operator")
+  await page.getByRole("link", { name: "效果", exact: true }).click()
+  const conclusion = page.getByRole("region", { name: "AI 结论" })
+  await expect(conclusion).toContainText(/点击|数据/)
+  await expect(conclusion).not.toContainText("正在读取效果数据")
+
+  await logout(page)
+  await login(page, "phaseb1_e2e_foreign")
+  await page.getByRole("link", { name: "我的公司", exact: true }).click()
+  await expect(page.getByRole("heading", { name: "AI 对公司的了解", level: 1 })).toBeVisible()
+  const gaps = page.getByRole("region", { name: "建议补充" })
+  await expect(gaps).toContainText("补充产品")
+  await expect(gaps.getByRole("link", { name: "去产品库补充产品" })).toHaveAttribute("href", "/products")
 })
 
 test("a beginner imports a public signal and reads the same evidence through a pre-Task12 fixture", async ({ page }) => {
@@ -179,6 +152,8 @@ test("mobile navigation traps focus, closes on Escape, and keeps five ordinary e
 
 test("advanced mode persists while read-only permissions keep mutation controls hidden", async ({ page }) => {
   await login(page, "phasea_e2e_viewer")
+  const organization = page.getByText("Phase A E2E Only", { exact: true })
+  await expect(organization).toBeVisible()
   await page.getByRole("link", { name: "客户机会", exact: true }).click()
   await expect(page.getByRole("button", { name: "添加公开线索" })).toHaveCount(0)
   const forbiddenImport = await page.request.post("/api/v1/ingestion-batches", {
@@ -200,6 +175,8 @@ test("advanced mode persists while read-only permissions keep mutation controls 
   await page.reload()
   await expect(navigation.getByRole("link", { name: "知识库", exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: "返回普通功能" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "退出登录" })).toBeVisible()
+  await expect(organization).toBeVisible()
   await expect.poll(() => page.evaluate(() => localStorage.getItem("sinofgear-navigation-mode-v1")))
     .toBe("advanced")
 
@@ -207,9 +184,56 @@ test("advanced mode persists while read-only permissions keep mutation controls 
   await page.reload()
   await expect(navigation.getByRole("link")).toHaveCount(5)
   await expect(page.getByRole("button", { name: "打开高级功能" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "退出登录" })).toBeVisible()
+  await expect(organization).toBeVisible()
 
   await logout(page)
   await login(page, "phasea_e2e_reviewer")
   await page.goto("/lead-radar")
   await expect(page.getByRole("button", { name: "添加公开线索" })).toHaveCount(0)
 })
+
+for (const viewport of [
+  { name: "desktop", width: 1440, height: 900 },
+  { name: "tablet", width: 820, height: 1180 },
+  { name: "mobile", width: 390, height: 844 },
+] as const) {
+  test(`ordinary shell and routes stay bounded at ${viewport.name} ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height })
+    await login(page, "phasea_e2e_operator")
+
+    const sidebar = page.getByTestId("app-sidebar")
+    if (viewport.width <= 860) {
+      await expect(sidebar).toHaveAttribute("aria-hidden", "true")
+      await page.getByRole("button", { name: "打开导航" }).click()
+      await expect(sidebar.getByRole("navigation", { name: "主导航" }).getByRole("link")).toHaveCount(5)
+      await page.keyboard.press("Escape")
+      await expect(sidebar).toHaveAttribute("aria-hidden", "true")
+    } else {
+      await expect(sidebar).not.toHaveAttribute("aria-hidden", "true")
+      await expect(sidebar.getByRole("navigation", { name: "主导航" }).getByRole("link")).toHaveCount(5)
+    }
+
+    const routes = [
+      { path: "/", heading: /今天(?:至少)?有 \d+ 件事需要你决定/, stableApi: "/api/v1/lead-candidates" },
+      { path: "/promotion", heading: "你今天想推广什么？", stableApi: "/api/v1/products" },
+      { path: "/lead-radar", heading: "客户机会", stableApi: "/api/v1/lead-candidates" },
+      { path: "/analytics", heading: "效果", stableApi: "/api/v1/analytics/channel-summary" },
+      { path: "/company-profile", heading: "AI 对公司的了解", stableApi: "/api/v1/products" },
+    ]
+    for (const route of routes) {
+      const stableResponse = page.waitForResponse((response) =>
+        new URL(response.url()).pathname.startsWith(route.stableApi)
+          && response.request().method() === "GET",
+      )
+      await page.goto(route.path)
+      expect((await stableResponse).ok(), `${route.path} stable query should succeed`).toBe(true)
+      await expect(page.getByRole("heading", { name: route.heading, level: 1 })).toBeVisible()
+      const bounds = await page.evaluate(() => ({
+        clientWidth: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+      }))
+      expect(bounds.scrollWidth, `${route.path} must not overflow horizontally`).toBeLessThanOrEqual(bounds.clientWidth + 1)
+    }
+  })
+}

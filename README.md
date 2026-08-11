@@ -11,6 +11,8 @@ Only the frontend (`http://localhost:3000`) and API (`http://localhost:8000`) ar
 
 Production secrets must differ from the development values in `.env.example`.
 
+Open `http://localhost:3000` in a browser after the stack starts. The signed-in product opens in ordinary mode by default, with five work destinations: Today, Promotion, Customer Opportunities, Results, and My Company. If advanced navigation is already selected in that browser, use **返回普通功能** to return to the ordinary experience without signing out or changing organization.
+
 ## Phase A acceptance
 
 The complete active-growth acceptance runs through the real browser UI against disposable local services:
@@ -23,3 +25,5 @@ pnpm test:e2e
 It creates a uniquely marked operating-system temporary directory, uses dynamic localhost ports, a temporary SQLite database and filesystem storage, fake AI, eager jobs, and mock platform connectors. It does not use normal development data, object storage, Docker services, provider accounts, or real secrets. The launcher removes only the child processes and marked temporary directory that it created.
 
 See [the Phase A acceptance guide](docs/phase-a-acceptance.md) for prerequisites, test-only credentials, expected statuses, forced publish-failure recovery, evidence, and cleanup boundaries.
+
+See [the AI-native UI acceptance guide](docs/acceptance/ai-native-ui-redesign.md) for the ordinary-mode browser journeys, viewport coverage, deterministic provider boundaries, CRM export behavior, verification commands, and current limitations.

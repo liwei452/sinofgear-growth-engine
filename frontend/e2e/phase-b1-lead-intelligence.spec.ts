@@ -1,4 +1,5 @@
 import { expect, type APIResponse, type Page, test } from "@playwright/test"
+import { readFile } from "node:fs/promises"
 
 const password = "PhaseA-E2E-Only!"
 const bridgeCompany = "Phase B1 Browser Packaging"
@@ -97,6 +98,32 @@ test("collects, analyzes, explains, and reviews a public lead through the real U
   await reviewDetail.getByText("高级审计信息", { exact: true }).click()
   await expect(reviewDetail.getByText(reason, { exact: true })).toBeVisible()
   await expect(reviewDetail.getByText("确认值得跟进", { exact: true })).toBeVisible()
+  await reviewDetail.getByRole("button", { name: "关闭机会依据" }).click()
+
+  await logout(page)
+  await login(page, "phasea_e2e_admin")
+  await page.goto("/lead-radar")
+  const handoffOpportunity = page.locator("article.opportunity-card").filter({ hasText: bridgeCompany })
+  await handoffOpportunity.getByRole("button", { name: "查看依据" }).click()
+  const handoffDetail = page.getByRole("dialog", { name: "机会依据" })
+  await handoffDetail.getByRole("button", { name: "交给 CRM" }).click()
+  const handoff = handoffDetail.getByRole("region", { name: "CRM 与导出" })
+  await expect(handoff.getByRole("status")).toHaveText("CRM 尚未配置，当前不会发送客户资料。")
+  await handoff.getByRole("button", { name: "交给 CRM" }).click()
+  await expect(handoff).not.toContainText(/交接成功|发送成功|已发送/)
+
+  const downloadPromise = page.waitForEvent("download")
+  await handoff.getByRole("button", { name: "下载 JSON" }).click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toMatch(/^lead-[0-9a-f-]+\.json$/)
+  const downloadPath = await download.path()
+  expect(downloadPath).not.toBeNull()
+  const exported = JSON.parse(await readFile(downloadPath!, "utf8")) as {
+    candidate: { company_name: string }
+    source_evidence: Array<{ content: string }>
+  }
+  expect(exported.candidate.company_name).toBe(bridgeCompany)
+  expect(exported.source_evidence.map((item) => item.content)).toContain(bridgeText)
 })
 
 test("the primary organization cannot create or analyze with real foreign evidence", async ({ page }) => {

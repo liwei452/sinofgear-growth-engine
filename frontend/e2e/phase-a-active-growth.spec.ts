@@ -25,7 +25,14 @@ async function logout(page: Page) {
 }
 
 async function selectCampaign(page: Page, campaignId: string) {
-  await page.locator(".filters label").filter({ hasText: "活动" }).locator("select").selectOption(campaignId)
+  await page.getByLabel("推广计划").selectOption(campaignId)
+}
+
+async function openAnalyticsOperations(page: Page) {
+  const operations = page.locator("details.operations")
+  if (!await operations.evaluate(element => (element as HTMLDetailsElement).open)) {
+    await operations.locator("summary").click()
+  }
 }
 
 async function scheduleAndRun(
@@ -65,6 +72,7 @@ async function createTrackingAndShort(
   source: string,
   campaignMarker: string,
 ): Promise<string> {
+  await openAnalyticsOperations(page)
   const existingPaths = new Set(await page.locator("code").allTextContents())
   await page.getByRole("button", { name: "创建追踪链接" }).click()
   const dialog = page.getByRole("dialog")
@@ -113,7 +121,7 @@ async function visitShortLink(
 
 test("Phase A active-growth loop is role-correct and provenance-exact", async ({ page, context }) => {
   test.setTimeout(180_000)
-  const campaignName = "Phase A Browser Growth"
+  const internalObjectNames = /Campaign|ContentBrief|MasterContent|PlatformContent/
   let seededLinkedInContentId = ""
   await login(page, "phasea_e2e_operator")
 
@@ -132,51 +140,52 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   const asset = page.locator("article").filter({ hasText: "phase-a-factory-floor.mp4" })
   await expect(asset).toContainText("关联产品：Custom Helical Gear")
 
-  await page.goto("/content-factory")
-  const seededReadyCard = page.locator(".workflow-card").filter({ hasText: "Phase A Helical Gear Growth" })
+  await page.goto("/promotion")
+  await expect(page.getByRole("heading", { name: "你今天想推广什么？" })).toBeVisible()
+  const seededGenerate = page.getByRole("button", { name: "生成推广内容" })
+  await expect(seededGenerate).toBeEnabled()
   const seededGenerationPromise = page.waitForResponse(response =>
     new URL(response.url()).pathname.endsWith("/generate-master-content") && response.request().method() === "POST",
   )
-  await seededReadyCard.getByRole("button", { name: "开始AI生成" }).click()
+  await seededGenerate.click()
   const seededGenerationResponse = await seededGenerationPromise
   expect(seededGenerationResponse.status()).toBe(202)
-  const seededGenerationJobId = (await seededGenerationResponse.json() as { job_id: string }).job_id
-  const seededJobCard = page.locator(".workflow-card").filter({ hasText: seededGenerationJobId })
-  await expect(seededJobCard).toContainText("SUCCEEDED")
-  await expect(seededJobCard).toContainText("生成完成")
+  await expect(page.getByRole("link", { name: "查看并确认" })).toBeVisible({ timeout: 15_000 })
 
-  await page.getByRole("button", { name: "创建内容任务" }).click()
-  await page.getByLabel("快速新建活动").check()
-  await page.getByLabel("活动名称（必填）").fill(campaignName)
-  await page.getByLabel("活动说明").fill("Browser-created industrial growth campaign")
+  await page.getByRole("button", { name: "开始新的推广" }).click()
+  const wizard = page.getByRole("dialog", { name: "制定推广方案" })
+  await wizard.getByLabel("定制斜齿轮", { exact: true }).check()
+  await wizard.getByRole("button", { name: "保存产品并继续" }).click()
+  await wizard.getByLabel("目标市场（必选）").selectOption({ label: "德国" })
+  await wizard.getByLabel("目标客户（必选）").selectOption({ label: "工业采购" })
+  await wizard.getByLabel("推广目标（必选）").selectOption({ label: "获取询盘" })
+  await wizard.getByLabel("希望客户下一步（必选）").selectOption({ label: "立即询价" })
+  await wizard.getByLabel("内容语言（必选）").selectOption("en")
+  await wizard.getByLabel("落地页（可选）").fill("https://example.invalid/gears")
+  for (const platform of platforms) await wizard.getByLabel(platform, { exact: true }).check()
+  await wizard.getByRole("button", { name: "保存目标并查看素材" }).click()
+  await wizard.getByLabel("phase-a-factory-floor.mp4", { exact: true }).check()
+  await wizard.getByLabel("Helical Gear (PRODUCT_TYPE)").check()
+  await wizard.getByLabel("Grinding (PROCESS)").check()
+  await wizard.getByLabel("DIN (STANDARD)").check()
+  await wizard.getByLabel("Packaging Machinery (INDUSTRY)").check()
+  await wizard.getByLabel("补充卖点（简短填写）").fill("DIN precision, reliable delivery")
+  await wizard.getByLabel("补充优势（简短填写）").fill("Grinding expertise")
+  await wizard.getByLabel("关键词（逗号分隔）").fill("custom helical gear")
+  await wizard.getByLabel("不能使用的说法（可选）").fill("never wears")
+  await wizard.getByRole("button", { name: "查看并确认方案" }).click()
+  await expect(wizard.getByRole("heading", { name: "确认方案" })).toBeVisible()
   const campaignPromise = page.waitForResponse(response =>
     new URL(response.url()).pathname === "/api/v1/campaigns" && response.request().method() === "POST",
   )
-  await page.getByRole("button", { name: "下一步" }).click()
-  const campaignResponse = await campaignPromise
-  expect(campaignResponse.status()).toBe(201)
-  const campaignId = (await campaignResponse.json() as { id: string }).id
-
-  await page.getByRole("group", { name: "产品（至少一个）" }).getByRole("checkbox").first().check()
-  for (const platform of platforms) await page.getByLabel(platform, { exact: true }).check()
-  await page.getByLabel("phase-a-factory-floor.mp4", { exact: true }).check()
-  await page.getByLabel("Helical Gear (PRODUCT_TYPE)").check()
-  await page.getByLabel("Grinding (PROCESS)").check()
-  await page.getByLabel("DIN (STANDARD)").check()
-  await page.getByLabel("Packaging Machinery (INDUSTRY)").check()
-  await page.getByRole("button", { name: "下一步" }).click()
-  for (const [label, value] of [
-    ["目标国家（必填）", "Germany"], ["客户类型（必填）", "Packaging machinery OEM"],
-    ["内容目标（必填）", "Qualified industrial inquiries"], ["行动号召（必填）", "Request a quote"],
-    ["落地页（必填）", "https://example.invalid/gears"], ["语言（必填）", "en"],
-    ["卖点", "DIN precision, reliable delivery"], ["优势", "Grinding expertise"],
-    ["关键词", "custom helical gear"], ["禁用说法", "never wears"],
-  ] as const) await page.getByLabel(label, { exact: true }).fill(value)
-  await page.getByRole("button", { name: "下一步" }).click()
   const briefPromise = page.waitForResponse(response =>
     new URL(response.url()).pathname === "/api/v1/content-briefs" && response.request().method() === "POST",
   )
-  await page.getByRole("button", { name: "创建需求草稿" }).click()
+  await wizard.getByRole("button", { name: "保存推广方案" }).click()
+  const campaignResponse = await campaignPromise
+  expect(campaignResponse.status()).toBe(201)
+  const campaignPayload = await campaignResponse.json() as { id: string; name: string }
+  const campaignId = campaignPayload.id
   const briefResponse = await briefPromise
   expect(briefResponse.status()).toBe(201)
   const briefPayload = await briefResponse.json() as {
@@ -187,31 +196,38 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   expect(briefPayload.concept_links.map(link => link.role).sort()).toEqual([
     "MANUFACTURING_PROCESS", "PRODUCT_TYPE", "STANDARD", "TARGET_INDUSTRY",
   ])
-  const briefCard = page.locator('section[aria-labelledby="briefs-title"] .workflow-card')
-    .filter({ hasText: campaignName })
-  await expect(briefCard).toContainText("需求草稿")
+  await expect(page.getByRole("status")).toContainText("推广方案已保存，等待有权限的同事确认。")
+  await expect(page.locator("body")).not.toContainText(internalObjectNames)
 
   await logout(page)
   await login(page, "phasea_e2e_reviewer")
-  await page.goto("/content-factory")
-  await expect(briefCard).toContainText("需求草稿")
-  await briefCard.getByRole("button", { name: "确认需求可生成" }).click()
-  await expect(briefCard).toContainText("可生成")
+  await page.goto("/promotion")
+  const readyPromise = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith("/ready") && response.request().method() === "POST",
+  )
+  await page.getByRole("button", { name: "确认方案可生成" }).click()
+  const readyResponse = await readyPromise
+  expect(readyResponse.status(), await readyResponse.text()).toBe(200)
+  await expect(page.getByRole("status")).toContainText("需求已确认，可以开始生成。")
+  await expect(page.locator("body")).not.toContainText(internalObjectNames)
 
   await logout(page)
   await login(page, "phasea_e2e_operator")
-  await page.goto("/content-factory")
-  const readyCard = page.locator(".workflow-card").filter({ hasText: campaignName })
+  await page.goto("/promotion")
+  const generate = page.getByRole("button", { name: "生成推广内容" })
+  await expect(generate).toBeEnabled()
   const generationPromise = page.waitForResponse(response =>
     new URL(response.url()).pathname.endsWith("/generate-master-content") && response.request().method() === "POST",
   )
-  await readyCard.getByRole("button", { name: "开始AI生成" }).click()
+  await generate.click()
   const generationResponse = await generationPromise
   expect(generationResponse.status()).toBe(202)
-  const generationJobId = (await generationResponse.json() as { job_id: string }).job_id
-  const jobCard = page.locator(".workflow-card").filter({ hasText: generationJobId })
-  await expect(jobCard).toContainText("SUCCEEDED")
-  await expect(jobCard).toContainText("生成完成")
+  await expect(page.getByRole("link", { name: "查看并确认" })).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator("body")).not.toContainText(internalObjectNames)
+  await page.getByRole("link", { name: "查看并确认" }).click()
+  await expect(page).toHaveURL(/\/reviews$/)
+  await expect(page.getByRole("heading", { name: "审核中心", level: 1 })).toBeVisible()
+  await expect(page.locator("body")).not.toContainText(internalObjectNames)
 
   await logout(page)
   await login(page, "phasea_e2e_reviewer")
@@ -219,23 +235,24 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   await selectCampaign(page, campaignId)
   const masterCard = page.locator(".review-card")
   await expect(masterCard).toHaveCount(1)
-  await masterCard.getByRole("button", { name: "查看详情" }).click()
+  await masterCard.getByRole("button", { name: "查看并确认" }).click()
   await page.getByRole("button", { name: "查看AI生成记录" }).click()
   const audit = page.locator(".audit-panel")
-  await expect(audit.getByText("SUCCEEDED", { exact: true })).toBeVisible()
+  await expect(audit.getByText("已完成", { exact: true })).toBeVisible()
+  await audit.getByText("高级模型记录", { exact: true }).click()
   await expect(audit.getByText(/phase-a-e2e-content-v1/)).toBeVisible()
   await expect(audit.getByText("HELICAL_GEAR", { exact: true })).toBeVisible()
   await expect(audit.getByText("GRINDING", { exact: true })).toBeVisible()
   await expect(audit.getByText("DIN", { exact: true })).toBeVisible()
   await expect(audit.getByText("PACKAGING_MACHINERY", { exact: true })).toBeVisible()
-  await page.getByRole("button", { name: "通过", exact: true }).click()
+  await page.getByRole("button", { name: "批准发布", exact: true }).click()
   await expect(page.getByText("内容已通过。", { exact: true })).toBeVisible()
   await page.getByRole("button", { name: "关闭" }).click()
   await selectCampaign(page, seededCampaignId)
   const seededMasterCard = page.locator(".review-card")
   await expect(seededMasterCard).toHaveCount(1)
-  await seededMasterCard.getByRole("button", { name: "查看详情" }).click()
-  await page.getByRole("button", { name: "通过", exact: true }).click()
+  await seededMasterCard.getByRole("button", { name: "查看并确认" }).click()
+  await page.getByRole("button", { name: "批准发布", exact: true }).click()
   await expect(page.getByText("内容已通过。", { exact: true })).toBeVisible()
   await page.getByRole("button", { name: "关闭" }).click()
 
@@ -244,8 +261,8 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   await page.goto("/reviews")
   await page.getByLabel("内容状态").selectOption("APPROVED")
   await selectCampaign(page, campaignId)
-  await page.locator(".review-card").getByRole("button", { name: "查看详情" }).click()
-  await page.getByRole("button", { name: "生成平台版本" }).click()
+  await page.locator(".review-card").getByRole("button", { name: "查看并确认" }).click()
+  await page.getByRole("button", { name: "生成渠道版本" }).click()
   for (const platform of platforms) {
     await page.getByRole("button", { name: `为 ${platform} 生成`, exact: true }).click()
     await expect(page.getByText(`已为 ${platform} 准备平台版本。`, { exact: true })).toBeVisible()
@@ -254,8 +271,8 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   await selectCampaign(page, seededCampaignId)
   const seededApprovedCard = page.locator(".review-card")
   await expect(seededApprovedCard).toHaveCount(1)
-  await seededApprovedCard.getByRole("button", { name: "查看详情" }).click()
-  await page.getByRole("button", { name: "生成平台版本" }).click()
+  await seededApprovedCard.getByRole("button", { name: "查看并确认" }).click()
+  await page.getByRole("button", { name: "生成渠道版本" }).click()
   const seededLinkedInPromise = page.waitForResponse(response =>
     new URL(response.url()).pathname.endsWith("/generate-platform-content")
       && response.request().method() === "POST",
@@ -270,13 +287,13 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   await logout(page)
   await login(page, "phasea_e2e_reviewer")
   await page.goto("/reviews")
-  await page.getByRole("tab", { name: "平台版本" }).click()
+  await page.getByRole("tab", { name: "渠道文案" }).click()
   await selectCampaign(page, campaignId)
   const platformCards = page.locator(".review-card")
   await expect(platformCards).toHaveCount(5)
   for (let remaining = 5; remaining > 0; remaining -= 1) {
-    await platformCards.first().getByRole("button", { name: "查看详情" }).click()
-    await page.getByRole("button", { name: "通过", exact: true }).click()
+    await platformCards.first().getByRole("button", { name: "查看并确认" }).click()
+    await page.getByRole("button", { name: "批准发布", exact: true }).click()
     await expect(page.getByText("内容已通过。", { exact: true })).toBeVisible()
     await page.getByRole("button", { name: "关闭" }).click()
     await expect(platformCards).toHaveCount(remaining - 1)
@@ -284,8 +301,8 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   await selectCampaign(page, seededCampaignId)
   const seededPlatformCard = page.locator(".review-card")
   await expect(seededPlatformCard).toHaveCount(1)
-  await seededPlatformCard.getByRole("button", { name: "查看详情" }).click()
-  await page.getByRole("button", { name: "通过", exact: true }).click()
+  await seededPlatformCard.getByRole("button", { name: "查看并确认" }).click()
+  await page.getByRole("button", { name: "批准发布", exact: true }).click()
   await expect(page.getByText("内容已通过。", { exact: true })).toBeVisible()
   await page.getByRole("button", { name: "关闭" }).click()
 
@@ -319,20 +336,30 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   )
 
   await page.goto("/analytics")
+  await openAnalyticsOperations(page)
   await expect(page.locator('[aria-label="总点击数"] strong')).toHaveText("2")
   const unfilteredRows = page.getByRole("table", { name: "渠道点击明细" }).getByRole("row")
   await expect(unfilteredRows).toHaveCount(3)
   await page.getByLabel("活动", { exact: true }).fill(campaignId)
   await page.getByLabel("平台", { exact: true }).fill(facebookPlatformId)
   await expect(page.locator('[aria-label="总点击数"] strong')).toHaveText("1")
-  const analyticsRow = page.getByRole("row").filter({ hasText: facebookPlatformId })
-  await expect(analyticsRow).toContainText(campaignId)
+  const analyticsTable = page.getByRole("table", { name: "渠道点击明细" })
+  await expect(analyticsTable.getByRole("row")).toHaveCount(2)
+  const analyticsRow = analyticsTable.getByRole("row").nth(1)
+  await expect(analyticsRow).toContainText(campaignPayload.name)
+  await expect(analyticsRow).toContainText("Facebook")
   await expect(analyticsRow).toContainText("1")
+  await expect(page.locator("body")).not.toContainText(campaignId)
+  await expect(page.locator("body")).not.toContainText(facebookPlatformId)
   await page.getByLabel("活动", { exact: true }).fill(seededCampaignId)
   await page.getByLabel("平台", { exact: true }).fill(linkedinPlatformId)
   await expect(page.locator('[aria-label="总点击数"] strong')).toHaveText("1")
-  const seededAnalyticsRow = page.getByRole("row").filter({ hasText: linkedinPlatformId })
-  await expect(seededAnalyticsRow).toContainText(seededCampaignId)
+  await expect(analyticsTable.getByRole("row")).toHaveCount(2)
+  const seededAnalyticsRow = analyticsTable.getByRole("row").nth(1)
+  await expect(seededAnalyticsRow).toContainText("Phase A Helical Gear Growth")
+  await expect(seededAnalyticsRow).toContainText("LinkedIn")
   await expect(seededAnalyticsRow).toContainText("1")
+  await expect(page.locator("body")).not.toContainText(seededCampaignId)
+  await expect(page.locator("body")).not.toContainText(linkedinPlatformId)
   expect(briefId).toBeTruthy()
 })

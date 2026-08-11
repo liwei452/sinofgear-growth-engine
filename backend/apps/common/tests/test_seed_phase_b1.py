@@ -1,18 +1,28 @@
 from io import StringIO
 import json
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import FieldDoesNotExist
 from django.core.management import CommandError, call_command
 from django.db import connection
 from django.test import override_settings
 
 from apps.ai.models import AIRun, PromptVersion
 from apps.identity.models import Membership, Organization, Role
-from apps.jobs.models import Job, job_service_writes
+from apps.jobs.models import Job, JobAttempt, job_service_writes
 from apps.leads.models import LeadCandidate, LeadInsight, LeadReview
 from apps.leads.schemas import LEAD_ANALYSIS_OUTPUT_SCHEMA
-from apps.sources.models import IngestionBatch, MonitoringTarget, SourceEvidence
+from apps.sources.models import (
+    IngestionBatch,
+    IngestionRow,
+    MonitoringTarget,
+    SourceContent,
+    SourceEvidence,
+    SourceSignal,
+)
 
 
 @pytest.fixture
@@ -49,6 +59,277 @@ def _run_seed(organization, user):
         username=user.username,
         stdout=StringIO(),
     )
+
+
+def _raw_update(model, pk, **values):
+    assignments = []
+    parameters = []
+    quote = connection.ops.quote_name
+    for field_name, value in values.items():
+        try:
+            field = model._meta.get_field(field_name)
+        except FieldDoesNotExist:
+            if not field_name.endswith("_id"):
+                raise
+            field = model._meta.get_field(field_name[:-3])
+        assignments.append(f"{quote(field.column)} = %s")
+        parameters.append(field.get_db_prep_save(value, connection))
+    parameters.append(model._meta.pk.get_db_prep_save(pk, connection))
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"UPDATE {quote(model._meta.db_table)} "
+            f"SET {', '.join(assignments)} WHERE {quote(model._meta.pk.column)} = %s",
+            parameters,
+        )
+
+
+def _source_contract_counts():
+    source_import_jobs = Job.objects.filter(type=Job.Type.SOURCE_IMPORT)
+    return {
+        "targets": MonitoringTarget.objects.count(),
+        "batches": IngestionBatch.objects.count(),
+        "rows": IngestionRow.objects.count(),
+        "contents": SourceContent.objects.count(),
+        "signals": SourceSignal.objects.count(),
+        "evidence": SourceEvidence.objects.count(),
+        "import_jobs": source_import_jobs.count(),
+        "import_attempts": JobAttempt.objects.filter(
+            job__in=source_import_jobs
+        ).count(),
+    }
+
+
+def _source_contract_tamper(case, *, organization, other_organization, other_user):
+    batch = IngestionBatch.objects.select_related("monitoring_target", "job").get(
+        organization=organization
+    )
+    accepted = batch.rows.select_related(
+        "source_content", "source_signal", "source_evidence"
+    ).get(row_number=1)
+    failed = batch.rows.get(row_number=4)
+    other_signal = batch.rows.get(row_number=2).source_signal
+    import_attempt = batch.job.attempts.get(number=1)
+    cases = {
+        "target_external_reference": (
+            batch.monitoring_target,
+            "external_reference",
+            "tampered-reference",
+            "monitoring target",
+        ),
+        "target_normalized_url": (
+            batch.monitoring_target,
+            "normalized_url",
+            "https://example.com/phase-b1/tampered-target",
+            "monitoring target",
+        ),
+        "target_capability_snapshot": (
+            batch.monitoring_target,
+            "capability_snapshot",
+            {"tampered": True},
+            "monitoring target",
+        ),
+        "target_enabled": (
+            batch.monitoring_target,
+            "enabled",
+            False,
+            "monitoring target",
+        ),
+        "target_organization": (
+            batch.monitoring_target,
+            "organization_id",
+            other_organization.id,
+            "monitoring target",
+        ),
+        "batch_received_count": (
+            batch,
+            "received_count",
+            99,
+            "mixed import",
+        ),
+        "batch_row_errors": (
+            batch,
+            "row_errors",
+            [{"tampered": True}],
+            "mixed import",
+        ),
+        "batch_request_digest": (
+            batch,
+            "prepared_reference_sha256",
+            "f" * 64,
+            "mixed import",
+        ),
+        "batch_request_asset": (
+            batch,
+            "request_import_asset_id",
+            uuid4(),
+            "mixed import",
+        ),
+        "batch_organization": (
+            batch,
+            "organization_id",
+            other_organization.id,
+            "mixed import",
+        ),
+        "job_status": (batch.job, "status", Job.Status.FAILED, "import job"),
+        "job_input_snapshot": (
+            batch.job,
+            "input_snapshot",
+            {"tampered": True},
+            "import job",
+        ),
+        "job_result_reference": (
+            batch.job,
+            "result_reference",
+            {"tampered": True},
+            "import job",
+        ),
+        "job_error": (
+            batch.job,
+            "error",
+            {"code": "tampered"},
+            "import job",
+        ),
+        "job_created_by": (
+            batch.job,
+            "created_by_id",
+            other_user.id,
+            "import job",
+        ),
+        "job_organization": (
+            batch.job,
+            "organization_id",
+            other_organization.id,
+            "import job",
+        ),
+        "job_attempt_status": (
+            import_attempt,
+            "status",
+            JobAttempt.Status.FAILED,
+            "import job attempt",
+        ),
+        "row_normalized_input": (
+            accepted,
+            "normalized_input",
+            {"tampered": True},
+            "ingestion row",
+        ),
+        "row_outcome": (
+            accepted,
+            "outcome",
+            IngestionRow.Outcome.FAILED,
+            "ingestion row",
+        ),
+        "row_source_evidence": (
+            accepted,
+            "source_evidence_id",
+            None,
+            "ingestion row",
+        ),
+        "row_error": (
+            failed,
+            "error",
+            {"tampered": True},
+            "ingestion row",
+        ),
+        "row_organization": (
+            accepted,
+            "organization_id",
+            other_organization.id,
+            "ingestion row",
+        ),
+        "content_hash": (
+            accepted.source_content,
+            "content_hash",
+            "e" * 64,
+            "source content",
+        ),
+        "content_original_text": (
+            accepted.source_content,
+            "original_text",
+            "Tampered source content.",
+            "source content",
+        ),
+        "content_captured_at": (
+            accepted.source_content,
+            "captured_at",
+            datetime(2030, 1, 1, tzinfo=UTC),
+            "source content",
+        ),
+        "content_target": (
+            accepted.source_content,
+            "monitoring_target_id",
+            None,
+            "source content",
+        ),
+        "content_created_by": (
+            accepted.source_content,
+            "created_by_id",
+            other_user.id,
+            "source content",
+        ),
+        "signal_type": (
+            accepted.source_signal,
+            "signal_type",
+            SourceSignal.SignalType.COMMENT,
+            "source signal",
+        ),
+        "signal_captured_at": (
+            accepted.source_signal,
+            "captured_at",
+            datetime(2030, 1, 1, tzinfo=UTC),
+            "source signal",
+        ),
+        "signal_source_content": (
+            accepted.source_signal,
+            "source_content_id",
+            None,
+            "source signal",
+        ),
+        "signal_created_by": (
+            accepted.source_signal,
+            "created_by_id",
+            other_user.id,
+            "source signal",
+        ),
+        "evidence_hash": (
+            accepted.source_evidence,
+            "content_hash",
+            "d" * 64,
+            "source evidence",
+        ),
+        "evidence_captured_at": (
+            accepted.source_evidence,
+            "captured_at",
+            datetime(2030, 1, 1, tzinfo=UTC),
+            "source evidence",
+        ),
+        "evidence_signal": (
+            accepted.source_evidence,
+            "source_signal_id",
+            other_signal.id,
+            "source evidence",
+        ),
+        "evidence_availability": (
+            accepted.source_evidence,
+            "availability",
+            SourceEvidence.Availability.SOURCE_UNAVAILABLE,
+            "source evidence",
+        ),
+        "evidence_created_by": (
+            accepted.source_evidence,
+            "created_by_id",
+            other_user.id,
+            "source evidence",
+        ),
+        "evidence_organization": (
+            accepted.source_evidence,
+            "organization_id",
+            other_organization.id,
+            "source evidence",
+        ),
+    }
+    instance, field_name, tampered_value, error_label = cases[case]
+    return type(instance), instance.pk, field_name, tampered_value, error_label
 
 
 @pytest.mark.django_db(transaction=True)
@@ -198,6 +479,137 @@ def test_seed_phase_b1_rejects_existing_failed_job_collision(
 
     with pytest.raises(CommandError, match="failed job"):
         _run_seed(organization, user)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(PHASE_B1_SCHEMA_FAKE_ALLOWED=True)
+def test_seed_phase_b1_rejects_monitoring_target_schedule_collision(
+    phase_b1_seed_identity,
+):
+    organization, user = phase_b1_seed_identity
+    _run_seed(organization, user)
+    target = MonitoringTarget.objects.get(organization=organization)
+    target.schedule = {"tampered": True}
+    target.save(update_fields=["schedule", "updated_at"])
+
+    with pytest.raises(CommandError, match="monitoring target"):
+        _run_seed(organization, user)
+
+    target.refresh_from_db()
+    assert target.schedule == {"tampered": True}
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(PHASE_B1_SCHEMA_FAKE_ALLOWED=True)
+def test_seed_phase_b1_rejects_ingestion_batch_count_collision(
+    phase_b1_seed_identity,
+):
+    organization, user = phase_b1_seed_identity
+    _run_seed(organization, user)
+    batch = IngestionBatch.objects.get(organization=organization)
+    batch.accepted_count = 99
+    batch.save(update_fields=["accepted_count", "updated_at"])
+
+    with pytest.raises(CommandError, match="mixed import"):
+        _run_seed(organization, user)
+
+    batch.refresh_from_db()
+    assert batch.accepted_count == 99
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(PHASE_B1_SCHEMA_FAKE_ALLOWED=True)
+def test_seed_phase_b1_rejects_source_evidence_text_collision(
+    phase_b1_seed_identity,
+):
+    organization, user = phase_b1_seed_identity
+    _run_seed(organization, user)
+    evidence = SourceEvidence.objects.get(
+        organization=organization,
+        source_url="https://example.com/phase-b1/public-signal",
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE sources_sourceevidence SET original_text = %s WHERE id = %s",
+            ["Tampered public evidence.", evidence.id.hex],
+        )
+
+    with pytest.raises(CommandError, match="evidence"):
+        _run_seed(organization, user)
+
+    evidence.refresh_from_db()
+    assert evidence.original_text == "Tampered public evidence."
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(PHASE_B1_SCHEMA_FAKE_ALLOWED=True)
+@pytest.mark.parametrize(
+    "case",
+    [
+        "target_external_reference",
+        "target_normalized_url",
+        "target_capability_snapshot",
+        "target_enabled",
+        "target_organization",
+        "batch_received_count",
+        "batch_row_errors",
+        "batch_request_digest",
+        "batch_request_asset",
+        "batch_organization",
+        "job_status",
+        "job_input_snapshot",
+        "job_result_reference",
+        "job_error",
+        "job_created_by",
+        "job_organization",
+        "job_attempt_status",
+        "row_normalized_input",
+        "row_outcome",
+        "row_source_evidence",
+        "row_error",
+        "row_organization",
+        "content_hash",
+        "content_original_text",
+        "content_captured_at",
+        "content_target",
+        "content_created_by",
+        "signal_type",
+        "signal_captured_at",
+        "signal_source_content",
+        "signal_created_by",
+        "evidence_hash",
+        "evidence_captured_at",
+        "evidence_signal",
+        "evidence_availability",
+        "evidence_created_by",
+        "evidence_organization",
+    ],
+)
+def test_seed_phase_b1_rejects_owned_source_contract_matrix(
+    phase_b1_seed_identity,
+    case,
+):
+    organization, user = phase_b1_seed_identity
+    _run_seed(organization, user)
+    other_organization = Organization.objects.create(
+        name=f"Other {case}", slug=f"other-{case.replace('_', '-')}"
+    )
+    other_user = get_user_model().objects.create_user(username=f"other_{case}")
+    model, pk, field_name, tampered_value, error_label = _source_contract_tamper(
+        case,
+        organization=organization,
+        other_organization=other_organization,
+        other_user=other_user,
+    )
+    _raw_update(model, pk, **{field_name: tampered_value})
+    counts_after_tamper = _source_contract_counts()
+
+    with pytest.raises(CommandError, match=error_label):
+        _run_seed(organization, user)
+
+    assert _source_contract_counts() == counts_after_tamper
+    persisted = model.objects.get(pk=pk)
+    assert getattr(persisted, field_name) == tampered_value
 
 
 @pytest.mark.django_db

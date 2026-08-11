@@ -1,13 +1,15 @@
 import json
+from datetime import UTC, datetime
 
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.core.management import BaseCommand, CommandError, call_command
+from django.db import transaction
 
 from apps.ai.models import AIRun, PromptVersion
 from apps.ai.services import PromptVersionService
 from apps.identity.models import Membership, Organization, Role
-from apps.jobs.models import Job
+from apps.jobs.models import Job, JobAttempt
 from apps.jobs.services import JobConflictError, JobService
 from apps.leads.models import (
     LeadAnalysisBinding,
@@ -25,8 +27,17 @@ from apps.leads.services import (
     build_analysis_snapshot,
 )
 from apps.sources.importers import prepare_import_reference
-from apps.sources.models import IngestionBatch, MonitoringTarget, SourceEvidence
-from apps.sources.services import source_import_job_snapshot
+from apps.sources.models import (
+    IngestionBatch,
+    IngestionRow,
+    MonitoringTarget,
+    SourceContent,
+    SourceEvidence,
+    SourceSignal,
+    evidence_service_writes,
+    prepared_reference_sha256,
+)
+from apps.sources.services import evidence_fingerprint, source_import_job_snapshot
 from apps.sources.tasks import execute_source_import
 from integrations.ai.providers import SchemaAwareFakeAIProvider
 
@@ -46,6 +57,8 @@ VAGUE_TEXT = "Our team is considering whether a different sprocket material migh
 LOW_URL = "https://example.com/phase-b1/ordinary-signal"
 LOW_TEXT = "Thanks for sharing this explanation of involute gear geometry."
 SEED_BATCH_KEY = "phase-b1-seed-mixed-import"
+TARGET_URL = "https://example.com/phase-b1/public-signals"
+SEED_CAPTURED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class Command(BaseCommand):
@@ -58,6 +71,7 @@ class Command(BaseCommand):
         parser.add_argument("--password")
         parser.add_argument("--create-demo-identity", action="store_true")
 
+    @transaction.atomic
     def handle(self, *args, **options):
         del args
         if not getattr(settings, "PHASE_B1_SCHEMA_FAKE_ALLOWED", False):
@@ -242,33 +256,89 @@ class Command(BaseCommand):
         )
 
     @staticmethod
+    def _require_owned_contract(label, instance, expected, *, invariants=None):
+        if instance is None:
+            raise CommandError(f"The Phase B1 {label} contract is missing.")
+        mismatches = [
+            field
+            for field, expected_value in expected.items()
+            if getattr(instance, field) != expected_value
+        ]
+        if invariants:
+            mismatches.extend(
+                name for name, satisfied in invariants.items() if not satisfied
+            )
+        if mismatches:
+            fields = ", ".join(sorted(set(mismatches)))
+            raise CommandError(f"The Phase B1 {label} contract collides at: {fields}.")
+        return instance
+
+    @staticmethod
+    def _require_exact_identity_set(label, actual, expected):
+        if len(actual) != len(expected) or set(actual) != set(expected):
+            raise CommandError(
+                f"The Phase B1 {label} contract is missing or ambiguous."
+            )
+
+    @staticmethod
     def _target(organization, actor):
-        target, created = MonitoringTarget.objects.get_or_create(
-            organization=organization,
-            normalized_url="https://example.com/phase-b1/public-signals",
-            defaults={
-                "target_type": MonitoringTarget.TargetType.POST,
-                "collection_mode": MonitoringTarget.CollectionMode.PASTE,
-                "platform": "MANUAL",
-                "label": "Phase B1 public signal fixtures",
-                "schedule": {},
-                "capability_snapshot": {},
-                "created_by": actor,
-            },
-        )
         expected = {
+            "organization_id": organization.id,
             "target_type": MonitoringTarget.TargetType.POST,
             "collection_mode": MonitoringTarget.CollectionMode.PASTE,
             "platform": "MANUAL",
+            "external_reference": "",
+            "normalized_url": TARGET_URL,
             "label": "Phase B1 public signal fixtures",
+            "schedule": {},
+            "enabled": True,
+            "capability_snapshot": {},
             "created_by_id": actor.id,
         }
-        if not created and any(
-            getattr(target, field) != value for field, value in expected.items()
-        ):
-            raise CommandError(
-                "The Phase B1 monitoring target collides with different data."
+        batches = list(
+            IngestionBatch.objects.select_related("monitoring_target").filter(
+                organization=organization,
+                idempotency_key=SEED_BATCH_KEY,
             )
+        )
+        if len(batches) > 1:
+            raise CommandError("The Phase B1 monitoring target contract is ambiguous.")
+        matching = list(
+            MonitoringTarget.objects.filter(
+                organization=organization,
+                normalized_url=TARGET_URL,
+            )
+        )
+        if batches:
+            target = batches[0].monitoring_target
+            identities = {row.id for row in matching}
+            if target is not None:
+                identities.add(target.id)
+            if len(identities) != 1:
+                raise CommandError(
+                    "The Phase B1 monitoring target contract is missing or ambiguous."
+                )
+        else:
+            if len(matching) > 1:
+                raise CommandError(
+                    "The Phase B1 monitoring target contract is ambiguous."
+                )
+            target = matching[0] if matching else None
+            if target is None:
+                target = MonitoringTarget.objects.create(
+                    organization=organization,
+                    normalized_url=TARGET_URL,
+                    target_type=MonitoringTarget.TargetType.POST,
+                    collection_mode=MonitoringTarget.CollectionMode.PASTE,
+                    platform="MANUAL",
+                    external_reference="",
+                    label="Phase B1 public signal fixtures",
+                    schedule={},
+                    enabled=True,
+                    capability_snapshot={},
+                    created_by=actor,
+                )
+        Command._require_owned_contract("monitoring target", target, expected)
         return target
 
     @staticmethod
@@ -286,11 +356,16 @@ class Command(BaseCommand):
         reference = prepare_import_reference(
             payload, source_type=IngestionBatch.SourceType.PASTE
         )
-        batch = IngestionBatch.objects.filter(
-            organization=organization,
-            idempotency_key=SEED_BATCH_KEY,
-        ).first()
-        if batch is None:
+        batches = list(
+            IngestionBatch.objects.filter(
+                organization=organization,
+                idempotency_key=SEED_BATCH_KEY,
+            )
+        )
+        if len(batches) > 1:
+            raise CommandError("The Phase B1 mixed import contract is ambiguous.")
+        created = not batches
+        if created:
             batch = IngestionBatch.objects.create(
                 organization=organization,
                 source_type=IngestionBatch.SourceType.PASTE,
@@ -299,42 +374,360 @@ class Command(BaseCommand):
                 idempotency_key=SEED_BATCH_KEY,
                 created_by=actor,
             )
-            job = JobService.create(
-                organization=organization,
-                job_type=Job.Type.SOURCE_IMPORT,
-                input_snapshot=source_import_job_snapshot(batch),
-                idempotency_key=SEED_BATCH_KEY,
-                created_by=actor,
-            )
+            try:
+                job = JobService.create(
+                    organization=organization,
+                    job_type=Job.Type.SOURCE_IMPORT,
+                    input_snapshot=source_import_job_snapshot(batch),
+                    idempotency_key=SEED_BATCH_KEY,
+                    created_by=actor,
+                )
+            except JobConflictError as error:
+                raise CommandError(
+                    "The Phase B1 mixed import contract collides with an import job."
+                ) from error
             batch.job = job
             batch.save(update_fields=["job", "updated_at"])
-        elif (
-            batch.source_type != IngestionBatch.SourceType.PASTE
-            or batch.monitoring_target_id != target.id
-            or batch.input_reference != reference
-            or batch.created_by_id != actor.id
-            or batch.job_id is None
-        ):
-            raise CommandError(
-                "The Phase B1 mixed import collides with different data."
-            )
-        if batch.job.status in {Job.Status.QUEUED, Job.Status.RETRY_QUEUED}:
-            execute_source_import(str(batch.job_id), str(batch.id))
-        batch.refresh_from_db()
-        if batch.status != IngestionBatch.Status.PARTIAL_SUCCESS:
-            raise CommandError(
-                "The Phase B1 mixed import did not complete with partial success."
-            )
-        rows = {
-            evidence.source_url: evidence
-            for evidence in SourceEvidence.objects.filter(
-                organization=organization,
-                source_url__in=[BRIDGE_URL, VAGUE_URL, LOW_URL],
-            )
+        else:
+            batch = batches[0]
+        Command._require_owned_contract(
+            "mixed import",
+            batch,
+            {
+                "organization_id": organization.id,
+                "source_type": IngestionBatch.SourceType.PASTE,
+                "monitoring_target_id": target.id,
+                "input_reference": reference,
+                "prepared_reference_sha256": prepared_reference_sha256(reference),
+                "request_import_asset_id": None,
+                "idempotency_key": SEED_BATCH_KEY,
+                "created_by_id": actor.id,
+            },
+            invariants={"job_id": batch.job_id is not None},
+        )
+        job = Job.objects.filter(pk=batch.job_id).first()
+        Command._require_owned_contract(
+            "import job",
+            job,
+            {
+                "organization_id": organization.id,
+                "type": Job.Type.SOURCE_IMPORT,
+                "input_snapshot": source_import_job_snapshot(batch),
+                "idempotency_key": SEED_BATCH_KEY,
+                "created_by_id": actor.id,
+                "max_attempts": 3,
+            },
+        )
+        if created:
+            if job.status != Job.Status.QUEUED:
+                raise CommandError(
+                    "The Phase B1 import job contract did not start queued."
+                )
+            execute_source_import(str(job.id), str(batch.id))
+            Command._freeze_source_capture_contract(batch)
+        return Command._validate_source_import_contract(
+            organization=organization,
+            actor=actor,
+            target=target,
+            batch=batch,
+            reference=reference,
+        )
+
+    @staticmethod
+    def _freeze_source_capture_contract(batch):
+        rows = list(batch.rows.all())
+        content_ids = {
+            row.source_content_id for row in rows if row.source_content_id is not None
         }
-        if set(rows) != {BRIDGE_URL, VAGUE_URL, LOW_URL}:
-            raise CommandError("The Phase B1 seed evidence is incomplete.")
-        return rows
+        signal_ids = {
+            row.source_signal_id for row in rows if row.source_signal_id is not None
+        }
+        evidence_ids = {
+            row.source_evidence_id for row in rows if row.source_evidence_id is not None
+        }
+        SourceContent.objects.filter(pk__in=content_ids).update(
+            captured_at=SEED_CAPTURED_AT
+        )
+        SourceSignal.objects.filter(pk__in=signal_ids).update(
+            captured_at=SEED_CAPTURED_AT
+        )
+        with evidence_service_writes():
+            SourceEvidence.objects.filter(pk__in=evidence_ids).update(
+                captured_at=SEED_CAPTURED_AT
+            )
+
+    @staticmethod
+    def _validate_source_import_contract(
+        *, organization, actor, target, batch, reference
+    ):
+        batch.refresh_from_db()
+        Command._require_owned_contract(
+            "mixed import",
+            batch,
+            {
+                "organization_id": organization.id,
+                "source_type": IngestionBatch.SourceType.PASTE,
+                "status": IngestionBatch.Status.PARTIAL_SUCCESS,
+                "monitoring_target_id": target.id,
+                "input_reference": reference,
+                "prepared_reference_sha256": prepared_reference_sha256(reference),
+                "request_import_asset_id": None,
+                "received_count": 4,
+                "accepted_count": 3,
+                "duplicate_count": 0,
+                "failed_count": 1,
+                "row_errors": reference["errors"],
+                "idempotency_key": SEED_BATCH_KEY,
+                "created_by_id": actor.id,
+            },
+            invariants={
+                "job_id": batch.job_id is not None,
+                "started_at": batch.started_at is not None,
+                "finished_at": batch.finished_at is not None,
+                "runtime_order": (
+                    batch.started_at is not None
+                    and batch.finished_at is not None
+                    and batch.started_at <= batch.finished_at
+                ),
+            },
+        )
+        job = Job.objects.filter(pk=batch.job_id).first()
+        expected_result = {"ingestion_batch_id": str(batch.id)}
+        Command._require_owned_contract(
+            "import job",
+            job,
+            {
+                "organization_id": organization.id,
+                "type": Job.Type.SOURCE_IMPORT,
+                "status": Job.Status.SUCCEEDED,
+                "progress": 100,
+                "input_snapshot": source_import_job_snapshot(batch),
+                "result_reference": expected_result,
+                "error": None,
+                "idempotency_key": SEED_BATCH_KEY,
+                "attempt": 1,
+                "max_attempts": 3,
+                "claim_token": None,
+                "claimed_by": "source-import-worker",
+                "version": 3,
+                "created_by_id": actor.id,
+            },
+            invariants={
+                "claimed_at": job is not None and job.claimed_at is not None,
+                "started_at": job is not None and job.started_at is not None,
+                "finished_at": job is not None and job.finished_at is not None,
+                "runtime_order": (
+                    job is not None
+                    and job.claimed_at is not None
+                    and job.started_at is not None
+                    and job.finished_at is not None
+                    and job.claimed_at == job.started_at
+                    and job.started_at <= job.finished_at
+                ),
+            },
+        )
+        attempts = list(JobAttempt.objects.filter(job=job))
+        if len(attempts) != 1:
+            raise CommandError(
+                "The Phase B1 import job attempt contract is missing or ambiguous."
+            )
+        attempt = attempts[0]
+        Command._require_owned_contract(
+            "import job attempt",
+            attempt,
+            {
+                "job_id": job.id,
+                "number": 1,
+                "worker_id": "source-import-worker",
+                "status": JobAttempt.Status.SUCCEEDED,
+                "error": None,
+                "result_reference": expected_result,
+            },
+            invariants={
+                "claim_token": attempt.claim_token is not None,
+                "started_at": attempt.started_at == job.started_at,
+                "finished_at": attempt.finished_at == job.finished_at,
+            },
+        )
+
+        ingestion_rows = list(
+            IngestionRow.objects.select_related(
+                "source_content",
+                "source_signal",
+                "source_evidence",
+            ).filter(batch=batch)
+        )
+        by_number = {row.row_number: row for row in ingestion_rows}
+        Command._require_exact_identity_set(
+            "ingestion row",
+            [row.row_number for row in ingestion_rows],
+            [1, 2, 3, 4],
+        )
+        expected_rows = {row["row_number"]: row for row in reference["rows"]}
+        content_ids = []
+        signal_ids = []
+        evidence_ids = []
+        evidence_by_url = {}
+        for row_number, expected_row in expected_rows.items():
+            row = by_number[row_number]
+            if any(
+                related is None
+                for related in (
+                    row.source_content,
+                    row.source_signal,
+                    row.source_evidence,
+                )
+            ):
+                raise CommandError(
+                    "The Phase B1 ingestion row contract is missing source provenance."
+                )
+            fingerprint = evidence_fingerprint(
+                original_text=expected_row["original_text"],
+                source_url=expected_row["source_url"],
+                platform=expected_row["platform"],
+            )
+            content = Command._require_owned_contract(
+                "source content",
+                row.source_content,
+                {
+                    "organization_id": organization.id,
+                    "monitoring_target_id": target.id,
+                    "platform": expected_row["platform"],
+                    "external_id": "",
+                    "canonical_url": expected_row["source_url"],
+                    "author_public_name": expected_row["author_name"],
+                    "title": "",
+                    "original_text": expected_row["original_text"],
+                    "public_published_at": None,
+                    "language": "",
+                    "captured_at": SEED_CAPTURED_AT,
+                    "content_hash": fingerprint,
+                    "created_by_id": actor.id,
+                },
+            )
+            signal = Command._require_owned_contract(
+                "source signal",
+                row.source_signal,
+                {
+                    "organization_id": organization.id,
+                    "monitoring_target_id": target.id,
+                    "source_content_id": content.id,
+                    "signal_type": expected_row["signal_type"],
+                    "platform": expected_row["platform"],
+                    "external_id": "",
+                    "captured_at": SEED_CAPTURED_AT,
+                    "created_by_id": actor.id,
+                },
+            )
+            source_evidence = row.source_evidence
+            evidence = Command._require_owned_contract(
+                "source evidence",
+                source_evidence,
+                {
+                    "organization_id": organization.id,
+                    "source_signal_id": signal.id,
+                    "evidence_type": SourceEvidence.EvidenceType.PUBLIC_TEXT,
+                    "original_text": expected_row["original_text"],
+                    "translated_text": "",
+                    "translated_language": "",
+                    "source_url": expected_row["source_url"],
+                    "platform": expected_row["platform"],
+                    "public_published_at": None,
+                    "captured_at": SEED_CAPTURED_AT,
+                    "collection_method": SourceEvidence.CollectionMethod.PASTE,
+                    "language": "",
+                    "screenshot_asset_id": None,
+                    "import_asset_id": None,
+                    "content_hash": fingerprint,
+                    "availability": SourceEvidence.Availability.AVAILABLE,
+                    "created_by_id": actor.id,
+                },
+                invariants={
+                    "retention_class": (
+                        source_evidence.retention_class
+                        in SourceEvidence.RetentionClass.values
+                    ),
+                },
+            )
+            normalized_input = dict(expected_row)
+            normalized_input.pop("row_number")
+            Command._require_owned_contract(
+                "ingestion row",
+                row,
+                {
+                    "organization_id": organization.id,
+                    "batch_id": batch.id,
+                    "row_number": row_number,
+                    "normalized_input": normalized_input,
+                    "request_screenshot_asset_id": None,
+                    "request_screenshot_identity_unproven": False,
+                    "outcome": IngestionRow.Outcome.ACCEPTED,
+                    "error": None,
+                    "source_content_id": content.id,
+                    "source_signal_id": signal.id,
+                    "source_evidence_id": evidence.id,
+                },
+            )
+            content_ids.append(content.id)
+            signal_ids.append(signal.id)
+            evidence_ids.append(evidence.id)
+            evidence_by_url[evidence.source_url] = evidence
+
+        failed_row = by_number[4]
+        Command._require_owned_contract(
+            "ingestion row",
+            failed_row,
+            {
+                "organization_id": organization.id,
+                "batch_id": batch.id,
+                "row_number": 4,
+                "normalized_input": {"row_number": 4},
+                "request_screenshot_asset_id": None,
+                "request_screenshot_identity_unproven": False,
+                "outcome": IngestionRow.Outcome.FAILED,
+                "error": reference["errors"][0],
+                "source_content_id": None,
+                "source_signal_id": None,
+                "source_evidence_id": None,
+            },
+        )
+        expected_urls = {BRIDGE_URL, VAGUE_URL, LOW_URL}
+        Command._require_exact_identity_set(
+            "source content",
+            list(
+                SourceContent.objects.filter(
+                    organization=organization,
+                    canonical_url__in=expected_urls,
+                ).values_list("id", flat=True)
+            ),
+            content_ids,
+        )
+        Command._require_exact_identity_set(
+            "source signal",
+            list(
+                SourceSignal.objects.filter(
+                    organization=organization,
+                    monitoring_target=target,
+                    source_content_id__in=content_ids,
+                ).values_list("id", flat=True)
+            ),
+            signal_ids,
+        )
+        Command._require_exact_identity_set(
+            "source evidence",
+            list(
+                SourceEvidence.objects.filter(
+                    organization=organization,
+                    source_url__in=expected_urls,
+                ).values_list("id", flat=True)
+            ),
+            evidence_ids,
+        )
+        if set(evidence_by_url) != expected_urls:
+            raise CommandError(
+                "The Phase B1 source evidence contract is missing or ambiguous."
+            )
+        return evidence_by_url
 
     @staticmethod
     def _candidate(

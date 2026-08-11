@@ -157,3 +157,44 @@ The first direct frontend attempt followed `C:\Users\Administrator\.local\bin\no
 ### Supported boundary after the fix
 
 The accepted result is an isolated, disposable local fixture using the product's audited orchestration service interfaces. It does not prove a live production model, a live connector, or broad evaluator generalization. The fake provider covers only schema shapes exercised by its tests and makes no claim for complete JSON Schema features such as `$ref`, compositions, or pattern semantics.
+
+## Fix Round 2 (2026-08-11)
+
+### Remaining review finding closed
+
+- Important — complete source/import ownership: `seed_phase_b1` now fails closed across its whole owned source graph. One auditable contract helper compares exact expected fields and named invariants for the monitoring target, ingestion batch, import job and attempt, every ingestion row, source content, source signal, and source evidence. Exact identity-set checks reject missing, duplicate, or substituted rows. Any missing or mismatched owned value raises `CommandError`; the command-level transaction rolls back tentative creates, so a collision is never repaired or partially supplemented.
+- The target contract includes organization, target/collection modes, platform/reference/URL, label, schedule, enabled state, capability snapshot, and creator. The batch contract includes source/target/request identity, digest, request asset, terminal status, all four counters, exact row errors, idempotency key, creator, organization, job binding, and ordered runtime timestamps. Job, attempt, accepted/failed row, and content/signal/evidence contracts cover their stable identity, ownership, outcome, error, snapshot, relationship, provenance, and terminal-result fields.
+- Newly created source provenance uses the fixed seed capture instant `2026-01-01T00:00:00Z`, making `SourceContent.captured_at`, `SourceSignal.captured_at`, and `SourceEvidence.captured_at` part of the exact deterministic contract. The three reviewer probes for `MonitoringTarget.schedule`, `IngestionBatch.accepted_count`, and `SourceEvidence.original_text` now all fail closed while preserving the tampered value and scoped record counts.
+
+### Mutable lifecycle boundary
+
+- Stable seed identity and provenance are exact. Database-managed `created_at`/`updated_at` and execution-time batch/job/attempt timestamps are not hard-coded because they are legitimate runtime values; they are instead required to be present and correctly ordered, with attempt/job timestamps required to agree where the service defines equality.
+- `SourceEvidence.retention_class` is intentionally not fixed to its import-time value. Lead review legitimately promotes the shared bridge evidence from `TRANSIENT_30D` to `CONFIRMED`; the seed therefore requires a recognized lifecycle value and leaves the service-owned promotion intact. `availability` remains exact at `AVAILABLE`, because retention review does not mutate it.
+- An isolated three-snapshot diagnostic proved the boundary: the Phase A seeded READY brief was byte-for-byte unchanged in id, status, version, reviewer, review time, and update time after the first and second B1 seed runs. The first B1 run created only its three source-evidence rows (`CONFIRMED` for the reviewed bridge and `TRANSIENT_30D` for the other two); the second run changed none of them.
+
+### TDD record
+
+- Reviewer-probe RED: all 3 required tampering cases failed because the old command did not raise.
+- Representative-matrix RED: 33 source/import tampering cases failed, mostly because the old seed silently accepted the drift; 5 supplemental content/capture/job-attempt cases also failed.
+- GREEN: the 3 reviewer probes passed. The first broad run exposed one test helper identity-field issue and four incorrect test assumptions about the legitimate retention promotion; after correcting those test-side boundaries, the final representative matrix passed 37/37.
+- Final complete seed module: 48 passed in 29.13s. The command is run twice by its idempotence case and retains exact scoped counts without repair.
+
+### Final verification
+
+| Gate | Exact result |
+| --- | --- |
+| Complete Phase B1 seed module | 48 passed in 29.13s |
+| Task 12 focused backend combination | 113 passed in 32.01s |
+| Complete backend pytest | 1240 passed, 1 skipped in 281.70s |
+| Django system / migration drift | no issues; no changes detected |
+| `sqlmigrate leads 0008` | successful no-op SQL (`BEGIN` / `COMMIT`) |
+| Full Ruff lint / changed-file formatting | passed; 2 changed Python files already formatted |
+| OpenAPI generate / drift | passed; generated client remained current |
+| OpenAPI atomic / lifecycle | 3 passed |
+| Complete frontend Vitest | 34 files, 308 passed on the confirmation run |
+| Frontend typecheck / ESLint | both exit 0 |
+| Production build | exit 0; 150 modules transformed |
+| E2E launcher unit tests | 6 passed |
+| Final complete browser suite | 7 passed in 31.7s; launcher exit 0 |
+
+The first full frontend invocation had one unrelated lifecycle test exceed its fixed five-second limit under parallel load; the same focused set immediately passed 3/3, and the complete confirmation run passed all 308 tests. The first browser invocation passed both new Phase B1 scenarios and six of seven total scenarios, but an unrelated Phase A `/content-briefs/{id}/ready` request returned the generic 145-byte `DEBUG=False` response and its UI test later timed out. This was not labeled a database-lock or seed defect without evidence. A traceback-enabled focused run and the original full seven-test ordering both passed with `/ready` returning 200, so no traceback was produced. Exact before/after seed snapshots ruled out Phase B1 brief or retention drift, and the final normal-settings full browser run passed 7/7. Every launcher-created run root was removed through its realpath, marker-prefix, and direct-temp-child ownership checks; no unrelated process or directory was removed.

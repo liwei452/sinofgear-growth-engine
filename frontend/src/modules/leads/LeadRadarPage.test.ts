@@ -118,8 +118,12 @@ it("separates value, evidence sufficiency, and inferred company identity", async
   expect(screen.getByText("待确认")).toBeVisible()
   expect(screen.getByText("高价值待决定").closest("article")).toHaveTextContent("1")
   expect(screen.getByText("需要补证据").closest("article")).toHaveTextContent("1")
-  expect(await screen.findByText("公开来源：LinkedIn")).toBeVisible()
+  expect(await screen.findByText("公开来源：领英")).toBeVisible()
   expect(screen.getByText("明确提出替换斜齿轮需求。")).toBeVisible()
+  const opportunity = screen.getByRole("article", { name: "ABC Packaging 客户机会" })
+  expect(within(opportunity).getByText("需求摘要")).toBeVisible()
+  expect(within(opportunity).getByText("国家或地区：DE")).toBeVisible()
+  expect(within(opportunity).getByText("公开平台：领英")).toBeVisible()
 
   await userEvent.click(screen.getByRole("button", { name: "查看依据" }))
   expect(view.emitted("select-candidate")).toEqual([["lead-high"]])

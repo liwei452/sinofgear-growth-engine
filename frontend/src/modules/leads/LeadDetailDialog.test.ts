@@ -114,11 +114,19 @@ afterEach(() => {
   document.cookie = "csrftoken=; Max-Age=0; path=/"
 })
 
-it("shows original evidence before AI explanation and audit details", async () => {
+it("orders judgment, reasons, source evidence, uncertainty, decision, and CRM export", async () => {
   renderDialog()
   const original = await screen.findByText("We need replacement helical gears, 200 pcs.")
-  const explanation = screen.getByText("为什么值得查看")
-  expect(original.compareDocumentPosition(explanation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  const judgment = screen.getByRole("heading", { name: "AI 判断" })
+  const explanation = screen.getByRole("heading", { name: "判断理由" })
+  const evidence = screen.getByRole("heading", { name: "来源证据" })
+  const uncertainty = screen.getByRole("heading", { name: "不确定项" })
+  const decision = screen.getByRole("heading", { name: "人工决定" })
+  const handoff = screen.getByRole("heading", { name: "CRM 与导出" })
+  for (const [before, after] of [[judgment, explanation], [explanation, evidence], [evidence, uncertainty], [uncertainty, decision], [decision, handoff]]) {
+    expect(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  }
+  expect(explanation.compareDocumentPosition(original) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   expect(screen.getByRole("link", { name: "打开公开来源" })).toHaveAttribute("target", "_blank")
   expect(screen.getByRole("link", { name: "打开公开来源" })).toHaveAttribute("rel", "noopener noreferrer")
   expect(screen.getByText("高级审计信息").closest("details")).not.toHaveAttribute("open")
@@ -126,8 +134,12 @@ it("shows original evidence before AI explanation and audit details", async () =
 
 it("requires a reason before dismissing", async () => {
   renderDialog()
-  await userEvent.click(await screen.findByRole("button", { name: "暂不跟进" }))
+  const opener = await screen.findByRole("button", { name: "暂不跟进" })
+  await userEvent.click(opener)
+  expect(screen.getByRole("heading", { name: "记录人工决定" })).toHaveFocus()
   expect(screen.getByRole("button", { name: "确认暂不跟进" })).toBeDisabled()
+  await userEvent.click(screen.getByRole("button", { name: "取消" }))
+  expect(screen.getByRole("button", { name: "暂不跟进" })).toHaveFocus()
 })
 
 it("marks inferred identity and requirements as unconfirmed while keeping value separate from evidence", async () => {
@@ -188,8 +200,10 @@ it("gates analyze, review, and handoff controls independently", async () => {
     permitted_actions: ["DISMISS", "REQUEST_MORE_EVIDENCE"],
   }
   renderDialog(["leads.read", "leads.handoff"], vi.fn(async () => json(reviewedDetail)))
-  expect(await screen.findByRole("button", { name: "交给 CRM" })).toBeDisabled()
-  expect(screen.getByText("CRM 交接尚未接入，当前不会发送任何客户数据。")).toBeVisible()
+  expect(await screen.findByRole("button", { name: "交给 CRM" })).toBeEnabled()
+  await userEvent.click(screen.getByRole("button", { name: "交给 CRM" }))
+  expect(screen.getByText("CRM 尚未配置，当前不会发送客户资料。")).toBeVisible()
+  expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("handoff"), expect.anything())
 })
 
 it("removes cached evidence and audit immediately when read permission is withdrawn", async () => {

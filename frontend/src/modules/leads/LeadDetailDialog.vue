@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { useQuery, useQueryClient } from "@tanstack/vue-query"
-import { computed, onBeforeUnmount, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue"
 
 import { ApiError } from "../../api/client"
 import OperationModal from "../../shared/components/OperationModal.vue"
+import { ordinaryPlatform } from "../../shared/presentation/ordinary"
 import { currentUserQueryOptions } from "../auth/auth"
 import {
   analyzeLeadCandidate,
@@ -15,6 +16,7 @@ import {
   safePublicHttpUrl,
   type LeadReviewCreate,
 } from "./api"
+import LeadHandoffPanel from "./LeadHandoffPanel.vue"
 
 type ReviewAction = "CONFIRM" | "CORRECT" | "DISMISS" | "REOPEN" | "REQUEST_MORE_EVIDENCE"
 type CompanyCorrection = { company_name?: string; company_domain?: string; country_hint?: string }
@@ -37,6 +39,11 @@ const recoveryState = ref<RecoveryState>("idle")
 const submitting = ref(false)
 const analyzing = ref(false)
 const activeJobId = ref<string | null>(null)
+const handoffOpen = ref(false)
+const reviewHeading = ref<HTMLElement | null>(null)
+const decisionSection = ref<HTMLElement | null>(null)
+let reviewOpener: HTMLElement | null = null
+let reviewOpenerLabel = ""
 let pollTimer: ReturnType<typeof setTimeout> | undefined
 let session = 0
 let reviewKeySignature = ""
@@ -68,8 +75,9 @@ const reviewActions = computed(() => ([
   { action: "REOPEN" as const, label: "重新打开" },
   { action: "REQUEST_MORE_EVIDENCE" as const, label: "请求更多证据" },
 ].filter((item) => canReview.value && permittedActions.value.has(item.action))))
-const showHandoffNotice = computed(() => canHandoff.value
-  && ["REVIEWED", "READY_FOR_HANDOFF"].includes(detail.value?.status ?? ""))
+const handoffEligible = computed(() => ["REVIEWED", "READY_FOR_HANDOFF"].includes(detail.value?.status ?? ""))
+// This stays false until a separately tested backend capability endpoint reports a real connector.
+const connectorConfigured = false
 
 function stringField(record: unknown, field: string): string {
   if (!record || typeof record !== "object") return ""
@@ -163,6 +171,9 @@ function resetTransient(): void {
   submitting.value = false
   analyzing.value = false
   activeJobId.value = null
+  handoffOpen.value = false
+  reviewOpener = null
+  reviewOpenerLabel = ""
   reviewKeySignature = ""
   reviewKey = ""
   analyzeKeySignature = ""
@@ -186,7 +197,7 @@ function closeDialog(): void {
   emit("close")
 }
 
-function startReview(action: ReviewAction): void {
+function startReview(action: ReviewAction, event?: MouseEvent): void {
   if (!canReview.value || !permittedActions.value.has(action)
     || submitting.value || analyzing.value || detailQuery.isFetching.value) return
   selectedAction.value = action
@@ -200,13 +211,44 @@ function startReview(action: ReviewAction): void {
   recoveryState.value = "idle"
   reviewKeySignature = ""
   reviewKey = ""
+  reviewOpener = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  reviewOpenerLabel = reviewActions.value.find((item) => item.action === action)?.label ?? ""
+  void nextTick(() => reviewHeading.value?.focus())
+}
+
+function restoreReviewFocus(opener: HTMLElement | null, label: string): void {
+  if (opener?.isConnected) {
+    opener.focus()
+    return
+  }
+  const replacement = [...(decisionSection.value?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
+    .find((button) => button.textContent?.trim() === label)
+  replacement?.focus()
 }
 
 function cancelReview(): void {
+  const opener = reviewOpener
+  const openerLabel = reviewOpenerLabel
   selectedAction.value = null
   reason.value = ""
   recoveryState.value = "idle"
   alert.value = ""
+  reviewOpener = null
+  reviewOpenerLabel = ""
+  void nextTick(() => restoreReviewFocus(opener, openerLabel))
+}
+
+function openHandoff(): void {
+  if (!canHandoff.value || !handoffEligible.value || !detail.value) return
+  handoffOpen.value = true
+}
+
+function closeHandoff(): void {
+  handoffOpen.value = false
+}
+
+function handoffRequested(): void {
+  // Event contract only. No connector mutation exists until backend capability discovery is implemented.
 }
 
 function markCorrected(field: keyof CompanyCorrection): void {
@@ -258,7 +300,12 @@ async function submitReview(): Promise<void> {
     if (!isCurrent(token, organizationId, candidateId)) return
     recoveryState.value = "idle"
     selectedAction.value = null
+    const opener = reviewOpener
+    const openerLabel = reviewOpenerLabel
+    reviewOpener = null
+    reviewOpenerLabel = ""
     message.value = "处理结果已保存"
+    void nextTick(() => restoreReviewFocus(opener, openerLabel))
   } catch (error) {
     if (!isCurrent(token, organizationId, candidateId)) return
     if (error instanceof ApiError && error.status === 409) {
@@ -430,6 +477,10 @@ watch(canRead, (current, previous) => {
   if (organizationId) void queryClient.cancelQueries({ queryKey: leadKeys.jobs(organizationId) })
 }, { flush: "sync" })
 
+watch(canHandoff, (current) => {
+  if (!current) handoffOpen.value = false
+}, { flush: "sync" })
+
 onBeforeUnmount(() => {
   const organizationId = props.organizationId
   const candidateId = props.candidateId
@@ -457,7 +508,7 @@ onBeforeUnmount(() => {
       </section>
       <template v-else-if="detail">
         <section class="detail-section summary-section" aria-labelledby="opportunity-summary-title">
-          <h3 id="opportunity-summary-title">机会摘要</h3>
+          <h3 id="opportunity-summary-title">AI 判断</h3>
           <dl class="identity-grid">
             <div><dt>公司名称</dt><dd>{{ companyName || "未知" }} <span class="pending-tag">待确认</span></dd></div>
             <div><dt>公开域名</dt><dd>{{ companyDomain || "未知" }} <span class="pending-tag">待确认</span></dd></div>
@@ -469,11 +520,23 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
+        <section class="detail-section" aria-labelledby="ai-explanation-title">
+          <h3 id="ai-explanation-title">判断理由</h3>
+          <p>{{ explanationText(insight?.explanation) }}</p>
+          <h4 id="match-title">需求与能力匹配</h4>
+          <p v-if="!detail.requirements.length">还没有可核对的需求与能力匹配。</p>
+          <article v-for="requirement in detail.requirements" :key="requirement.id" class="match-card">
+            <div><span>推断需求</span><strong>{{ requirement.requirement_label }}</strong> <em class="pending-tag">待确认</em></div>
+            <p v-if="requirement.extracted_value">提取值：{{ requirement.extracted_value }} {{ requirement.unit }}</p>
+            <div><span>能力匹配</span><strong>{{ requirement.capability_label || "尚未匹配" }}</strong> <em class="pending-tag">待确认</em></div>
+          </article>
+        </section>
+
         <section class="detail-section" aria-labelledby="original-evidence-title">
-          <h3 id="original-evidence-title">原始证据</h3>
+          <h3 id="original-evidence-title">来源证据</h3>
           <p v-if="!detail.evidence.length">还没有可展示的公开证据。</p>
           <article v-for="item in detail.evidence" :key="item.id" class="evidence-card">
-            <div class="evidence-meta"><strong>{{ item.platform }}</strong><span>{{ item.language || "语言未知" }}</span></div>
+            <div class="evidence-meta"><strong>{{ ordinaryPlatform(item.platform) }}</strong><span>{{ item.language || "语言未知" }}</span></div>
             <p v-if="!evidenceIsUsable(item.availability, item.original_text)" class="evidence-status">
               {{ evidenceAvailabilityText(item.availability, item.original_text) }}
             </p>
@@ -486,21 +549,6 @@ onBeforeUnmount(() => {
           </article>
         </section>
 
-        <section class="detail-section" aria-labelledby="ai-explanation-title">
-          <h3 id="ai-explanation-title">AI 为什么这样判断</h3>
-          <p>{{ explanationText(insight?.explanation) }}</p>
-        </section>
-
-        <section class="detail-section" aria-labelledby="match-title">
-          <h3 id="match-title">需求与能力匹配</h3>
-          <p v-if="!detail.requirements.length">还没有可核对的需求与能力匹配。</p>
-          <article v-for="requirement in detail.requirements" :key="requirement.id" class="match-card">
-            <div><span>推断需求</span><strong>{{ requirement.requirement_label }}</strong> <em class="pending-tag">待确认</em></div>
-            <p v-if="requirement.extracted_value">提取值：{{ requirement.extracted_value }} {{ requirement.unit }}</p>
-            <div><span>能力匹配</span><strong>{{ requirement.capability_label || "尚未匹配" }}</strong> <em class="pending-tag">待确认</em></div>
-          </article>
-        </section>
-
         <section class="detail-section uncertainty-section" aria-labelledby="uncertainty-title">
           <h3 id="uncertainty-title">不确定项</h3>
           <ul>
@@ -510,18 +558,15 @@ onBeforeUnmount(() => {
           </ul>
         </section>
 
-        <section class="detail-section decision-section" aria-labelledby="human-decision-title">
+        <section ref="decisionSection" class="detail-section decision-section" aria-labelledby="human-decision-title">
           <h3 id="human-decision-title">人工决定</h3>
           <div v-if="!selectedAction" class="action-grid">
             <button v-if="canAnalyze && permittedActions.has('ANALYZE')" type="button" :disabled="!canStartAnalysis" @click="startAnalysis">{{ analyzing ? "正在分析…" : recoveryState === "ready" ? "按最新版本重新提交" : "重新分析" }}</button>
             <p v-if="canAnalyze && permittedActions.has('ANALYZE') && !usableEvidence.length" class="handoff-note">没有可用于分析的公开证据。请先补充仍可访问的公开原文。</p>
-            <button v-for="item in reviewActions" :key="item.action" type="button" :disabled="submitting || analyzing || detailQuery.isFetching.value" @click="startReview(item.action)">{{ item.label }}</button>
-            <template v-if="showHandoffNotice">
-              <button type="button" aria-label="交给 CRM" disabled>交给 CRM（尚未接入）</button>
-              <p class="handoff-note">CRM 交接尚未接入，当前不会发送任何客户数据。</p>
-            </template>
+            <button v-for="item in reviewActions" :key="item.action" type="button" :disabled="submitting || analyzing || detailQuery.isFetching.value" @click="startReview(item.action, $event)">{{ item.label }}</button>
           </div>
           <form v-else class="review-form" @submit.prevent="submitReview">
+            <h4 ref="reviewHeading" tabindex="-1">记录人工决定</h4>
             <p v-if="!canReview" class="form-alert">审核权限已撤销，当前处理内容不会提交。</p>
             <p v-else-if="!selectedActionAllowed" class="form-alert">最新状态不再允许“{{ actionLabel(selectedAction) }}”，请保留原因并取消后重新选择。</p>
             <fieldset v-if="selectedAction === 'CORRECT'" :disabled="!canReview || submitting">
@@ -560,11 +605,26 @@ onBeforeUnmount(() => {
             </article>
           </section>
         </details>
+
+        <section v-if="canHandoff" class="detail-section handoff-section" aria-labelledby="crm-export-title">
+          <h3 id="crm-export-title">CRM 与导出</h3>
+          <p v-if="handoffEligible">可下载包含来源证据的本地文件；CRM 连接器尚未配置，不会自动发送客户资料。</p>
+          <p v-else>完成人工决定后，可在这里导出资料或查看 CRM 接入方式。</p>
+          <button class="primary-action" type="button" :disabled="!handoffEligible" @click="openHandoff">交给 CRM</button>
+        </section>
       </template>
     </article>
   </OperationModal>
+  <LeadHandoffPanel
+    v-if="handoffOpen && detail"
+    :detail="detail"
+    :can-handoff="canHandoff"
+    :connector-configured="connectorConfigured"
+    @close="closeHandoff"
+    @handoff="handoffRequested"
+  />
 </template>
 
 <style scoped>
-.lead-detail{display:grid;gap:1rem}.dialog-header,.evidence-meta,.form-actions{display:flex;align-items:center;justify-content:space-between;gap:1rem}.dialog-header .eyebrow,.live-message{margin:0}.live-message:empty{display:none}.detail-section{padding:1rem;border:1px solid var(--sg-line,#d8dee8);border-radius:.8rem;background:#fff}.detail-section h3{margin-top:0}.identity-grid,.audit-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.7rem}.identity-grid div,.audit-grid div{padding:.65rem;border-radius:.6rem;background:var(--sg-canvas,#f6f8fa)}dt,.detail-section span{color:var(--sg-muted,#536273)}dd{margin:.25rem 0 0;font-weight:700}.pending-tag{display:inline-flex;padding:.15rem .45rem;border-radius:999px;background:#fff4d6;color:#805400;font-size:.75rem;font-style:normal;font-weight:800}.decision-signals{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:1rem}.decision-signals>div{display:grid;gap:.25rem;padding:.8rem;border-left:4px solid var(--sg-brand,#005ba8);background:var(--sg-canvas,#f6f8fa)}.decision-signals>div+div{border-left-color:#c17d16}.evidence-card,.match-card,.history-card{display:grid;gap:.6rem;padding:.85rem;border:1px solid var(--sg-line,#d8dee8);border-radius:.7rem}.evidence-card+.evidence-card,.match-card+.match-card,.history-card+.history-card{margin-top:.75rem}blockquote{margin:.2rem 0;padding:.7rem;border-left:4px solid var(--sg-brand,#005ba8);background:#f5f9fd;white-space:pre-wrap}.translation h4,.translation p{margin:.25rem 0}.unsafe-link{font-weight:700}.uncertainty-section{background:#fffaf0}.action-grid,.form-actions{display:flex;flex-wrap:wrap;gap:.7rem}.handoff-note{flex-basis:100%;margin:0;color:var(--sg-muted,#536273)}.review-form,.review-form fieldset{display:grid;gap:.8rem}.review-form label{display:grid;gap:.35rem}.review-form input,.review-form textarea{box-sizing:border-box;width:100%}.form-actions{justify-content:flex-end}.primary-action{border-color:var(--sg-brand,#005ba8);background:var(--sg-brand,#005ba8);color:#fff}.form-alert{padding:.75rem;border-radius:.6rem;background:#fff0ed;color:#79291d}.audit-section summary{cursor:pointer;font-weight:800}.audit-section section{margin-top:1rem}.audit-section pre{max-width:100%;overflow:auto;padding:.7rem;border-radius:.5rem;background:#16202b;color:#f5f7fa;white-space:pre-wrap;word-break:break-word}.state-panel{text-align:center}@media(max-width:600px){.identity-grid,.decision-signals,.audit-grid{grid-template-columns:1fr}.dialog-header{align-items:flex-start}.action-grid,.form-actions{display:grid;grid-template-columns:1fr}.action-grid button,.form-actions button{width:100%}}
+:deep(.operation-backdrop){place-items:stretch end;padding:0}:deep(.operation-dialog){box-sizing:border-box;width:min(46rem,52vw);max-height:100vh;border-radius:1rem 0 0 1rem}.lead-detail{display:grid;gap:1rem}.dialog-header,.evidence-meta,.form-actions{display:flex;align-items:center;justify-content:space-between;gap:1rem}.dialog-header .eyebrow,.live-message{margin:0}.live-message:empty{display:none}.detail-section{padding:1rem;border:1px solid var(--sg-line,#d8dee8);border-radius:.8rem;background:#fff}.detail-section h3{margin-top:0}.identity-grid,.audit-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.7rem}.identity-grid div,.audit-grid div{padding:.65rem;border-radius:.6rem;background:var(--sg-canvas,#f6f8fa)}dt,.detail-section span{color:var(--sg-muted,#536273)}dd{margin:.25rem 0 0;font-weight:700}.pending-tag{display:inline-flex;padding:.15rem .45rem;border-radius:999px;background:#fff4d6;color:#805400;font-size:.75rem;font-style:normal;font-weight:800}.decision-signals{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:1rem}.decision-signals>div{display:grid;gap:.25rem;padding:.8rem;border-left:4px solid var(--sg-brand,#005ba8);background:var(--sg-canvas,#f6f8fa)}.decision-signals>div+div{border-left-color:#c17d16}.evidence-card,.match-card,.history-card{display:grid;gap:.6rem;padding:.85rem;border:1px solid var(--sg-line,#d8dee8);border-radius:.7rem}.evidence-card+.evidence-card,.match-card+.match-card,.history-card+.history-card{margin-top:.75rem}blockquote{margin:.2rem 0;padding:.7rem;border-left:4px solid var(--sg-brand,#005ba8);background:#f5f9fd;white-space:pre-wrap}.translation h4,.translation p{margin:.25rem 0}.unsafe-link{font-weight:700}.uncertainty-section{background:#fffaf0}.action-grid,.form-actions{display:flex;flex-wrap:wrap;gap:.7rem}.handoff-note{flex-basis:100%;margin:0;color:var(--sg-muted,#536273)}.review-form,.review-form fieldset{display:grid;gap:.8rem}.review-form label{display:grid;gap:.35rem}.review-form input,.review-form textarea{box-sizing:border-box;width:100%}.form-actions{justify-content:flex-end}.primary-action{border-color:var(--sg-brand,#005ba8);background:var(--sg-brand,#005ba8);color:#fff}.form-alert{padding:.75rem;border-radius:.6rem;background:#fff0ed;color:#79291d}.audit-section summary{cursor:pointer;font-weight:800}.audit-section section{margin-top:1rem}.audit-section pre{max-width:100%;overflow:auto;padding:.7rem;border-radius:.5rem;background:#16202b;color:#f5f7fa;white-space:pre-wrap;word-break:break-word}.state-panel{text-align:center}@media(max-width:900px){:deep(.operation-dialog){width:100%;border-radius:0}}@media(max-width:600px){.identity-grid,.decision-signals,.audit-grid{grid-template-columns:1fr}.dialog-header{align-items:flex-start}.action-grid,.form-actions{display:grid;grid-template-columns:1fr}.action-grid button,.form-actions button{width:100%}}
 </style>

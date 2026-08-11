@@ -2,6 +2,9 @@
 import { useQuery, useQueryClient } from "@tanstack/vue-query"
 import { computed, onUnmounted, ref, shallowRef, watch } from "vue"
 
+import AppIcon from "../../shared/components/AppIcon.vue"
+import StatusBadge, { type StatusTone } from "../../shared/components/StatusBadge.vue"
+import { ordinaryPlatform } from "../../shared/presentation/ordinary"
 import { currentUserQueryOptions } from "../auth/auth"
 import {
   getLeadCandidate,
@@ -193,9 +196,13 @@ function sourceCopy(candidateId: string): string {
   const state = detailStates.value[candidateId]
   if (state === "loading" || !state) return "正在读取公开来源…"
   if (state === "error") return "公开来源暂时无法加载"
+  return `公开来源：${sourcePlatforms(candidateId)}`
+}
+
+function sourcePlatforms(candidateId: string): string {
   const platforms = [...new Set((details.value[candidateId]?.evidence ?? [])
-    .map((item) => item.platform.trim()).filter(Boolean))]
-  return `公开来源：${platforms.length ? platforms.join("、") : "待补充"}`
+    .map((item) => item.platform.trim()).filter(Boolean).map(ordinaryPlatform))]
+  return platforms.length ? platforms.join("、") : "待补充"
 }
 
 function explanation(candidateId: string): string {
@@ -226,6 +233,13 @@ function statusLabel(status: LeadCandidateList["status"]): string {
     DISMISSED: "已忽略",
   }
   return labels[status]
+}
+
+function statusTone(status: LeadCandidateList["status"]): StatusTone {
+  if (["REVIEWED", "READY_FOR_HANDOFF", "HANDED_OFF"].includes(status)) return "success"
+  if (["DISCOVERED", "ANALYZING"].includes(status)) return "neutral"
+  if (status === "DISMISSED") return "danger"
+  return "warning"
 }
 
 async function importCompleted(): Promise<void> {
@@ -286,7 +300,7 @@ function selectCandidate(candidateId: string): void {
       </label>
       <label>
         公开平台
-        <input v-model="platform" type="search" placeholder="例如 LinkedIn">
+        <input v-model="platform" type="search" placeholder="例如领英">
       </label>
       <label>
         国家或地区
@@ -324,16 +338,17 @@ function selectCandidate(candidateId: string): void {
       </button>
     </section>
     <section v-if="canRead && leads.length" class="opportunity-list" aria-label="客户机会列表" aria-live="polite">
-      <article v-for="candidate in leads" :key="candidate.id" class="opportunity-card">
+      <article v-for="candidate in leads" :key="candidate.id" class="opportunity-card" :aria-label="`${candidate.company_name || '待确认公司'} 客户机会`">
         <div class="opportunity-heading">
           <div>
             <div class="company-line">
+              <AppIcon name="company" />
               <h2>{{ candidate.company_name || "待确认" }}</h2>
               <span v-if="candidate.company_name" class="uncertain-label">待确认</span>
             </div>
             <p>{{ sourceCopy(candidate.id) }}</p>
           </div>
-          <span class="status-label">{{ statusLabel(candidate.status) }}</span>
+          <StatusBadge :tone="statusTone(candidate.status)" :label="statusLabel(candidate.status)" />
         </div>
         <div class="decision-signals">
           <div class="signal value-signal">
@@ -346,10 +361,13 @@ function selectCandidate(candidateId: string): void {
             <strong>{{ evidenceLabel(candidate) }}</strong>
           </div>
         </div>
-        <p class="explanation">{{ explanation(candidate.id) }}</p>
+        <div class="need-summary"><span>需求摘要</span><p class="explanation">{{ explanation(candidate.id) }}</p></div>
         <div class="card-footer">
-          <span>{{ candidate.country_hint || "地区待确认" }}</span>
-          <button type="button" @click="selectCandidate(candidate.id)">查看依据</button>
+          <div class="source-facts">
+            <span>国家或地区：{{ candidate.country_hint || "待确认" }}</span>
+            <span>公开平台：{{ sourcePlatforms(candidate.id) }}</span>
+          </div>
+          <button type="button" @click="selectCandidate(candidate.id)"><AppIcon name="document" />查看依据</button>
         </div>
       </article>
     </section>
@@ -375,5 +393,5 @@ function selectCandidate(candidateId: string): void {
 </template>
 
 <style scoped>
-.lead-radar{display:grid;gap:1.5rem}.page-header,.section-heading,.opportunity-heading,.company-line,.card-footer,.pagination{display:flex;align-items:center;justify-content:space-between;gap:1rem}.page-header{align-items:flex-start}.page-header h1,.section-heading h2,.opportunity-card h2{margin:.2rem 0}.page-header p,.section-heading p,.opportunity-heading p,.card-footer,.explanation{color:var(--sg-muted)}.eyebrow{margin:0;color:var(--sg-brand);font-weight:800;letter-spacing:.04em}.primary-action{border-color:var(--sg-brand);background:var(--sg-brand);color:#fff}.summary-section,.filter-panel,.state-panel,.opportunity-card{border:1px solid var(--sg-line);border-radius:var(--sg-radius-md);background:var(--sg-surface)}.summary-section{padding:1rem}.section-heading p{margin:0;font-size:.85rem}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem;margin-top:.8rem}.summary-card{display:grid;gap:.4rem;padding:.9rem;border-radius:var(--sg-radius-sm);background:var(--sg-canvas)}.summary-card span{color:var(--sg-muted)}.summary-card strong{font-size:1.65rem;color:var(--sg-ink)}.filter-panel{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) auto;gap:.8rem;padding:1rem;align-items:end}.filter-panel label{display:grid;gap:.35rem;font-weight:700}.filter-panel input,.filter-panel select{box-sizing:border-box;width:100%;min-height:2.7rem}.text-action{background:transparent;color:var(--sg-brand)}.loading-state,.state-panel{padding:1.4rem}.state-panel{text-align:center}.error-state{border-color:#efc7c7;background:var(--sg-danger-soft)}.opportunity-list{display:grid;gap:1rem}.opportunity-card{padding:1.1rem;box-shadow:0 8px 24px rgb(23 34 49 / 6%)}.opportunity-heading{align-items:flex-start}.company-line{justify-content:flex-start;flex-wrap:wrap}.uncertain-label,.status-label{display:inline-flex;padding:.25rem .55rem;border-radius:999px;background:var(--sg-brand-soft);color:var(--sg-brand);font-size:.78rem;font-weight:800}.decision-signals{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin:1rem 0}.signal{display:grid;gap:.25rem;padding:.8rem;border:1px solid var(--sg-line);border-radius:var(--sg-radius-sm)}.signal span,.signal small{color:var(--sg-muted)}.value-signal{border-left:4px solid var(--sg-brand)}.evidence-signal{border-left:4px solid #c17d16;background:#fffaf0}.explanation{margin:.8rem 0}.card-footer{border-top:1px solid var(--sg-line);padding-top:.8rem}.pagination{justify-content:flex-end}@media(max-width:900px){.summary-grid,.filter-panel{grid-template-columns:repeat(2,minmax(0,1fr))}.filter-panel .text-action{justify-self:start}}@media(max-width:600px){.page-header,.section-heading,.opportunity-heading,.card-footer{align-items:stretch;flex-direction:column}.page-header .primary-action{width:100%}.summary-grid,.filter-panel,.decision-signals{grid-template-columns:1fr}.pagination{display:grid;grid-template-columns:1fr 1fr}.card-footer button{width:100%}}
+.lead-radar{display:grid;gap:1.5rem}.page-header,.section-heading,.opportunity-heading,.company-line,.card-footer,.pagination{display:flex;align-items:center;justify-content:space-between;gap:1rem}.page-header{align-items:flex-start}.page-header h1,.section-heading h2,.opportunity-card h2{margin:.2rem 0}.page-header p,.section-heading p,.opportunity-heading p,.card-footer,.explanation{color:var(--sg-muted)}.eyebrow{margin:0;color:var(--sg-brand);font-weight:800;letter-spacing:.04em}.primary-action{border-color:var(--sg-brand);background:var(--sg-brand);color:#fff}.summary-section,.filter-panel,.state-panel,.opportunity-card{border:1px solid var(--sg-line);border-radius:var(--sg-radius-md);background:var(--sg-surface)}.summary-section{padding:1rem}.section-heading p{margin:0;font-size:.85rem}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem;margin-top:.8rem}.summary-card{display:grid;gap:.4rem;padding:.9rem;border-radius:var(--sg-radius-sm);background:var(--sg-canvas)}.summary-card span{color:var(--sg-muted)}.summary-card strong{font-size:1.65rem;color:var(--sg-ink)}.filter-panel{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) auto;gap:.8rem;padding:1rem;align-items:end}.filter-panel label{display:grid;gap:.35rem;font-weight:700}.filter-panel input,.filter-panel select{box-sizing:border-box;width:100%;min-height:2.7rem}.text-action{background:transparent;color:var(--sg-brand)}.loading-state,.state-panel{padding:1.4rem}.state-panel{text-align:center}.error-state{border-color:#efc7c7;background:var(--sg-danger-soft)}.opportunity-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.opportunity-card{display:grid;align-content:start;padding:1.1rem;box-shadow:0 8px 24px rgb(23 34 49 / 6%)}.opportunity-heading{align-items:flex-start}.company-line{justify-content:flex-start;flex-wrap:wrap}.company-line :deep(.app-icon){width:1.25rem}.uncertain-label{display:inline-flex;padding:.25rem .55rem;border-radius:999px;background:var(--sg-brand-soft);color:var(--sg-brand);font-size:.78rem;font-weight:800}.decision-signals{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin:1rem 0}.signal{display:grid;gap:.25rem;padding:.8rem;border:1px solid var(--sg-line);border-radius:var(--sg-radius-sm)}.signal span,.signal small,.need-summary>span{color:var(--sg-muted)}.value-signal{border-left:4px solid var(--sg-brand)}.evidence-signal{border-left:4px solid #c17d16;background:#fffaf0}.need-summary{display:grid;gap:.25rem}.need-summary>span{font-size:.82rem;font-weight:800}.explanation{margin:.15rem 0 .8rem}.card-footer{align-items:flex-end;border-top:1px solid var(--sg-line);padding-top:.8rem}.source-facts{display:grid;gap:.25rem}.card-footer button{display:inline-flex;align-items:center;gap:.35rem}.card-footer button :deep(.app-icon){width:1rem}.pagination{justify-content:flex-end}@media(max-width:1000px){.opportunity-list{grid-template-columns:1fr}.summary-grid,.filter-panel{grid-template-columns:repeat(2,minmax(0,1fr))}.filter-panel .text-action{justify-self:start}}@media(max-width:600px){.page-header,.section-heading,.opportunity-heading,.card-footer{align-items:stretch;flex-direction:column}.page-header .primary-action{width:100%}.summary-grid,.filter-panel,.decision-signals{grid-template-columns:1fr}.pagination{display:grid;grid-template-columns:1fr 1fr}.card-footer button{justify-content:center;width:100%}}
 </style>

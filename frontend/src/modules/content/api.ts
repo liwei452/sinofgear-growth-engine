@@ -1,4 +1,4 @@
-import { ApiError, apiRequest } from "../../api/client"
+import { ApiError, apiRequest, type ApiRequestOptions } from "../../api/client"
 
 export type CursorPage<T> = { next: string | null; previous: string | null; results: T[] }
 export type Campaign = {
@@ -144,8 +144,11 @@ export const listPlatformPage = async (): Promise<CursorPage<Platform>> => {
 export const listAssets = async (): Promise<CursorPage<Asset>> =>
   required(await apiRequest<CursorPage<Asset>>("/api/v1/assets"))
 
-export const listJobs = async (filters: { status?: JobStatus; job_id?: string } = {}): Promise<CursorPage<Job>> =>
-  required(await apiRequest<CursorPage<Job>>(queryUrl("/api/v1/jobs", filters)))
+export const listJobs = async (
+  filters: { status?: JobStatus; job_id?: string } = {},
+  options: Pick<ApiRequestOptions, "signal"> = {},
+): Promise<CursorPage<Job>> =>
+  required(await apiRequest<CursorPage<Job>>(queryUrl("/api/v1/jobs", filters), options))
 export const getJob = async (id: string): Promise<Job> => required(await apiRequest<Job>(`/api/v1/jobs/${id}`))
 export const cancelJob = async (id: string): Promise<Job> =>
   required(await apiRequest<Job>(`/api/v1/jobs/${id}/cancel`, { method: "POST", body: {} }))

@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { useQuery } from "@tanstack/vue-query"
 import { computed } from "vue"
-import { RouterLink } from "vue-router"
+import { RouterLink, useRouter } from "vue-router"
 
-import { assetKeys, listAssets } from "../assets/api"
 import { currentUserQueryOptions } from "../auth/auth"
 import { listJobs, type Job, type JobStatus } from "../content/api"
-import { knowledgeQueryKeys, listConcepts } from "../knowledge/api"
 import { listLeadCandidates } from "../leads/api"
-import { listProducts, productQueryKeys } from "../products/api"
+import { ordinaryScoreBand, ordinaryStatus } from "../../shared/presentation/ordinary"
+import ActivityRow from "./components/ActivityRow.vue"
+import DecisionCard from "./components/DecisionCard.vue"
+import MetricCard from "./components/MetricCard.vue"
 
+const router = useRouter()
 const currentUserQuery = useQuery(currentUserQueryOptions())
 const organizationId = computed(() => currentUserQuery.data.value?.organization.id ?? "")
 const permissions = computed(() => currentUserQuery.data.value?.membership.permissions ?? [])
@@ -17,13 +19,6 @@ const has = (permission: string): boolean => permissions.value.includes(permissi
 
 const canReadLeads = computed(() => has("leads.read"))
 const canReadJobs = computed(() => has("jobs.read"))
-const canReadProducts = computed(() => has("products.read"))
-const canReadKnowledge = computed(() => has("knowledge.read"))
-const canReadAssets = computed(() => has("assets.read"))
-const canManageProducts = computed(() => has("products.manage"))
-const canCreateKnowledge = computed(() => has("knowledge.create"))
-const canManageAssets = computed(() => has("assets.manage"))
-const canCheckCompany = computed(() => canReadProducts.value || canReadKnowledge.value || canReadAssets.value)
 
 type ActiveJobStatus = Extract<JobStatus, "QUEUED" | "RUNNING" | "RETRY_QUEUED">
 
@@ -36,51 +31,49 @@ const dashboardKeys = {
 
 const decisionsQuery = useQuery({
   queryKey: computed(() => dashboardKeys.decisions(organizationId.value)),
-  queryFn: () => listLeadCandidates({ review_state: "UNREVIEWED", page_size: 5 }),
+  queryFn: ({ signal }) => listLeadCandidates({ review_state: "UNREVIEWED", page_size: 5 }, { signal }),
   enabled: computed(() => Boolean(organizationId.value) && canReadLeads.value),
   retry: false,
 })
 const queuedJobsQuery = useQuery({
   queryKey: computed(() => dashboardKeys.activeJobs(organizationId.value, "QUEUED")),
-  queryFn: () => listJobs({ status: "QUEUED" }),
+  queryFn: ({ signal }) => listJobs({ status: "QUEUED" }, { signal }),
   enabled: computed(() => Boolean(organizationId.value) && canReadJobs.value),
   retry: false,
 })
 const runningJobsQuery = useQuery({
   queryKey: computed(() => dashboardKeys.activeJobs(organizationId.value, "RUNNING")),
-  queryFn: () => listJobs({ status: "RUNNING" }),
+  queryFn: ({ signal }) => listJobs({ status: "RUNNING" }, { signal }),
   enabled: computed(() => Boolean(organizationId.value) && canReadJobs.value),
   retry: false,
 })
 const retryQueuedJobsQuery = useQuery({
   queryKey: computed(() => dashboardKeys.activeJobs(organizationId.value, "RETRY_QUEUED")),
-  queryFn: () => listJobs({ status: "RETRY_QUEUED" }),
+  queryFn: ({ signal }) => listJobs({ status: "RETRY_QUEUED" }, { signal }),
   enabled: computed(() => Boolean(organizationId.value) && canReadJobs.value),
   retry: false,
 })
 const recentResultsQuery = useQuery({
   queryKey: computed(() => dashboardKeys.recentResults(organizationId.value)),
-  queryFn: () => listJobs({ status: "SUCCEEDED" }),
+  queryFn: ({ signal }) => listJobs({ status: "SUCCEEDED" }, { signal }),
   enabled: computed(() => Boolean(organizationId.value) && canReadJobs.value),
   retry: false,
 })
-const productsQuery = useQuery({
-  queryKey: computed(() => productQueryKeys.list(organizationId.value, {})),
-  queryFn: () => listProducts(),
-  enabled: computed(() => Boolean(organizationId.value) && canReadProducts.value),
-  retry: false,
-})
-const knowledgeQuery = useQuery({
-  queryKey: computed(() => knowledgeQueryKeys.concepts(organizationId.value)),
-  queryFn: listConcepts,
-  enabled: computed(() => Boolean(organizationId.value) && canReadKnowledge.value),
-  retry: false,
-})
-const assetsQuery = useQuery({
-  queryKey: computed(() => assetKeys.list(organizationId.value, {})),
-  queryFn: () => listAssets(),
-  enabled: computed(() => Boolean(organizationId.value) && canReadAssets.value),
-  retry: false,
+
+const decisionCards = computed(() => (decisionsQuery.data.value?.results ?? []).map((candidate, index) => ({
+  id: candidate.id,
+  index: index + 1,
+  title: `判断${candidate.company_name}是否值得联系`,
+  explanation: candidate.latest_score === null
+    ? "这条客户机会尚未完成人工判断；现在确认可让后续跟进继续。"
+    : `AI 给出的参考分数为 ${candidate.latest_score}（${ordinaryScoreBand(candidate.latest_score_band)}）；现在确认可让后续跟进继续。`,
+  statusLabel: "等待你的判断",
+  statusTone: "warning" as const,
+})))
+const decisionCount = computed(() => decisionCards.value.length)
+const decisionHeading = computed(() => {
+  const qualifier = decisionsQuery.data.value?.next ? "至少有" : "有"
+  return `今天${qualifier} ${decisionCount.value} 件事需要你决定`
 })
 
 const activeJobQueries = [queuedJobsQuery, runningJobsQuery, retryQueuedJobsQuery]
@@ -121,55 +114,28 @@ function completedJobLabel(job: Job): string {
   return jobTypeLabels[job.type]?.complete ?? "后台任务已完成"
 }
 
-function activeJobState(job: Job): string {
-  if (job.status === "QUEUED") return "等待开始"
-  if (job.status === "RETRY_QUEUED") return "等待重新执行"
-  return "执行中"
+function jobStatusTone(status: JobStatus): "brand" | "warning" | "neutral" {
+  if (status === "RUNNING") return "brand"
+  if (status === "RETRY_QUEUED") return "warning"
+  return "neutral"
 }
 
-type CompanyGap = { label: string; detail: string; to: string; action: string }
-const companyGaps = computed<CompanyGap[]>(() => {
-  const gaps: CompanyGap[] = []
-  if (canReadProducts.value && productsQuery.isSuccess.value && !productsQuery.data.value?.results.length) {
-    gaps.push({
-      label: "还缺产品资料",
-      detail: canManageProducts.value ? "先补充要推广的产品与交付能力。" : "当前没有可见产品资料。如需补充，请联系管理员。",
-      to: "/products",
-      action: canManageProducts.value ? "补充产品" : "查看产品库",
-    })
-  }
-  if (canReadKnowledge.value && knowledgeQuery.isSuccess.value && !knowledgeQuery.data.value?.length) {
-    gaps.push({
-      label: "还缺公司知识",
-      detail: canCreateKnowledge.value ? "补充卖点、工艺、市场术语和表达边界。" : "当前没有可见公司知识。如需补充，请联系管理员。",
-      to: "/knowledge",
-      action: canCreateKnowledge.value ? "补充知识" : "查看知识库",
-    })
-  }
-  if (canReadAssets.value && assetsQuery.isSuccess.value && !assetsQuery.data.value?.results.length) {
-    gaps.push({
-      label: "还缺可用素材",
-      detail: canManageAssets.value ? "上传真实图片、视频或文档，供后续推广使用。" : "当前没有可见素材。如需补充，请联系管理员。",
-      to: "/assets",
-      action: canManageAssets.value ? "补充素材" : "查看素材库",
-    })
-  }
-  return gaps
-})
-const companyPending = computed(() => [productsQuery, knowledgeQuery, assetsQuery]
-  .some((query) => query.isPending.value && query.fetchStatus.value === "fetching"))
-const companyHasError = computed(() => [productsQuery, knowledgeQuery, assetsQuery]
-  .some((query) => query.isError.value))
-const companyReady = computed(() => [
-  !canReadProducts.value || productsQuery.isSuccess.value,
-  !canReadKnowledge.value || knowledgeQuery.isSuccess.value,
-  !canReadAssets.value || assetsQuery.isSuccess.value,
-].every(Boolean))
+function activeJobDetail(job: Job): string {
+  if (job.status === "QUEUED") return "任务正在等待开始。"
+  if (job.status === "RETRY_QUEUED") return "任务正在等待重新执行。"
+  return "任务正在处理，进度来自任务状态。"
+}
 
-function retryCompanySources(): void {
-  if (productsQuery.isError.value) void productsQuery.refetch()
-  if (knowledgeQuery.isError.value) void knowledgeQuery.refetch()
-  if (assetsQuery.isError.value) void assetsQuery.refetch()
+const recentResults = computed(() => recentResultsQuery.data.value?.results ?? [])
+const recentResultConclusion = computed(() => {
+  const count = recentResults.value.length
+  return count === 1
+    ? "当前展示的 1 项工作已完成，可以查看对应工作区的结果。"
+    : `当前展示的 ${count} 项工作已完成，可以查看对应工作区的结果。`
+})
+
+function openLeadRadar(): void {
+  void router.push("/lead-radar")
 }
 </script>
 
@@ -178,111 +144,134 @@ function retryCompanySources(): void {
     <header class="cockpit-hero">
       <div>
         <p class="eyebrow">今天</p>
-        <h1>需要处理的事，都在这里</h1>
-        <p>只显示当前账号有权查看的真实工作与资料；没有数据时会直接说明。</p>
+        <h1 v-if="canReadLeads && decisionsQuery.isSuccess.value">{{ decisionHeading }}</h1>
+        <h1 v-else-if="canReadLeads && decisionsQuery.isError.value">今天的客户机会暂未加载</h1>
+        <h1 v-else-if="canReadLeads">正在整理今天需要你决定的事</h1>
+        <h1 v-else>今天的工作概览</h1>
+        <p>优先展示当前账号有权查看、并且需要你采取行动的真实工作；未知信息不会被补成数字。</p>
       </div>
     </header>
 
-    <div class="cockpit-grid">
+    <div class="cockpit-grid dashboard-cockpit-grid">
       <section class="cockpit-card cockpit-card-priority" role="region" aria-labelledby="decision-title">
         <div class="cockpit-card-heading">
           <div>
-            <p class="eyebrow">待办</p>
-            <h2 id="decision-title">今天需要你决定</h2>
+            <p class="eyebrow">优先处理</p>
+            <h2 id="decision-title">需要你决定</h2>
           </div>
           <RouterLink v-if="canReadLeads" class="text-link" to="/lead-radar">查看全部</RouterLink>
         </div>
         <p v-if="!canReadLeads" class="cockpit-empty">你没有查看客户机会的权限。</p>
-        <p v-else-if="decisionsQuery.isPending.value" class="cockpit-empty" role="status">正在读取待决定事项…</p>
+        <p v-else-if="decisionsQuery.isPending.value" class="cockpit-empty" role="status">正在读取需要你决定的客户机会…</p>
         <div v-else-if="decisionsQuery.isError.value" class="cockpit-local-error" role="alert">
-          <p>待决定事项暂时无法加载。</p>
-          <button type="button" @click="decisionsQuery.refetch()">重新加载待决定事项</button>
+          <p>客户机会暂时没有加载成功。</p>
+          <button type="button" @click="decisionsQuery.refetch()">重新加载客户机会</button>
         </div>
-        <p v-else-if="!decisionsQuery.data.value?.results.length" class="cockpit-empty">今天没有等待你处理的客户机会。</p>
-        <ul v-else class="cockpit-list">
-          <li v-for="candidate in decisionsQuery.data.value.results" :key="candidate.id">
-            <div>
-              <strong>{{ candidate.company_name }}</strong>
-              <p>这条客户机会还没有完成人工判断。</p>
-            </div>
-            <RouterLink class="button button-secondary" to="/lead-radar">查看并决定</RouterLink>
-          </li>
-        </ul>
+        <div v-else-if="!decisionCards.length" class="cockpit-empty">
+          <p>还没有等待判断的客户机会。先添加公开线索，AI 才能帮你整理下一步。</p>
+          <RouterLink class="text-link" to="/lead-radar">前往客户机会</RouterLink>
+        </div>
+        <div v-else class="decision-card-list">
+          <DecisionCard
+            v-for="decision in decisionCards"
+            :key="decision.id"
+            v-bind="decision"
+            primary-action="查看并决定"
+            @primary="openLeadRadar"
+          />
+        </div>
       </section>
 
-      <section class="cockpit-card" role="region" aria-labelledby="running-title">
+      <section class="cockpit-card" role="region" aria-labelledby="activity-title">
         <div class="cockpit-card-heading">
           <div>
             <p class="eyebrow">进行中</p>
-            <h2 id="running-title">AI 正在执行</h2>
+            <h2 id="activity-title">AI 正在帮你工作</h2>
           </div>
         </div>
         <p v-if="!canReadJobs" class="cockpit-empty">你没有查看 AI 任务的权限。</p>
-        <p v-else-if="activeJobsPending && !activeJobs.length && !activeJobsHasError" class="cockpit-empty" role="status">正在读取执行情况…</p>
+        <p v-else-if="activeJobsPending && !activeJobs.length && !activeJobsHasError" class="cockpit-empty" role="status">正在读取 AI 的工作进度…</p>
         <div v-if="canReadJobs && activeJobsHasError" class="cockpit-local-error" role="alert">
-          <p>部分 AI 执行状态暂时无法确认。已确认的任务仍显示在下方。</p>
+          <p>部分 AI 工作状态暂时无法确认；已确认的工作仍显示在下方。</p>
           <button type="button" @click="retryActiveJobs">重新加载未确认状态</button>
         </div>
-        <p v-if="canReadJobs && activeJobsReady && !activeJobs.length" class="cockpit-empty">当前没有正在执行的 AI 任务。</p>
-        <ul v-if="canReadJobs && activeJobs.length" class="cockpit-list cockpit-list-compact">
-          <li v-for="job in activeJobs" :key="job.job_id">
-            <div>
-              <strong>{{ activeJobLabel(job) }}</strong>
-              <p>{{ activeJobState(job) }}</p>
-            </div>
-          </li>
-        </ul>
+        <div v-if="canReadJobs && activeJobsReady && !activeJobs.length" class="cockpit-empty">
+          <p>当前没有正在执行的 AI 工作。添加公开线索后，AI 会在这里汇报进度。</p>
+          <RouterLink class="text-link" to="/lead-radar">前往客户机会</RouterLink>
+        </div>
+        <div v-if="canReadJobs && activeJobs.length" class="activity-row-list">
+          <ActivityRow
+            v-for="job in activeJobs"
+            :key="job.job_id"
+            :title="activeJobLabel(job)"
+            :detail="activeJobDetail(job)"
+            :status-label="ordinaryStatus(job.status)"
+            :status-tone="jobStatusTone(job.status)"
+            :progress="Number.isInteger(job.progress) ? job.progress : null"
+          />
+        </div>
       </section>
 
-      <section class="cockpit-card" role="region" aria-labelledby="results-title">
+      <section class="cockpit-card cockpit-card-results" role="region" aria-labelledby="results-title">
         <div class="cockpit-card-heading">
           <div>
             <p class="eyebrow">刚刚完成</p>
-            <h2 id="results-title">近期结果</h2>
+            <h2 id="results-title">最近结果</h2>
           </div>
         </div>
         <p v-if="!canReadJobs" class="cockpit-empty">你没有查看近期 AI 结果的权限。</p>
-        <p v-else-if="recentResultsQuery.isPending.value" class="cockpit-empty" role="status">正在读取近期结果…</p>
+        <p v-else-if="recentResultsQuery.isPending.value" class="cockpit-empty" role="status">正在读取最近结果…</p>
         <div v-else-if="recentResultsQuery.isError.value" class="cockpit-local-error" role="alert">
-          <p>近期结果暂时无法加载。</p>
-          <button type="button" @click="recentResultsQuery.refetch()">重新加载近期结果</button>
+          <p>最近结果暂时无法加载。</p>
+          <button type="button" @click="recentResultsQuery.refetch()">重新加载最近结果</button>
         </div>
-        <p v-else-if="!recentResultsQuery.data.value?.results.length" class="cockpit-empty">当前页没有最近完成的 AI 任务。</p>
-        <ul v-else class="cockpit-list cockpit-list-compact">
-          <li v-for="job in recentResultsQuery.data.value.results" :key="job.job_id">
-            <div>
-              <strong>{{ completedJobLabel(job) }}</strong>
-              <p>可前往对应工作区查看真实结果。</p>
-            </div>
-          </li>
-        </ul>
-      </section>
-
-      <section class="cockpit-card" role="region" aria-labelledby="company-gap-title">
-        <div class="cockpit-card-heading">
-          <div>
-            <p class="eyebrow">AI 的资料基础</p>
-            <h2 id="company-gap-title">公司资料还缺什么</h2>
+        <div v-else-if="!recentResults.length" class="cockpit-empty">
+          <p>暂时没有已完成的 AI 工作。完成后的结果会在这里汇总。</p>
+        </div>
+        <template v-else>
+          <div class="dashboard-metrics">
+            <MetricCard
+              label="当前展示的完成任务"
+              :value="`${recentResults.length} 项`"
+              :conclusion="recentResultConclusion"
+            />
           </div>
-          <RouterLink class="text-link" to="/company-profile">查看资料</RouterLink>
-        </div>
-        <p v-if="!canCheckCompany" class="cockpit-empty">当前权限下无法检查公司资料完整度。</p>
-        <p v-else-if="companyPending" class="cockpit-empty" role="status">正在检查当前可见的公司资料…</p>
-        <div v-else-if="companyHasError" class="cockpit-local-error" role="alert">
-          <p>部分公司资料暂时无法检查，已读取的其他区域仍可使用。</p>
-          <button type="button" @click="retryCompanySources">重新检查公司资料</button>
-        </div>
-        <p v-if="companyReady && !companyGaps.length" class="cockpit-empty cockpit-success">当前可见资料中没有发现空白项。</p>
-        <ul v-else-if="companyGaps.length" class="cockpit-list">
-          <li v-for="gap in companyGaps" :key="gap.to">
-            <div>
-              <strong>{{ gap.label }}</strong>
-              <p>{{ gap.detail }}</p>
-            </div>
-            <RouterLink class="button button-secondary" :to="gap.to">{{ gap.action }}</RouterLink>
-          </li>
-        </ul>
+          <ul class="cockpit-list cockpit-list-compact">
+            <li v-for="job in recentResults" :key="job.job_id">
+              <div>
+                <strong>{{ completedJobLabel(job) }}</strong>
+                <p>可以前往对应工作区查看真实结果。</p>
+              </div>
+            </li>
+          </ul>
+        </template>
       </section>
     </div>
   </div>
 </template>
+
+<style scoped>
+.dashboard-cockpit-grid {
+  align-items: start;
+}
+
+.cockpit-card-priority {
+  grid-row: span 2;
+}
+
+.decision-card-list,
+.activity-row-list {
+  margin-top: 18px;
+}
+
+.dashboard-metrics {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 18px;
+}
+
+@media (max-width: 760px) {
+  .cockpit-card-priority { grid-row: auto; }
+}
+</style>

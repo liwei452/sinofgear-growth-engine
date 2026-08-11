@@ -52,8 +52,8 @@ function renderWizard(overrides: {
       platforms: [{ id: "platform-1", code: "LINKEDIN", name: "LinkedIn", capabilities: ["PUBLISH"] }],
       assets: overrides.assets ?? [], concepts: overrides.concepts ?? [], brief: overrides.brief === undefined ? draft : overrides.brief,
       experience: overrides.experience,
-      more: { campaigns: false, products: false, platforms: false, assets: false },
-      pageErrors: { campaigns: "", products: "", platforms: "", assets: "" },
+      more: { campaigns: false, products: false, platforms: false, assets: false, concepts: false },
+      pageErrors: { campaigns: "", products: "", platforms: "", assets: "", concepts: "" },
     },
   })
 }
@@ -171,16 +171,20 @@ it("shows linked unavailable relationships and removes them from an edited draft
 })
 
 it("renders missing linked provenance as a removable unavailable placeholder", async () => {
-  const missingDraft: ContentBrief = { ...draft, product_ids: ["product-1", "product-outside-page"] }
+  const missingDraft: ContentBrief = { ...draft, product_ids: ["product-1", "product-outside-page", "product-other-page"] }
   patchBriefMock.mockResolvedValueOnce(missingDraft)
   const user = userEvent.setup()
   renderWizard({ brief: missingDraft })
 
   await user.click(screen.getByRole("button", { name: "下一步" }))
   const placeholder = screen.getByLabelText("历史产品 1（名称暂不可用）（不可用，仅可移除）")
+  const secondPlaceholder = screen.getByLabelText("历史产品 2（名称暂不可用）（不可用，仅可移除）")
   expect(placeholder).toBeChecked()
-  expect(screen.getByText("内部ID")).toBeInTheDocument()
+  expect(secondPlaceholder).toBeChecked()
+  for (const summary of screen.getAllByText("内部ID")) expect(summary.closest("details")).not.toHaveAttribute("open")
   await user.click(placeholder)
+  expect(screen.getByLabelText("历史产品 2（名称暂不可用）（不可用，仅可移除）")).toBeChecked()
+  await user.click(secondPlaceholder)
   await user.click(screen.getByRole("button", { name: "下一步" }))
   await user.click(screen.getByRole("button", { name: "下一步" }))
   await user.click(screen.getByRole("button", { name: "保存需求草稿" }))
@@ -215,6 +219,9 @@ it("keeps missing relationship UUIDs private in the ordinary wizard and still re
   expect(document.body).not.toHaveTextContent(assetUuid)
   expect(document.body).not.toHaveTextContent(conceptUuid)
   await user.click(screen.getByRole("button", { name: "查看并确认方案" }))
+  expect(screen.getByRole("heading", { name: "确认方案" }).parentElement).toHaveTextContent(
+    "精密齿轮、历史产品 1（名称暂不可用）",
+  )
   expect(document.body).not.toHaveTextContent(productUuid)
   expect(document.body).not.toHaveTextContent(assetUuid)
   expect(document.body).not.toHaveTextContent(conceptUuid)

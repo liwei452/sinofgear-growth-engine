@@ -172,6 +172,136 @@ it("loads one safe cursor page and selects products and assets from page two", a
   expect(screen.queryByRole("button", { name: "加载更多产品" })).not.toBeInTheDocument()
 })
 
+it("keeps ordinary advanced-record pagination safe and retryable after a 403", async () => {
+  const privateUuid = "91a34e74-bfad-4e4c-8753-9475df12dbb2"
+  const rawMessage = `Campaign access denied for ${privateUuid}`
+  let attempts = 0
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/campaigns") return new Response(JSON.stringify({
+      next: "/api/v1/campaigns?cursor=two", previous: null, results: [campaign],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/campaigns?cursor=two") {
+      attempts += 1
+      return attempts === 1
+        ? new Response(JSON.stringify({
+            code: "PERMISSION_DENIED", message: rawMessage,
+            recovery_action: "Contact your administrator and retry",
+          }), { status: 403, headers: { "Content-Type": "application/json" } })
+        : new Response(JSON.stringify({
+            next: null, previous: "/api/v1/campaigns", results: [{ ...campaign, id: "campaign-2", name: "第二项推广" }],
+          }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["campaigns.read"], "ordinary")
+
+  await user.click(await screen.findByRole("button", { name: "查看高级记录" }))
+  await user.click(screen.getByRole("button", { name: "加载更多推广活动" }))
+
+  const recovery = await screen.findByRole("alert")
+  expect(recovery).toHaveTextContent("下一页没有加载成功，请重试。")
+  expect(document.body).not.toHaveTextContent("PERMISSION_DENIED")
+  expect(document.body).not.toHaveTextContent("Contact your administrator")
+  expect(document.body).not.toHaveTextContent(rawMessage)
+  expect(document.body).not.toHaveTextContent(privateUuid)
+  expect(screen.getByText(campaign.name)).toBeVisible()
+
+  await user.click(within(recovery).getByRole("button", { name: "重试" }))
+  expect(await screen.findByText("第二项推广")).toBeVisible()
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+})
+
+it("keeps product, asset, and knowledge page errors safe in the ordinary wizard and clears them after retry", async () => {
+  const privateUuid = "28a977bf-27c8-47d5-982b-dd308dcb2c65"
+  const productRaw = `Invalid product_ids[0] ${privateUuid}`
+  const assetRaw = `Invalid asset_ids[0] ${privateUuid}`
+  const conceptRaw = `Invalid concept_links[0].concept_id ${privateUuid}`
+  const attempts = { products: 0, assets: 0, concepts: 0 }
+  const secondProduct = { id: "product-2", name_zh: "第二页齿轮", name_en: "Page Two Gear", status: "ACTIVE" }
+  const secondAsset = { id: "asset-2", asset_type: "IMAGE", original_filename: "page-two.png", mime_type: "image/png", size_bytes: 10, language: "zh", status: "ACTIVE", tags: [], created_at: "" }
+  const secondConcept = { id: "concept-2", code: "ISO_1328", concept_type: "STANDARD", label_zh: "ISO 1328", label_en: "ISO 1328", status: "APPROVED" }
+  const badPage = (message: string) => new Response(JSON.stringify({
+    code: "VALIDATION_ERROR", message, errors: { raw_field: [message] },
+  }), { status: 400, headers: { "Content-Type": "application/json" } })
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === "/api/v1/products?status=ACTIVE") return new Response(JSON.stringify({
+      next: "/api/v1/products?status=ACTIVE&cursor=two", previous: null,
+      results: [{ id: "product-1", name_zh: "精密齿轮", name_en: "Precision Gear", status: "ACTIVE" }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/products?status=ACTIVE&cursor=two") {
+      attempts.products += 1
+      return attempts.products === 1 ? badPage(productRaw) : new Response(JSON.stringify({
+        next: null, previous: "/api/v1/products?status=ACTIVE", results: [secondProduct],
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/assets?status=ACTIVE") return new Response(JSON.stringify({
+      next: "/api/v1/assets?status=ACTIVE&cursor=two", previous: null, results: [],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/assets?status=ACTIVE&cursor=two") {
+      attempts.assets += 1
+      return attempts.assets === 1 ? badPage(assetRaw) : new Response(JSON.stringify({
+        next: null, previous: "/api/v1/assets?status=ACTIVE", results: [secondAsset],
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/knowledge/concepts?status=APPROVED&page_size=50") return new Response(JSON.stringify({
+      next: "/api/v1/knowledge/concepts?status=APPROVED&page_size=50&cursor=two", previous: null,
+      results: [{ id: "concept-1", code: "DIN", concept_type: "STANDARD", label_zh: "DIN", label_en: "DIN", status: "APPROVED" }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/knowledge/concepts?status=APPROVED&page_size=50&cursor=two") {
+      attempts.concepts += 1
+      return attempts.concepts === 1 ? badPage(conceptRaw) : new Response(JSON.stringify({
+        next: null, previous: "/api/v1/knowledge/concepts?status=APPROVED&page_size=50", results: [secondConcept],
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    return new Response(JSON.stringify(baseResponse(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read", "knowledge.read", "memberships.read"], "ordinary")
+
+  await user.click(await screen.findByRole("button", { name: "选择产品并继续" }))
+  const products = screen.getByRole("group", { name: "这次推广什么？" })
+  await user.click(within(products).getByRole("button", { name: "加载更多产品" }))
+  let recovery = await within(products).findByRole("alert")
+  expect(recovery).toHaveTextContent("下一页没有加载成功，请重试。")
+  expect(document.body).not.toHaveTextContent(productRaw)
+  expect(document.body).not.toHaveTextContent("raw_field")
+  await user.click(within(recovery).getByRole("button", { name: "重试" }))
+  expect(await screen.findByLabelText("第二页齿轮")).toBeVisible()
+  expect(within(products).queryByRole("alert")).not.toBeInTheDocument()
+
+  await user.click(screen.getByLabelText("精密齿轮"))
+  await user.click(screen.getByRole("button", { name: "保存产品并继续" }))
+  await user.selectOptions(screen.getByLabelText("目标市场（必选）"), "德国")
+  await user.selectOptions(screen.getByLabelText("目标客户（必选）"), "工业采购")
+  await user.selectOptions(screen.getByLabelText("推广目标（必选）"), "获取询盘")
+  await user.selectOptions(screen.getByLabelText("希望客户下一步（必选）"), "立即询价")
+  await user.selectOptions(screen.getByLabelText("内容语言（必选）"), "de")
+  await user.click(screen.getByLabelText("LinkedIn"))
+  await user.click(screen.getByRole("button", { name: "保存目标并查看素材" }))
+
+  const assets = screen.getByRole("group", { name: "可选素材" })
+  const concepts = screen.getByRole("group", { name: "已批准知识（可选）" })
+  await user.click(within(assets).getByRole("button", { name: "加载更多素材" }))
+  recovery = await within(assets).findByRole("alert")
+  expect(recovery).toHaveTextContent("下一页没有加载成功，请重试。")
+  expect(document.body).not.toHaveTextContent(assetRaw)
+  await user.click(within(concepts).getByRole("button", { name: "加载更多知识" }))
+  const conceptRecovery = await within(concepts).findByRole("alert")
+  expect(conceptRecovery).toHaveTextContent("下一页没有加载成功，请重试。")
+  expect(document.body).not.toHaveTextContent(conceptRaw)
+  expect(document.body).not.toHaveTextContent(privateUuid)
+
+  await user.click(within(recovery).getByRole("button", { name: "重试" }))
+  await user.click(within(conceptRecovery).getByRole("button", { name: "重试" }))
+  expect(await screen.findByText("page-two.png")).toBeVisible()
+  expect(await screen.findByLabelText("ISO 1328 (STANDARD)")).toBeVisible()
+  expect(within(assets).queryByRole("alert")).not.toBeInTheDocument()
+  expect(within(concepts).queryByRole("alert")).not.toBeInTheDocument()
+})
+
 it("requires selling points, advantages, and keywords before confirmation", async () => {
   vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(baseResponse(path)), {
     status: 200, headers: { "Content-Type": "application/json" },

@@ -85,6 +85,7 @@ const briefPages = useCursorCollection(briefsQuery.data, "/api/v1/content-briefs
 const productPages = useCursorCollection(productsQuery.data, "/api/v1/products", organizationId, (item) => item.id)
 const platformPages = useCursorCollection(platformsQuery.data, "/api/v1/platforms", organizationId, (item) => item.id)
 const assetPages = useCursorCollection(assetsQuery.data, "/api/v1/assets", organizationId, (item) => item.id)
+const conceptPages = useCursorCollection(conceptsQuery.data, "/api/v1/knowledge/concepts", organizationId, (item) => item.id)
 const jobPages = useCursorCollection(jobsQuery.data, "/api/v1/jobs", organizationId, (item) => item.job_id)
 const masterPages = useCursorCollection(masterQuery.data, "/api/v1/master-contents", organizationId, (item) => item.id)
 const visibleCampaigns = computed(() => canReadCampaigns.value ? campaigns.items.value : [])
@@ -92,10 +93,10 @@ const briefs = computed(() => canReadCampaigns.value ? briefPages.items.value : 
 const visibleMasterContents = computed(() => canReadContent.value ? masterPages.items.value : [])
 const visibleProducts = computed(() => canReadProducts.value ? productPages.items.value : [])
 const visibleAssets = computed(() => canReadAssets.value ? assetPages.items.value : [])
-const visibleConcepts = computed(() => canReadKnowledge.value ? conceptsQuery.data.value?.results ?? [] : [])
+const visibleConcepts = computed(() => canReadKnowledge.value ? conceptPages.items.value : [])
 const eligibleProducts = computed(() => canReadProducts.value ? productPages.items.value.filter((product) => product.status === "ACTIVE") : [])
 const eligibleAssets = computed(() => canReadAssets.value ? assetPages.items.value.filter((asset) => asset.status === "ACTIVE") : [])
-const approvedConcepts = computed(() => canReadKnowledge.value ? (conceptsQuery.data.value?.results ?? []).filter((concept) => concept.status === "APPROVED") : [])
+const approvedConcepts = computed(() => canReadKnowledge.value ? conceptPages.items.value.filter((concept) => concept.status === "APPROVED") : [])
 const jobs = computed(() => {
   if (!canObserveJobs.value && !trackedGeneration.value) return []
   const combined = [...(canObserveJobs.value ? jobPages.items.value : []), ...liveJobs.value]
@@ -508,6 +509,7 @@ watch(canReadAssets, (current, previous) => {
 
 watch(canReadKnowledge, (current, previous) => {
   if (!previous || current) return
+  conceptPages.reset()
   wizardOpen.value = false
   editingBrief.value = null
   cancelAndClear(conceptQueryKey.value)
@@ -542,6 +544,7 @@ watch(canObserveJobs, (current, previous) => {
 watch(editingBrief, () => {
   productPages.reset()
   assetPages.reset()
+  conceptPages.reset()
 }, { flush: "sync" })
 
 watch(ordinaryRecoveryScope, () => { void startOrdinaryRecovery() }, { immediate: true, flush: "sync" })
@@ -618,7 +621,7 @@ onBeforeUnmount(() => { disposed = true; cancelOrdinaryRecovery(); for (const ti
       <section v-if="has('jobs.read')" aria-labelledby="jobs-title"><h2 id="jobs-title">生成任务</h2><p v-if="visibleJobError" role="alert">{{ visibleJobError }} <button type="button" @click="reloadJobs">重新加载生成记录</button></p><div v-if="jobs.length" class="card-grid"><article v-for="(job, index) in jobs" :key="job.job_id" class="workflow-card"><div class="card-heading"><h3>{{ ordinaryExperience ? `第 ${index + 1} 项生成记录` : `任务 ${job.job_id}` }}</h3><span class="status-chip">{{ jobStatusLabel(job) }}</span></div><p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p><p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p><p v-else-if="job.status === 'FAILED'" role="alert">{{ ordinaryExperience ? '这次没有生成完成，你可以再次尝试。' : job.error?.message || '生成未完成，可以重试。' }}</p><div class="card-actions"><button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">{{ ordinaryExperience ? '停止生成' : '取消任务' }}</button><button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">{{ ordinaryExperience ? '再次尝试' : '重新尝试' }}</button></div></article></div><p v-else class="muted">提交生成后，进度会显示在这里。</p><p v-if="visibleJobPageError" role="alert">{{ visibleJobPageError }} <button type="button" @click="jobPages.loadMore">{{ ordinaryExperience ? '重新加载更多生成记录' : '重试' }}</button></p><button v-else-if="jobPages.next.value" type="button" @click="jobPages.loadMore">加载更多生成任务</button></section>
     </template>
 
-    <ContentBriefWizard v-if="wizardOpen || editingBrief" :experience="experience" :brief="editingBrief" :campaigns="visibleCampaigns" :products="ordinaryCreation ? eligibleProducts : visibleProducts" :platforms="platformPages.items.value" :assets="ordinaryCreation ? eligibleAssets : visibleAssets" :concepts="ordinaryCreation ? approvedConcepts : visibleConcepts" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
+    <ContentBriefWizard v-if="wizardOpen || editingBrief" :experience="experience" :brief="editingBrief" :campaigns="visibleCampaigns" :products="ordinaryCreation ? eligibleProducts : visibleProducts" :platforms="platformPages.items.value" :assets="ordinaryCreation ? eligibleAssets : visibleAssets" :concepts="ordinaryCreation ? approvedConcepts : visibleConcepts" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value), concepts: Boolean(conceptPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value, concepts: conceptPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages, concepts: conceptPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
   </div>
 </template>
 

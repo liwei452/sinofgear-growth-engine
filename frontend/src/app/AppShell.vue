@@ -5,9 +5,10 @@ import { RouterLink, RouterView, useRoute, useRouter } from "vue-router"
 
 import { ApiError } from "../api/client"
 import { currentUserQueryOptions, logout } from "../modules/auth/auth"
+import AppIcon, { type AppIconName } from "../shared/components/AppIcon.vue"
 
 type NavigationMode = "ordinary" | "advanced"
-type NavigationItem = { label: string; to: string; icon: string; permission?: string }
+type NavigationItem = { label: string; to: string; icon: AppIconName; permission?: string }
 type NavigationSection = { group: string; items: NavigationItem[] }
 
 const navigationPreferenceKey = "sinofgear-navigation-mode-v1"
@@ -15,11 +16,11 @@ const ordinaryNavigation: NavigationSection[] = [
   {
     group: "日常工作",
     items: [
-      { label: "今天", to: "/", icon: "今" },
-      { label: "推广", to: "/promotion", icon: "推" },
-      { label: "客户机会", to: "/lead-radar", icon: "客" },
-      { label: "效果", to: "/analytics", icon: "效" },
-      { label: "公司资料", to: "/company-profile", icon: "司" },
+      { label: "今天", to: "/", icon: "home" },
+      { label: "推广", to: "/promotion", icon: "megaphone" },
+      { label: "客户机会", to: "/lead-radar", icon: "users" },
+      { label: "效果", to: "/analytics", icon: "chart" },
+      { label: "我的公司", to: "/company-profile", icon: "company" },
     ],
   },
 ]
@@ -27,31 +28,31 @@ const advancedNavigation: NavigationSection[] = [
   {
     group: "工作台",
     items: [
-      { label: "首页", to: "/", icon: "首" },
-      { label: "客户机会", to: "/lead-radar", icon: "客", permission: "leads.read" },
+      { label: "首页", to: "/", icon: "home" },
+      { label: "客户机会", to: "/lead-radar", icon: "users", permission: "leads.read" },
     ],
   },
   {
     group: "内容准备",
     items: [
-      { label: "产品库", to: "/products", icon: "产", permission: "products.read" },
-      { label: "知识库", to: "/knowledge", icon: "知", permission: "knowledge.read" },
-      { label: "素材库", to: "/assets", icon: "素", permission: "assets.read" },
+      { label: "产品库", to: "/products", icon: "company", permission: "products.read" },
+      { label: "知识库", to: "/knowledge", icon: "document", permission: "knowledge.read" },
+      { label: "素材库", to: "/assets", icon: "star", permission: "assets.read" },
     ],
   },
   {
     group: "内容与审核",
     items: [
-      { label: "AI 内容工厂", to: "/content-factory", icon: "AI", permission: "campaigns.read" },
-      { label: "审核中心", to: "/reviews", icon: "审", permission: "content.read" },
+      { label: "AI 内容工厂", to: "/content-factory", icon: "sparkles", permission: "campaigns.read" },
+      { label: "审核中心", to: "/reviews", icon: "check", permission: "content.read" },
     ],
   },
   {
     group: "发布与增长",
     items: [
-      { label: "发布日历", to: "/publishing-calendar", icon: "发", permission: "publishing.read" },
-      { label: "平台账户", to: "/platform-accounts", icon: "账", permission: "publishing.read" },
-      { label: "数据看板", to: "/analytics", icon: "数", permission: "tracking.read" },
+      { label: "发布日历", to: "/publishing-calendar", icon: "chart", permission: "publishing.read" },
+      { label: "平台账户", to: "/platform-accounts", icon: "globe", permission: "publishing.read" },
+      { label: "数据看板", to: "/analytics", icon: "chart", permission: "tracking.read" },
     ],
   },
 ]
@@ -208,7 +209,7 @@ onBeforeUnmount(() => {
       :inert="drawerClosed ? '' : null"
     >
       <RouterLink class="brand-lockup" to="/" aria-label="SinofGear 首页">
-        <span class="brand-mark" aria-hidden="true">SG</span>
+        <span class="brand-mark" aria-hidden="true"><AppIcon name="sparkles" /></span>
         <span><strong>SinofGear</strong><small>增长引擎</small></span>
       </RouterLink>
       <nav aria-label="主导航">
@@ -221,13 +222,14 @@ onBeforeUnmount(() => {
             class="nav-link"
             exact-active-class="nav-link-active"
           >
-            <span class="nav-icon" aria-hidden="true">{{ item.icon }}</span>
+            <AppIcon class="nav-icon" :name="item.icon" />
             <span>{{ item.label }}</span>
           </RouterLink>
         </section>
       </nav>
       <button class="navigation-mode-button" type="button" @click="switchNavigationMode">
-        {{ navigationMode === "ordinary" ? "打开高级功能" : "返回普通功能" }}
+        <AppIcon name="settings" />
+        <span>{{ navigationMode === "ordinary" ? "打开高级功能" : "返回普通功能" }}</span>
       </button>
     </aside>
     <button
@@ -251,7 +253,7 @@ onBeforeUnmount(() => {
             :aria-label="navOpen ? '关闭导航' : '打开导航'"
             @click="toggleNavigation"
           >
-            <span aria-hidden="true">☰</span>
+            <AppIcon class="menu-icon" name="chevron" />
           </button>
           <div>
             <p class="topbar-label">当前位置</p>
@@ -260,6 +262,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="currentUser.data.value" class="user-session">
           <div class="user-area">
+            <span class="user-avatar" aria-hidden="true"><AppIcon name="users" /></span>
             <div class="user-copy">
               <strong>{{ currentUser.data.value.organization.name }}</strong>
               <span>{{ currentUser.data.value.user.username }}</span>

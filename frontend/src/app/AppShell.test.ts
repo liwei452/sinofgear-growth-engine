@@ -63,7 +63,7 @@ async function renderShell(
           { path: "promotion", component: PlaceholderPage, meta: { title: "推广" } },
           { path: "lead-radar", component: PlaceholderPage, meta: { title: "客户机会" } },
           { path: "analytics", component: PlaceholderPage, meta: { title: "效果" } },
-          { path: "company-profile", component: PlaceholderPage, meta: { title: "公司资料" } },
+          { path: "company-profile", component: PlaceholderPage, meta: { title: "我的公司" } },
           { path: "products", component: PlaceholderPage, meta: { title: "产品库" } },
           { path: ":pathMatch(.*)*", component: PlaceholderPage, meta: { title: "功能" } },
         ],
@@ -83,29 +83,37 @@ async function renderShell(
 }
 
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
   window.localStorage.clear()
   document.cookie = "csrftoken=; Max-Age=0; path=/"
 })
 
-it("shows only five task-oriented entries by default", async () => {
+it("shows exactly five ordinary work destinations with icons", async () => {
   await renderShell("/company-profile")
 
   const navigation = screen.getByRole("navigation", { name: "主导航" })
-  expect(within(navigation).getAllByRole("link")).toHaveLength(5)
-  for (const [label, href] of [
-    ["今天", "/"], ["推广", "/promotion"], ["客户机会", "/lead-radar"],
-    ["效果", "/analytics"], ["公司资料", "/company-profile"],
-  ]) {
-    expect(within(navigation).getByRole("link", { name: label })).toHaveAttribute("href", href)
-  }
+  expect(within(navigation).getAllByRole("link").map((item) => item.textContent?.trim())).toEqual([
+    "今天", "推广", "客户机会", "效果", "我的公司",
+  ])
+  expect(within(navigation).getAllByTestId(/^app-icon-/)).toHaveLength(5)
+  expect(within(navigation).getByRole("link", { name: "我的公司" })).toHaveAttribute("href", "/company-profile")
   expect(within(navigation).queryByRole("link", { name: "知识库" })).not.toBeInTheDocument()
   expect(screen.getByText("示例组织")).toBeInTheDocument()
   expect(screen.getByText("operator")).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "公司资料" })).toHaveAttribute("aria-current", "page")
-  expect(screen.getByRole("heading", { name: "公司资料" })).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "我的公司" })).toHaveAttribute("aria-current", "page")
+  expect(screen.getByRole("heading", { name: "我的公司" })).toBeInTheDocument()
   expect(screen.getByText("这个入口已经准备好，具体业务能力将在后续阶段接入。")).toBeInTheDocument()
   expect(screen.getByRole("link", { name: "返回首页" })).toHaveAttribute("href", "/")
+})
+
+it("keeps ordinary mode usable when browser storage throws", async () => {
+  vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    throw new Error("blocked")
+  })
+
+  await expect(renderShell()).resolves.toBeDefined()
+  expect(screen.getByRole("link", { name: "今天" })).toBeVisible()
 })
 
 it("reveals permitted administration routes in advanced mode and persists the preference", async () => {

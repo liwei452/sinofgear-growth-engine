@@ -152,7 +152,7 @@ describe("protected routing", () => {
 
     await appRouter.push("/company-profile")
     expect(await screen.findByText("真实公司资料")).toBeInTheDocument()
-    expect(appRouter.currentRoute.value.meta.title).toBe("公司资料")
+    expect(appRouter.currentRoute.value.meta.title).toBe("我的公司")
   })
 
   it.each([401, 403])("redirects status %s to login with the local target", async (status) => {

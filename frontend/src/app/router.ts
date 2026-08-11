@@ -101,7 +101,7 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
       path: "company-profile",
       name: "company-profile",
       component: options.components.CompanyProfile,
-      meta: { title: "公司资料" },
+      meta: { title: "我的公司" },
     },
   ]
   const router = createRouter({

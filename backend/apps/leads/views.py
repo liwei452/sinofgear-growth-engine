@@ -77,7 +77,9 @@ def _error_values(value):
     return str(value)
 
 
-def _validation_response(error, *, response_status=status.HTTP_400_BAD_REQUEST, code=None):
+def _validation_response(
+    error, *, response_status=status.HTTP_400_BAD_REQUEST, code=None
+):
     if isinstance(error, DjangoValidationError):
         values = (
             error.message_dict
@@ -97,9 +99,21 @@ def _validation_response(error, *, response_status=status.HTTP_400_BAD_REQUEST, 
 
 def _conflict(error, *, code):
     return Response(
-        recoverable_error({"code": code, "detail": str(error)}, status.HTTP_409_CONFLICT),
+        recoverable_error(
+            {"code": code, "detail": str(error)}, status.HTTP_409_CONFLICT
+        ),
         status=status.HTTP_409_CONFLICT,
     )
+
+
+def _require_organization_evidence(organization, evidence_ids) -> None:
+    requested = set(evidence_ids)
+    visible = SourceEvidence.objects.filter(
+        organization=organization,
+        pk__in=requested,
+    ).count()
+    if visible != len(requested):
+        raise Http404
 
 
 class LeadCursorPagination(CursorPagination):
@@ -184,7 +198,9 @@ class LeadCandidateListView(APIView):
         if "score_band" in values:
             queryset = queryset.filter(latest_insight__score_band=values["score_band"])
         if "minimum_score" in values:
-            queryset = queryset.filter(latest_insight__score__gte=values["minimum_score"])
+            queryset = queryset.filter(
+                latest_insight__score__gte=values["minimum_score"]
+            )
         if "platform" in values:
             queryset = queryset.filter(
                 evidence_links__evidence__platform__iexact=values["platform"]
@@ -221,15 +237,19 @@ class LeadCandidateListView(APIView):
         )
         if not serializer.is_valid():
             return _validation_response(serializer.errors)
+        _require_organization_evidence(
+            request.organization,
+            serializer.validated_data["evidence_ids"],
+        )
         try:
             candidate = serializer.save()
         except DjangoValidationError as error:
             return _validation_response(error)
-        candidate = _candidate_detail_queryset(request.organization).get(pk=candidate.pk)
+        candidate = _candidate_detail_queryset(request.organization).get(
+            pk=candidate.pk
+        )
         return Response(
-            LeadCandidateDetailSerializer(
-                candidate, context={"request": request}
-            ).data,
+            LeadCandidateDetailSerializer(candidate, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -243,15 +263,15 @@ class LeadCandidateDetailView(APIView):
         responses={200: LeadCandidateDetailSerializer, **READ_ERRORS},
     )
     def get(self, request, candidate_id):
-        candidate = _candidate_detail_queryset(request.organization).filter(
-            pk=candidate_id
-        ).first()
+        candidate = (
+            _candidate_detail_queryset(request.organization)
+            .filter(pk=candidate_id)
+            .first()
+        )
         if candidate is None:
             raise Http404
         return Response(
-            LeadCandidateDetailSerializer(
-                candidate, context={"request": request}
-            ).data
+            LeadCandidateDetailSerializer(candidate, context={"request": request}).data
         )
 
 
@@ -273,6 +293,10 @@ class LeadCandidateAnalyzeView(APIView):
         if not serializer.is_valid():
             return _validation_response(serializer.errors)
         values = serializer.validated_data
+        _require_organization_evidence(
+            request.organization,
+            values["evidence_ids"],
+        )
         try:
             job, _prompt = LeadAnalysisService.schedule(
                 organization=request.organization,
@@ -306,7 +330,10 @@ class LeadInsightListView(APIView):
 
     @extend_schema(
         operation_id="lead_insights_list",
-        parameters=[OpenApiParameter("candidate_id", OpenApiTypes.UUID), *PAGE_PARAMETERS],
+        parameters=[
+            OpenApiParameter("candidate_id", OpenApiTypes.UUID),
+            *PAGE_PARAMETERS,
+        ],
         responses={
             200: LeadInsightPageSerializer,
             400: LeadValidationErrorSerializer,
@@ -387,9 +414,7 @@ class LeadReviewCreateView(APIView):
                 "candidate_status": result.candidate.status,
                 "candidate_version": result.candidate.version,
                 "insight_id": result.insight.id if result.insight else None,
-                "insight_version": (
-                    result.insight.version if result.insight else None
-                ),
+                "insight_version": (result.insight.version if result.insight else None),
             },
             status=status.HTTP_201_CREATED,
         )

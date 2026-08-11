@@ -219,6 +219,25 @@ _HIGH_COMPANY_TERMS = (
 _MEDIUM_COMPANY_TERMS = ("we ", "our team", "team ", "我们", "团队")
 
 
+_PROCUREMENT_PATTERNS = (
+    re.compile(
+        r"\b(?:can anyone|who can)\s+(?:manufacture|make|supply)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:procurement|purchasing)\b[^.?!]{0,40}"
+        r"\b(?:requests?|invites?|seeks?)\s+(?:bids?|quotes?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:采购|采购团队)[^。！？]{0,16}(?:征集|寻求|请求)(?:报价|投标)"),
+)
+_PERSONNEL_REQUEST_PATTERN = re.compile(
+    r"\b(?:need|seeking|require)\s+(?:an?\s+)?[^.?!]{0,32}"
+    r"\b(?:engineer|consultant|operator|manager|technician)\b",
+    re.IGNORECASE,
+)
+
+
 def _contains_term(text: str, terms: tuple[str, ...]) -> bool:
     return any(term in text for term in terms)
 
@@ -230,6 +249,39 @@ def _normalized_signal_text(text: str) -> str:
     if not normalized:
         raise ValueError("public signal text must not be blank")
     return normalized
+
+
+def _evidence_windows(text: str, *, language: str) -> tuple[str, ...]:
+    """Return bounded, overlapping excerpts copied exactly from the public text."""
+    source = text.strip()
+    spans = []
+    if language == "en":
+        tokens = list(re.finditer(r"[\w]+(?:[-'][\w]+)*", source, re.UNICODE))
+        window_size = 6 if len(tokens) > 6 else max(1, len(tokens) - 1)
+        stride = max(1, window_size - 3)
+        for start in range(0, len(tokens), stride):
+            end = min(len(tokens), start + window_size)
+            if start >= end:
+                continue
+            span = source[tokens[start].start() : tokens[end - 1].end()]
+            if span != source:
+                spans.append(span)
+            if end == len(tokens):
+                break
+    else:
+        content_end = len(source.rstrip("。！？.!?"))
+        window_size = min(10, max(1, content_end - 1))
+        stride = max(1, window_size - 5)
+        for start in range(0, content_end, stride):
+            end = min(content_end, start + window_size)
+            span = source[start:end]
+            if span and span != source:
+                spans.append(span)
+            if end == content_end:
+                break
+    if not spans:
+        spans.append(source[: max(1, len(source) // 2)])
+    return tuple(dict.fromkeys(spans))
 
 
 def evaluate_public_signal(text: str, *, language: str) -> PublicSignalEvaluation:
@@ -254,12 +306,19 @@ def evaluate_public_signal(text: str, *, language: str) -> PublicSignalEvaluatio
             _COMPANY_PAGE_TERMS,
         )
     )
-    excluded = organization_context or any(
+    excluded = bool(
+        organization_context or _PERSONNEL_REQUEST_PATTERN.search(folded)
+    ) or any(
         _contains_term(folded, terms)
         for terms in (_ENGAGEMENT_TERMS, _JOB_SEEKER_TERMS, _ACADEMIC_TERMS)
     )
+    procurement_request = any(
+        pattern.search(normalized) for pattern in _PROCUREMENT_PATTERNS
+    )
     explicit = (
-        industrial and not excluded and _contains_term(folded, _EXPLICIT_NEED_TERMS)
+        industrial
+        and not excluded
+        and (_contains_term(folded, _EXPLICIT_NEED_TERMS) or procurement_request)
     )
     vague = (
         industrial
@@ -305,7 +364,7 @@ def evaluate_public_signal(text: str, *, language: str) -> PublicSignalEvaluatio
         dimensions=dimensions,
         gates=gates,
         score=score_lead(dimensions, gates),
-        evidence_spans=(normalized,),
+        evidence_spans=_evidence_windows(text, language=language),
     )
 
 

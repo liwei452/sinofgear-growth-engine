@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import unicodedata
+
 from jsonschema.validators import validator_for
 
 
@@ -209,10 +212,45 @@ def _path(error) -> str:
     return ".".join(str(part) for part in error.absolute_path) or "$"
 
 
+def _normalized_claim_text(value) -> str:
+    return (
+        re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(value)))
+        .strip()
+        .casefold()
+    )
+
+
+def _claim_is_in_cited_evidence(value, evidence_ids, evidence_text_by_id) -> bool:
+    claim = _normalized_claim_text(value)
+    return bool(claim) and any(
+        claim in evidence_text_by_id.get(str(evidence_id), "")
+        for evidence_id in evidence_ids
+    )
+
+
+def _capability_is_supported(code, evidence_ids, evidence_text_by_id) -> bool:
+    if not re.match(r"^cap(?:ability)?[-_]", str(code), re.IGNORECASE):
+        return True
+    generic = {"cap", "capability", "gear", "gears"}
+    discriminating = [
+        token
+        for token in re.split(r"[^a-z0-9]+", str(code).casefold())
+        if len(token) >= 3 and token not in generic
+    ]
+    if not discriminating:
+        return False
+    cited = "\n".join(
+        evidence_text_by_id.get(str(evidence_id), "") for evidence_id in evidence_ids
+    )
+    return any(token in cited for token in discriminating)
+
+
 def lead_analysis_errors(output, *, snapshot=None) -> list[str]:
     errors = [
         f"{_path(error)}: {error.message}"
-        for error in sorted(_validator.iter_errors(output), key=lambda item: list(item.absolute_path))
+        for error in sorted(
+            _validator.iter_errors(output), key=lambda item: list(item.absolute_path)
+        )
     ]
     if errors or snapshot is None or not isinstance(output, dict):
         return errors
@@ -221,6 +259,11 @@ def lead_analysis_errors(output, *, snapshot=None) -> list[str]:
 
     source_evidence_ids = {
         str(row.get("id"))
+        for row in snapshot.get("evidence", [])
+        if isinstance(row, dict) and row.get("id")
+    }
+    evidence_text_by_id = {
+        str(row.get("id")): _normalized_claim_text(row.get("original_text", ""))
         for row in snapshot.get("evidence", [])
         if isinstance(row, dict) and row.get("id")
     }
@@ -258,11 +301,31 @@ def lead_analysis_errors(output, *, snapshot=None) -> list[str]:
         if requirement["type"] not in requirement_codes:
             errors.append(f"requirements.{index}.type: unknown frozen requirement code")
         if not set(requirement["evidence_ids"]) <= source_evidence_ids:
-            errors.append(f"requirements.{index}.evidence_ids: unknown frozen source evidence")
+            errors.append(
+                f"requirements.{index}.evidence_ids: unknown frozen source evidence"
+            )
+        if not _claim_is_in_cited_evidence(
+            requirement["value"],
+            requirement["evidence_ids"],
+            evidence_text_by_id,
+        ):
+            errors.append(
+                f"requirements.{index}.value: value is not present in cited frozen evidence"
+            )
+        if requirement["unit"] and not _claim_is_in_cited_evidence(
+            requirement["unit"],
+            requirement["evidence_ids"],
+            evidence_text_by_id,
+        ):
+            errors.append(
+                f"requirements.{index}.unit: unit is not present in cited frozen evidence"
+            )
     for index, match in enumerate(output["capability_matches"]):
         code = match["capability_code"]
         if code not in capability_codes or code not in capability_bindings:
-            errors.append(f"capability_matches.{index}.capability_code: unknown frozen capability")
+            errors.append(
+                f"capability_matches.{index}.capability_code: unknown frozen capability"
+            )
         elif not set(match["knowledge_evidence_ids"]) <= capability_bindings[code]:
             errors.append(
                 f"capability_matches.{index}.knowledge_evidence_ids: evidence is not bound to the frozen capability"
@@ -271,9 +334,25 @@ def lead_analysis_errors(output, *, snapshot=None) -> list[str]:
             errors.append(
                 f"capability_matches.{index}.source_evidence_ids: unknown frozen source evidence"
             )
+        elif not _capability_is_supported(
+            code,
+            match["source_evidence_ids"],
+            evidence_text_by_id,
+        ):
+            errors.append(
+                f"capability_matches.{index}.capability_code: capability is not supported by cited frozen evidence"
+            )
     for index, reason in enumerate(output["reasons"]):
         if not set(reason["evidence_ids"]) <= source_evidence_ids:
-            errors.append(f"reasons.{index}.evidence_ids: unknown frozen source evidence")
+            errors.append(
+                f"reasons.{index}.evidence_ids: unknown frozen source evidence"
+            )
+    if output["insufficient_evidence"] and (
+        output["requirements"] or output["capability_matches"]
+    ):
+        errors.append(
+            "insufficient_evidence: requirements and capability matches must be empty"
+        )
     return errors
 
 

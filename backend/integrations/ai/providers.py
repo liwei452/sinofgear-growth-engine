@@ -1,9 +1,16 @@
 import json
+import re
 from dataclasses import dataclass
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
 from jsonschema.validators import validator_for
+
+
+def _schema_fake_allowed() -> bool:
+    from django.conf import settings
+
+    return bool(getattr(settings, "PHASE_B1_SCHEMA_FAKE_ALLOWED", False))
 
 
 class AIProvider(Protocol):
@@ -18,13 +25,18 @@ class ProviderRegistry:
         normalized = code.strip().lower()
         if not normalized:
             raise ValueError("Provider code must not be blank.")
+        if normalized == "schema-fake" and not _schema_fake_allowed():
+            raise ValueError("Provider 'schema-fake' is disabled by the safety gate.")
         if normalized in self._providers and not replace:
             raise ValueError(f"Provider '{normalized}' is already registered.")
         self._providers[normalized] = provider
 
     def get(self, code: str) -> AIProvider:
+        normalized = code.strip().lower()
+        if normalized == "schema-fake" and _schema_fake_allowed():
+            return SchemaAwareFakeAIProvider()
         try:
-            return self._providers[code.strip().lower()]
+            return self._providers[normalized]
         except KeyError as exc:
             raise ValueError(f"Unknown AI provider '{code}'.") from exc
 
@@ -101,6 +113,117 @@ class _SchemaContext:
         ]
         return "\n".join(texts) or "Deterministic schema fixture"
 
+    def evidence_rows(self) -> list[dict[str, str]]:
+        evidence = self.snapshot.get("evidence")
+        if not isinstance(evidence, list):
+            return []
+        return [
+            {"id": str(row["id"]), "text": str(row["original_text"])}
+            for row in evidence
+            if isinstance(row, dict)
+            and row.get("id")
+            and isinstance(row.get("original_text"), str)
+            and row["original_text"].strip()
+        ]
+
+    def grounded_requirements(self) -> list[dict[str, object]]:
+        ontology = self.snapshot.get("ontology_snapshot")
+        concepts = (
+            ontology.get("concept_versions") if isinstance(ontology, dict) else []
+        )
+        requirement_codes = {
+            str(row["code"])
+            for row in concepts
+            if isinstance(row, dict)
+            and row.get("concept_type") == "REQUIREMENT"
+            and row.get("code")
+        }
+        patterns = {
+            "REQ-DIN6": re.compile(r"DIN\s*6", re.IGNORECASE),
+            "REQ-SMALL-BATCH": re.compile(r"small[- ]batch|小批量"),
+            "REQ-URGENT-REPLACEMENT": re.compile(
+                r"urgent\s+replacement|紧急替换|急需替换", re.IGNORECASE
+            ),
+        }
+        results = []
+        for row in self.evidence_rows():
+            language = (
+                "zh"
+                if any("\u4e00" <= char <= "\u9fff" for char in row["text"])
+                else "en"
+            )
+            from apps.leads.scoring import evaluate_public_signal
+
+            if not evaluate_public_signal(
+                row["text"], language=language
+            ).is_explicit_need:
+                continue
+            for code in sorted(requirement_codes):
+                matcher = patterns.get(code)
+                match = matcher.search(row["text"]) if matcher else None
+                if match is not None:
+                    results.append(
+                        {
+                            "type": code,
+                            "value": match.group(0),
+                            "unit": "",
+                            "evidence_ids": [row["id"]],
+                        }
+                    )
+        return results
+
+    def grounded_capability_matches(self) -> list[dict[str, object]]:
+        patterns = {
+            "CAP-GEAR-GRINDING": re.compile(r"gear\s+grinding|磨齿", re.IGNORECASE),
+            "CAP-HEAT-TREATMENT": re.compile(
+                r"heat[- ]treatment|热处理", re.IGNORECASE
+            ),
+        }
+        bindings = self.snapshot.get("capability_bindings")
+        if not isinstance(bindings, list):
+            return []
+        results = []
+        for row in self.evidence_rows():
+            language = (
+                "zh"
+                if any("\u4e00" <= char <= "\u9fff" for char in row["text"])
+                else "en"
+            )
+            from apps.leads.scoring import evaluate_public_signal
+
+            if not evaluate_public_signal(
+                row["text"], language=language
+            ).is_explicit_need:
+                continue
+            for binding in bindings:
+                code = (
+                    str(binding.get("capability_code", ""))
+                    if isinstance(binding, dict)
+                    else ""
+                )
+                knowledge_ids = (
+                    binding.get("knowledge_evidence_ids")
+                    if isinstance(binding, dict)
+                    else None
+                )
+                matcher = patterns.get(code)
+                if (
+                    matcher
+                    and matcher.search(row["text"])
+                    and isinstance(knowledge_ids, list)
+                    and knowledge_ids
+                ):
+                    results.append(
+                        {
+                            "capability_code": code,
+                            "knowledge_evidence_ids": [
+                                str(value) for value in knowledge_ids
+                            ],
+                            "source_evidence_ids": [row["id"]],
+                        }
+                    )
+        return results
+
     def requirement_code(self) -> str | None:
         ontology = self.snapshot.get("ontology_snapshot")
         rows = ontology.get("concept_versions") if isinstance(ontology, dict) else None
@@ -149,10 +272,13 @@ class _SchemaValueBuilder:
                 for key, value in schema.get("properties", {}).items()
             }
         if value_type == "array":
+            semantic = self._semantic_array(name, schema=schema)
+            if semantic is not None:
+                return semantic
             reference = self._reference_array(name)
             if reference:
                 return reference[: schema.get("maxItems", len(reference))]
-            count = max(1, int(schema.get("minItems", 0)))
+            count = int(schema.get("minItems", 0))
             maximum = schema.get("maxItems")
             if isinstance(maximum, int):
                 count = min(count, maximum)
@@ -177,6 +303,26 @@ class _SchemaValueBuilder:
         if value_type == "null":
             return None
         return self._string(schema, name=name, index=index)
+
+    def _semantic_array(self, name: str, *, schema: dict):
+        item_properties = schema.get("items", {}).get("properties", {})
+        if name == "requirements" and {
+            "type",
+            "value",
+            "unit",
+            "evidence_ids",
+        } <= set(item_properties):
+            values = self.context.grounded_requirements()
+        elif name == "capability_matches" and {
+            "capability_code",
+            "knowledge_evidence_ids",
+            "source_evidence_ids",
+        } <= set(item_properties):
+            values = self.context.grounded_capability_matches()
+        else:
+            return None
+        maximum = schema.get("maxItems")
+        return values[:maximum] if isinstance(maximum, int) else values
 
     def _reference_array(self, name: str) -> list[str]:
         if name in {"evidence_ids", "source_evidence_ids"}:
@@ -242,7 +388,7 @@ class _SchemaValueBuilder:
 
 
 class SchemaAwareFakeAIProvider:
-    """Deterministically materialize valid JSON from a caller-supplied schema.
+    """Materialize deterministic JSON for the schema shapes covered by tests.
 
     The provider has no network, credential, authentication, or persistence
     behavior. Frozen prompt context is used only to preserve values and references
@@ -265,4 +411,3 @@ class SchemaAwareFakeAIProvider:
 
 provider_registry = ProviderRegistry()
 provider_registry.register("fake", FakeAIProvider())
-provider_registry.register("schema-fake", SchemaAwareFakeAIProvider())

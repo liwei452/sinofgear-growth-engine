@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from uuid import UUID
 
+import pytest
+
 from apps.leads.schemas import lead_analysis_errors
 from apps.leads.scoring import evaluate_public_signal
 
@@ -105,6 +107,11 @@ def test_deterministic_lead_evaluation_meets_quality_gates():
         assert (
             first.company_match_confidence_class == row["company_match_confidence"]
         ), row["id"]
+        assert first.evidence_spans
+        assert all(
+            span in row["text"] and span != first.normalized_text and len(span) <= 72
+            for span in first.evidence_spans
+        ), row["id"]
         predictions.append((row, first))
         output = _schema_output(first)
         evidence_valid.append(
@@ -135,3 +142,36 @@ def test_deterministic_lead_evaluation_meets_quality_gates():
         f"precision={precision:.3f}; false positives={false_positives}"
     )
     assert evidence_coverage == 1.00, f"evidence coverage={evidence_coverage:.3f}"
+
+
+@pytest.mark.parametrize(
+    ("text", "language", "expected_explicit"),
+    [
+        (
+            "Can anyone manufacture 200 helical gears for our packaging line by October?",
+            "en",
+            True,
+        ),
+        (
+            "Our procurement team requests bids for 40 hardened sprockets.",
+            "en",
+            True,
+        ),
+        ("采购团队现为40件淬硬链轮征集报价。", "zh", True),
+        (
+            "We need a gear engineer consultant for a short repair project.",
+            "en",
+            False,
+        ),
+    ],
+)
+def test_held_out_procurement_language_is_not_tied_to_fixture_phrasing(
+    text,
+    language,
+    expected_explicit,
+):
+    result = evaluate_public_signal(text, language=language)
+
+    assert result.is_explicit_need is expected_explicit
+    assert (result.score.band == "HIGH") is expected_explicit
+    assert result.normalized_text not in result.evidence_spans

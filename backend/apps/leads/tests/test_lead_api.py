@@ -88,9 +88,28 @@ def test_candidate_create_rejects_cross_org_evidence(organization, other_source_
         },
         format="json",
     )
-    assert response.status_code == 400
+    assert response.status_code == 404
     assert "lead-other" not in str(response.json())
+    assert other_source_pair[1].original_text not in str(response.json())
     assert LeadCandidate.objects.filter(organization=organization).count() == 0
+
+
+def test_candidate_create_keeps_malformed_same_org_evidence_as_400(
+    organization,
+    evidence,
+):
+    _user, client = _operator(organization)
+    response = client.post(
+        "/api/v1/lead-candidates",
+        {
+            "company_name": "Malformed",
+            "evidence_ids": [str(evidence.id), str(evidence.id)],
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "http_400"
 
 
 def test_repeated_filters_are_rejected(organization):
@@ -160,6 +179,71 @@ def test_analyze_is_idempotent_and_schedules_after_commit(
     assert Job.objects.filter(type=Job.Type.LEAD_ANALYZE).count() == 1
 
 
+def test_own_candidate_analyze_hides_foreign_evidence_as_404(
+    candidate,
+    other_source_pair,
+):
+    user, client = _operator(candidate.organization)
+    PromptVersionService.create(
+        purpose="LEAD_ANALYZE",
+        code="lead-api-foreign-evidence",
+        provider="fake",
+        model="fake-v1",
+        template="{input_json}",
+        output_schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
+        status=PromptVersion.Status.PUBLISHED,
+        created_by=user,
+    )
+    foreign_evidence = other_source_pair[1]
+
+    response = client.post(
+        f"/api/v1/lead-candidates/{candidate.id}/analyze",
+        {
+            "expected_version": candidate.version,
+            "evidence_ids": [str(foreign_evidence.id)],
+            "idempotency_key": "foreign-evidence-hidden",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 404
+    body = str(response.json())
+    assert "lead-other" not in body
+    assert foreign_evidence.original_text not in body
+    assert not Job.objects.filter(type=Job.Type.LEAD_ANALYZE).exists()
+
+
+def test_own_candidate_analyze_keeps_same_org_unlinked_evidence_as_400(
+    candidate,
+    second_source_pair,
+):
+    user, client = _operator(candidate.organization)
+    PromptVersionService.create(
+        purpose="LEAD_ANALYZE",
+        code="lead-api-unlinked-evidence",
+        provider="fake",
+        model="fake-v1",
+        template="{input_json}",
+        output_schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
+        status=PromptVersion.Status.PUBLISHED,
+        created_by=user,
+    )
+
+    response = client.post(
+        f"/api/v1/lead-candidates/{candidate.id}/analyze",
+        {
+            "expected_version": candidate.version,
+            "evidence_ids": [str(second_source_pair[1].id)],
+            "idempotency_key": "same-org-unlinked-evidence",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "http_400"
+    assert not Job.objects.filter(type=Job.Type.LEAD_ANALYZE).exists()
+
+
 def test_analyze_same_key_different_request_conflicts(
     candidate,
     evidence,
@@ -187,11 +271,14 @@ def test_analyze_same_key_different_request_conflicts(
         "idempotency_key": "analyze-conflict",
     }
     with django_capture_on_commit_callbacks(execute=True):
-        assert client.post(
-            f"/api/v1/lead-candidates/{candidate.id}/analyze",
-            first_payload,
-            format="json",
-        ).status_code == 202
+        assert (
+            client.post(
+                f"/api/v1/lead-candidates/{candidate.id}/analyze",
+                first_payload,
+                format="json",
+            ).status_code
+            == 202
+        )
     changed = dict(first_payload, expected_version=candidate.version + 99)
     response = client.post(
         f"/api/v1/lead-candidates/{candidate.id}/analyze", changed, format="json"
@@ -295,7 +382,9 @@ def test_reviewer_correction_api_returns_append_only_versions(
     assert response.json()["insight_version"] == 2
 
 
-def test_insight_history_is_scoped(candidate, other_organization, evidence, ai_run, insight_payload):
+def test_insight_history_is_scoped(
+    candidate, other_organization, evidence, ai_run, insight_payload
+):
     _analyzed(candidate, evidence, ai_run, insight_payload)
     _own_user, own_client = _operator(candidate.organization)
     _other_user, other_client = _operator(other_organization, "lead-api-other-operator")

@@ -1,13 +1,15 @@
 from io import StringIO
+import json
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
+from django.db import connection
 from django.test import override_settings
 
 from apps.ai.models import AIRun, PromptVersion
 from apps.identity.models import Membership, Organization, Role
-from apps.jobs.models import Job
+from apps.jobs.models import Job, job_service_writes
 from apps.leads.models import LeadCandidate, LeadInsight, LeadReview
 from apps.leads.schemas import LEAD_ANALYSIS_OUTPUT_SCHEMA
 from apps.sources.models import IngestionBatch, MonitoringTarget, SourceEvidence
@@ -40,7 +42,17 @@ def _seed_counts(organization):
     }
 
 
+def _run_seed(organization, user):
+    call_command(
+        "seed_phase_b1",
+        organization_slug=organization.slug,
+        username=user.username,
+        stdout=StringIO(),
+    )
+
+
 @pytest.mark.django_db(transaction=True)
+@override_settings(PHASE_B1_SCHEMA_FAKE_ALLOWED=True)
 def test_seed_phase_b1_is_complete_and_idempotent(phase_b1_seed_identity):
     organization, user = phase_b1_seed_identity
     arguments = [
@@ -99,7 +111,97 @@ def test_seed_phase_b1_is_complete_and_idempotent(phase_b1_seed_identity):
     assert "Phase B1 seed present" in second_output.getvalue()
 
 
+@pytest.mark.django_db(transaction=True)
+@override_settings(PHASE_B1_SCHEMA_FAKE_ALLOWED=True)
+def test_seed_phase_b1_rejects_candidate_country_collision(
+    phase_b1_seed_identity,
+):
+    organization, user = phase_b1_seed_identity
+    _run_seed(organization, user)
+    candidate = LeadCandidate.objects.get(
+        organization=organization,
+        company_name="Phase B1 Browser Packaging",
+    )
+    candidate.country_hint = "US"
+    candidate.save(update_fields=["country_hint"])
+
+    with pytest.raises(CommandError, match="candidate"):
+        _run_seed(organization, user)
+
+    candidate.refresh_from_db()
+    assert candidate.country_hint == "US"
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(PHASE_B1_SCHEMA_FAKE_ALLOWED=True)
+def test_seed_phase_b1_rejects_existing_insight_output_collision(
+    phase_b1_seed_identity,
+):
+    organization, user = phase_b1_seed_identity
+    _run_seed(organization, user)
+    candidate = LeadCandidate.objects.get(
+        organization=organization,
+        company_name="Phase B1 Browser Packaging",
+    )
+    tampered = json.dumps(
+        {"reasons": [{"text": "invented", "evidence_ids": []}]},
+        separators=(",", ":"),
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE leads_leadinsight SET explanation = %s WHERE id = %s",
+            [tampered, candidate.latest_insight_id.hex],
+        )
+
+    with pytest.raises(CommandError, match="analysis"):
+        _run_seed(organization, user)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(PHASE_B1_SCHEMA_FAKE_ALLOWED=True)
+def test_seed_phase_b1_rejects_existing_review_collision(
+    phase_b1_seed_identity,
+):
+    organization, user = phase_b1_seed_identity
+    _run_seed(organization, user)
+    review = LeadReview.objects.get(
+        organization=organization,
+        idempotency_key="phase-b1-seed-reviewed-correction",
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE leads_leadreview SET reason = %s WHERE id = %s",
+            ["Tampered reviewer reason.", review.id.hex],
+        )
+
+    with pytest.raises(CommandError, match="review"):
+        _run_seed(organization, user)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(PHASE_B1_SCHEMA_FAKE_ALLOWED=True)
+def test_seed_phase_b1_rejects_existing_failed_job_collision(
+    phase_b1_seed_identity,
+):
+    organization, user = phase_b1_seed_identity
+    _run_seed(organization, user)
+    job = Job.objects.get(
+        organization=organization,
+        idempotency_key="phase-b1-seed-failed-analysis",
+    )
+    with job_service_writes():
+        Job.objects.filter(pk=job.pk).update(
+            status=Job.Status.SUCCEEDED,
+            error=None,
+            result_reference={"tampered": True},
+        )
+
+    with pytest.raises(CommandError, match="failed job"):
+        _run_seed(organization, user)
+
+
 @pytest.mark.django_db
+@override_settings(PHASE_B1_SCHEMA_FAKE_ALLOWED=True)
 def test_seed_phase_b1_requires_an_active_named_membership():
     organization = Organization.objects.create(
         name="No Membership", slug="no-membership"
@@ -114,8 +216,37 @@ def test_seed_phase_b1_requires_an_active_named_membership():
         )
 
 
+@pytest.mark.django_db
+def test_seed_phase_b1_fails_closed_before_publishing_a_fake_prompt(
+    phase_b1_seed_identity,
+):
+    organization, user = phase_b1_seed_identity
+
+    with pytest.raises(CommandError, match="schema-fake safety gate"):
+        call_command(
+            "seed_phase_b1",
+            organization_slug=organization.slug,
+            username=user.username,
+        )
+
+    assert not PromptVersion.objects.filter(purpose="LEAD_ANALYZE").exists()
+    assert _seed_counts(organization) == {
+        "targets": 0,
+        "batches": 0,
+        "evidence": 0,
+        "candidates": 0,
+        "insights": 0,
+        "reviews": 0,
+        "jobs": 0,
+        "runs": 0,
+    }
+
+
 @pytest.mark.django_db(transaction=True)
-@override_settings(PHASE_A_E2E_SEED_ALLOWED=True)
+@override_settings(
+    PHASE_A_E2E_SEED_ALLOWED=True,
+    PHASE_B1_SCHEMA_FAKE_ALLOWED=True,
+)
 def test_seed_phase_b1_can_create_an_explicit_isolated_e2e_identity():
     call_command(
         "seed_phase_b1",

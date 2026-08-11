@@ -24,7 +24,8 @@ ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").sp
 TRACKING_HASH_SECRET = os.environ.get("TRACKING_HASH_SECRET", "")
 TRACKING_HASH_VERSION = os.environ.get("TRACKING_HASH_VERSION", "v1")
 TRACKING_TRUSTED_PROXY_CIDRS = [
-    value.strip() for value in os.environ.get("TRACKING_TRUSTED_PROXY_CIDRS", "").split(",")
+    value.strip()
+    for value in os.environ.get("TRACKING_TRUSTED_PROXY_CIDRS", "").split(",")
     if value.strip()
 ]
 
@@ -71,11 +72,13 @@ TEMPLATES = [
         "BACKEND": "django.template.backends.django.DjangoTemplates",
         "DIRS": [],
         "APP_DIRS": True,
-        "OPTIONS": {"context_processors": [
-            "django.template.context_processors.request",
-            "django.contrib.auth.context_processors.auth",
-            "django.contrib.messages.context_processors.messages",
-        ]},
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ]
+        },
     }
 ]
 WSGI_APPLICATION = "config.wsgi.application"
@@ -167,8 +170,13 @@ MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "sinofgear-assets")
 MINIO_REGION = os.environ.get("MINIO_REGION", "us-east-1")
 MINIO_SECURE = os.environ.get("MINIO_SECURE", "false").lower() == "true"
 MINIO_PUBLIC_SECURE = os.environ.get("MINIO_PUBLIC_SECURE", "false").lower() == "true"
-ASSET_MAX_UPLOAD_BYTES = int(os.environ.get("ASSET_MAX_UPLOAD_BYTES", str(250 * 1024 * 1024)))
+ASSET_MAX_UPLOAD_BYTES = int(
+    os.environ.get("ASSET_MAX_UPLOAD_BYTES", str(250 * 1024 * 1024))
+)
 ASSET_SPOOL_MEMORY_BYTES = int(
     os.environ.get("ASSET_SPOOL_MEMORY_BYTES", str(8 * 1024 * 1024))
 )
 PLATFORM_CONNECTOR_CAPABILITIES = {}
+PHASE_B1_SCHEMA_FAKE_ALLOWED = (
+    os.environ.get("SINO_PHASE_B1_SCHEMA_FAKE_ALLOWED", "false").lower() == "true"
+)

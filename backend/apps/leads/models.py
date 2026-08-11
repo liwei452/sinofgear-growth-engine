@@ -55,7 +55,9 @@ def lead_history_writes():
 
 
 @contextmanager
-def lead_frozen_reference_writes(*, organization_id, ontology_snapshot, capability_bindings):
+def lead_frozen_reference_writes(
+    *, organization_id, ontology_snapshot, capability_bindings
+):
     """Allow immutable insight links already approved in a verified frozen snapshot."""
     references = {
         "organization_id": str(organization_id),
@@ -92,7 +94,9 @@ def normalize_company_domain(value: str) -> str:
     if not isinstance(value, str) or not (value := value.strip()):
         return ""
     if any(ord(character) <= 32 for character in value):
-        raise ValidationError("Company domain must not contain whitespace or control characters.")
+        raise ValidationError(
+            "Company domain must not contain whitespace or control characters."
+        )
     candidate = value if "://" in value else f"//{value}"
     try:
         parsed = urlsplit(candidate)
@@ -103,8 +107,15 @@ def normalize_company_domain(value: str) -> str:
         raise ValidationError("Company domain URL must use HTTP or HTTPS.")
     if parsed.username is not None or parsed.password is not None:
         raise ValidationError("Company domain must not contain credentials.")
-    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment or port is not None:
-        raise ValidationError("Company domain must not contain a path, port, query, or fragment.")
+    if (
+        parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or port is not None
+    ):
+        raise ValidationError(
+            "Company domain must not contain a path, port, query, or fragment."
+        )
     hostname = parsed.hostname
     if not hostname or "%" in hostname:
         raise ValidationError("Company domain is invalid.")
@@ -127,31 +138,42 @@ def normalize_company_domain(value: str) -> str:
             for label in labels
         ):
             raise ValidationError("Company domain must not use an encoded IP address.")
-        if len(labels) < 2 or len(hostname) > 253 or any(
-            not label
-            or len(label) > 63
-            or label.startswith("-")
-            or label.endswith("-")
-            or re.fullmatch(r"[a-z0-9-]+", label) is None
-            for label in labels
+        if (
+            len(labels) < 2
+            or len(hostname) > 253
+            or any(
+                not label
+                or len(label) > 63
+                or label.startswith("-")
+                or label.endswith("-")
+                or re.fullmatch(r"[a-z0-9-]+", label) is None
+                for label in labels
+            )
         ):
             raise ValidationError("Company domain is invalid.")
         return hostname
-    raise ValidationError("Company domain must be a public DNS name, not an IP address.")
+    raise ValidationError(
+        "Company domain must be a public DNS name, not an IP address."
+    )
 
 
-def _related_organization_error(instance, field_name: str, errors: dict[str, str]) -> None:
+def _related_organization_error(
+    instance, field_name: str, errors: dict[str, str]
+) -> None:
     related_id = getattr(instance, f"{field_name}_id", None)
     if not instance.organization_id or not related_id:
         return
     related = getattr(instance, field_name)
     persisted_organization_id = (
-        type(related)._base_manager.filter(pk=related_id)
+        type(related)
+        ._base_manager.filter(pk=related_id)
         .values_list("organization_id", flat=True)
         .first()
     )
     if persisted_organization_id != instance.organization_id:
-        errors[field_name] = f"{field_name.replace('_', ' ').title()} must belong to the same organization."
+        errors[field_name] = (
+            f"{field_name.replace('_', ' ').title()} must belong to the same organization."
+        )
 
 
 class CandidateQuerySet(models.QuerySet):
@@ -178,7 +200,9 @@ class CandidateQuerySet(models.QuerySet):
 
     @transaction.atomic
     def bulk_update(self, objs, fields, **kwargs):
-        names = [field.name if hasattr(field, "name") else str(field) for field in fields]
+        names = [
+            field.name if hasattr(field, "name") else str(field) for field in fields
+        ]
         rows = sorted(objs, key=lambda row: str(row.pk))
         for row in rows:
             row.save(update_fields=[*names, "updated_at"])
@@ -193,7 +217,9 @@ class ImmutableHistoryQuerySet(models.QuerySet):
     @staticmethod
     def _require_service_write():
         if not _lead_history_write.get():
-            raise ValidationError("Lead history may be created only through LeadService.")
+            raise ValidationError(
+                "Lead history may be created only through LeadService."
+            )
 
     def update(self, **kwargs):
         raise ValidationError("Lead history is immutable.")
@@ -229,7 +255,9 @@ class ImmutableLeadHistory(OrganizationScopedModel):
 
     def save(self, *args, **kwargs):
         if not _lead_history_write.get():
-            raise ValidationError("Lead history may be created only through LeadService.")
+            raise ValidationError(
+                "Lead history may be created only through LeadService."
+            )
         if not self._state.adding:
             raise ValidationError("Lead history is immutable.")
         self.full_clean(validate_unique=False, validate_constraints=False)
@@ -270,7 +298,9 @@ class LeadCandidate(OrganizationScopedModel):
     company_name = models.CharField(max_length=255, blank=True)
     company_domain = models.CharField(max_length=253, blank=True)
     country_hint = models.CharField(max_length=64, blank=True)
-    status = models.CharField(max_length=24, choices=Status.choices, default=Status.DISCOVERED)
+    status = models.CharField(
+        max_length=24, choices=Status.choices, default=Status.DISCOVERED
+    )
     latest_insight = models.ForeignKey(
         "LeadInsight",
         on_delete=models.PROTECT,
@@ -299,7 +329,10 @@ class LeadCandidate(OrganizationScopedModel):
         default_manager_name = "objects"
         ordering = ["-created_at", "-id"]
         constraints = [
-            models.CheckConstraint(condition=models.Q(version__gte=1), name="leads_candidate_version_positive"),
+            models.CheckConstraint(
+                condition=models.Q(version__gte=1),
+                name="leads_candidate_version_positive",
+            ),
             models.CheckConstraint(
                 condition=(
                     models.Q(
@@ -342,24 +375,34 @@ class LeadCandidate(OrganizationScopedModel):
         if (self.status == self.Status.ANALYZING) != (
             self.analysis_lease_token is not None
         ):
-            errors.setdefault("analysis_lease_token", (
-                "ANALYZING status and an analysis lease must exist together."
-            ))
+            errors.setdefault(
+                "analysis_lease_token",
+                ("ANALYZING status and an analysis lease must exist together."),
+            )
         if self.latest_insight_id:
             _related_organization_error(self, "latest_insight", errors)
-            latest_values = LeadInsight._base_manager.filter(pk=self.latest_insight_id).values(
-                "candidate_id", "version"
-            ).first()
+            latest_values = (
+                LeadInsight._base_manager.filter(pk=self.latest_insight_id)
+                .values("candidate_id", "version")
+                .first()
+            )
             if latest_values is None or latest_values["candidate_id"] != self.pk:
-                errors["latest_insight"] = "Latest insight must belong to this candidate."
+                errors["latest_insight"] = (
+                    "Latest insight must belong to this candidate."
+                )
         if not self._state.adding and self.pk:
-            persisted = type(self)._base_manager.filter(pk=self.pk).values(
-                "organization_id",
-                "status",
-                "version",
-                "latest_insight_id",
-                "analysis_lease_token",
-            ).first()
+            persisted = (
+                type(self)
+                ._base_manager.filter(pk=self.pk)
+                .values(
+                    "organization_id",
+                    "status",
+                    "version",
+                    "latest_insight_id",
+                    "analysis_lease_token",
+                )
+                .first()
+            )
             if persisted is not None:
                 if self.organization_id != persisted["organization_id"]:
                     errors["organization"] = "Organization is immutable after creation."
@@ -386,10 +429,16 @@ class LeadCandidate(OrganizationScopedModel):
                     )
                 if self.version != persisted["version"]:
                     errors["version"] = "Candidate version is managed automatically."
-                greatest_insight_id = LeadInsight._base_manager.filter(
-                    candidate_id=self.pk
-                ).order_by("-version", "-id").values_list("id", flat=True).first()
-                if greatest_insight_id is not None and self.latest_insight_id != greatest_insight_id:
+                greatest_insight_id = (
+                    LeadInsight._base_manager.filter(candidate_id=self.pk)
+                    .order_by("-version", "-id")
+                    .values_list("id", flat=True)
+                    .first()
+                )
+                if (
+                    greatest_insight_id is not None
+                    and self.latest_insight_id != greatest_insight_id
+                ):
                     errors["latest_insight"] = (
                         "Latest insight must remain the greatest candidate-local version."
                     )
@@ -430,12 +479,16 @@ class LeadCandidate(OrganizationScopedModel):
             and field.name in selected
         }
         database = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-        queryset = type(self)._base_manager.using(database).filter(
-            pk=self.pk, version=expected_version
+        queryset = (
+            type(self)
+            ._base_manager.using(database)
+            .filter(pk=self.pk, version=expected_version)
         )
         if models.QuerySet.update(queryset, **values) != 1:
             self.version = expected_version
-            raise LeadVersionConflict("Lead candidate version changed before persistence.")
+            raise LeadVersionConflict(
+                "Lead candidate version changed before persistence."
+            )
         self._state.db = database
         self._state.adding = False
         return None
@@ -452,8 +505,12 @@ class LeadInsight(ImmutableLeadHistory):
         OBSERVE = "OBSERVE", "Observe"
         LOW = "LOW", "Low"
 
-    candidate = models.ForeignKey(LeadCandidate, on_delete=models.PROTECT, related_name="insights")
-    ai_run = models.ForeignKey("ai.AIRun", on_delete=models.PROTECT, related_name="lead_insights")
+    candidate = models.ForeignKey(
+        LeadCandidate, on_delete=models.PROTECT, related_name="insights"
+    )
+    ai_run = models.ForeignKey(
+        "ai.AIRun", on_delete=models.PROTECT, related_name="lead_insights"
+    )
     origin = models.CharField(max_length=24, choices=Origin.choices, default=Origin.AI)
     source_insight = models.ForeignKey(
         "self",
@@ -474,9 +531,15 @@ class LeadInsight(ImmutableLeadHistory):
     review_reason = models.TextField(blank=True)
     version = models.PositiveIntegerField()
     intent_score = models.PositiveSmallIntegerField(validators=[MaxValueValidator(30)])
-    company_fit_score = models.PositiveSmallIntegerField(validators=[MaxValueValidator(25)])
-    specificity_score = models.PositiveSmallIntegerField(validators=[MaxValueValidator(20)])
-    capability_fit_score = models.PositiveSmallIntegerField(validators=[MaxValueValidator(15)])
+    company_fit_score = models.PositiveSmallIntegerField(
+        validators=[MaxValueValidator(25)]
+    )
+    specificity_score = models.PositiveSmallIntegerField(
+        validators=[MaxValueValidator(20)]
+    )
+    capability_fit_score = models.PositiveSmallIntegerField(
+        validators=[MaxValueValidator(15)]
+    )
     recency_score = models.PositiveSmallIntegerField(validators=[MaxValueValidator(10)])
     score = models.PositiveSmallIntegerField(validators=[MaxValueValidator(100)])
     score_band = models.CharField(max_length=16, choices=ScoreBand.choices)
@@ -487,15 +550,21 @@ class LeadInsight(ImmutableLeadHistory):
     audited_run = models.BooleanField(default=False)
     ontology_snapshot_complete = models.BooleanField(default=False)
     explanation = models.JSONField(default=dict)
-    extracted_requirement_values = models.JSONField(default=list)
+    extracted_requirement_values = models.JSONField(default=list, blank=True)
     evidence_confidence = models.DecimalField(
-        max_digits=5, decimal_places=4, validators=[MinValueValidator(0), MaxValueValidator(1)]
+        max_digits=5,
+        decimal_places=4,
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
     )
     company_match_confidence = models.DecimalField(
-        max_digits=5, decimal_places=4, validators=[MinValueValidator(0), MaxValueValidator(1)]
+        max_digits=5,
+        decimal_places=4,
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
     )
     ai_confidence = models.DecimalField(
-        max_digits=5, decimal_places=4, validators=[MinValueValidator(0), MaxValueValidator(1)]
+        max_digits=5,
+        decimal_places=4,
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
     )
     ontology_snapshot = models.JSONField()
     evidence = models.ManyToManyField(
@@ -508,13 +577,18 @@ class LeadInsight(ImmutableLeadHistory):
     class Meta(ImmutableLeadHistory.Meta):
         ordering = ["candidate_id", "version", "id"]
         constraints = [
-            models.UniqueConstraint(fields=["candidate", "version"], name="leads_unique_insight_version"),
+            models.UniqueConstraint(
+                fields=["candidate", "version"], name="leads_unique_insight_version"
+            ),
             models.UniqueConstraint(
                 fields=["ai_run"],
                 condition=models.Q(origin="AI"),
                 name="leads_unique_ai_origin_insight_run",
             ),
-            models.CheckConstraint(condition=models.Q(version__gte=1), name="leads_insight_version_positive"),
+            models.CheckConstraint(
+                condition=models.Q(version__gte=1),
+                name="leads_insight_version_positive",
+            ),
             models.CheckConstraint(
                 condition=models.Q(
                     intent_score__gte=0,
@@ -608,7 +682,9 @@ class LeadInsight(ImmutableLeadHistory):
                     self.review_reason,
                 )
             ):
-                errors["origin"] = "AI insights cannot contain human correction metadata."
+                errors["origin"] = (
+                    "AI insights cannot contain human correction metadata."
+                )
         elif self.origin == self.Origin.HUMAN_CORRECTION:
             if (
                 not self.source_insight_id
@@ -618,9 +694,13 @@ class LeadInsight(ImmutableLeadHistory):
                 or self.reviewed_at is None
                 or not self.review_reason.strip()
             ):
-                errors["origin"] = "Human corrections require source, reviewer, reason, and payload."
+                errors["origin"] = (
+                    "Human corrections require source, reviewer, reason, and payload."
+                )
             elif self.source_insight.candidate_id != self.candidate_id:
-                errors["source_insight"] = "Correction source must belong to this candidate."
+                errors["source_insight"] = (
+                    "Correction source must belong to this candidate."
+                )
         dimensions = ScoreDimensions(
             self.intent_score,
             self.company_fit_score,
@@ -645,14 +725,22 @@ class LeadInsight(ImmutableLeadHistory):
             if self.score_band != scored.band:
                 errors["score_band"] = "Score band must match the deterministic total."
             if self.high_value_eligible != scored.high_value_eligible:
-                errors["high_value_eligible"] = "High-value eligibility must match evidence gates."
-        snapshot_org = self.ontology_snapshot.get("organization_id") if isinstance(
-            self.ontology_snapshot, dict
-        ) else None
+                errors["high_value_eligible"] = (
+                    "High-value eligibility must match evidence gates."
+                )
+        snapshot_org = (
+            self.ontology_snapshot.get("organization_id")
+            if isinstance(self.ontology_snapshot, dict)
+            else None
+        )
         if snapshot_org is not None and str(snapshot_org) != str(self.organization_id):
-            errors["ontology_snapshot"] = "Ontology snapshot belongs to another organization."
+            errors["ontology_snapshot"] = (
+                "Ontology snapshot belongs to another organization."
+            )
         elif self.ontology_snapshot_complete and snapshot_org is None:
-            errors["ontology_snapshot"] = "Complete ontology snapshot must belong to the candidate organization."
+            errors["ontology_snapshot"] = (
+                "Complete ontology snapshot must belong to the candidate organization."
+            )
         if errors:
             raise ValidationError(errors)
 
@@ -669,10 +757,14 @@ class LeadCandidateEvidence(ImmutableLeadHistory):
         related_name="evidence_links",
     )
     evidence = models.ForeignKey(
-        "sources.SourceEvidence", on_delete=models.PROTECT, related_name="candidate_links"
+        "sources.SourceEvidence",
+        on_delete=models.PROTECT,
+        related_name="candidate_links",
     )
     source_signal = models.ForeignKey(
-        "sources.SourceSignal", on_delete=models.PROTECT, related_name="candidate_evidence_links"
+        "sources.SourceSignal",
+        on_delete=models.PROTECT,
+        related_name="candidate_evidence_links",
     )
 
     class Meta(ImmutableLeadHistory.Meta):
@@ -693,20 +785,36 @@ class LeadCandidateEvidence(ImmutableLeadHistory):
         errors: dict[str, str] = {}
         for field_name in ("candidate", "insight", "evidence", "source_signal"):
             _related_organization_error(self, field_name, errors)
-        insight_candidate_id = LeadInsight._base_manager.filter(pk=self.insight_id).values_list(
-            "candidate_id", flat=True
-        ).first() if self.insight_id else None
-        if self.insight_id and self.candidate_id and insight_candidate_id != self.candidate_id:
+        insight_candidate_id = (
+            LeadInsight._base_manager.filter(pk=self.insight_id)
+            .values_list("candidate_id", flat=True)
+            .first()
+            if self.insight_id
+            else None
+        )
+        if (
+            self.insight_id
+            and self.candidate_id
+            and insight_candidate_id != self.candidate_id
+        ):
             errors["insight"] = "Insight must belong to this candidate."
         evidence_signal_id = None
         if self.evidence_id:
             from apps.sources.models import SourceEvidence
 
-            evidence_signal_id = SourceEvidence._base_manager.filter(pk=self.evidence_id).values_list(
-                "source_signal_id", flat=True
-            ).first()
-        if self.evidence_id and self.source_signal_id and evidence_signal_id != self.source_signal_id:
-            errors["source_signal"] = "Source signal must be the evidence source signal."
+            evidence_signal_id = (
+                SourceEvidence._base_manager.filter(pk=self.evidence_id)
+                .values_list("source_signal_id", flat=True)
+                .first()
+            )
+        if (
+            self.evidence_id
+            and self.source_signal_id
+            and evidence_signal_id != self.source_signal_id
+        ):
+            errors["source_signal"] = (
+                "Source signal must be the evidence source signal."
+            )
         if errors:
             raise ValidationError(errors)
 
@@ -743,7 +851,9 @@ class LeadAnalysisBinding(ImmutableLeadHistory):
             self.prompt_version.purpose != "LEAD_ANALYZE"
             or self.prompt_version.status != "PUBLISHED"
         ):
-            errors["prompt_version"] = "Analysis binding requires a published lead prompt."
+            errors["prompt_version"] = (
+                "Analysis binding requires a published lead prompt."
+            )
         if errors:
             raise ValidationError(errors)
 
@@ -777,7 +887,9 @@ class LeadReview(ImmutableLeadHistory):
     idempotency_key = models.CharField(max_length=128)
     intent_hash = models.CharField(max_length=64)
     ignore_fingerprint = models.CharField(max_length=64, blank=True)
-    candidate_status = models.CharField(max_length=24, choices=LeadCandidate.Status.choices)
+    candidate_status = models.CharField(
+        max_length=24, choices=LeadCandidate.Status.choices
+    )
     candidate_version = models.PositiveIntegerField()
 
     class Meta(ImmutableLeadHistory.Meta):
@@ -814,7 +926,9 @@ class LeadReview(ImmutableLeadHistory):
 
 
 class LeadInsightRequirement(ImmutableLeadHistory):
-    insight = models.ForeignKey(LeadInsight, on_delete=models.PROTECT, related_name="requirements")
+    insight = models.ForeignKey(
+        LeadInsight, on_delete=models.PROTECT, related_name="requirements"
+    )
     requirement_concept = models.ForeignKey(
         "knowledge.KnowledgeConcept",
         on_delete=models.PROTECT,
@@ -835,7 +949,9 @@ class LeadInsightRequirement(ImmutableLeadHistory):
         related_name="lead_capability_evidence_links",
     )
     source_evidence = models.ForeignKey(
-        "sources.SourceEvidence", on_delete=models.PROTECT, related_name="lead_requirement_links"
+        "sources.SourceEvidence",
+        on_delete=models.PROTECT,
+        related_name="lead_requirement_links",
     )
     extracted_value = models.CharField(max_length=500)
     unit = models.CharField(max_length=64, blank=True)
@@ -844,21 +960,35 @@ class LeadInsightRequirement(ImmutableLeadHistory):
         ordering = ["insight_id", "created_at", "id"]
         constraints = [
             models.UniqueConstraint(
-                fields=["insight", "requirement_concept", "source_evidence", "extracted_value", "unit"],
+                fields=[
+                    "insight",
+                    "requirement_concept",
+                    "source_evidence",
+                    "extracted_value",
+                    "unit",
+                ],
                 name="leads_unique_insight_requirement",
             )
         ]
 
     def clean(self):
         super().clean()
-        from apps.knowledge.models import KnowledgeConcept, KnowledgeEvidence, KnowledgeStatus
+        from apps.knowledge.models import (
+            KnowledgeConcept,
+            KnowledgeEvidence,
+            KnowledgeStatus,
+        )
 
         errors: dict[str, str] = {}
         _related_organization_error(self, "insight", errors)
         _related_organization_error(self, "source_evidence", errors)
         if self.insight_id and self.source_evidence_id:
-            if not self.insight.evidence_links.filter(evidence_id=self.source_evidence_id).exists():
-                errors["source_evidence"] = "Requirement evidence must be linked to this insight."
+            if not self.insight.evidence_links.filter(
+                evidence_id=self.source_evidence_id
+            ).exists():
+                errors["source_evidence"] = (
+                    "Requirement evidence must be linked to this insight."
+                )
         frozen_references = _lead_frozen_references.get()
         for field_name, expected_type in (
             ("requirement_concept", KnowledgeConcept.ConceptType.REQUIREMENT),
@@ -869,7 +999,9 @@ class LeadInsightRequirement(ImmutableLeadHistory):
                 continue
             concept = KnowledgeConcept._base_manager.filter(pk=concept_id).first()
             if concept is None:
-                errors[field_name] = f"{field_name.replace('_', ' ').title()} does not exist."
+                errors[field_name] = (
+                    f"{field_name.replace('_', ' ').title()} does not exist."
+                )
                 continue
             frozen_type = (
                 frozen_references["concept_types"].get(str(concept_id))
@@ -887,15 +1019,21 @@ class LeadInsightRequirement(ImmutableLeadHistory):
                 concept.status != KnowledgeStatus.APPROVED
                 or concept.concept_type != expected_type
             ):
-                errors[field_name] = f"{field_name.replace('_', ' ').title()} must be an approved {expected_type}."
+                errors[field_name] = (
+                    f"{field_name.replace('_', ' ').title()} must be an approved {expected_type}."
+                )
             elif concept.organization_id not in {None, self.organization_id}:
-                errors[field_name] = f"{field_name.replace('_', ' ').title()} is not visible to this organization."
+                errors[field_name] = (
+                    f"{field_name.replace('_', ' ').title()} is not visible to this organization."
+                )
         if self.capability_knowledge_evidence_id:
             knowledge_evidence = KnowledgeEvidence._base_manager.filter(
                 pk=self.capability_knowledge_evidence_id
             ).first()
             if knowledge_evidence is None:
-                errors["capability_knowledge_evidence"] = "Capability knowledge evidence does not exist."
+                errors["capability_knowledge_evidence"] = (
+                    "Capability knowledge evidence does not exist."
+                )
             elif frozen_references is not None and str(
                 self.capability_knowledge_evidence_id
             ) not in frozen_references["capability_evidence"].get(
@@ -904,8 +1042,13 @@ class LeadInsightRequirement(ImmutableLeadHistory):
                 errors["capability_knowledge_evidence"] = (
                     "Capability knowledge evidence is not approved for the frozen capability."
                 )
-            elif frozen_references is None and knowledge_evidence.status != KnowledgeStatus.APPROVED:
-                errors["capability_knowledge_evidence"] = "Capability knowledge evidence must be approved."
+            elif (
+                frozen_references is None
+                and knowledge_evidence.status != KnowledgeStatus.APPROVED
+            ):
+                errors["capability_knowledge_evidence"] = (
+                    "Capability knowledge evidence must be approved."
+                )
             elif knowledge_evidence.organization_id not in {None, self.organization_id}:
                 errors["capability_knowledge_evidence"] = (
                     "Capability knowledge evidence is not visible to this organization."
@@ -914,10 +1057,13 @@ class LeadInsightRequirement(ImmutableLeadHistory):
                 errors["capability_knowledge_evidence"] = (
                     "Capability knowledge evidence requires a capability concept."
                 )
-            elif frozen_references is None and not KnowledgeConcept.objects.filter(
-                pk=self.capability_concept_id,
-                evidence=self.capability_knowledge_evidence_id,
-            ).exists():
+            elif (
+                frozen_references is None
+                and not KnowledgeConcept.objects.filter(
+                    pk=self.capability_concept_id,
+                    evidence=self.capability_knowledge_evidence_id,
+                ).exists()
+            ):
                 errors["capability_knowledge_evidence"] = (
                     "Capability knowledge evidence must support the linked capability."
                 )

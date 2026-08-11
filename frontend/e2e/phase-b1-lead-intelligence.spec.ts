@@ -99,7 +99,7 @@ test("collects, analyzes, explains, and reviews a public lead through the real U
   await expect(reviewDetail.getByText("确认值得跟进", { exact: true })).toBeVisible()
 })
 
-test("the primary organization cannot read or analyze a real foreign candidate", async ({ page }) => {
+test("the primary organization cannot create or analyze with real foreign evidence", async ({ page }) => {
   await login(page, "phaseb1_e2e_foreign")
   const foreignListResponse = await expectOk(
     await page.request.get("/api/v1/lead-candidates?page_size=50"),
@@ -123,6 +123,14 @@ test("the primary organization cannot read or analyze a real foreign candidate",
   )
   const ownList = await ownListResponse.json() as CandidateList
   expect(ownList.results.map((candidate) => candidate.id)).not.toContain(foreignCandidate!.id)
+  const ownCandidate = ownList.results.find(
+    (candidate) => candidate.company_name === bridgeCompany,
+  )
+  expect(ownCandidate).toBeDefined()
+  const ownDetailResponse = await expectOk(
+    await page.request.get(`/api/v1/lead-candidates/${ownCandidate!.id}`),
+  )
+  const ownDetail = await ownDetailResponse.json() as CandidateDetail
 
   const forbiddenRead = await page.request.get(
     `/api/v1/lead-candidates/${foreignCandidate!.id}`,
@@ -130,15 +138,31 @@ test("the primary organization cannot read or analyze a real foreign candidate",
   expect(forbiddenRead.status()).toBe(404)
   expect(await forbiddenRead.text()).not.toContain(foreignEvidence!.original_text)
 
+  const token = await csrfToken(page)
+  const forbiddenCreate = await page.request.post(
+    "/api/v1/lead-candidates",
+    {
+      data: {
+        company_name: "Foreign evidence probe",
+        evidence_ids: [foreignEvidence!.id],
+      },
+      headers: { "X-CSRFToken": token },
+    },
+  )
+  expect(forbiddenCreate.status()).toBe(404)
+  const forbiddenCreateBody = await forbiddenCreate.text()
+  expect(forbiddenCreateBody).not.toContain(foreignDetail.company.name)
+  expect(forbiddenCreateBody).not.toContain(foreignEvidence!.original_text)
+
   const forbiddenAnalyze = await page.request.post(
-    `/api/v1/lead-candidates/${foreignCandidate!.id}/analyze`,
+    `/api/v1/lead-candidates/${ownCandidate!.id}/analyze`,
     {
       data: {
         evidence_ids: [foreignEvidence!.id],
-        expected_version: foreignDetail.version,
+        expected_version: ownDetail.version,
         idempotency_key: "phase-b1-e2e-foreign-analysis-denied",
       },
-      headers: { "X-CSRFToken": await csrfToken(page) },
+      headers: { "X-CSRFToken": token },
     },
   )
   expect(forbiddenAnalyze.status()).toBe(404)

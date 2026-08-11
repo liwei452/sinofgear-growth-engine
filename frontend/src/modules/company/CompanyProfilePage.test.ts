@@ -347,7 +347,7 @@ it("keeps evidence pending while a readable product source is pending", async ()
     if (path.startsWith("/api/v1/knowledge/")) return Promise.resolve(json({ results: [] }))
     throw new Error(`Unexpected request: ${path}`)
   })
-  const { queryClient } = await renderCompany(fetchMock, ["products.read", "knowledge.read"])
+  const { queryClient } = await renderCompany(fetchMock, ["products.read", "knowledge.read", "knowledge.create"])
 
   await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
   await waitFor(() => {
@@ -356,9 +356,90 @@ it("keeps evidence pending while a readable product source is pending", async ()
     expect(knowledgeQueries.every((query) => query.state.status === "success")).toBe(true)
   })
   const gaps = screen.getByRole("region", { name: "建议补充" })
+  const evidenceRegion = screen.getByRole("region", { name: "证据覆盖" })
   expect(gaps).toHaveTextContent("0 项")
   expect(gaps).not.toHaveTextContent("补充证据")
+  expect(within(evidenceRegion).getByRole("link", { name: "查看知识库" })).toHaveAttribute("href", "/knowledge")
+  expect(within(evidenceRegion).queryByRole("link", { name: /补充|管理/ })).not.toBeInTheDocument()
   expect(screen.getByRole("region", { name: "资料完整度" })).toHaveTextContent("正在核对真实资料")
+})
+
+it.each([
+  { label: "failed", productResponse: json({ detail: "offline" }, 503) },
+  { label: "truncated", productResponse: json({ next: "https://evil.example/api/v1/products?cursor=2", previous: null, results: [] }) },
+])("uses a neutral evidence CTA when a product contributor is $label", async ({ productResponse }) => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path.startsWith("/api/v1/products")) return Promise.resolve(productResponse)
+    if (path.startsWith("/api/v1/knowledge/")) return Promise.resolve(json({ results: [] }))
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  await renderCompany(fetchMock, ["products.read", "knowledge.read", "knowledge.create"])
+
+  const evidenceRegion = screen.getByRole("region", { name: "证据覆盖" })
+  expect(await within(evidenceRegion).findByRole("alert")).toHaveTextContent("当前是否存在缺口暂无法判断")
+  expect(within(evidenceRegion).getByRole("link", { name: "查看知识库" })).toHaveAttribute("href", "/knowledge")
+  expect(within(evidenceRegion).queryByRole("link", { name: /补充|管理/ })).not.toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "建议补充" })).not.toHaveTextContent("补充证据")
+})
+
+it("offers evidence supplementation only when evidence readiness is ready and evidence is empty", async () => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path.startsWith("/api/v1/products")) return Promise.resolve(page([]))
+    if (path.startsWith("/api/v1/knowledge/concepts")) return Promise.resolve(json({ results: [{
+      id: "company-knowledge", scope: "ORGANIZATION", organization: "org-1", status: "APPROVED",
+      concept_type: "PRODUCT_TYPE", label_zh: "公司知识", label_en: "", evidence: [],
+    }] }))
+    if (path.startsWith("/api/v1/knowledge/evidence")) return Promise.resolve(json({ results: [] }))
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  await renderCompany(fetchMock, ["products.read", "knowledge.read", "knowledge.create"])
+
+  const evidenceRegion = screen.getByRole("region", { name: "证据覆盖" })
+  expect(await within(evidenceRegion).findByText("还没有可追溯的证据依据。")).toBeVisible()
+  expect(within(evidenceRegion).getByRole("link", { name: "去知识库补充" })).toHaveAttribute("href", "/knowledge")
+  expect(screen.getByRole("region", { name: "建议补充" })).toHaveTextContent("补充证据")
+})
+
+it("uses a view-only evidence CTA when ready evidence is already known", async () => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path.startsWith("/api/v1/products")) return Promise.resolve(page([]))
+    if (path.startsWith("/api/v1/knowledge/concepts")) return Promise.resolve(json({ results: [] }))
+    if (path.startsWith("/api/v1/knowledge/evidence")) return Promise.resolve(json({ results: [{
+      id: "evidence-1", organization: "org-1", status: "APPROVED",
+    }] }))
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  await renderCompany(fetchMock, ["products.read", "knowledge.read", "knowledge.create"])
+
+  const evidenceRegion = screen.getByRole("region", { name: "证据覆盖" })
+  expect(await within(evidenceRegion).findByText("当前可确认 1 条证据依据。")).toBeVisible()
+  expect(within(evidenceRegion).getByRole("link", { name: "查看知识库" })).toHaveAttribute("href", "/knowledge")
+  expect(within(evidenceRegion).queryByRole("link", { name: /补充|管理/ })).not.toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "建议补充" })).not.toHaveTextContent("补充证据")
+})
+
+it("hides the evidence CTA when evidence is unavailable without read permission", async () => {
+  const fetchMock = vi.fn()
+  await renderCompany(fetchMock, ["knowledge.create"])
+
+  const evidenceRegion = screen.getByRole("region", { name: "证据覆盖" })
+  expect(evidenceRegion).toHaveTextContent("你没有查看证据资料的权限。")
+  expect(within(evidenceRegion).queryByRole("link")).not.toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "建议补充" })).not.toHaveTextContent("补充证据")
+  expect(fetchMock).not.toHaveBeenCalled()
+})
+
+it("keeps the evidence CTA read-only without knowledge create permission", async () => {
+  const fetchMock = vi.fn((path: string) => path.startsWith("/api/v1/knowledge/")
+    ? Promise.resolve(json({ results: [] }))
+    : Promise.resolve(page([])))
+  await renderCompany(fetchMock, ["knowledge.read"])
+
+  const evidenceRegion = screen.getByRole("region", { name: "证据覆盖" })
+  expect(await within(evidenceRegion).findByText("还没有可追溯的证据依据。")).toBeVisible()
+  expect(within(evidenceRegion).getByRole("link", { name: "查看知识库" })).toHaveAttribute("href", "/knowledge")
+  expect(within(evidenceRegion).queryByRole("link", { name: /补充|管理/ })).not.toBeInTheDocument()
+  expect(evidenceRegion).toHaveTextContent("如需补充或编辑，请联系管理员。")
 })
 
 it("does not turn a failed knowledge contributor into composite or evidence gaps", async () => {
@@ -441,7 +522,7 @@ it("summarizes only currently available company data and links to existing edito
   expect(await screen.findByText("当前可见 1 条知识")).toBeVisible()
   expect(await screen.findByText("当前页有 3 份素材")).toBeVisible()
   expect(screen.getByRole("link", { name: "管理产品资料" })).toHaveAttribute("href", "/products")
-  expect(screen.getByRole("link", { name: "管理公司知识" })).toHaveAttribute("href", "/knowledge")
+  expect(screen.getByRole("link", { name: "去知识库补充" })).toHaveAttribute("href", "/knowledge")
   expect(screen.getByRole("link", { name: "管理素材" })).toHaveAttribute("href", "/assets")
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument()
 })

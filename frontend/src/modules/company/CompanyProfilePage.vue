@@ -209,6 +209,11 @@ const coverageStatusLabel = computed(() => {
   if (coverage.value === 8 && !hasUnavailableCategories.value) return "资料已覆盖"
   return hasKnownGaps.value ? "仍有可补充项" : "可见资料已核对"
 })
+const evidenceActionLabel = computed(() => (
+  categoryReadiness.value.evidence === "ready" && !evidenceCount.value && canCreateKnowledge.value
+    ? "去知识库补充"
+    : "查看知识库"
+))
 
 type Gap = { title: string; explanation: string; to: string; action: string; allowed: boolean }
 const gaps = computed<Gap[]>(() => {
@@ -316,7 +321,7 @@ function refetchCapabilities() {
           <p v-if="categoryReadiness.evidence === 'pending'" role="status">正在读取证据资料…</p><div v-else-if="categoryReadiness.evidence === 'unknown'" role="alert"><p>证据资料暂时无法完整读取，当前是否存在缺口暂无法判断。</p><button @click="refetchCapabilities(); evidenceQuery.refetch()">重新加载证据资料</button></div>
           <p v-if="evidenceSourceReadiness === 'ready' && evidenceCount">当前可确认 {{ evidenceCount }} 条证据依据。</p><p v-else-if="categoryReadiness.evidence === 'ready'">还没有可追溯的证据依据。</p>
         </template>
-        <RouterLink v-if="canReadKnowledge" class="text-link" to="/knowledge">{{ concepts.length || evidenceCount ? (canCreateKnowledge ? "管理公司知识" : "查看知识库") : (canCreateKnowledge ? "去知识库补充" : "查看知识库") }}</RouterLink>
+        <RouterLink v-if="canReadKnowledge" class="text-link" to="/knowledge">{{ evidenceActionLabel }}</RouterLink>
         <p v-if="canReadKnowledge && !canCreateKnowledge" class="muted">如需补充或编辑，请联系管理员。</p>
       </section>
 

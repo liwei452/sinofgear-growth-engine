@@ -180,3 +180,61 @@ vite build：退出 0（176 个模块）
 
 - SYSTEM 证据仍只通过 ACTIVE 产品的显式 `concept_links` 与已计入概念建立关联；产品源不完整时刻意保持未知，不猜测缺口。
 - 产品读取继续采用 100 页防御上限；超过上限时证据和产品相关分类保持未知。
+
+## Fix round 4
+
+### 根因与 RED
+
+证据缺口任务已经只在 `categoryReadiness.evidence === "ready"` 且证据为空时生成，但证据卡片 CTA 仍只按 `concepts.length || evidenceCount` 分支。产品源挂起、失败或截断，以及知识/证据源失败且当前结果为空时，卡片会同时显示“缺口暂无法判断”和“去知识库补充”；同时，有公司知识但没有证据的完整结果会错误显示“管理公司知识”。
+
+- 新增或强化 pending、unknown（请求失败与分页截断）、ready-empty、ready-nonempty、unavailable 和无 `knowledge.create` 权限的证据 CTA 用例。
+- RED 命令：
+
+```text
+C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vitest/vitest.mjs --run src/modules/company/CompanyProfilePage.test.ts
+```
+
+- RED 结果：1 个文件共 34 项，6 项按预期失败、28 项通过。失败场景证明 pending、失败与截断仍错误显示“去知识库补充”，ready-empty 受知识概念数量干扰，ready-nonempty 仍显示管理文案；unavailable 与只读权限用例作为既有正确边界保持通过。
+
+### GREEN 实现
+
+- 证据卡片 CTA 现在只在证据分类为 `ready`、已知证据数为 0 且用户拥有 `knowledge.create` 时显示“去知识库补充”。
+- 其他可读状态统一显示中性的“查看知识库”：包括 pending、unknown、已有已知证据，以及没有创建权限的只读用户。
+- 没有 `knowledge.read` 权限时继续隐藏 CTA 并显示只读权限说明；证据缺口任务原有 readiness 门槛保持不变，未修改其他分类。
+
+### Fix round 4 验证
+
+```text
+公司页：1 个文件，34/34 通过
+Task 6（公司页 + 分析页）：2 个文件，49/49 通过
+公司/分析/API 关联集：6 个文件，67/67 通过
+全量前端：43 个文件，454/454 通过
+vue-tsc --noEmit：退出 0
+eslint .：退出 0
+vite build：退出 0（176 个模块）
+git diff --check：退出 0
+```
+
+验证命令：
+
+```text
+C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vitest/vitest.mjs --run src/modules/company/CompanyProfilePage.test.ts
+C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vitest/vitest.mjs --run src/modules/analytics/AnalyticsPage.test.ts src/modules/company/CompanyProfilePage.test.ts
+C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vitest/vitest.mjs --run src/modules/analytics/AnalyticsPage.test.ts src/modules/company/CompanyProfilePage.test.ts src/modules/products/api.test.ts src/modules/assets/api.test.ts src/modules/knowledge/api.test.ts src/modules/content/api.test.ts
+C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vitest/vitest.mjs --run
+C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vue-tsc/bin/vue-tsc.js --noEmit
+C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/eslint/bin/eslint.js .
+C:\tmp\task-10b-node\node-v22.21.1-win-x64\node.exe node_modules/vite/bin/vite.js build
+git diff --check
+```
+
+### 文件与提交
+
+- `frontend/src/modules/company/CompanyProfilePage.vue`
+- `frontend/src/modules/company/CompanyProfilePage.test.ts`
+- `.superpowers/sdd/2026-08-11-ai-native-ui-redesign/task-6-report.md`
+- 提交：`fix: align evidence CTA with readiness`
+
+### 剩余边界
+
+- pending/unknown 状态仍允许用户进入知识库查看已经可见的部分资料，但不会使用补充或管理文案，也不会生成证据缺口任务。

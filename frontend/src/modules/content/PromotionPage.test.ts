@@ -65,11 +65,11 @@ it("starts with the user's goal instead of internal content objects", async () =
   renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read", "knowledge.read", "jobs.read", "memberships.read"])
 
   expect(await screen.findByRole("heading", { name: "你今天想推广什么？" })).toBeVisible()
-  expect(screen.getByText("选择推广目标")).toBeVisible()
-  expect(screen.getByText("确认 AI 方案")).toBeVisible()
-  expect(screen.getByText("批准后执行")).toBeVisible()
-  expect(screen.getByRole("button", { name: "让 AI 给我方案" })).toBeVisible()
-  await waitFor(() => expect(screen.getByRole("button", { name: "让 AI 给我方案" })).toBeEnabled())
+  expect(screen.getByText("选择产品")).toBeVisible()
+  expect(screen.getByText("告诉 AI 目标")).toBeVisible()
+  expect(screen.getByText("确认方案")).toBeVisible()
+  expect(screen.getByRole("button", { name: "选择产品并继续" })).toBeVisible()
+  await waitFor(() => expect(screen.getByRole("button", { name: "选择产品并继续" })).toBeEnabled())
   expect(screen.getByRole("button", { name: "查看高级记录" })).toBeVisible()
   expect(screen.queryByRole("heading", { name: "内容需求" })).not.toBeInTheDocument()
   expect(screen.queryByRole("heading", { name: "生成任务" })).not.toBeInTheDocument()
@@ -78,23 +78,23 @@ it("starts with the user's goal instead of internal content objects", async () =
 it("opens the real content brief wizard when the available data is ready", async () => {
   const user = userEvent.setup()
   renderPage(["campaigns.read", "campaigns.manage", "products.read", "memberships.read"])
-  const action = await screen.findByRole("button", { name: "让 AI 给我方案" })
+  const action = await screen.findByRole("button", { name: "选择产品并继续" })
   await waitFor(() => expect(action).toBeEnabled())
 
   await user.click(action)
 
   expect(screen.getByRole("dialog")).toBeInTheDocument()
-  expect(screen.getByRole("heading", { name: "创建内容任务" })).toBeInTheDocument()
+  expect(screen.getByRole("heading", { name: "制定推广方案" })).toBeInTheDocument()
 })
 
 it("keeps the proposal action honest when permission or required data is missing", async () => {
   const first = renderPage(["campaigns.read", "products.read", "memberships.read"])
   expect(await screen.findByText("你当前没有创建推广方案的权限，请联系管理员。")).toBeVisible()
-  expect(screen.queryByRole("button", { name: "让 AI 给我方案" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "选择产品并继续" })).not.toBeInTheDocument()
   first.unmount()
 
   renderPage(["campaigns.read", "campaigns.manage", "products.read", "memberships.read"], { products: false })
-  const action = await screen.findByRole("button", { name: "让 AI 给我方案" })
+  const action = await screen.findByRole("button", { name: "选择产品并继续" })
   await waitFor(() => expect(action).toBeDisabled())
   expect(await screen.findByText("产品库还没有可推广的产品，请先补充产品资料。")).toBeVisible()
 })
@@ -103,7 +103,7 @@ it("requires an empty first product page to be loaded before opening the wizard"
   const user = userEvent.setup()
   renderPage(["campaigns.read", "campaigns.manage", "products.read", "memberships.read"], { productsOnNextPage: true })
 
-  const action = await screen.findByRole("button", { name: "让 AI 给我方案" })
+  const action = await screen.findByRole("button", { name: "选择产品并继续" })
   await waitFor(() => expect(action).toBeDisabled())
   expect(await screen.findByText("还有产品资料未加载，请先加载后再继续。")).toBeVisible()
   await user.click(screen.getByRole("button", { name: "加载更多产品资料" }))
@@ -151,7 +151,7 @@ it("does not fetch or poll hidden jobs and keeps polling errors inside advanced 
   const user = userEvent.setup()
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
-  const action = await screen.findByRole("button", { name: "让 AI 给我方案" })
+  const action = await screen.findByRole("button", { name: "选择产品并继续" })
   await waitFor(() => expect(action).toBeEnabled())
   expect(fetchMock.mock.calls.some(([path]) => path === "/api/v1/jobs")).toBe(false)
   expect(fetchMock.mock.calls.some(([path]) => path === "/api/v1/jobs/job-hidden")).toBe(false)
@@ -172,7 +172,7 @@ it("requests active products and assets and filters inactive records at the page
   const fetchMock = vi.fn(async (path: string) => {
     if (path.startsWith("/api/v1/products")) return new Response(JSON.stringify({ next: "/api/v1/products?status=ACTIVE&cursor=two", previous: null, results: [activeProduct, archivedProduct] }), { status: 200, headers: { "Content-Type": "application/json" } })
     if (path.startsWith("/api/v1/assets")) return new Response(JSON.stringify({ next: null, previous: null, results: [activeAsset, archivedAsset] }), { status: 200, headers: { "Content-Type": "application/json" } })
-    return new Response(JSON.stringify(response(path, { records: true })), { status: 200, headers: { "Content-Type": "application/json" } })
+    return new Response(JSON.stringify(response(path)), { status: 200, headers: { "Content-Type": "application/json" } })
   })
   vi.stubGlobal("fetch", fetchMock)
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -180,7 +180,7 @@ it("requests active products and assets and filters inactive records at the page
   const user = userEvent.setup()
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
-  const action = await screen.findByRole("button", { name: "让 AI 给我方案" })
+  const action = await screen.findByRole("button", { name: "选择产品并继续" })
   await waitFor(() => expect(action).toBeEnabled())
   expect(fetchMock).toHaveBeenCalledWith("/api/v1/products?status=ACTIVE", expect.anything())
   expect(fetchMock).toHaveBeenCalledWith("/api/v1/assets?status=ACTIVE", expect.anything())
@@ -188,13 +188,20 @@ it("requests active products and assets and filters inactive records at the page
   expect(within(screen.getByText("可用素材").closest("article")!).getByText("已加载 1 项")).toBeVisible()
 
   await user.click(action)
-  await user.selectOptions(screen.getByLabelText("已有活动"), "campaign-1")
-  await user.click(screen.getByRole("button", { name: "下一步" }))
   expect(screen.getByLabelText("可推广齿轮")).toBeVisible()
   expect(screen.queryByLabelText("已归档齿轮")).not.toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "加载更多产品" })).toBeVisible()
+  await user.click(screen.getByLabelText("可推广齿轮"))
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+  await user.selectOptions(screen.getByLabelText("目标市场（必选）"), "德国")
+  await user.selectOptions(screen.getByLabelText("目标客户（必选）"), "工业采购")
+  await user.selectOptions(screen.getByLabelText("推广目标（必选）"), "获取询盘")
+  await user.selectOptions(screen.getByLabelText("希望客户下一步（必选）"), "立即询价")
+  await user.selectOptions(screen.getByLabelText("内容语言（必选）"), "de")
+  await user.click(screen.getByLabelText("LinkedIn"))
+  await user.click(screen.getByRole("button", { name: "下一步" }))
   expect(screen.getByText("active.png")).toBeVisible()
   expect(screen.queryByText("archived.png")).not.toBeInTheDocument()
-  expect(screen.getByRole("button", { name: "加载更多产品" })).toBeVisible()
 })
 
 it("blocks platform definitions without memberships.read and does not request them", async () => {
@@ -207,11 +214,11 @@ it("blocks platform definitions without memberships.read and does not request th
   queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(["campaigns.read", "campaigns.manage", "products.read"]))
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
-  const action = await screen.findByRole("button", { name: "让 AI 给我方案" })
+  const action = await screen.findByRole("button", { name: "选择产品并继续" })
   await waitFor(() => expect(action).toBeDisabled())
   expect(screen.getByText("需要组织成员查看权限，才能读取平台定义。")).toBeVisible()
   expect(fetchMock.mock.calls.some(([path]) => path === "/api/v1/platforms")).toBe(false)
-  expect(screen.getByText("来自系统支持的平台定义，不代表账号已连接")).toBeVisible()
+  expect(screen.getByText("来自系统支持的渠道定义，不代表账号已连接")).toBeVisible()
 })
 
 it("counts and offers only approved knowledge when the backend returns mixed statuses", async () => {
@@ -219,7 +226,7 @@ it("counts and offers only approved knowledge when the backend returns mixed sta
   const rejected = { id: "concept-rejected", code: "REJECTED_GEAR", concept_type: "PRODUCT_TYPE", label_zh: "已拒绝齿轮", label_en: "Rejected Gear", status: "REJECTED" }
   const fetchMock = vi.fn(async (path: string) => {
     if (path === "/api/v1/knowledge/concepts?status=APPROVED&page_size=50") return new Response(JSON.stringify({ next: null, previous: null, results: [approved, rejected] }), { status: 200, headers: { "Content-Type": "application/json" } })
-    return new Response(JSON.stringify(response(path, { records: true })), { status: 200, headers: { "Content-Type": "application/json" } })
+    return new Response(JSON.stringify(response(path)), { status: 200, headers: { "Content-Type": "application/json" } })
   })
   vi.stubGlobal("fetch", fetchMock)
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -227,13 +234,79 @@ it("counts and offers only approved knowledge when the backend returns mixed sta
   const user = userEvent.setup()
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
-  const action = await screen.findByRole("button", { name: "让 AI 给我方案" })
+  const action = await screen.findByRole("button", { name: "选择产品并继续" })
   await waitFor(() => expect(action).toBeEnabled())
   expect(within(screen.getByText("已批准知识").closest("article")!).getByText("已加载 1 项")).toBeVisible()
 
   await user.click(action)
-  await user.selectOptions(screen.getByLabelText("已有活动"), "campaign-1")
+  await user.click(screen.getByLabelText("精密齿轮"))
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+  await user.selectOptions(screen.getByLabelText("目标市场（必选）"), "德国")
+  await user.selectOptions(screen.getByLabelText("目标客户（必选）"), "工业采购")
+  await user.selectOptions(screen.getByLabelText("推广目标（必选）"), "获取询盘")
+  await user.selectOptions(screen.getByLabelText("希望客户下一步（必选）"), "立即询价")
+  await user.selectOptions(screen.getByLabelText("内容语言（必选）"), "de")
+  await user.click(screen.getByLabelText("LinkedIn"))
   await user.click(screen.getByRole("button", { name: "下一步" }))
   expect(screen.getByLabelText("Approved Gear (PRODUCT_TYPE)")).toBeVisible()
   expect(screen.queryByLabelText("Rejected Gear (PRODUCT_TYPE)")).not.toBeInTheDocument()
+})
+
+it("shows the six real promotion steps and expands only the current one", async () => {
+  renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read", "memberships.read"])
+
+  expect(await screen.findByRole("heading", { name: "你今天想推广什么？" })).toBeVisible()
+  for (const title of ["选择产品", "告诉 AI 目标", "查看可用素材", "确认方案", "生成内容", "批准发布"]) {
+    expect(screen.getByRole("heading", { name: title })).toBeVisible()
+  }
+  expect(screen.getByRole("region", { name: "选择产品" })).toHaveAttribute("aria-current", "step")
+  expect(screen.queryByRole("region", { name: "告诉 AI 目标" })).not.toBeInTheDocument()
+  await waitFor(() => expect(screen.getByRole("button", { name: "选择产品并继续" })).toBeEnabled())
+  expect(screen.queryByText(/Campaign|ContentBrief|MasterContent|PlatformContent/)).not.toBeInTheDocument()
+})
+
+it("persists the preset beginner flow through the real campaign and brief contracts", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const writes: Array<{ path: string; body: Record<string, unknown> }> = []
+  vi.stubGlobal("fetch", vi.fn(async (path: string, options?: RequestInit) => {
+    if (options?.method === "POST") {
+      const body = JSON.parse(String(options.body)) as Record<string, unknown>
+      writes.push({ path, body })
+      return new Response(JSON.stringify(path === "/api/v1/campaigns" ? campaign : brief), {
+        status: 201, headers: { "Content-Type": "application/json" },
+      })
+    }
+    return new Response(JSON.stringify(response(path)), { status: 200, headers: { "Content-Type": "application/json" } })
+  }))
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser([
+    "campaigns.read", "campaigns.manage", "products.read", "assets.read", "memberships.read",
+  ]))
+  const user = userEvent.setup()
+  render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  const start = await screen.findByRole("button", { name: "选择产品并继续" })
+  await waitFor(() => expect(start).toBeEnabled())
+  await user.click(start)
+  await user.click(screen.getByLabelText("精密齿轮"))
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+  await user.selectOptions(screen.getByLabelText("目标市场（必选）"), "德国")
+  await user.selectOptions(screen.getByLabelText("目标客户（必选）"), "工业采购")
+  await user.selectOptions(screen.getByLabelText("推广目标（必选）"), "获取询盘")
+  await user.selectOptions(screen.getByLabelText("希望客户下一步（必选）"), "立即询价")
+  await user.selectOptions(screen.getByLabelText("内容语言（必选）"), "de")
+  await user.click(screen.getByLabelText("LinkedIn"))
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+  await user.click(screen.getByRole("button", { name: "精密制造" }))
+  await user.click(screen.getByRole("button", { name: "质量可追溯" }))
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+  await user.click(screen.getByRole("button", { name: "保存推广方案" }))
+
+  await waitFor(() => expect(writes.map((item) => item.path)).toEqual(["/api/v1/campaigns", "/api/v1/content-briefs"]))
+  expect(writes[0].body).toEqual({ name: "精密齿轮推广", description: "德国 · 获取询盘", status: "DRAFT", product_ids: [] })
+  expect(writes[1].body).toEqual(expect.objectContaining({
+    campaign_id: "campaign-1", product_ids: ["product-1"], platform_ids: ["platform-1"],
+    target_country: "德国", customer_type: "工业采购", content_objective: "获取询盘",
+    selling_points: ["精密制造"], advantages: ["质量可追溯"], keywords: ["精密齿轮"],
+  }))
 })

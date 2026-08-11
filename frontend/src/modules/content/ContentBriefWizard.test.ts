@@ -43,6 +43,7 @@ function renderWizard(overrides: {
   products?: Product[]
   assets?: Asset[]
   concepts?: BriefConcept[]
+  experience?: "ordinary" | "advanced"
 } = {}) {
   return render(ContentBriefWizard, {
     props: {
@@ -50,6 +51,7 @@ function renderWizard(overrides: {
       products: overrides.products ?? [product("product-1", "精密齿轮", "ACTIVE")],
       platforms: [{ id: "platform-1", code: "LINKEDIN", name: "LinkedIn", capabilities: ["PUBLISH"] }],
       assets: overrides.assets ?? [], concepts: overrides.concepts ?? [], brief: overrides.brief === undefined ? draft : overrides.brief,
+      experience: overrides.experience,
       more: { campaigns: false, products: false, platforms: false, assets: false },
       pageErrors: { campaigns: "", products: "", platforms: "", assets: "" },
     },
@@ -205,4 +207,13 @@ it("does not offer inactive or unapproved relationships during ordinary creation
   expect(screen.queryByText("旧产品")).not.toBeInTheDocument()
   expect(screen.queryByText("old.png")).not.toBeInTheDocument()
   expect(screen.queryByLabelText("Old (STANDARD)")).not.toBeInTheDocument()
+})
+
+it("uses beginner presets in product goal material confirmation order", async () => {
+  renderWizard({ experience: "ordinary" })
+
+  expect(screen.getByRole("heading", { name: "选择产品" })).toBeVisible()
+  expect(screen.getByLabelText("精密齿轮")).toBeVisible()
+  expect(screen.queryByLabelText("目标国家（必填）")).not.toBeInTheDocument()
+  expect(screen.queryByRole("textbox", { name: /聊天|对话|问 AI/ })).not.toBeInTheDocument()
 })

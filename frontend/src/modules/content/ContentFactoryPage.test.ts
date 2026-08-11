@@ -395,7 +395,7 @@ it.each([
   const view = renderPage(permissions, "ordinary")
   const user = userEvent.setup()
 
-  await user.click(await screen.findByRole("button", { name: "让 AI 给我方案" }))
+  await user.click(await screen.findByRole("button", { name: "选择产品并继续" }))
   expect(screen.getByRole("dialog")).toBeVisible()
   if (queryKey) expect(view.queryClient.getQueryData(queryKey())).toBeDefined()
 

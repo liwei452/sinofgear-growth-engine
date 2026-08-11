@@ -70,7 +70,7 @@ it("shows plain content fields and a safe, collapsed AI audit summary", async ()
   ), { status: 200, headers: { "Content-Type": "application/json" } })))
   const user = userEvent.setup()
   renderPage(["content.read", "jobs.read"])
-  await user.click(await screen.findByRole("button", { name: "查看详情" }))
+  await user.click(await screen.findByRole("button", { name: "查看并确认" }))
   const reviewDialog = within(screen.getByRole("dialog"))
 
   expect(reviewDialog.getByRole("heading", { name: "精密齿轮解决方案" })).toBeInTheDocument()
@@ -79,11 +79,25 @@ it("shows plain content fields and a safe, collapsed AI audit summary", async ()
   expect(screen.queryByText(/never-render/)).not.toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "查看AI生成记录" }))
   expect(await screen.findByText("gpt-safe")).toBeInTheDocument()
-  expect(screen.getByText("SUCCEEDED")).toBeInTheDocument()
+  expect(screen.getByText("已完成")).toBeInTheDocument()
+  expect(screen.queryByText("SUCCEEDED")).not.toBeInTheDocument()
   expect(screen.getByText("DIN")).toBeInTheDocument()
   expect(screen.getByText("PACKAGING_MACHINERY")).toBeInTheDocument()
   expect(screen.getByText("content-default · v3")).toBeInTheDocument()
   expect(screen.queryByText(/Authorization|never-render/)).not.toBeInTheDocument()
+})
+
+it("uses beginner review language and consequence-oriented approval", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
+    path.startsWith("/api/v1/master-contents") ? page([master()]) : common(path),
+  ), { status: 200, headers: { "Content-Type": "application/json" } })))
+  const user = userEvent.setup()
+  renderPage(["content.read", "content.review"])
+
+  expect(await screen.findByText("等待确认")).toBeVisible()
+  expect(screen.queryByText("IN_REVIEW")).not.toBeInTheDocument()
+  await user.click(await screen.findByRole("button", { name: "查看并确认" }))
+  expect(screen.getByRole("button", { name: "批准发布" })).toBeVisible()
 })
 
 it("creates a platform revision with the exact schema and immutable platform code", async () => {
@@ -101,9 +115,9 @@ it("creates a platform revision with the exact schema and immutable platform cod
   vi.stubGlobal("fetch", fetchMock)
   const user = userEvent.setup()
   renderPage(["content.read", "content.manage"])
-  await user.click(await screen.findByRole("tab", { name: "平台版本" }))
+  await user.click(await screen.findByRole("tab", { name: "渠道文案" }))
   await user.selectOptions(screen.getByLabelText("内容状态"), "DRAFT")
-  await user.click(await screen.findByRole("button", { name: "查看详情" }))
+  await user.click(await screen.findByRole("button", { name: "查看并确认" }))
   await user.click(screen.getByRole("button", { name: "创建修改版" }))
   expect(screen.getByDisplayValue("LINKEDIN")).toBeDisabled()
   await user.clear(screen.getByLabelText("正文（必填）"))
@@ -130,7 +144,7 @@ it("requires a rejection reason and sends the guarded review action", async () =
   vi.stubGlobal("fetch", fetchMock)
   const user = userEvent.setup()
   renderPage(["content.read", "content.review"])
-  await user.click(await screen.findByRole("button", { name: "查看详情" }))
+  await user.click(await screen.findByRole("button", { name: "查看并确认" }))
   await user.click(screen.getByRole("button", { name: "驳回" }))
   await user.click(screen.getByRole("button", { name: "确认驳回" }))
   expect(screen.getByRole("alert")).toHaveTextContent("请填写驳回原因")
@@ -154,8 +168,8 @@ it("generates only platforms selected by the source brief", async () => {
   const user = userEvent.setup()
   renderPage(["content.read", "content.manage"])
   await user.selectOptions(await screen.findByLabelText("内容状态"), "APPROVED")
-  await user.click(await screen.findByRole("button", { name: "查看详情" }))
-  await user.click(screen.getByRole("button", { name: "生成平台版本" }))
+  await user.click(await screen.findByRole("button", { name: "查看并确认" }))
+  await user.click(screen.getByRole("button", { name: "生成渠道版本" }))
 
   expect(await screen.findByRole("button", { name: "为 LinkedIn 生成" })).toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "为 YouTube 生成" })).not.toBeInTheDocument()
@@ -179,8 +193,8 @@ it("refreshes the active review queue when a guarded action conflicts", async ()
   vi.stubGlobal("fetch", fetchMock)
   const user = userEvent.setup()
   renderPage(["content.read", "content.review"])
-  await user.click(await screen.findByRole("button", { name: /详情/ }))
-  await user.click(screen.getByRole("button", { name: /通过/ }))
+  await user.click(await screen.findByRole("button", { name: /查看并确认/ }))
+  await user.click(screen.getByRole("button", { name: /批准发布/ }))
 
   await waitFor(() => expect(listRequests).toBe(2))
   expect(screen.getByRole("alert")).toBeInTheDocument()
@@ -192,9 +206,9 @@ it("hides review mutations when permission and status guards do not both pass", 
   ), { status: 200, headers: { "Content-Type": "application/json" } })))
   const user = userEvent.setup()
   renderPage(["content.read"])
-  await user.click(await screen.findByRole("button", { name: /详情/ }))
+  await user.click(await screen.findByRole("button", { name: /查看并确认/ }))
 
-  expect(screen.queryByRole("button", { name: /^通过$/ })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: /^批准发布$/ })).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: /^驳回$/ })).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: /创建修改版/ })).not.toBeInTheDocument()
 })
@@ -212,9 +226,9 @@ it("trusts the server current-head flag when a successor is outside the page", a
   const user = userEvent.setup()
   renderPage(["content.read", "content.review"])
 
-  await user.click(await screen.findByRole("button", { name: /详情/ }))
+  await user.click(await screen.findByRole("button", { name: /查看并确认/ }))
 
-  expect(screen.queryByRole("button", { name: /^通过$/ })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: /^批准发布$/ })).not.toBeInTheDocument()
   expect(fetchMock).not.toHaveBeenCalledWith(expect.stringMatching(/\/approve$/), expect.anything())
 })
 
@@ -234,7 +248,7 @@ it("loads and reviews an item from the second safe cursor page", async () => {
   renderPage(["content.read", "content.review"])
 
   await user.click(await screen.findByRole("button", { name: "加载更多待审内容" }))
-  await user.click(await screen.findByRole("button", { name: "查看详情" }))
+  await user.click(await screen.findByRole("button", { name: "查看并确认" }))
 
   expect(within(screen.getByRole("dialog")).getByRole("heading", { name: "第二页待审内容" })).toBeInTheDocument()
 })
@@ -286,7 +300,7 @@ it("recovers campaign and platform filter options after first-page errors", asyn
   await user.click(screen.getByRole("button", { name: "重新加载平台" }))
 
   expect(await screen.findByRole("option", { name: "恢复的活动" })).toBeInTheDocument()
-  await user.click(screen.getByRole("tab", { name: "平台版本" }))
+  await user.click(screen.getByRole("tab", { name: "渠道文案" }))
   expect(await screen.findByRole("option", { name: "恢复的平台" })).toBeInTheDocument()
   expect(attempts).toEqual(new Map([
     ["/api/v1/campaigns", 2], ["/api/v1/platforms", 2],

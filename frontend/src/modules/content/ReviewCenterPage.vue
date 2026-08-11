@@ -4,6 +4,8 @@ import { useQuery, useQueryClient } from "@tanstack/vue-query"
 
 import { ApiError } from "../../api/client"
 import { currentUserQueryOptions } from "../auth/auth"
+import StatusBadge from "../../shared/components/StatusBadge.vue"
+import { ordinaryStatus } from "../../shared/presentation/ordinary"
 import ContentReviewDialog from "./ContentReviewDialog.vue"
 import {
   contentQueryKeys, listCampaigns, listMasterContents, listPlatformContents,
@@ -55,10 +57,10 @@ const items = computed<ReviewItem[]>(() => tab.value === "master"
 const activePages = computed(() => tab.value === "master" ? masterPages : platformPages)
 const pending = computed(() => tab.value === "master" ? masterQuery.isPending.value : platformQuery.isPending.value)
 const failed = computed(() => tab.value === "master" ? masterQuery.error.value : platformQuery.error.value)
-const statusLabels: Record<string, string> = {
-  DRAFT: "草稿", IN_REVIEW: "待审核", APPROVED: "已通过", REJECTED: "已驳回",
-  PUBLISHED: "已发布", ARCHIVED: "已归档",
-}
+const statusTone = (value: string): "brand" | "success" | "warning" | "danger" | "neutral" => (
+  value === "APPROVED" || value === "PUBLISHED" ? "success"
+    : value === "REJECTED" ? "danger" : value === "IN_REVIEW" ? "warning" : "neutral"
+)
 
 function switchTab(next: "master" | "platform"): void {
   tab.value = next
@@ -96,13 +98,13 @@ function filterError(reason: unknown, label: string): string {
 
 <template>
   <main class="page-stack review-center" aria-labelledby="reviews-title">
-    <header><p class="eyebrow">集中比较与推进内容</p><h1 id="reviews-title">审核中心</h1><p>查看普通字段，修改内容，并清楚地通过、驳回或归档当前版本。</p></header>
+    <header><p class="eyebrow">集中比较与推进内容</p><h1 id="reviews-title">审核中心</h1><p>查看普通字段，修改内容，并清楚地批准、驳回或归档当前版本。</p></header>
     <p v-if="notice" role="status" class="notice">{{ notice }}</p><p v-if="error" role="alert">{{ error }}</p>
-    <div role="tablist" aria-label="内容类型" class="tabs"><button role="tab" type="button" :aria-selected="tab === 'master'" @click="switchTab('master')">主内容</button><button role="tab" type="button" :aria-selected="tab === 'platform'" @click="switchTab('platform')">平台版本</button></div>
-    <section class="filters" aria-label="审核筛选"><label>内容状态<select v-model="status" aria-label="内容状态"><option value="IN_REVIEW">待审核</option><option value="DRAFT">草稿</option><option value="APPROVED">已通过</option><option value="REJECTED">已驳回</option><option value="ARCHIVED">已归档</option><option value="">全部状态</option></select></label><label>活动<select v-model="campaign"><option value="">全部活动</option><option v-for="item in campaignPages.items.value" :key="item.id" :value="item.id">{{ item.name }}</option></select><button v-if="campaignPages.next.value" type="button" :disabled="campaignPages.loading.value" @click="campaignPages.loadMore">加载更多活动</button><span v-if="campaignPages.error.value" role="alert">{{ campaignPages.error.value }} <button type="button" @click="campaignPages.loadMore">重试加载更多活动</button></span></label><label v-if="tab === 'platform'">平台<select v-model="platform"><option value="">全部平台</option><option v-for="item in platformOptions.items.value" :key="item.id" :value="item.id">{{ item.name }}</option></select><button v-if="platformOptions.next.value" type="button" :disabled="platformOptions.loading.value" @click="platformOptions.loadMore">加载更多平台</button><span v-if="platformOptions.error.value" role="alert">{{ platformOptions.error.value }} <button type="button" @click="platformOptions.loadMore">重试加载更多平台</button></span></label></section>
+    <div role="tablist" aria-label="内容类型" class="tabs"><button role="tab" type="button" :aria-selected="tab === 'master'" @click="switchTab('master')">通用文案</button><button role="tab" type="button" :aria-selected="tab === 'platform'" @click="switchTab('platform')">渠道文案</button></div>
+    <section class="filters" aria-label="审核筛选"><label>内容状态<select v-model="status" aria-label="内容状态"><option value="IN_REVIEW">等待确认</option><option value="DRAFT">草稿</option><option value="APPROVED">已批准</option><option value="REJECTED">已退回</option><option value="ARCHIVED">已归档</option><option value="">全部状态</option></select></label><label>推广计划<select v-model="campaign"><option value="">全部推广计划</option><option v-for="item in campaignPages.items.value" :key="item.id" :value="item.id">{{ item.name }}</option></select><button v-if="campaignPages.next.value" type="button" :disabled="campaignPages.loading.value" @click="campaignPages.loadMore">加载更多推广计划</button><span v-if="campaignPages.error.value" role="alert">{{ campaignPages.error.value }} <button type="button" @click="campaignPages.loadMore">重试加载更多推广计划</button></span></label><label v-if="tab === 'platform'">推广渠道<select v-model="platform"><option value="">全部推广渠道</option><option v-for="item in platformOptions.items.value" :key="item.id" :value="item.id">{{ item.name }}</option></select><button v-if="platformOptions.next.value" type="button" :disabled="platformOptions.loading.value" @click="platformOptions.loadMore">加载更多推广渠道</button><span v-if="platformOptions.error.value" role="alert">{{ platformOptions.error.value }} <button type="button" @click="platformOptions.loadMore">重试加载更多推广渠道</button></span></label></section>
     <p v-if="enabled && campaignsQuery.isError.value" role="alert">{{ filterError(campaignsQuery.error.value, '活动') }} <button type="button" @click="campaignsQuery.refetch()">重新加载活动</button></p>
     <p v-if="enabled && platformsQuery.isError.value" role="alert">{{ filterError(platformsQuery.error.value, '平台') }} <button type="button" @click="platformsQuery.refetch()">重新加载平台</button></p>
-    <p v-if="pending" role="status">正在加载审核队列…</p><section v-else-if="failed" class="state-panel"><h2>审核队列没有加载成功</h2><p>{{ safeError() }}</p><button type="button" @click="retry">重新加载</button></section><section v-else-if="!items.length && !activePages.next.value" class="state-panel"><h2>当前没有符合条件的内容</h2><p>可以切换状态或内容类型查看其他项目。</p></section><section v-else-if="items.length" class="review-grid"><article v-for="item in items" :key="item.id" class="review-card"><div class="card-heading"><div><p class="eyebrow">第 {{ item.version }} 版</p><h2>{{ item.payload.title }}</h2></div><span class="status-chip">{{ statusLabels[item.status] || item.status }}</span></div><p>{{ item.payload.body.slice(0, 140) }}{{ item.payload.body.length > 140 ? '…' : '' }}</p><p class="muted">来源：{{ tab === 'master' ? `需求 ${(item as MasterContent).brief_id} · 任务 ${(item as MasterContent).generation_job_id}` : `主内容 ${(item as PlatformContent).master_content_id}` }}</p><button type="button" @click="selected = item">查看详情</button></article></section>
+    <p v-if="pending" role="status">正在加载待确认内容…</p><section v-else-if="failed" class="state-panel"><h2>待确认内容没有加载成功</h2><p>{{ safeError() }}</p><button type="button" @click="retry">重新加载</button></section><section v-else-if="!items.length && !activePages.next.value" class="state-panel"><h2>当前没有符合条件的内容</h2><p>可以切换状态或内容类型查看其他项目。</p></section><section v-else-if="items.length" class="review-grid"><article v-for="item in items" :key="item.id" class="review-card"><div class="card-heading"><div><p class="eyebrow">第 {{ item.version }} 版</p><h2>{{ item.payload.title }}</h2></div><StatusBadge :tone="statusTone(item.status)" :label="ordinaryStatus(item.status)" /></div><p>{{ item.payload.body.slice(0, 140) }}{{ item.payload.body.length > 140 ? '…' : '' }}</p><p class="muted">来源和版本信息已保留，可在详情中查看。</p><details><summary>高级记录</summary><p>{{ tab === 'master' ? `方案 ${ (item as MasterContent).brief_id } · 生成记录 ${ (item as MasterContent).generation_job_id }` : `通用文案 ${ (item as PlatformContent).master_content_id }` }}</p></details><button type="button" @click="selected = item">查看并确认</button></article></section>
     <p v-if="activePages.error.value" role="alert">{{ activePages.error.value }} <button type="button" @click="activePages.loadMore">重试</button></p><button v-else-if="activePages.next.value" type="button" :disabled="activePages.loading.value" @click="activePages.loadMore">{{ activePages.loading.value ? '正在加载…' : '加载更多待审内容' }}</button>
     <ContentReviewDialog v-if="selected" :item="selected" :kind="tab" :permissions="permissions" :current-head="selected.is_current_head" :platforms="platformOptions.items.value" @close="selected = null" @updated="updated" @platform-generated="platformGenerated" @conflict="refreshConflict" />
   </main>

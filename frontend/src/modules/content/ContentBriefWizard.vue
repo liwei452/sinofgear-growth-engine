@@ -15,9 +15,10 @@ const props = withDefaults(defineProps<{
   assets: Asset[]
   concepts?: BriefConcept[]
   brief?: ContentBrief | null
+  experience?: "ordinary" | "advanced"
   more: Record<"campaigns" | "products" | "platforms" | "assets", boolean>
   pageErrors: Record<"campaigns" | "products" | "platforms" | "assets", string>
-}>(), { concepts: () => [], brief: null })
+}>(), { concepts: () => [], brief: null, experience: "advanced" })
 const emit = defineEmits<{
   close: []
   saved: [brief: ContentBrief]
@@ -25,11 +26,12 @@ const emit = defineEmits<{
 }>()
 
 const step = ref(1)
+const ordinaryExperience = computed(() => props.experience === "ordinary")
 const busy = ref(false)
 const alert = ref("")
 const fieldErrors = reactive<Record<string, string>>({})
 const quickCampaign = ref(false)
-const campaignId = ref(props.brief?.campaign_id ?? props.campaigns[0]?.id ?? "")
+const campaignId = ref(props.brief?.campaign_id ?? (props.experience === "ordinary" ? "" : props.campaigns[0]?.id ?? ""))
 const newCampaign = reactive({ name: "", description: "" })
 const productIds = ref<string[]>([...(props.brief?.product_ids ?? [])])
 const platformIds = ref<string[]>([...(props.brief?.platform_ids ?? [])])
@@ -174,8 +176,60 @@ function removeConcept(id: string): void {
   conceptIds.value = conceptIds.value.filter((selected) => selected !== id)
 }
 
+function usePreset(field: "selling_points" | "advantages", value: string): void {
+  const values = list(form[field])
+  form[field] = values.includes(value) ? values.filter((item) => item !== value).join("，") : [...values, value].join("，")
+}
+
+async function validateOrdinaryStep(): Promise<boolean> {
+  if (step.value === 1) {
+    if (!productIds.value.length) {
+      fieldErrors.products = "请至少选择一个产品。"
+      alert.value = "请先选择这次要推广的产品。"
+      await focusFirstError("products")
+      return false
+    }
+    const selected = props.products.find((item) => item.id === productIds.value[0])
+    if (!form.keywords.trim()) form.keywords = selected?.name_zh || selected?.name_en || "产品"
+    if (!form.landing_page_url.trim()) form.landing_page_url = selected?.landing_page_url ?? ""
+  }
+  if (step.value === 2) {
+    for (const key of ["target_country", "customer_type", "content_objective", "cta", "language"] as const) {
+      if (!form[key].trim()) fieldErrors[key] = "请选择一项。"
+    }
+    if (!platformIds.value.length) fieldErrors.platforms = "请选择至少一个推广渠道。"
+    if (Object.keys(fieldErrors).length) {
+      alert.value = "请完成推广目标和渠道选择。"
+      await focusFirstError()
+      return false
+    }
+  }
+  if (step.value === 3) {
+    if (!list(form.selling_points).length) fieldErrors.selling_points = "请选择或填写至少一个卖点。"
+    if (!list(form.advantages).length) fieldErrors.advantages = "请选择或填写至少一个优势。"
+    if (!list(form.keywords).length) fieldErrors.keywords = "请填写至少一个关键词。"
+    if (form.landing_page_url) {
+      try {
+        const url = new URL(form.landing_page_url)
+        if (!("http:" === url.protocol || "https:" === url.protocol)) throw new Error()
+      } catch { fieldErrors.landing_page_url = "请输入 http 或 https 开头的网址。" }
+    }
+    if (Object.keys(fieldErrors).length) {
+      alert.value = "请补全用于生成方案的必要信息。"
+      await focusFirstError()
+      return false
+    }
+  }
+  return true
+}
+
 async function next(): Promise<void> {
   clearErrors()
+  if (ordinaryExperience.value) {
+    if (!(await validateOrdinaryStep())) return
+    step.value += 1
+    return
+  }
   if (step.value === 1) {
     if (props.brief) {
       campaignId.value = props.brief.campaign_id
@@ -243,7 +297,7 @@ async function submit(): Promise<void> {
       return role ? { role, concept_id: conceptId } : null
     })
     if (conceptLinks.some((link) => link === null)) {
-      step.value = 2
+      step.value = ordinaryExperience.value ? 3 : 2
       alert.value = "所选知识类型不支持内容需求，请取消选择后重试。"
       await focusFirstError("concepts")
       return
@@ -257,6 +311,13 @@ async function submit(): Promise<void> {
       advantages: list(form.advantages), keywords: list(form.keywords),
       product_ids: productIds.value, asset_ids: assetIds.value, platform_ids: platformIds.value,
       concept_links: validConceptLinks,
+    }
+    if (!props.brief && ordinaryExperience.value && !campaignId.value) {
+      const selectedProduct = props.products.find((item) => item.id === productIds.value[0])
+      campaignId.value = (await createCampaign({
+        name: `${selectedProduct?.name_zh || selectedProduct?.name_en || "产品"}推广`,
+        description: `${form.target_country} · ${form.content_objective}`,
+      })).id
     }
     const brief = props.brief
       ? await patchBrief(props.brief.id, input)
@@ -275,12 +336,41 @@ async function submit(): Promise<void> {
     <div ref="backdrop" class="dialog-backdrop" @click.self="emit('close')">
       <section ref="dialog" class="wizard-dialog" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
         <header>
-          <div><p class="eyebrow">第 {{ step }} 步，共 4 步</p><h2 id="wizard-title" ref="title" tabindex="-1">{{ brief ? '编辑需求草稿' : '创建内容任务' }}</h2></div>
+          <div><p class="eyebrow">第 {{ step }} 步，共 4 步</p><h2 id="wizard-title" ref="title" tabindex="-1">{{ ordinaryExperience ? (brief ? '修改推广方案' : '制定推广方案') : (brief ? '编辑需求草稿' : '创建内容任务') }}</h2></div>
           <button type="button" aria-label="关闭" @click="emit('close')">×</button>
         </header>
         <p v-if="alert" ref="alertElement" role="alert" class="form-alert" tabindex="-1">{{ alert }}</p>
 
-        <section v-if="step === 1" aria-labelledby="campaign-step">
+        <template v-if="ordinaryExperience">
+          <ol class="wizard-progress" aria-label="方案准备进度">
+            <li :aria-current="step === 1 ? 'step' : undefined">选择产品</li><li :aria-current="step === 2 ? 'step' : undefined">告诉 AI 目标</li><li :aria-current="step === 3 ? 'step' : undefined">查看可用素材</li><li :aria-current="step === 4 ? 'step' : undefined">确认方案</li>
+          </ol>
+          <section v-if="step === 1" aria-labelledby="ordinary-product-step">
+            <h3 id="ordinary-product-step">选择产品</h3><p>从当前组织的可用产品中选择，后续方案只使用真实产品资料。</p>
+            <fieldset data-field="products"><legend>这次推广什么？</legend><span v-if="fieldErrors.products" class="field-error">{{ fieldErrors.products }}</span><label v-for="item in availableProducts" :key="item.id"><input v-model="productIds" type="checkbox" :value="item.id" :aria-label="item.name_zh || item.name_en"> {{ item.name_zh || item.name_en }}</label><label v-for="item in unavailableProducts" :key="`unavailable-${item.id}`"><input type="checkbox" checked :aria-label="`${item.name_zh || item.name_en}（不可用，仅可移除）`" @change="removeProduct(item.id)"> {{ item.name_zh || item.name_en }} <small>不可用，仅可移除</small></label><button v-if="more.products" type="button" @click="emit('loadMore', 'products')">加载更多产品</button><span v-if="pageErrors.products" role="alert">{{ pageErrors.products }} <button type="button" @click="emit('loadMore', 'products')">重试</button></span></fieldset>
+          </section>
+          <section v-else-if="step === 2" aria-labelledby="ordinary-goal-step">
+            <h3 id="ordinary-goal-step">告诉 AI 目标</h3><p>使用明确选项约束方案，不会模拟自由聊天。</p>
+            <div class="form-grid">
+              <label>目标市场（必选）<select v-model="form.target_country" data-field="target_country"><option value="">请选择</option><option>中国</option><option>德国</option><option>美国</option><option>日本</option></select><span v-if="fieldErrors.target_country" class="field-error">{{ fieldErrors.target_country }}</span></label>
+              <label>目标客户（必选）<select v-model="form.customer_type" data-field="customer_type"><option value="">请选择</option><option>工业采购</option><option>工程师</option><option>渠道伙伴</option></select><span v-if="fieldErrors.customer_type" class="field-error">{{ fieldErrors.customer_type }}</span></label>
+              <label>推广目标（必选）<select v-model="form.content_objective" data-field="content_objective"><option value="">请选择</option><option>获取询盘</option><option>介绍产品</option><option>建立品牌认知</option></select><span v-if="fieldErrors.content_objective" class="field-error">{{ fieldErrors.content_objective }}</span></label>
+              <label>希望客户下一步（必选）<select v-model="form.cta" data-field="cta"><option value="">请选择</option><option>立即询价</option><option>获取样品</option><option>查看产品详情</option></select><span v-if="fieldErrors.cta" class="field-error">{{ fieldErrors.cta }}</span></label>
+              <label>内容语言（必选）<select v-model="form.language" data-field="language"><option value="">请选择</option><option value="zh">中文</option><option value="en">英文</option><option value="de">德文</option><option value="ja">日文</option></select><span v-if="fieldErrors.language" class="field-error">{{ fieldErrors.language }}</span></label>
+              <label>落地页（可选）<input v-model="form.landing_page_url" aria-label="落地页（可选）" data-field="landing_page_url" placeholder="https://"><span v-if="fieldErrors.landing_page_url" class="field-error">{{ fieldErrors.landing_page_url }}</span></label>
+            </div>
+            <fieldset data-field="platforms"><legend>推广渠道（至少一个）</legend><span v-if="fieldErrors.platforms" class="field-error">{{ fieldErrors.platforms }}</span><label v-for="item in platforms" :key="item.id"><input v-model="platformIds" type="checkbox" :value="item.id" :aria-label="item.name"> {{ item.name }}</label><button v-if="more.platforms" type="button" @click="emit('loadMore', 'platforms')">加载更多推广渠道</button></fieldset>
+          </section>
+          <section v-else-if="step === 3" aria-labelledby="ordinary-material-step">
+            <h3 id="ordinary-material-step">查看可用素材</h3><p>素材和知识均来自已加载的真实资料；不选择也不会虚构来源。</p>
+            <fieldset v-if="availableAssets.length || unavailableAssets.length || missingAssetIds.length || more.assets" data-field="assets"><legend>可选素材</legend><label v-for="item in availableAssets" :key="item.id"><input v-model="assetIds" type="checkbox" :value="item.id"> {{ item.original_filename }}</label><button v-if="more.assets" type="button" @click="emit('loadMore', 'assets')">加载更多素材</button></fieldset>
+            <fieldset v-if="availableConcepts.length || unavailableConcepts.length || missingConceptIds.length" data-field="concepts"><legend>已批准知识（可选）</legend><label v-for="item in availableConcepts" :key="item.id"><input v-model="conceptIds" type="checkbox" :value="item.id" :aria-label="`${item.label_en || item.label_zh} (${item.concept_type})`"> {{ item.label_zh || item.label_en }}</label></fieldset>
+            <fieldset><legend>方案重点</legend><div class="preset-row"><button v-for="value in ['精密制造','稳定交付','支持定制']" :key="value" type="button" :aria-pressed="list(form.selling_points).includes(value)" @click="usePreset('selling_points', value)">{{ value }}</button></div><label>补充卖点（简短填写）<input v-model="form.selling_points" data-field="selling_points"><span v-if="fieldErrors.selling_points" class="field-error">{{ fieldErrors.selling_points }}</span></label><div class="preset-row"><button v-for="value in ['质量可追溯','交付周期清晰','工程支持']" :key="value" type="button" :aria-pressed="list(form.advantages).includes(value)" @click="usePreset('advantages', value)">{{ value }}</button></div><label>补充优势（简短填写）<input v-model="form.advantages" data-field="advantages"><span v-if="fieldErrors.advantages" class="field-error">{{ fieldErrors.advantages }}</span></label><label>关键词（逗号分隔）<input v-model="form.keywords" data-field="keywords"><span v-if="fieldErrors.keywords" class="field-error">{{ fieldErrors.keywords }}</span></label><label>不能使用的说法（可选）<input v-model="form.prohibited_claims" data-field="prohibited_claims"></label></fieldset>
+          </section>
+          <section v-else aria-labelledby="ordinary-confirm-step"><h3 id="ordinary-confirm-step">确认方案</h3><dl><div><dt>产品</dt><dd>{{ productIds.map(id => products.find(item => item.id === id)?.name_zh || id).join('、') }}</dd></div><div><dt>目标</dt><dd>{{ form.target_country }} · {{ form.customer_type }} · {{ form.content_objective }}</dd></div><div><dt>渠道与素材</dt><dd>{{ platformIds.length }} 个渠道 · {{ assetIds.length }} 份素材</dd></div><div><dt>方案重点</dt><dd>{{ form.selling_points }}；{{ form.advantages }}</dd></div></dl><p>确认后会保存真实推广方案，等待有权限的同事审核；此处不会假装已经调用 AI 模型。</p></section>
+        </template>
+
+        <section v-else-if="step === 1" aria-labelledby="campaign-step">
           <h3 id="campaign-step">准备活动</h3>
           <p v-if="brief">活动保持不变：{{ campaigns.find(item => item.id === campaignId)?.name || campaignId }}</p>
           <label v-else><input v-model="quickCampaign" type="checkbox" aria-label="快速新建活动"> 快速新建活动</label>
@@ -295,7 +385,7 @@ async function submit(): Promise<void> {
           </label>
         </section>
 
-        <section v-else-if="step === 2" aria-labelledby="selection-step">
+        <section v-if="!ordinaryExperience && step === 2" aria-labelledby="selection-step">
           <h3 id="selection-step">选择产品和平台</h3>
           <fieldset data-field="products"><legend>产品（至少一个）</legend><span v-if="fieldErrors.products" class="field-error">{{ fieldErrors.products }}</span><label v-for="item in availableProducts" :key="item.id"><input v-model="productIds" type="checkbox" :value="item.id" :aria-label="item.name_zh || item.name_en"> {{ item.name_zh || item.name_en }}</label><label v-for="item in unavailableProducts" :key="`unavailable-${item.id}`"><input type="checkbox" checked :aria-label="`${item.name_zh || item.name_en}（不可用，仅可移除）`" @change="removeProduct(item.id)"> {{ item.name_zh || item.name_en }} <small>不可用，仅可移除</small></label><label v-for="id in missingProductIds" :key="`missing-${id}`"><input type="checkbox" checked :aria-label="`历史关联产品 ${id}（不可用，仅可移除）`" @change="removeProduct(id)"> 历史关联产品 {{ id }} <small>不可用，仅可移除</small></label><button v-if="more.products" type="button" @click="emit('loadMore', 'products')">加载更多产品</button><span v-if="pageErrors.products" role="alert">{{ pageErrors.products }} <button type="button" @click="emit('loadMore', 'products')">重试</button></span></fieldset>
           <fieldset data-field="platforms"><legend>平台（至少一个）</legend><span v-if="fieldErrors.platforms" class="field-error">{{ fieldErrors.platforms }}</span><label v-for="item in platforms" :key="item.id"><input v-model="platformIds" type="checkbox" :value="item.id" :aria-label="item.name"> {{ item.name }} <small>{{ item.capabilities.join('、') || '基础内容' }}</small></label><button v-if="more.platforms" type="button" @click="emit('loadMore', 'platforms')">加载更多平台</button><span v-if="pageErrors.platforms" role="alert">{{ pageErrors.platforms }} <button type="button" @click="emit('loadMore', 'platforms')">重试</button></span></fieldset>
@@ -303,7 +393,7 @@ async function submit(): Promise<void> {
           <fieldset v-if="availableConcepts.length || unavailableConcepts.length || missingConceptIds.length" data-field="concepts"><legend>已批准知识（可选）</legend><label v-for="item in availableConcepts" :key="item.id"><input v-model="conceptIds" type="checkbox" :value="item.id" :aria-label="`${item.label_en || item.label_zh} (${item.concept_type})`"> {{ item.label_zh || item.label_en }} <small>{{ item.code }}</small></label><label v-for="item in unavailableConcepts" :key="`unavailable-${item.id}`"><input type="checkbox" checked :aria-label="`${item.label_en || item.label_zh} (${item.concept_type})（不可用，仅可移除）`" @change="removeConcept(item.id)"> {{ item.label_zh || item.label_en }} <small>不可用，仅可移除</small></label><label v-for="id in missingConceptIds" :key="`missing-${id}`"><input type="checkbox" checked :aria-label="`历史关联知识 ${id}（不可用，仅可移除）`" @change="removeConcept(id)"> 历史关联知识 {{ id }} <small>不可用，仅可移除</small></label></fieldset>
         </section>
 
-        <section v-else-if="step === 3" aria-labelledby="details-step">
+        <section v-else-if="!ordinaryExperience && step === 3" aria-labelledby="details-step">
           <h3 id="details-step">填写内容需求</h3>
           <div class="form-grid">
             <label>目标国家（必填）<input v-model="form.target_country" aria-label="目标国家（必填）" data-field="target_country"><span v-if="fieldErrors.target_country" class="field-error">{{ fieldErrors.target_country }}</span></label>
@@ -319,7 +409,7 @@ async function submit(): Promise<void> {
           </div>
         </section>
 
-        <section v-else aria-labelledby="confirm-step">
+        <section v-else-if="!ordinaryExperience" aria-labelledby="confirm-step">
           <h3 id="confirm-step">确认需求摘要</h3>
           <dl><div><dt>目标</dt><dd>{{ form.target_country }} · {{ form.customer_type }}</dd></div><div><dt>目的</dt><dd>{{ form.content_objective }}</dd></div><div><dt>选择</dt><dd>{{ productIds.length }} 个产品 · {{ platformIds.length }} 个平台</dd></div></dl>
           <p>创建后先由审核人员确认需求，再开始 AI 生成。</p>
@@ -328,7 +418,7 @@ async function submit(): Promise<void> {
         <footer>
           <button v-if="step > 1" type="button" :disabled="busy" @click="step -= 1">上一步</button>
           <button v-if="step < 4" class="primary-action" type="button" :disabled="busy" @click="next">{{ busy ? "正在处理…" : "下一步" }}</button>
-          <button v-else class="primary-action" type="button" :disabled="busy" @click="submit">{{ busy ? "正在保存…" : brief ? "保存需求草稿" : "创建需求草稿" }}</button>
+          <button v-else class="primary-action" type="button" :disabled="busy" @click="submit">{{ busy ? "正在保存…" : ordinaryExperience ? (brief ? "保存修改方案" : "保存推广方案") : brief ? "保存需求草稿" : "创建需求草稿" }}</button>
         </footer>
       </section>
     </div>
@@ -336,5 +426,5 @@ async function submit(): Promise<void> {
 </template>
 
 <style scoped>
-.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.wizard-dialog{width:min(820px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:#fff}.wizard-dialog header,.wizard-dialog footer{display:flex;justify-content:space-between;gap:1rem}.wizard-dialog section,.wizard-dialog label{display:grid;gap:.45rem}.wizard-dialog section{gap:1rem}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.wizard-dialog footer{justify-content:flex-end;position:sticky;bottom:-1.5rem;padding:1rem 0 0;background:#fff}.form-alert{padding:.75rem;border-radius:.7rem;background:#fff0ed;color:#79291d}.field-error{color:#79291d;font-size:.9rem}fieldset{display:grid;gap:.5rem;border:1px solid #d8dee8;border-radius:.75rem}@media(max-width:650px){.form-grid{grid-template-columns:1fr}}
+.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.wizard-dialog{width:min(820px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:#fff}.wizard-dialog header,.wizard-dialog footer{display:flex;justify-content:space-between;gap:1rem}.wizard-dialog section,.wizard-dialog label{display:grid;gap:.45rem}.wizard-dialog section{gap:1rem}.wizard-progress{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;padding:0;list-style:none}.wizard-progress li{padding:.55rem;border-radius:.6rem;background:#f1f4f7;color:#607083;text-align:center}.wizard-progress li[aria-current=step]{background:#e5f2ec;color:#174d39;font-weight:800}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.preset-row{display:flex;flex-wrap:wrap;gap:.5rem}.preset-row button[aria-pressed=true]{border-color:#245b47;background:#e5f2ec;color:#174d39}.wizard-dialog footer{justify-content:flex-end;position:sticky;bottom:-1.5rem;padding:1rem 0 0;background:#fff}.form-alert{padding:.75rem;border-radius:.7rem;background:#fff0ed;color:#79291d}.field-error{color:#79291d;font-size:.9rem}fieldset{display:grid;gap:.5rem;border:1px solid #d8dee8;border-radius:.75rem}@media(max-width:650px){.form-grid,.wizard-progress{grid-template-columns:1fr}.wizard-progress li:not([aria-current=step]){display:none}}@media(prefers-reduced-motion:reduce){.wizard-dialog{scroll-behavior:auto}}
 </style>

@@ -7,6 +7,7 @@ import { currentUserQueryOptions } from "../auth/auth"
 import { listProducts, productQueryKeys } from "../products/api"
 import { assetKeys, listAssets } from "../assets/api"
 import ContentBriefWizard from "./ContentBriefWizard.vue"
+import GuidedStepCard from "./components/GuidedStepCard.vue"
 import {
   cancelJob, contentQueryKeys, generateMaster, getJob, listBriefs,
   listApprovedBriefConcepts, listBriefConcepts, listCampaigns, listJobs, listMasterContents, listPlatformPage, markBriefReady,
@@ -110,6 +111,18 @@ const proposalBlocker = computed(() => {
   return ""
 })
 const canOpenProposal = computed(() => !proposalBlocker.value)
+const latestBrief = computed(() => briefs.value.reduce<ContentBrief | null>((latest, item) => (
+  !latest || item.version > latest.version || item.updated_at > latest.updated_at ? item : latest
+), null))
+const guidedStep = computed(() => {
+  if (visibleMasterContents.value.length) return 6
+  if (latestBrief.value?.status === "READY") return 5
+  if (latestBrief.value) return 4
+  return 1
+})
+const guidedState = (number: number): "current" | "complete" | "locked" => (
+  number === guidedStep.value ? "current" : number < guidedStep.value ? "complete" : "locked"
+)
 
 const jobStatusLabels: Record<Job["status"], string> = {
   QUEUED: "等待开始",
@@ -398,25 +411,27 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
     <template v-if="ordinaryExperience">
       <header class="promotion-header">
         <div><p class="eyebrow">AI 推广助手</p><h1 id="factory-title">你今天想推广什么？</h1><p>从现有产品和资料出发，AI 会陪你整理方案；只有你确认后，才会进入执行。</p></div>
-        <div class="promotion-action">
-          <button v-if="has('campaigns.manage')" class="primary-action" type="button" :disabled="!canOpenProposal" @click="openProposal">让 AI 给我方案</button>
-          <p v-if="proposalBlocker" class="muted" role="status">{{ proposalBlocker }}</p>
-          <button v-if="has('campaigns.read') && campaignsQuery.isError.value" type="button" @click="campaignsQuery.refetch()">重新检查已有推广资料</button>
-        </div>
+        <button v-if="guidedStep > 1 && has('campaigns.manage')" type="button" :disabled="!canOpenProposal" @click="openProposal">开始新的推广</button>
       </header>
 
-      <ol class="promotion-stages" aria-label="推广流程">
-        <li><strong>1</strong><span>选择推广目标</span></li>
-        <li><strong>2</strong><span>确认 AI 方案</span></li>
-        <li><strong>3</strong><span>批准后执行</span></li>
+      <ol class="guided-flow" aria-label="推广流程">
+        <GuidedStepCard :number="1" title="选择产品" description="先从真实产品库中选择这次要推广的产品。" :state="guidedState(1)">
+          <div class="readiness-grid" aria-label="推广资料准备情况">
+            <article><strong>{{ has('products.read') ? `已加载 ${eligibleProducts.length} 项` : '—' }}</strong><span>可推广产品</span><small>{{ has('products.read') ? '来自当前组织的可用产品；数字仅代表已加载页' : '没有产品库查看权限' }}</small><button v-if="has('products.read') && productsQuery.isError.value" type="button" @click="productsQuery.refetch()">重新检查产品资料</button><button v-else-if="has('products.read') && !eligibleProducts.length && productPages.next.value" type="button" @click="productPages.loadMore">加载更多产品资料</button></article>
+            <article><strong>{{ has('memberships.read') ? `已加载 ${platformPages.items.value.length} 项` : '—' }}</strong><span>可选推广渠道</span><small>来自系统支持的渠道定义，不代表账号已连接</small><button v-if="has('memberships.read') && platformsQuery.isError.value" type="button" @click="platformsQuery.refetch()">重新检查渠道定义</button></article>
+            <article><strong>{{ has('assets.read') ? `已加载 ${eligibleAssets.length} 项` : '—' }}</strong><span>可用素材</span><small>{{ has('assets.read') ? '来自当前可用素材；数字仅代表已加载页' : '没有素材库查看权限，不影响先整理方案' }}</small><button v-if="has('assets.read') && assetsQuery.isError.value" type="button" @click="assetsQuery.refetch()">重新检查素材</button></article>
+            <article><strong>{{ has('knowledge.read') ? `已加载 ${approvedConcepts.length} 项` : '—' }}</strong><span>已批准知识</span><small>{{ has('knowledge.read') ? '仅包含已批准知识；数字仅代表已加载页' : '没有知识库查看权限，不会代填知识' }}</small><button v-if="has('knowledge.read') && conceptsQuery.isError.value" type="button" @click="conceptsQuery.refetch()">重新检查知识资料</button></article>
+          </div>
+          <div class="promotion-action"><button v-if="has('campaigns.manage')" class="primary-action" type="button" :disabled="!canOpenProposal" @click="openProposal">选择产品并继续</button><p v-if="proposalBlocker" class="muted" role="status">{{ proposalBlocker }}</p><button v-if="has('campaigns.read') && campaignsQuery.isError.value" type="button" @click="campaignsQuery.refetch()">重新检查已有推广资料</button></div>
+        </GuidedStepCard>
+        <GuidedStepCard :number="2" title="告诉 AI 目标" description="选择市场、受众和这次推广要达成的结果。" :state="guidedState(2)" />
+        <GuidedStepCard :number="3" title="查看可用素材" description="核对来自素材库和知识库的真实资料。" :state="guidedState(3)" />
+        <GuidedStepCard :number="4" title="确认方案" description="检查方案后，再交给有权限的同事确认。" :state="guidedState(4)">
+          <div v-if="latestBrief" class="card-actions"><button v-if="latestBrief.status === 'DRAFT' && has('campaigns.manage')" type="button" @click="openBriefEditor(latestBrief)">查看并修改方案</button><button v-if="latestBrief.status === 'DRAFT' && has('campaigns.review')" class="primary-action" type="button" :disabled="actionId === latestBrief.id" @click="ready(latestBrief)">确认方案可生成</button><p v-else-if="latestBrief.status === 'DRAFT'" class="muted">方案正在等待有权限的同事确认。</p></div>
+        </GuidedStepCard>
+        <GuidedStepCard :number="5" title="生成内容" description="确认方案后，才会提交真实的内容生成任务。" :state="guidedState(5)"><button v-if="latestBrief?.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId)" @click="startGeneration(latestBrief)">生成推广内容</button><p v-else class="muted">需要内容管理权限才能生成。</p></GuidedStepCard>
+        <GuidedStepCard :number="6" title="批准发布" description="查看生成结果、填写拒绝原因或批准进入发布流程。" :state="guidedState(6)"><a class="primary-action button-link" href="/reviews">查看并确认</a></GuidedStepCard>
       </ol>
-
-      <section class="readiness-grid" aria-label="推广资料准备情况">
-        <article><strong>{{ has('products.read') ? `已加载 ${eligibleProducts.length} 项` : '—' }}</strong><span>可推广产品</span><small>{{ has('products.read') ? '来自当前组织的 ACTIVE 产品；数字仅代表已加载页' : '没有产品库查看权限' }}</small><button v-if="has('products.read') && productsQuery.isError.value" type="button" @click="productsQuery.refetch()">重新检查产品资料</button><button v-else-if="has('products.read') && !eligibleProducts.length && productPages.next.value" type="button" @click="productPages.loadMore">加载更多产品资料</button></article>
-        <article><strong>{{ has('memberships.read') ? `已加载 ${platformPages.items.value.length} 项` : '—' }}</strong><span>可选平台定义</span><small>来自系统支持的平台定义，不代表账号已连接</small><button v-if="has('memberships.read') && platformsQuery.isError.value" type="button" @click="platformsQuery.refetch()">重新检查平台定义</button></article>
-        <article><strong>{{ has('assets.read') ? `已加载 ${eligibleAssets.length} 项` : '—' }}</strong><span>可用素材</span><small>{{ has('assets.read') ? '来自 ACTIVE 素材；数字仅代表已加载页' : '没有素材库查看权限，不影响先整理方案' }}</small><button v-if="has('assets.read') && assetsQuery.isError.value" type="button" @click="assetsQuery.refetch()">重新检查素材</button></article>
-        <article><strong>{{ has('knowledge.read') ? `已加载 ${approvedConcepts.length} 项` : '—' }}</strong><span>已批准知识</span><small>{{ has('knowledge.read') ? '仅包含 APPROVED 知识；数字仅代表已加载页' : '没有知识库查看权限，不会代填知识' }}</small><button v-if="has('knowledge.read') && conceptsQuery.isError.value" type="button" @click="conceptsQuery.refetch()">重新检查知识资料</button></article>
-      </section>
 
       <button class="advanced-disclosure" type="button" :aria-expanded="advancedRecordsOpen" @click="advancedRecordsOpen = !advancedRecordsOpen">
         {{ advancedRecordsOpen ? '收起高级记录' : '查看高级记录' }}
@@ -442,10 +457,10 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
       <section v-if="has('jobs.read')" aria-labelledby="jobs-title"><h2 id="jobs-title">生成任务</h2><p v-if="visibleJobError" role="alert">{{ visibleJobError }} <button type="button" @click="reloadJobs">重新加载生成记录</button></p><div v-if="jobs.length" class="card-grid"><article v-for="(job, index) in jobs" :key="job.job_id" class="workflow-card"><div class="card-heading"><h3>{{ ordinaryExperience ? `第 ${index + 1} 项生成记录` : `任务 ${job.job_id}` }}</h3><span class="status-chip">{{ jobStatusLabel(job) }}</span></div><p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p><p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p><p v-else-if="job.status === 'FAILED'" role="alert">{{ ordinaryExperience ? '这次没有生成完成，你可以再次尝试。' : job.error?.message || '生成未完成，可以重试。' }}</p><div class="card-actions"><button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">{{ ordinaryExperience ? '停止生成' : '取消任务' }}</button><button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">{{ ordinaryExperience ? '再次尝试' : '重新尝试' }}</button></div></article></div><p v-else class="muted">提交生成后，进度会显示在这里。</p><p v-if="visibleJobPageError" role="alert">{{ visibleJobPageError }} <button type="button" @click="jobPages.loadMore">{{ ordinaryExperience ? '重新加载更多生成记录' : '重试' }}</button></p><button v-else-if="jobPages.next.value" type="button" @click="jobPages.loadMore">加载更多生成任务</button></section>
     </template>
 
-    <ContentBriefWizard v-if="wizardOpen || editingBrief" :brief="editingBrief" :campaigns="visibleCampaigns" :products="ordinaryExperience ? eligibleProducts : visibleProducts" :platforms="platformPages.items.value" :assets="ordinaryExperience ? eligibleAssets : visibleAssets" :concepts="ordinaryExperience ? approvedConcepts : visibleConcepts" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
+    <ContentBriefWizard v-if="wizardOpen || editingBrief" :experience="experience" :brief="editingBrief" :campaigns="visibleCampaigns" :products="ordinaryExperience ? eligibleProducts : visibleProducts" :platforms="platformPages.items.value" :assets="ordinaryExperience ? eligibleAssets : visibleAssets" :concepts="ordinaryExperience ? approvedConcepts : visibleConcepts" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
   </main>
 </template>
 
 <style scoped>
-.content-factory{display:grid;gap:1.5rem}.library-header,.promotion-header,.card-heading,.card-actions{display:flex;justify-content:space-between;gap:1rem;align-items:flex-start}.promotion-header{padding:1.5rem;border-radius:1.25rem;background:linear-gradient(135deg,#f2f8f5,#f7f3ea)}.promotion-header>div:first-child{max-width:680px}.promotion-action{display:grid;gap:.5rem;max-width:320px}.promotion-action p{margin:0}.promotion-stages{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;padding:0;list-style:none}.promotion-stages li{display:flex;align-items:center;gap:.65rem;padding:1rem;border:1px solid #d8dee8;border-radius:1rem;background:#fff}.promotion-stages strong{display:grid;place-items:center;width:2rem;height:2rem;border-radius:50%;background:#245b47;color:#fff}.readiness-grid,.summary-grid,.card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}.readiness-grid article,.summary-grid article,.workflow-card{padding:1rem;border:1px solid #d8dee8;border-radius:1rem;background:#fff}.readiness-grid article,.summary-grid article{display:grid;gap:.25rem}.readiness-grid strong,.summary-grid strong{font-size:1.8rem}.readiness-grid small{color:#667085}.advanced-disclosure{justify-self:start}.status-chip{padding:.25rem .55rem;border-radius:999px;background:#edf4f1;font-weight:700}.notice,.form-alert{padding:.8rem 1rem;border-radius:.75rem}.notice{background:#edf8f2;color:#225c42}.form-alert{background:#fff0ed;color:#79291d}.muted{color:#667085}.success{color:#187249;font-weight:700}.card-actions{justify-content:flex-end;flex-wrap:wrap}.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.brief-editor{display:grid;gap:.8rem;width:min(560px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:#fff}.brief-editor label{display:grid;gap:.35rem}@media(max-width:700px){.library-header,.promotion-header{display:grid}.promotion-stages{grid-template-columns:1fr}.card-actions{justify-content:stretch}.card-actions button{width:100%}}
+.content-factory{display:grid;gap:1.5rem}.library-header,.promotion-header,.card-heading,.card-actions{display:flex;justify-content:space-between;gap:1rem;align-items:flex-start}.promotion-header{padding:1.5rem;border-radius:1.25rem;background:linear-gradient(135deg,#f2f8f5,#f7f3ea)}.promotion-header>div:first-child{max-width:680px}.promotion-action{display:flex;align-items:center;flex-wrap:wrap;gap:.75rem}.promotion-action p{margin:0}.guided-flow{display:grid;gap:.8rem;padding:0;margin:0}.readiness-grid,.summary-grid,.card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}.readiness-grid article,.summary-grid article,.workflow-card{padding:1rem;border:1px solid #d8dee8;border-radius:1rem;background:#fff}.readiness-grid article,.summary-grid article{display:grid;gap:.25rem}.readiness-grid strong,.summary-grid strong{font-size:1.35rem}.readiness-grid small{color:#667085}.advanced-disclosure{justify-self:start}.status-chip{padding:.25rem .55rem;border-radius:999px;background:#edf4f1;font-weight:700}.notice,.form-alert{padding:.8rem 1rem;border-radius:.75rem}.notice{background:#edf8f2;color:#225c42}.form-alert{background:#fff0ed;color:#79291d}.muted{color:#667085}.success{color:#187249;font-weight:700}.card-actions{justify-content:flex-end;flex-wrap:wrap}.button-link{display:inline-flex;width:max-content;text-decoration:none}.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.brief-editor{display:grid;gap:.8rem;width:min(560px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:#fff}.brief-editor label{display:grid;gap:.35rem}@media(max-width:700px){.library-header,.promotion-header{display:grid}.card-actions{justify-content:stretch}.card-actions button{width:100%}.readiness-grid{grid-template-columns:1fr}}
 </style>

@@ -11,6 +11,17 @@ class DirectorProposalQuerySet(models.QuerySet):
             raise ValidationError("Proposal organization is immutable after creation.")
         return super().update(**kwargs)
 
+    def bulk_update(self, objs, fields, **kwargs):
+        field_names = {field.name if hasattr(field, "name") else str(field) for field in fields}
+        if {"organization", "organization_id"} & field_names:
+            raise ValidationError("Proposal organization is immutable after creation.")
+        return super().bulk_update(objs, fields, **kwargs)
+
+    def bulk_create(self, objs, **kwargs):
+        if kwargs.get("update_conflicts"):
+            raise ValidationError("Director proposal upserts are not allowed.")
+        return super().bulk_create(objs, **kwargs)
+
 
 class DirectorProposal(models.Model):
     class ProposalType(models.TextChoices):
@@ -60,7 +71,7 @@ class DirectorProposal(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        if not self._state.adding:
+        if self.pk and type(self)._base_manager.filter(pk=self.pk).exists():
             original = type(self).objects.only("organization_id").get(pk=self.pk)
             if self.organization_id != original.organization_id:
                 raise ValidationError("Proposal organization is immutable after creation.")
@@ -73,6 +84,14 @@ class DirectorDecisionQuerySet(models.QuerySet):
 
     def bulk_update(self, objs, fields, **kwargs):
         raise ValidationError("Director decision history is append-only.")
+
+    def bulk_create(self, objs, **kwargs):
+        if kwargs.get("update_conflicts"):
+            raise ValidationError("Director decision upserts are not allowed.")
+        rows = list(objs)
+        for obj in rows:
+            obj._validate_organization_match()
+        return super().bulk_create(rows, **kwargs)
 
     def delete(self):
         raise ValidationError("Director decision history is append-only.")
@@ -113,9 +132,23 @@ class DirectorDecision(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        if not self._state.adding:
+        if self.pk and type(self)._base_manager.filter(pk=self.pk).exists():
             raise ValidationError("Director decision history is append-only.")
+        self._validate_organization_match()
         return super().save(*args, **kwargs)
+
+    def _validate_organization_match(self):
+        if not self.organization_id or not self.proposal_id:
+            return
+        proposal_organization_id = (
+            DirectorProposal._base_manager.filter(pk=self.proposal_id)
+            .values_list("organization_id", flat=True)
+            .first()
+        )
+        if proposal_organization_id != self.organization_id:
+            raise ValidationError(
+                {"organization": "Decision organization must match its proposal organization."}
+            )
 
     def delete(self, *args, **kwargs):
         raise ValidationError("Director decision history is append-only.")

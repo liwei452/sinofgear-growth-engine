@@ -9,6 +9,7 @@ from apps.ai.provider_configuration import (
     delete_deepseek_credential,
     test_and_save_deepseek_configuration as save_configuration,
     test_deepseek_configuration as check_configuration,
+    _clear_uncertain,
 )
 from apps.identity.models import Organization
 from integrations.ai.providers import ProviderAuthenticationError, ProviderResult
@@ -63,7 +64,8 @@ class Provider:
 def context(db):
     organization = Organization.objects.create(name="AI Own", slug="ai-own")
     actor = get_user_model().objects.create_user(username="ai-admin")
-    return organization, actor
+    yield organization, actor
+    _clear_uncertain(organization.id)
 
 
 def limits(**overrides):

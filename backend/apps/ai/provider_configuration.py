@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+from copy import copy
 from dataclasses import dataclass
+from threading import RLock
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -70,6 +72,30 @@ _LIMIT_FIELDS = frozenset(
         "timeout_seconds",
     }
 )
+_uncertain_lock = RLock()
+_uncertain_organizations: set[str] = set()
+
+
+def _set_uncertain(organization_id) -> None:
+    with _uncertain_lock:
+        _uncertain_organizations.add(str(organization_id))
+
+
+def _clear_uncertain(organization_id) -> None:
+    with _uncertain_lock:
+        _uncertain_organizations.discard(str(organization_id))
+
+
+def configuration_for_display(configuration: AIProviderConfiguration):
+    with _uncertain_lock:
+        uncertain = str(configuration.organization_id) in _uncertain_organizations
+    if not uncertain:
+        return configuration
+    safe = copy(configuration)
+    safe.connection_state = AIProviderConfiguration.ConnectionState.NEEDS_RECONNECT
+    safe.key_suffix = ""
+    safe.last_tested_at = None
+    return safe
 
 
 def _store_or_error(credential_store):
@@ -160,6 +186,7 @@ def test_and_save_deepseek_configuration(
     )
     if outcome:
         raise ProviderConfigurationError(outcome)
+    _clear_uncertain(organization.id)
     return configuration
 
 
@@ -177,6 +204,7 @@ def delete_deepseek_credential(
     )
     if outcome:
         raise ProviderConfigurationError(outcome)
+    _clear_uncertain(organization.id)
     return configuration
 
 
@@ -192,6 +220,7 @@ def _restore_secret(store, target: str, previous_secret: str | None) -> bool:
 
 
 def _mark_state_uncertain(*, organization, actor) -> None:
+    _set_uncertain(organization.id)
     try:
         with transaction.atomic():
             Organization.objects.select_for_update().get(pk=organization.pk)

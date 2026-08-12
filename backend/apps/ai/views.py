@@ -24,6 +24,7 @@ from .serializers import (
 from .models import AIProviderConfiguration
 from .provider_configuration import (
     ProviderConfigurationError,
+    configuration_for_display,
     delete_deepseek_credential,
     test_and_save_deepseek_configuration,
     test_deepseek_configuration,
@@ -133,15 +134,26 @@ class DuplicateSafeJSONParser(JSONParser):
         except (ParseError, UnicodeDecodeError, ValueError):
             failed = True
         if failed:
-            raise ParseError("Malformed JSON.") from None
+            raw = None
+            stream = None
+            parser_context = None
+            parsed = None
+            unique_pairs = None
+            del self
+            _raise_safe_parse_error()
         return parsed
+
+
+def _raise_safe_parse_error():
+    raise ParseError("Malformed JSON.") from None
 
 
 def _configuration_for(organization):
     try:
-        return AIProviderConfiguration.objects.get(organization=organization)
+        configuration = AIProviderConfiguration.objects.get(organization=organization)
     except AIProviderConfiguration.DoesNotExist:
-        return AIProviderConfiguration(organization=organization)
+        configuration = AIProviderConfiguration(organization=organization)
+    return configuration_for_display(configuration)
 
 
 @extend_schema(tags=["AIProviderConfiguration"])

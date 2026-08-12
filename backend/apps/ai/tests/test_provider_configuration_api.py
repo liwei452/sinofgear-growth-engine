@@ -1,4 +1,5 @@
 import json
+from types import TracebackType
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -12,6 +13,7 @@ from rest_framework.exceptions import ParseError
 from rest_framework.test import APIRequestFactory
 
 from apps.ai.views import DuplicateSafeJSONParser
+from apps.ai.provider_configuration import _clear_uncertain
 
 
 SECRET = "sk-api-secret-1234567890"
@@ -48,7 +50,9 @@ def api_context(db, monkeypatch):
     Membership.objects.create(user=operator, organization=own, role=roles[Role.Code.OPERATOR])
     Membership.objects.create(user=other_admin, organization=other, role=roles[Role.Code.ADMINISTRATOR])
     monkeypatch.setattr("apps.ai.provider_configuration.DeepSeekProvider", Provider)
-    return own, other, admin, operator, other_admin
+    yield own, other, admin, operator, other_admin
+    _clear_uncertain(own.id)
+    _clear_uncertain(other.id)
 
 
 def payload():
@@ -70,9 +74,42 @@ def authenticated(user, *, csrf=False):
     return client
 
 
+def assert_secret_absent_from_exception_graph(error, secret):
+    pending = [error]
+    seen = set()
+    while pending:
+        value = pending.pop()
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        assert secret not in repr(value)
+        if isinstance(value, TracebackType):
+            if value.tb_frame.f_globals.get("__name__") == "apps.ai.views":
+                pending.append(value.tb_frame.f_locals)
+            if value.tb_next is not None:
+                pending.append(value.tb_next)
+        elif isinstance(value, dict):
+            pending.extend(value.keys())
+            pending.extend(value.values())
+        elif isinstance(value, (list, tuple, set)):
+            pending.extend(value)
+        elif isinstance(value, BaseException):
+            pending.append(vars(value))
+        cause = getattr(value, "__cause__", None)
+        context = getattr(value, "__context__", None)
+        traceback = getattr(value, "__traceback__", None)
+        pending.extend(item for item in (cause, context, traceback) if item is not None)
+
+
 def test_admin_can_save_get_delete_without_secret_and_is_org_scoped(api_context):
     own, other, admin, _, other_admin = api_context
-    store = Store()
+    class RestoreFailingStore(Store):
+        def write(self, target, secret):
+            if secret == "sk-old-key":
+                raise RuntimeError("replace with credential error")
+            return super().write(target, secret)
+
+    store = RestoreFailingStore()
     with credential_store_override(store):
         response = authenticated(admin).put(URL, payload(), format="json")
         assert response.status_code == 200
@@ -121,8 +158,7 @@ def test_malformed_json_parse_error_does_not_retain_body_or_secret(body, caplog)
     error = caught.value
     assert error.__cause__ is None
     assert error.__context__ is None
-    snapshot = repr(vars(error)) + repr(error)
-    assert "sk-parser-secret" not in snapshot
+    assert_secret_absent_from_exception_graph(error, "sk-parser-secret")
     assert "sk-parser-secret" not in caplog.text
 
 
@@ -138,7 +174,56 @@ def test_duplicate_json_parse_error_does_not_retain_submitted_secret(caplog):
     error = caught.value
     assert error.__cause__ is None
     assert error.__context__ is None
-    assert secret not in repr(vars(error)) + repr(error) + caplog.text
+    assert_secret_absent_from_exception_graph(error, secret)
+    assert secret not in caplog.text
+
+
+def test_uncertain_registry_forces_fail_closed_get_and_is_organization_scoped(
+    api_context, monkeypatch
+):
+    own, other, admin, _, other_admin = api_context
+    own_configuration = AIProviderConfiguration.objects.create(
+        organization=own, connection_state="CONNECTED", key_suffix="old1"
+    )
+    AIProviderConfiguration.objects.create(
+        organization=other, connection_state="CONNECTED", key_suffix="safe"
+    )
+    store = Store()
+    store.values[f"SinofGear/DeepSeek/{own.id}"] = "sk-old-key"
+    original_save = AIProviderConfiguration.save
+
+    def fail_every_save(self, *args, **kwargs):
+        raise RuntimeError(f"database failure {SECRET}")
+
+    monkeypatch.setattr(AIProviderConfiguration, "save", fail_every_save)
+    from apps.ai.provider_configuration import delete_deepseek_credential
+
+    from integrations.credentials import CredentialStoreError
+    original_write = store.write
+
+    def fail_restore(target, secret):
+        if secret == "sk-old-key":
+            raise CredentialStoreError("safe")
+        return original_write(target, secret)
+
+    store.write = fail_restore
+    with credential_store_override(store), pytest.raises(Exception):
+        delete_deepseek_credential(organization=own, actor=admin)
+
+    response = authenticated(admin).get(URL)
+    assert response.data["connection_state"] == "NEEDS_RECONNECT"
+    assert response.data["key_suffix"] == ""
+    other_response = authenticated(other_admin).get(URL)
+    assert other_response.data["connection_state"] == "CONNECTED"
+    assert other_response.data["key_suffix"] == "safe"
+
+    monkeypatch.setattr(AIProviderConfiguration, "save", original_save)
+    with credential_store_override(store):
+        repaired = authenticated(admin).put(URL, payload(), format="json")
+    assert repaired.status_code == 200
+    assert repaired.data["connection_state"] == "CONNECTED"
+    assert repaired.data["key_suffix"] == SECRET[-4:]
+    own_configuration.refresh_from_db()
 
 
 def test_openapi_documents_fixed_provider_failure_shape():

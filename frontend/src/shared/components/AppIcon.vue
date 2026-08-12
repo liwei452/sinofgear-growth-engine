@@ -14,6 +14,8 @@ export type AppIconName =
   | "document"
   | "sparkles"
   | "star"
+  | "key"
+  | "shield"
 
 defineProps<{ name: AppIconName }>()
 </script>
@@ -86,6 +88,14 @@ defineProps<{ name: AppIconName }>()
       <path d="m12 3 .9 4.1L17 8l-4.1.9L12 13l-.9-4.1L7 8l4.1-.9z" />
       <path d="m19 14 .5 2.5L22 17l-2.5.5L19 20l-.5-2.5L16 17l2.5-.5z" />
       <path d="m5 15 .6 2.4L8 18l-2.4.6L5 21l-.6-2.4L2 18l2.4-.6z" />
+    </template>
+    <template v-else-if="name === 'key'">
+      <circle cx="8" cy="15" r="4" />
+      <path d="m11 12 8-8M16 7l2 2M14 9l2 2" />
+    </template>
+    <template v-else-if="name === 'shield'">
+      <path d="M12 3 4.5 6v5.5c0 4.8 3.2 8.1 7.5 9.5 4.3-1.4 7.5-4.7 7.5-9.5V6z" />
+      <path d="m9 12 2 2 4-5" />
     </template>
     <template v-else>
       <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z" />

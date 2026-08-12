@@ -21,6 +21,7 @@ const PlatformAccounts = defineComponent({ name: "AccountsStub", template: "<p>�
 const Analytics = defineComponent({ name: "AnalyticsStub", template: "<p>真实数据看板</p>" })
 const LeadRadar = defineComponent({ name: "LeadRadarStub", template: "<p>真实客户机会</p>" })
 const CompanyProfile = defineComponent({ name: "CompanyProfileStub", template: "<p>真实公司资料</p>" })
+const AISettings = defineComponent({ name: "AISettingsStub", template: "<p>真实 DeepSeek 设置</p>" })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
 function deferred<T>() {
@@ -38,7 +39,7 @@ function router(client = queryClient(), initialPath?: string) {
   if (initialPath) history.push(initialPath)
   return createAppRouter(client, {
     history,
-    components: { Login, Shell, Dashboard, Promotion, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LeadRadar, CompanyProfile },
+    components: { Login, Shell, Dashboard, Promotion, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LeadRadar, CompanyProfile, AISettings },
   })
 }
 
@@ -153,6 +154,21 @@ describe("protected routing", () => {
     await appRouter.push("/company-profile")
     expect(await screen.findByText("真实公司资料")).toBeInTheDocument()
     expect(appRouter.currentRoute.value.meta.title).toBe("我的公司")
+  })
+
+  it("allows only credential administrators to enter DeepSeek settings", async () => {
+    const allowed = queryClient()
+    allowed.setQueryData(["auth", "me"], { user: {}, organization: { id: "org-1" }, membership: { permissions: ["credentials.manage"] } })
+    const allowedRouter = router(allowed)
+    await allowedRouter.push("/ai-settings")
+    expect(allowedRouter.currentRoute.value.name).toBe("ai-settings")
+    expect(allowedRouter.currentRoute.value.meta.title).toBe("DeepSeek 设置")
+
+    const denied = queryClient()
+    denied.setQueryData(["auth", "me"], { user: {}, organization: { id: "org-1" }, membership: { permissions: [] } })
+    const deniedRouter = router(denied)
+    await deniedRouter.push("/ai-settings")
+    expect(deniedRouter.currentRoute.value.name).toBe("home")
   })
 
   it.each([401, 403])("redirects status %s to login with the local target", async (status) => {

@@ -22,6 +22,7 @@ export type AppRouteComponents = {
   Analytics: Component
   LeadRadar: Component
   CompanyProfile: Component
+  AISettings: Component
 }
 
 type RouterOptions = {
@@ -103,6 +104,12 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
       component: options.components.CompanyProfile,
       meta: { title: "我的公司" },
     },
+    {
+      path: "ai-settings",
+      name: "ai-settings",
+      component: options.components.AISettings,
+      meta: { title: "DeepSeek 设置", permission: "credentials.manage" },
+    },
   ]
   const router = createRouter({
     history: options.history ?? createWebHistory(),
@@ -124,7 +131,11 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
   router.beforeEach(async (to) => {
     if (!to.matched.some((record) => record.meta.requiresAuth)) return true
     try {
-      await queryClient.ensureQueryData(currentUserQueryOptions())
+      const user = await queryClient.ensureQueryData(currentUserQueryOptions())
+      const requiredPermission = typeof to.meta.permission === "string" ? to.meta.permission : undefined
+      if (requiredPermission && !user.membership.permissions.includes(requiredPermission)) {
+        return { name: "home" }
+      }
       return true
     } catch (error) {
       if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {

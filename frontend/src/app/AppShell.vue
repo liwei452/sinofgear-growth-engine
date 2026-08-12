@@ -5,6 +5,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from "vue-router"
 
 import { ApiError } from "../api/client"
 import { currentUserQueryOptions, logout } from "../modules/auth/auth"
+import { aiProviderConfigurationQueryOptions, aiSettingsKeys } from "../modules/aiSettings/api"
 import AppIcon, { type AppIconName } from "../shared/components/AppIcon.vue"
 
 type NavigationMode = "ordinary" | "advanced"
@@ -55,6 +56,12 @@ const advancedNavigation: NavigationSection[] = [
       { label: "数据看板", to: "/analytics", icon: "chart", permission: "tracking.read" },
     ],
   },
+  {
+    group: "系统设置",
+    items: [
+      { label: "DeepSeek 设置", to: "/ai-settings", icon: "key", permission: "credentials.manage" },
+    ],
+  },
 ]
 
 function readNavigationMode(): NavigationMode {
@@ -72,6 +79,14 @@ const queryClient = useQueryClient()
 const currentUser = useQuery(currentUserQueryOptions())
 const navigationMode = ref<NavigationMode>(readNavigationMode())
 const permissions = computed(() => currentUser.data.value?.membership.permissions ?? [])
+const organizationId = computed(() => currentUser.data.value?.organization.id)
+const canManageCredentials = computed(() => permissions.value.includes("credentials.manage"))
+const aiConfiguration = useQuery(computed(() => aiProviderConfigurationQueryOptions(
+  organizationId.value ?? "", canManageCredentials.value,
+)))
+const shouldShowDeepSeekGuide = computed(() => canManageCredentials.value
+  && !aiConfiguration.isPending.value
+  && aiConfiguration.data.value?.connection_state !== "CONNECTED")
 const navigation = computed<NavigationSection[]>(() => {
   if (navigationMode.value === "ordinary") return ordinaryNavigation
   return advancedNavigation
@@ -189,6 +204,16 @@ watch(() => route.fullPath, async () => {
   contentElement.value?.focus()
 })
 
+watch(organizationId, (nextOrganization, previousOrganization) => {
+  if (previousOrganization && nextOrganization !== previousOrganization) {
+    queryClient.removeQueries({ queryKey: aiSettingsKeys.all })
+  }
+})
+
+watch(canManageCredentials, (allowed) => {
+  if (!allowed) queryClient.removeQueries({ queryKey: aiSettingsKeys.all })
+})
+
 onMounted(() => {
   viewportQuery = window.matchMedia("(max-width: 860px)")
   updateViewport(viewportQuery)
@@ -302,7 +327,19 @@ onBeforeUnmount(() => {
           <p>请检查网络后刷新页面，或重新登录。</p>
           <RouterLink class="button button-primary" to="/login">返回登录</RouterLink>
         </div>
-        <RouterView v-else />
+        <template v-else>
+          <aside
+            v-if="shouldShowDeepSeekGuide && route.name !== 'ai-settings'"
+            class="deepseek-setup-banner"
+            role="region"
+            aria-label="DeepSeek 首次设置提醒"
+          >
+            <span class="deepseek-setup-icon" aria-hidden="true"><AppIcon name="key" /></span>
+            <div><strong>连接 DeepSeek 后，AI 才能开始生成和分析</strong><p>仅管理员需要完成一次安全设置，不影响你查看其他功能。</p></div>
+            <RouterLink class="button button-primary" to="/ai-settings">去连接 DeepSeek</RouterLink>
+          </aside>
+          <RouterView />
+        </template>
       </main>
     </div>
   </div>

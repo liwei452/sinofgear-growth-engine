@@ -26,6 +26,7 @@ const router = createAppRouter(queryClient, {
     Analytics: defineAsyncComponent(() => import("./modules/analytics/AnalyticsPage.vue")),
     LeadRadar: defineAsyncComponent(() => import("./modules/leads/LeadRadarPage.vue")),
     CompanyProfile: defineAsyncComponent(() => import("./modules/company/CompanyProfilePage.vue")),
+    AISettings: defineAsyncComponent(() => import("./modules/aiSettings/DeepSeekSettingsPage.vue")),
   },
 })
 

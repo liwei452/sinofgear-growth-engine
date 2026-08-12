@@ -22,6 +22,7 @@ const currentUser = {
     permissions: [
       "products.read", "knowledge.read", "assets.read", "campaigns.read", "content.read",
       "publishing.read", "tracking.read", "leads.read",
+      "credentials.manage",
     ],
   },
 }
@@ -65,6 +66,7 @@ async function renderShell(
           { path: "analytics", component: PlaceholderPage, meta: { title: "效果" } },
           { path: "company-profile", component: PlaceholderPage, meta: { title: "我的公司" } },
           { path: "products", component: PlaceholderPage, meta: { title: "产品库" } },
+          { path: "ai-settings", component: PlaceholderPage, meta: { title: "DeepSeek 设置" } },
           { path: ":pathMatch(.*)*", component: PlaceholderPage, meta: { title: "功能" } },
         ],
       },
@@ -75,6 +77,14 @@ async function renderShell(
     ...currentUser,
     membership: { ...currentUser.membership, permissions },
   })
+  if (permissions.includes("credentials.manage")) {
+    queryClient.setQueryData(["ai-provider-configuration", "org-1"], {
+      provider_code: "deepseek", connection_state: "NOT_CONFIGURED", key_suffix: "",
+      credential_revision: 0, last_tested_at: null, last_tested_by_id: null,
+      daily_budget_usd: "5.00", flash_max_output_tokens: 4096,
+      pro_max_output_tokens: 8192, timeout_seconds: 60, updated_at: null,
+    })
+  }
   const result = render(Root, {
     global: { plugins: [[VueQueryPlugin, { queryClient }], router] },
   })
@@ -137,8 +147,32 @@ it("reveals permitted administration routes in advanced mode and persists the pr
 
   expect(screen.getByRole("link", { name: "知识库" })).toBeVisible()
   expect(screen.getByRole("link", { name: "平台账户" })).toBeVisible()
+  expect(screen.getByRole("link", { name: "DeepSeek 设置" })).toBeVisible()
   expect(screen.queryByRole("link", { name: "推广" })).not.toBeInTheDocument()
   expect(window.localStorage.getItem("sinofgear-navigation-mode-v1")).toBe("advanced")
+})
+
+it("shows a non-blocking first-run DeepSeek guide only to credential administrators", async () => {
+  const administrator = await renderShell()
+  const banner = screen.getByRole("region", { name: "DeepSeek 首次设置提醒" })
+  expect(banner).toHaveTextContent("连接 DeepSeek 后，AI 才能开始生成和分析")
+  expect(within(banner).getByRole("link", { name: "去连接 DeepSeek" })).toHaveAttribute("href", "/ai-settings")
+  expect(screen.getByRole("heading", { name: "首页内容" })).toBeVisible()
+
+  administrator.unmount()
+  const reader = await renderShell("/", { permissions: [] })
+  expect(screen.queryByRole("region", { name: "DeepSeek 首次设置提醒" })).not.toBeInTheDocument()
+  reader.unmount()
+})
+
+it("removes organization-scoped AI configuration data when the organization changes", async () => {
+  const { queryClient } = await renderShell()
+  queryClient.setQueryData(["ai-provider-configuration", "org-1"], { key_suffix: "1234" })
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, {
+    ...currentUser,
+    organization: { id: "org-2", name: "另一组织", slug: "other" },
+  })
+  await waitFor(() => expect(queryClient.getQueryData(["ai-provider-configuration", "org-1"])).toBeUndefined())
 })
 
 it("keeps advanced routes hidden when their read permission is absent", async () => {

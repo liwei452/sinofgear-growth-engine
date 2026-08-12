@@ -395,6 +395,28 @@ a {
   padding: clamp(24px, 5vw, 54px) clamp(18px, 4vw, 42px);
 }
 
+.deepseek-setup-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 22px;
+  border: 1px solid #b9d9f2;
+  border-radius: var(--sg-radius-md);
+  background: linear-gradient(120deg, #f5fbff, var(--sg-brand-soft));
+  padding: 16px 18px;
+}
+
+.deepseek-setup-banner > div { flex: 1; min-width: 0; }
+.deepseek-setup-banner strong { display: block; }
+.deepseek-setup-banner p { margin: 4px 0 0; color: var(--sg-muted); font-size: .86rem; }
+.deepseek-setup-icon { display: grid; width: 38px; height: 38px; flex: none; place-items: center; border-radius: 10px; background: white; color: var(--sg-brand); }
+.deepseek-setup-icon .app-icon { width: 21px; height: 21px; }
+
+@media (max-width: 600px) {
+  .deepseek-setup-banner { align-items: stretch; flex-direction: column; }
+  .deepseek-setup-banner .button { width: 100%; }
+}
+
 .page-stack {
   display: grid;
   gap: 24px;

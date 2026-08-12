@@ -10,7 +10,12 @@ from apps.ai.models import (
     AIUsageAttempt,
 )
 from apps.identity.models import Organization
-from integrations.ai.providers import ProviderResult, ProviderUnavailableError
+from integrations.ai.providers import (
+    ProviderNetworkError,
+    ProviderResult,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+)
 
 
 class FakeStore:
@@ -189,6 +194,17 @@ def test_content_generation_requires_separate_opt_in(configured_org):
     assert len(FakeProvider.calls) == 2
 
 
+def test_content_generation_is_not_started_when_connection_check_fails(configured_org):
+    FakeProvider.error = ProviderUnavailableError("safe")
+
+    with pytest.raises(CommandError, match="provider_unavailable"):
+        run_smoke(configured_org, include_content_generation=True)
+
+    assert len(FakeProvider.calls) == 1
+    assert AIRun.objects.filter(organization=configured_org).count() == 1
+    assert configured_org.jobs.count() == 1
+
+
 def test_provider_failure_is_reported_without_provider_detail(configured_org):
     FakeProvider.error = ProviderUnavailableError(
         "private provider response test-credential-placeholder"
@@ -231,3 +247,30 @@ def test_zero_budget_refuses_before_provider_call(configured_org):
     assert run.status == AIRun.Status.FAILED
     assert run.error == {"code": "deepseek_daily_budget_exceeded"}
     assert not AIProviderCall.objects.filter(run=run).exists()
+
+
+@pytest.mark.parametrize(
+    "provider_error",
+    [ProviderNetworkError("private body"), ProviderTimeoutError("private body")],
+)
+def test_uncertain_transport_failure_is_conservatively_reconciled(
+    configured_org, provider_error
+):
+    FakeProvider.error = provider_error
+
+    with pytest.raises(CommandError):
+        run_smoke(configured_org)
+
+    run = AIRun.objects.get(organization=configured_org)
+    run.job.refresh_from_db()
+    call = AIProviderCall.objects.get(run=run)
+    usage = AIUsageAttempt.objects.get(run=run)
+    usage.usage_day.refresh_from_db()
+    assert run.status == AIRun.Status.FAILED
+    assert run.job.status == "FAILED"
+    assert call.status == AIProviderCall.Status.AMBIGUOUS
+    assert call.actual_usd == call.reserved_usd
+    assert usage.status == AIUsageAttempt.Status.FAILED
+    assert usage.actual_usd == usage.reserved_usd
+    assert usage.usage_day.reserved_usd == 0
+    assert usage.usage_day.actual_usd == usage.reserved_usd

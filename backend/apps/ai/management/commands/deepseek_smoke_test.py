@@ -42,16 +42,19 @@ def _execute_checks(*, organization, credential_store, include_content_generatio
                 "content-generation",
             )
         )
-    return [
-        run_audited_deepseek_smoke(
+    outcomes = []
+    for prompt, schema, check_code in checks:
+        outcome = run_audited_deepseek_smoke(
             organization=organization,
             provider=provider,
             prompt=prompt,
             schema=schema,
             check_code=check_code,
         )
-        for prompt, schema, check_code in checks
-    ]
+        outcomes.append(outcome)
+        if not outcome.passed:
+            break
+    return outcomes
 
 
 class Command(BaseCommand):

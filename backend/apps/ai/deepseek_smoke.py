@@ -9,7 +9,13 @@ from django.utils import timezone
 
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
-from integrations.ai.providers import ProviderCallError, ProviderResult
+from integrations.ai.providers import (
+    ProviderCallError,
+    ProviderNetworkError,
+    ProviderResult,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+)
 
 from .budget import BudgetExceeded, calculate_actual_cost, reconcile_usage, reserve_budget
 from .models import (
@@ -34,6 +40,7 @@ class SmokeOutcome:
     cache_hit_tokens: int = 0
     estimated_cost_usd: Decimal = Decimal("0")
     error_code: str = ""
+    ambiguous_charge: bool = False
 
 
 def _prompt_version():
@@ -57,13 +64,15 @@ def _provider_call(provider, *, prompt, schema, execution):
     """Return values only so provider exceptions cannot reach the CLI graph."""
     try:
         result = provider.generate(prompt=prompt, schema=schema, execution=execution)
+    except (ProviderNetworkError, ProviderTimeoutError, ProviderUnavailableError) as error:
+        return None, error.code, True
     except ProviderCallError as error:
-        return None, error.code
+        return None, error.code, False
     except Exception:
-        return None, "provider_error"
+        return None, "provider_error", True
     if not isinstance(result, ProviderResult):
-        return None, "invalid_provider_contract"
-    return result, ""
+        return None, "invalid_provider_contract", True
+    return result, "", False
 
 
 def run_audited_deepseek_smoke(
@@ -126,12 +135,13 @@ def run_audited_deepseek_smoke(
         lease_token=uuid4(),
         lease_expires_at=timezone.now(),
     )
-    result, error_code = _provider_call(
+    result, error_code, ambiguous_charge = _provider_call(
         provider, prompt=prompt, schema=schema, execution=execution
     )
     if error_code:
         return _fail_without_exception(
-            run=run, job=claimed, code=error_code, usage=usage, call=call
+            run=run, job=claimed, code=error_code, usage=usage, call=call,
+            ambiguous_charge=ambiguous_charge,
         )
     metadata = _safe_metadata(result.metadata, intent=intent)
     usage_counts = {
@@ -146,7 +156,7 @@ def run_audited_deepseek_smoke(
             job=claimed,
             code="deepseek_invalid_usage",
             usage=usage,
-            call=call,
+            call=call, ambiguous_charge=True,
         )
     now = timezone.now()
     call.status = AIProviderCall.Status.SUCCEEDED
@@ -187,10 +197,15 @@ def run_audited_deepseek_smoke(
     )
 
 
-def _fail_without_exception(*, run, job, code, usage, call):
+def _fail_without_exception(
+    *, run, job, code, usage, call, ambiguous_charge=False
+):
     now = timezone.now()
     if call is not None:
-        call.status = AIProviderCall.Status.FAILED
+        call.status = (
+            AIProviderCall.Status.AMBIGUOUS
+            if ambiguous_charge else AIProviderCall.Status.FAILED
+        )
         call.actual_usd = call.reserved_usd
         call.lease_token = None
         call.lease_expires_at = None
@@ -212,6 +227,7 @@ def _fail_without_exception(*, run, job, code, usage, call):
         model=run.model,
         thinking_enabled=False,
         error_code=code,
+        ambiguous_charge=ambiguous_charge,
     )
 
 

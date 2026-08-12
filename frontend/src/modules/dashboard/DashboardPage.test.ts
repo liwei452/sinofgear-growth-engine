@@ -225,3 +225,32 @@ it("does not leak an old organization completion into the newly active organizat
   expect(invalidate).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["director", "org-2", "cockpit"] }))
   expect(screen.queryByText("已提交你的决定。")).not.toBeInTheDocument()
 })
+
+it("clears an unsubmitted old-organization dialog and transient UI when the organization changes", async () => {
+  const fetchMock = vi.fn((path: string, options?: RequestInit) => options?.method === "POST"
+    ? Promise.resolve(json({ id: "p1", status: "ADJUSTMENT_REQUESTED", version: 3 }))
+    : Promise.resolve(json(cockpit)))
+  const user = userEvent.setup()
+  const { queryClient } = await renderDashboard(fetchMock)
+  const opener = within((await screen.findByRole("heading", { name: "确认德国市场推广方案" })).closest("article")!)
+    .getByRole("button", { name: "要求调整" })
+  await user.click(opener)
+  const dialog = screen.getByRole("dialog", { name: "请说明需要怎样调整" })
+  await user.type(within(dialog).getByLabelText("原因"), "这是旧组织尚未提交的原因。")
+  await user.click(within(dialog).getByRole("button", { name: "提交" }))
+  await screen.findByText("已提交你的决定。")
+  await user.click(opener)
+  await user.type(screen.getByLabelText("原因"), "这是第二个旧组织草稿。")
+
+  const postCount = fetchMock.mock.calls.filter(([, options]) => (options as RequestInit | undefined)?.method === "POST").length
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, {
+    ...currentUser,
+    organization: { id: "org-2", name: "新组织", slug: "new" },
+  })
+
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument())
+  expect(screen.queryByText("这是第二个旧组织草稿。")).not.toBeInTheDocument()
+  expect(screen.queryByText("已提交你的决定。")).not.toBeInTheDocument()
+  await user.keyboard("{Enter}")
+  expect(fetchMock.mock.calls.filter(([, options]) => (options as RequestInit | undefined)?.method === "POST")).toHaveLength(postCount)
+})

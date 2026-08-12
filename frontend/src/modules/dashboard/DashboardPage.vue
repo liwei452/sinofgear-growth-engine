@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useQuery, useQueryClient } from "@tanstack/vue-query"
-import { computed, nextTick, ref } from "vue"
+import { computed, nextTick, ref, watch } from "vue"
 
 import { currentUserQueryOptions } from "../auth/auth"
 import { decideProposal, directorKeys, getCockpit, type DirectorAction, type DirectorDecision } from "../director/api"
@@ -108,6 +108,12 @@ function closeDialog(): void {
   reasonError.value = ""
   dialogError.value = ""
 }
+
+watch(organizationId, (current, previous) => {
+  if (current === previous) return
+  closeDialog()
+  notice.value = ""
+})
 
 function submitReason(): void {
   if (!dialog.value) return

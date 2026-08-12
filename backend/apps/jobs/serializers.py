@@ -3,6 +3,9 @@ from uuid import UUID
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from apps.ai.models import AIRun
+from apps.common.security import public_error
+
 from .models import Job
 
 
@@ -21,9 +24,45 @@ class JobSourceReferenceSerializer(serializers.Serializer):
     brief_version = serializers.IntegerField(min_value=1, read_only=True)
 
 
+class JobSerializerList(serializers.ListSerializer):
+    def to_representation(self, data):
+        items = list(data)
+        latest = {}
+        runs = AIRun.objects.filter(job_id__in=[item.id for item in items]).order_by(
+            "job_id", "-job_attempt", "-created_at", "-id"
+        )
+        for run in runs:
+            latest.setdefault(run.job_id, run)
+        for item in items:
+            item._public_ai_run = latest.get(item.id)
+        return super().to_representation(items)
+
+
 class JobSerializer(serializers.ModelSerializer):
     job_id = serializers.UUIDField(source="id", read_only=True)
     source_reference = serializers.SerializerMethodField()
+    error = serializers.SerializerMethodField()
+    retry_count = serializers.SerializerMethodField()
+    next_retry_at = serializers.SerializerMethodField()
+
+    def _latest_run(self, obj):
+        if hasattr(obj, "_public_ai_run"):
+            return obj._public_ai_run
+        return obj.ai_runs.order_by("-job_attempt", "-created_at", "-id").first()
+
+    @extend_schema_field({"type": "object", "nullable": True})
+    def get_error(self, obj):
+        return public_error(obj.error)
+
+    @extend_schema_field(serializers.IntegerField(min_value=0))
+    def get_retry_count(self, obj):
+        run = self._latest_run(obj)
+        return run.transport_retry_count if run is not None else 0
+
+    @extend_schema_field(serializers.DateTimeField(allow_null=True))
+    def get_next_retry_at(self, obj):
+        run = self._latest_run(obj)
+        return run.next_retry_at if run is not None else None
 
     @extend_schema_field(JobSourceReferenceSerializer(allow_null=True))
     def get_source_reference(self, obj):
@@ -44,8 +83,10 @@ class JobSerializer(serializers.ModelSerializer):
         fields = [
             "job_id", "type", "status", "progress", "attempt", "max_attempts",
             "created_at", "finished_at", "error", "result_reference", "source_reference",
+            "retry_count", "next_retry_at",
         ]
         read_only_fields = fields
+        list_serializer_class = JobSerializerList
 
 
 class JobListSerializer(serializers.Serializer):

@@ -2,11 +2,47 @@ import { expect, it } from "vitest"
 
 import {
   formatOrdinaryError,
+  ordinaryJobError,
+  ordinaryJobProgress,
   ordinaryPlatform,
   ordinaryScoreBand,
   ordinaryStatus,
   ordinaryTerm,
 } from "./ordinary"
+
+it.each([
+  ["provider_authentication_failed", "AI服务的连接信息已失效，任务没有继续。", "请联系管理员检查连接后重新尝试。"],
+  ["provider_balance_required", "AI账户余额不足，任务没有继续扣费。", "请联系管理员充值后重新尝试。"],
+  ["provider_rate_limited", "当前使用人数较多，本次处理没有完成。", "请稍后重新尝试。"],
+  ["provider_unavailable", "AI服务暂时繁忙，本次处理没有完成。", "请稍后重新尝试。"],
+  ["provider_timeout", "AI服务响应超时，本次处理没有完成。", "请稍后重新尝试。"],
+  ["invalid_provider_output_after_repair", "AI返回的内容仍不符合要求，本次处理已停止。", "请检查输入资料后重新尝试；仍有问题请联系管理员。"],
+  ["deepseek_daily_budget_exceeded", "今天的AI使用额度已达到上限，任务没有继续扣费。", "请联系管理员调整额度，或明天再试。"],
+  ["deepseek_retry_exhausted", "多次尝试后仍未完成，系统已停止自动重试。", "请稍后手动重试；仍有问题请联系管理员。"],
+  ["deepseek_invalid_usage", "本次AI用量记录异常，任务已安全停止。", "请联系管理员检查后再重试。"],
+  ["deepseek_not_connected", "AI服务尚未连接，任务没有开始。", "请联系管理员完成设置后重新尝试。"],
+  ["deepseek_invalid_key", "AI服务的连接信息无效，设置没有保存。", "请联系管理员重新填写连接信息。"],
+  ["deepseek_configuration_busy", "另一项AI设置正在处理中。", "请等待管理员完成设置后再试。"],
+  ["administrator_approval_required", "这项操作需要管理员确认。", "请联系管理员确认后重新尝试。"],
+] as const)("maps controlled job error %s to beginner Chinese", (code, message, recovery) => {
+  expect(ordinaryJobError({ code, message: "raw secret V4 Flash Pro 模型" })).toEqual({ message, recovery })
+})
+
+it("shows safe retry count and time without promising terminal recovery", () => {
+  const scheduled = ordinaryJobProgress({
+    status: "RUNNING", retry_count: 1, next_retry_at: "2026-08-12T06:30:00Z", error: null,
+  })
+  expect(scheduled.message).toContain("第 1 次")
+  expect(scheduled.message).toContain("再次处理")
+  expect(scheduled.recovery).toBe("暂时无需操作，系统会按计划继续。")
+
+  const terminal = ordinaryJobProgress({
+    status: "FAILED", retry_count: 2, next_retry_at: null,
+    error: { code: "deepseek_retry_exhausted", message: "raw provider detail" },
+  })
+  expect(terminal.message).toContain("已停止自动重试")
+  expect(`${terminal.message}${terminal.recovery}`).not.toMatch(/V4|Flash|Pro|模型|raw provider detail/)
+})
 
 it.each([
   ["Campaign", "推广计划"],

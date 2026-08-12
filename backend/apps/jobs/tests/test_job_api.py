@@ -1,13 +1,16 @@
 import importlib
 
 import pytest
+from datetime import timedelta
 from uuid import uuid4
 from django.apps import apps as django_apps
 from django.test.utils import CaptureQueriesContext
 from django.db import connection
+from django.utils import timezone
 
+from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
 from apps.identity.models import Role
-from apps.jobs.models import Job
+from apps.jobs.models import Job, job_service_writes
 from apps.jobs.services import JobService
 
 from .conftest import member_client
@@ -47,9 +50,73 @@ def test_job_permissions_and_safe_response(
     assert set(detail.json()) == {
         "job_id", "type", "status", "progress", "attempt", "max_attempts",
         "created_at", "finished_at", "error", "result_reference", "source_reference",
+        "retry_count", "next_retry_at",
     }
     assert "must-not-leak" not in str(detail.json())
     assert cancel.status_code == (200 if can_manage else 403)
+
+
+@pytest.mark.django_db
+def test_job_error_is_allowlisted_at_public_boundary(api_organizations, api_roles):
+    own, _ = api_organizations
+    job = _job(own, "safe-public-error")
+    with job_service_writes():
+        Job.objects.filter(pk=job.id).update(
+            status=Job.Status.FAILED,
+            error={
+                "code": "provider_balance_required",
+                "message": "upstream body sk-secret-must-not-leak",
+                "recovery_action": "raw provider recovery",
+                "provider_body": {"reasoning_content": "private chain"},
+            },
+        )
+    _, client = member_client(
+        organization=own,
+        role=api_roles[Role.Code.READ_ONLY],
+        username="jobs-safe-public-error",
+    )
+
+    payload = client.get(f"/api/v1/jobs/{job.id}").json()
+
+    assert payload["error"] == {
+        "code": "provider_balance_required",
+        "message": "AI provider balance is insufficient.",
+        "recovery": "Ask an administrator to add balance, then try again.",
+    }
+    assert "sk-secret-must-not-leak" not in str(payload)
+    assert "reasoning_content" not in str(payload)
+
+
+@pytest.mark.django_db
+def test_job_retry_progress_exposes_only_count_and_due_time(api_organizations, api_roles):
+    own, _ = api_organizations
+    job = _job(own, "safe-retry")
+    due = timezone.now() + timedelta(minutes=2)
+    with ai_audit_writes():
+        prompt = PromptVersion.objects.create(
+            purpose="CONTENT_GENERATE", code="job-public-retry", provider="deepseek",
+            model="private-model-name", template="prompt", output_schema={"type": "object"},
+            version=1, status=PromptVersion.Status.PUBLISHED,
+        )
+        AIRun.objects.create(
+            organization=own, job=job, job_attempt=1, prompt_version=prompt,
+            provider="deepseek", model="private-model-name", input_snapshot={},
+            status=AIRun.Status.RUNNING, started_at=timezone.now(),
+            transport_retry_count=1, next_retry_at=due,
+            provider_metadata={"provider_body": "secret"},
+        )
+    _, client = member_client(
+        organization=own,
+        role=api_roles[Role.Code.READ_ONLY],
+        username="jobs-safe-retry",
+    )
+
+    payload = client.get(f"/api/v1/jobs/{job.id}").json()
+
+    assert payload["retry_count"] == 1
+    assert payload["next_retry_at"] == due.isoformat().replace("+00:00", "Z")
+    assert "private-model-name" not in str(payload)
+    assert "provider_body" not in str(payload)
 
 
 @pytest.mark.django_db

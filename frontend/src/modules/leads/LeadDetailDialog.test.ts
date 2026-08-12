@@ -321,6 +321,31 @@ it("shows unavailable evidence honestly and analyzes only usable evidence IDs", 
   expect(bodies[0]?.evidence_ids).toEqual(["evidence-1"])
 })
 
+it("shows a safe terminal analysis recovery without raw server detail", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path.endsWith("/analyze")) {
+      return json({ job_id: "job-terminal", lead_candidate_id: "lead-1", status: "QUEUED" }, 202)
+    }
+    if (path === "/api/v1/jobs/job-terminal") return json({
+      job_id: "job-terminal", status: "FAILED", type: "LEAD_ANALYZE", progress: 50,
+      attempt: 1, max_attempts: 3, created_at: "2026-08-12T06:00:00Z", finished_at: "2026-08-12T06:01:00Z",
+      retry_count: 2, next_retry_at: null,
+      error: { code: "deepseek_retry_exhausted", message: "raw provider V4 Pro model secret" },
+      result_reference: null,
+    })
+    return json(detail)
+  })
+  renderDialog(["leads.read", "leads.analyze"], fetchMock)
+
+  await userEvent.click(await screen.findByRole("button", { name: "重新分析" }))
+
+  const alert = await screen.findByRole("alert")
+  expect(alert).toHaveTextContent("多次尝试后仍未完成，系统已停止自动重试。")
+  expect(alert).toHaveTextContent("请稍后手动重试；仍有问题请联系管理员。")
+  expect(alert).not.toHaveTextContent(/V4|Flash|Pro|模型|raw provider/)
+})
+
 it.each([
   ["REDACTED_BY_RETENTION", "内容已按保留期限移除"],
   ["SOURCE_UNAVAILABLE", "公开来源当前不可用"],

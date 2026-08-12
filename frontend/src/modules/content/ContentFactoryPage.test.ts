@@ -1243,6 +1243,28 @@ it("restores only the latest failed job for the current brief and ignores unrela
   expect(fetchMock.mock.calls.some(([path]) => path === `/api/v1/jobs/${missingReference.job_id}`)).toBe(false)
 })
 
+it("explains a scheduled retry with safe Chinese copy in ordinary mode", async () => {
+  const currentBrief = {
+    ...brief("READY"), id: "16709db2-f90d-46fa-982b-6825fe581d6a", version: 2,
+  }
+  const retrying = {
+    job_id: "c545eb30-6dc2-43b9-aea6-0cdd1e0c2c2e", type: "CONTENT_GENERATE", status: "RUNNING",
+    progress: 35, attempt: 1, max_attempts: 3, created_at: "2026-08-12T06:00:00Z", finished_at: null,
+    error: null, result_reference: null, retry_count: 1, next_retry_at: "2026-08-12T06:30:00Z",
+    source_reference: { brief_id: currentBrief.id, brief_version: currentBrief.version },
+  }
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
+    path === "/api/v1/jobs?type=CONTENT_GENERATE&page_size=50"
+      ? { next: null, previous: null, results: [retrying] }
+      : path === `/api/v1/jobs/${retrying.job_id}` ? retrying : baseResponse(path, [currentBrief]),
+  ), { status: 200, headers: { "Content-Type": "application/json" } })))
+  renderPage(["campaigns.read", "content.manage", "content.read", "jobs.read"], "ordinary")
+
+  expect(await screen.findByText(/第 1 次.*再次处理/)).toBeVisible()
+  expect(screen.getByText("暂时无需操作，系统会按计划继续。")).toBeVisible()
+  expect(document.body).not.toHaveTextContent(/V4|Flash|Pro|模型/)
+})
+
 it("continues through server job pages until it finds the current brief's latest job", async () => {
   const currentBrief = {
     ...brief("READY"),

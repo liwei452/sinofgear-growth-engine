@@ -57,6 +57,31 @@ _CONTROLLED_ERROR_MESSAGES = {
     "SOURCE_IMPORT_FAILED": "Public source import failed.",
 }
 
+_PUBLIC_ERROR_RECOVERY = {
+    "job_error": "Try again later. If the problem continues, contact an administrator.",
+    "provider_error": "Try again later. If the problem continues, contact an administrator.",
+    "invalid_provider_output": "Review the input material, then try again.",
+    "invalid_provider_output_after_repair": "Review the input material, then try again; contact an administrator if it continues.",
+    "output_too_large": "Reduce the requested content or input material, then try again.",
+    "ai_run_start_failed": "Try again later or contact an administrator.",
+    "job_canceled": "Start a new task if this work is still needed.",
+    "content_finalize_failed": "Try again; contact an administrator if it continues.",
+    "invalid_provider_contract": "Contact an administrator before trying again.",
+    "provider_authentication_failed": "Ask an administrator to check the connection, then try again.",
+    "provider_balance_required": "Ask an administrator to add balance, then try again.",
+    "provider_rate_limited": "Wait a moment, then try again.",
+    "provider_unavailable": "Wait a moment, then try again.",
+    "provider_timeout": "Wait a moment, then try again.",
+    "provider_network_error": "Check the network, then try again.",
+    "deepseek_not_connected": "Ask an administrator to complete setup, then try again.",
+    "deepseek_daily_budget_exceeded": "Ask an administrator to adjust the limit, or try again tomorrow.",
+    "deepseek_budget_unavailable": "Ask an administrator to check the usage limit before trying again.",
+    "deepseek_retry_exhausted": "Try again manually later; contact an administrator if it continues.",
+    "deepseek_usage_exceeds_reservation": "Ask an administrator to review usage before trying again.",
+    "deepseek_invalid_usage": "Ask an administrator to review usage before trying again.",
+    "SOURCE_IMPORT_FAILED": "Review the source import, then try again.",
+}
+
 _SECRET_VALUE = re.compile(
     r"(?i)(?:\bauthorization\s*[:=]\s*(?:bearer\s+)?[^\s,;]+|"
     r"\bbearer\s+sk-[a-z0-9_-]{8,}|\bsk-[a-z0-9_-]{8,})"
@@ -100,3 +125,16 @@ def normalize_persisted_error(value) -> dict[str, str]:
     if not isinstance(code, str) or code not in _CONTROLLED_ERROR_MESSAGES:
         code = "job_error"
     return {"code": code, "message": _CONTROLLED_ERROR_MESSAGES[code]}
+
+
+def public_error(value) -> dict[str, str] | None:
+    """Return the complete allowlist for ordinary job-error responses."""
+    if value is None:
+        return None
+    normalized = normalize_persisted_error(value)
+    code = normalized["code"]
+    return {
+        "code": code,
+        "message": normalized["message"],
+        "recovery": _PUBLIC_ERROR_RECOVERY[code],
+    }

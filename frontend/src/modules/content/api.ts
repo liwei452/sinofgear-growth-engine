@@ -36,7 +36,9 @@ export type JobStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "RETRY_Q
 export type Job = {
   job_id: string; type: string; status: JobStatus; progress: number; attempt: number
   max_attempts: number; created_at: string; finished_at: string | null
-  error: { code?: string; message?: string } | null; result_reference: Record<string, unknown> | null
+  error: { code?: string; message?: string; recovery?: string } | null
+  retry_count?: number; next_retry_at?: string | null
+  result_reference: Record<string, unknown> | null
   source_reference: { brief_id: string; brief_version: number } | null
 }
 export type ContentStatus = "DRAFT" | "IN_REVIEW" | "APPROVED" | "REJECTED" | "PUBLISHED" | "ARCHIVED"

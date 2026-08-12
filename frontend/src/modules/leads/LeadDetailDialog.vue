@@ -4,7 +4,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue"
 
 import { ApiError } from "../../api/client"
 import OperationModal from "../../shared/components/OperationModal.vue"
-import { ordinaryPlatform } from "../../shared/presentation/ordinary"
+import { ordinaryJobProgress, ordinaryPlatform } from "../../shared/presentation/ordinary"
 import { currentUserQueryOptions } from "../auth/auth"
 import {
   analyzeLeadCandidate,
@@ -368,7 +368,10 @@ async function pollAnalysis(jobId: string, token: number, organizationId: string
     })
     if (!isCurrent(token, organizationId, candidateId)) return
     if (isActiveImportJob(job.status)) {
-      message.value = job.status === "RUNNING" ? "正在分析公开证据…" : "分析任务正在排队…"
+      const retryNotice = ordinaryJobProgress(job)
+      message.value = (job as { next_retry_at?: unknown }).next_retry_at
+        ? `${retryNotice.message} ${retryNotice.recovery}`
+        : job.status === "RUNNING" ? "正在分析公开证据…" : "分析任务正在排队…"
       pollTimer = setTimeout(() => { void pollAnalysis(jobId, token, organizationId, candidateId) }, 1_000)
       return
     }
@@ -377,7 +380,8 @@ async function pollAnalysis(jobId: string, token: number, organizationId: string
       message.value = "分析已完成"
       await invalidateMutationScopes(organizationId, candidateId)
     } else {
-      alert.value = "分析没有完成，请检查公开证据后重试。"
+      const notice = ordinaryJobProgress(job)
+      alert.value = `${notice.message} ${notice.recovery}`
     }
   } catch (error) {
     if (!isCurrent(token, organizationId, candidateId)) return

@@ -45,3 +45,18 @@ The local UI/UX design skill was used for accessibility, responsive layout, touc
 - No paid provider request was executed by this task.
 - Actual usage telemetry is not yet exposed by the local API, so the UI explicitly says usage will appear in audit after tasks run.
 - `backend/config/test_settings.py` was pre-existing and was not modified or included in this task's commit.
+
+## Review fix round 1
+
+- Captured immutable organization and permission-generation context for test, save, and delete operations. Late responses after an organization switch, permission loss, or unmount are ignored and cannot update another organization's cache or UI.
+- Permission loss immediately hides the settings page, clears provider cache, closes dialogs, and wipes transient key/test/form/status state. Every operation handler now also checks current permission and organization.
+- Connected limits are now read-only summaries. Editing happens only in the secure settings dialog and requires the API Key; limits and key are submitted together through the existing tested PUT contract. Failed saves preserve the server-backed values.
+- Both settings and deletion dialogs use the shared modal focus lifecycle: initial heading focus, Tab/Shift+Tab trapping, Escape/backdrop/cancel closure, background inerting, and exact opener restoration.
+- The first-run banner is displayed only after a successful configuration query explicitly reports a non-connected state. Query failures never claim the provider is unconfigured.
+
+Round 1 verification:
+
+- RED: 5 new regression tests failed for the reviewed behaviors.
+- Targeted GREEN: 24/24 tests passed.
+- Full frontend GREEN: 45 files, 520/520 tests passed.
+- Type check, ESLint, production build, generated API check, and diff check passed.

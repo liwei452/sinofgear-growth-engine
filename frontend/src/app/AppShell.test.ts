@@ -44,9 +44,10 @@ function useViewport(narrow: boolean) {
 
 async function renderShell(
   initialPath = "/",
-  { narrow = false, permissions = currentUser.membership.permissions }: {
+  { narrow = false, permissions = currentUser.membership.permissions, seedAIConfiguration = true }: {
     narrow?: boolean
     permissions?: string[]
+    seedAIConfiguration?: boolean
   } = {},
 ) {
   const mediaQuery = useViewport(narrow)
@@ -77,7 +78,7 @@ async function renderShell(
     ...currentUser,
     membership: { ...currentUser.membership, permissions },
   })
-  if (permissions.includes("credentials.manage")) {
+  if (permissions.includes("credentials.manage") && seedAIConfiguration) {
     queryClient.setQueryData(["ai-provider-configuration", "org-1"], {
       provider_code: "deepseek", connection_state: "NOT_CONFIGURED", key_suffix: "",
       credential_revision: 0, last_tested_at: null, last_tested_by_id: null,
@@ -163,6 +164,12 @@ it("shows a non-blocking first-run DeepSeek guide only to credential administrat
   const reader = await renderShell("/", { permissions: [] })
   expect(screen.queryByRole("region", { name: "DeepSeek 首次设置提醒" })).not.toBeInTheDocument()
   reader.unmount()
+})
+
+it("does not claim setup is missing while the provider configuration request is failing", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response("unavailable", { status: 503 })))
+  await renderShell("/", { seedAIConfiguration: false })
+  await waitFor(() => expect(screen.queryByRole("region", { name: /DeepSeek 首次设置提醒/ })).not.toBeInTheDocument())
 })
 
 it("removes organization-scoped AI configuration data when the organization changes", async () => {

@@ -85,7 +85,7 @@ const aiConfiguration = useQuery(computed(() => aiProviderConfigurationQueryOpti
   organizationId.value ?? "", canManageCredentials.value,
 )))
 const shouldShowDeepSeekGuide = computed(() => canManageCredentials.value
-  && !aiConfiguration.isPending.value
+  && aiConfiguration.isSuccess.value
   && aiConfiguration.data.value?.connection_state !== "CONNECTED")
 const navigation = computed<NavigationSection[]>(() => {
   if (navigationMode.value === "ordinary") return ordinaryNavigation

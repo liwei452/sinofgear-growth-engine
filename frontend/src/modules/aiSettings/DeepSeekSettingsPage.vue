@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue"
 
 import { currentUserQueryOptions } from "../auth/auth"
 import {
@@ -8,6 +8,7 @@ import {
   saveAIProviderConfiguration, testAIProviderConfiguration, type AIProviderConfiguration,
 } from "./api"
 import AppIcon from "../../shared/components/AppIcon.vue"
+import OperationModal from "../../shared/components/OperationModal.vue"
 
 const queryClient = useQueryClient()
 const currentUser = useQuery(currentUserQueryOptions())
@@ -22,14 +23,28 @@ const testSucceeded = ref(false)
 const statusMessage = ref("")
 const errorMessage = ref("")
 const errorElement = ref<HTMLElement | null>(null)
-const replaceButton = ref<HTMLButtonElement | null>(null)
-const deleteButton = ref<HTMLButtonElement | null>(null)
+const keyInput = ref<HTMLInputElement | null>(null)
 const dailyBudget = ref("5.00")
 const flashTokens = ref(4096)
 const proTokens = ref(8192)
 const timeoutSeconds = ref(60)
 let pendingTestUsesStoredKey = false
 let pendingTestKey = ""
+let operationGeneration = 0
+let pendingTestContext: OperationContext | undefined
+let pendingSaveContext: (OperationContext & { input: Parameters<typeof saveAIProviderConfiguration>[0] }) | undefined
+let pendingDeleteContext: OperationContext | undefined
+
+type OperationContext = { generation: number; organizationId: string }
+
+function operationContext(): OperationContext {
+  return { generation: operationGeneration, organizationId: organizationId.value }
+}
+
+function isCurrent(context?: OperationContext): boolean {
+  return Boolean(context && context.generation === operationGeneration
+    && context.organizationId === organizationId.value && canManage.value)
+}
 
 function applyConfiguration(value?: AIProviderConfiguration) {
   if (!value) return
@@ -43,6 +58,22 @@ watch(() => configuration.data.value, applyConfiguration, { immediate: true })
 
 function wipeKey() {
   keyValue.value = ""
+  pendingTestKey = ""
+}
+
+function resetSensitiveState() {
+  operationGeneration += 1
+  wipeKey()
+  pendingTestContext = undefined
+  pendingSaveContext = undefined
+  pendingDeleteContext = undefined
+  pendingTestUsesStoredKey = false
+  testSucceeded.value = false
+  modalOpen.value = false
+  deleteOpen.value = false
+  statusMessage.value = ""
+  errorMessage.value = ""
+  applyConfiguration(configuration.data.value)
 }
 
 function safeFailure(message = "连接没有成功，请检查 API Key 和网络后重试。") {
@@ -50,19 +81,22 @@ function safeFailure(message = "连接没有成功，请检查 API Key 和网络
   testSucceeded.value = false
   statusMessage.value = ""
   errorMessage.value = message
-  void nextTick(() => errorElement.value?.focus())
+  void nextTick(() => (modalOpen.value ? keyInput.value : errorElement.value)?.focus())
 }
 
 const testMutation = useMutation({
   mutationFn: async () => {
+    const context = pendingTestContext
     const apiKey = pendingTestKey
     try {
-      return await testAIProviderConfiguration(apiKey || undefined)
+      const value = await testAIProviderConfiguration(apiKey || undefined)
+      return { context, value }
     } finally {
       pendingTestKey = ""
     }
   },
-  onSuccess: () => {
+  onSuccess: ({ context }) => {
+    if (!isCurrent(context)) return
     wipeKey()
     errorMessage.value = ""
     if (!pendingTestUsesStoredKey) {
@@ -72,42 +106,55 @@ const testMutation = useMutation({
       statusMessage.value = "现有连接可用。"
     }
   },
-  onError: () => safeFailure(),
+  onError: () => {
+    if (isCurrent(pendingTestContext)) safeFailure()
+  },
 })
 
 const saveMutation = useMutation({
-  mutationFn: () => saveAIProviderConfiguration({
-    api_key: keyValue.value,
-    daily_budget_usd: dailyBudget.value,
-    flash_max_output_tokens: flashTokens.value,
-    pro_max_output_tokens: proTokens.value,
-    timeout_seconds: timeoutSeconds.value,
-  }),
-  onSuccess: (value) => {
-    queryClient.setQueryData(aiSettingsKeys.configuration(organizationId.value), value)
+  mutationFn: async () => {
+    const pending = pendingSaveContext
+    if (!pending) throw new Error("missing operation context")
+    const value = await saveAIProviderConfiguration(pending.input)
+    return { context: pending, value }
+  },
+  onSuccess: ({ context, value }) => {
+    if (!isCurrent(context)) return
+    queryClient.setQueryData(aiSettingsKeys.configuration(context.organizationId), value)
+    applyConfiguration(value)
     errorMessage.value = ""
     statusMessage.value = "DeepSeek 已连接，可以开始执行 AI 任务。"
     testSucceeded.value = false
     closeKeyModal(false)
   },
-  onError: () => safeFailure("保存没有成功，原来的连接没有改变。请重新测试后再试。"),
-  onSettled: wipeKey,
+  onError: () => {
+    if (isCurrent(pendingSaveContext)) safeFailure("保存没有成功，原来的连接和限制没有改变。请重新测试后再试。")
+  },
+  onSettled: () => { wipeKey(); pendingSaveContext = undefined },
 })
 
 const deleteMutation = useMutation({
-  mutationFn: deleteAIProviderConfiguration,
-  onSuccess: (value) => {
-    queryClient.setQueryData(aiSettingsKeys.configuration(organizationId.value), value)
+  mutationFn: async () => {
+    const context = pendingDeleteContext
+    const value = await deleteAIProviderConfiguration()
+    return { context, value }
+  },
+  onSuccess: ({ context, value }) => {
+    if (!isCurrent(context)) return
+    queryClient.setQueryData(aiSettingsKeys.configuration(context.organizationId), value)
     statusMessage.value = "DeepSeek 连接已删除。"
     deleteOpen.value = false
-    void nextTick(() => deleteButton.value?.focus())
   },
-  onError: () => safeFailure("暂时无法删除连接，请稍后重试。"),
+  onError: () => {
+    if (isCurrent(pendingDeleteContext)) safeFailure("暂时无法删除连接，请稍后重试。")
+  },
+  onSettled: () => { pendingDeleteContext = undefined },
 })
 
 function startTest() {
-  if (!keyValue.value || testMutation.isPending.value) return
+  if (!canManage.value || !organizationId.value || !keyValue.value || testMutation.isPending.value) return
   pendingTestUsesStoredKey = false
+  pendingTestContext = operationContext()
   pendingTestKey = keyValue.value
   errorMessage.value = ""
   statusMessage.value = "正在安全测试连接…"
@@ -115,8 +162,9 @@ function startTest() {
 }
 
 function retest() {
-  if (testMutation.isPending.value) return
+  if (!canManage.value || !organizationId.value || testMutation.isPending.value) return
   pendingTestUsesStoredKey = true
+  pendingTestContext = operationContext()
   pendingTestKey = ""
   errorMessage.value = ""
   statusMessage.value = "正在安全测试现有连接…"
@@ -124,11 +172,17 @@ function retest() {
 }
 
 function save() {
-  if (!testSucceeded.value || !keyValue.value || saveMutation.isPending.value) return
+  if (!canManage.value || !organizationId.value || !testSucceeded.value || !keyValue.value || saveMutation.isPending.value) return
+  pendingSaveContext = { ...operationContext(), input: {
+    api_key: keyValue.value, daily_budget_usd: Number(dailyBudget.value).toFixed(2),
+    flash_max_output_tokens: flashTokens.value, pro_max_output_tokens: proTokens.value,
+    timeout_seconds: timeoutSeconds.value,
+  } }
   saveMutation.mutate()
 }
 
 function openKeyModal() {
+  if (!canManage.value) return
   wipeKey()
   testSucceeded.value = false
   errorMessage.value = ""
@@ -139,27 +193,33 @@ function closeKeyModal(restoreFocus = true) {
   wipeKey()
   testSucceeded.value = false
   modalOpen.value = false
-  if (restoreFocus) void nextTick(() => replaceButton.value?.focus())
+  applyConfiguration(configuration.data.value)
+  void restoreFocus
 }
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key !== "Escape") return
-  if (modalOpen.value) closeKeyModal()
-  else if (deleteOpen.value) {
-    deleteOpen.value = false
-    void nextTick(() => deleteButton.value?.focus())
-  }
+function openDeleteModal() {
+  if (canManage.value) deleteOpen.value = true
 }
 
-watch(canManage, (allowed) => {
+function closeDeleteModal() {
+  deleteOpen.value = false
+}
+
+function removeConnection() {
+  if (!canManage.value || !organizationId.value || deleteMutation.isPending.value) return
+  pendingDeleteContext = operationContext()
+  deleteMutation.mutate()
+}
+
+watch([organizationId, canManage], ([nextOrganization, allowed], [previousOrganization]) => {
+  if (!allowed || (previousOrganization && nextOrganization !== previousOrganization)) resetSensitiveState()
   if (!allowed) queryClient.removeQueries({ queryKey: aiSettingsKeys.all })
 })
-onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
-onMounted(() => window.addEventListener("keydown", onKeydown))
+onBeforeUnmount(resetSensitiveState)
 </script>
 
 <template>
-  <section data-testid="deepseek-settings-page" class="ai-settings-page page-stack">
+  <section v-if="canManage" data-testid="deepseek-settings-page" class="ai-settings-page page-stack">
     <header class="ai-settings-hero">
       <div>
         <p class="eyebrow">AI 能力设置</p>
@@ -183,7 +243,7 @@ onMounted(() => window.addEventListener("keydown", onKeydown))
     </div>
 
     <template v-else>
-      <div v-if="errorMessage" ref="errorElement" class="ai-settings-alert" role="alert" tabindex="-1">{{ errorMessage }}</div>
+      <div v-if="errorMessage && !modalOpen" ref="errorElement" class="ai-settings-alert" role="alert" tabindex="-1">{{ errorMessage }}</div>
       <p v-if="statusMessage || testMutation.isPending.value" class="ai-settings-status" role="status" aria-live="polite">
         {{ statusMessage }}
       </p>
@@ -209,16 +269,17 @@ onMounted(() => window.addEventListener("keydown", onKeydown))
             <button class="button button-secondary" type="button" :disabled="testMutation.isPending.value" @click="retest">
               {{ testMutation.isPending.value ? "正在测试…" : "重新测试" }}
             </button>
-            <button ref="replaceButton" class="button button-secondary" type="button" @click="openKeyModal">更换 API Key</button>
-            <button ref="deleteButton" class="button button-danger" type="button" @click="deleteOpen = true">删除连接</button>
+            <button class="button button-secondary" type="button" @click="openKeyModal">更换 API Key</button>
+            <button class="button button-danger" type="button" @click="openDeleteModal">删除连接</button>
           </div>
         </article>
 
         <article class="card ai-settings-card">
           <div class="section-heading"><div><p class="eyebrow">02 · 费用保护</p><h2>每日使用上限</h2></div><AppIcon name="shield" /></div>
           <label class="field-label" for="daily-budget">每天最多使用（美元）</label>
-          <input id="daily-budget" v-model="dailyBudget" class="text-input" type="number" min="0" max="100000" step="0.01">
+          <input id="daily-budget" v-model="dailyBudget" class="text-input" type="number" min="0" max="100000" step="0.01" :disabled="connected">
           <p class="field-help">达到上限后，新任务会暂停，不会继续产生费用。</p>
+          <button v-if="connected" class="button button-secondary" type="button" @click="openKeyModal">修改限制</button>
         </article>
 
         <article class="card ai-settings-card">
@@ -232,9 +293,9 @@ onMounted(() => window.addEventListener("keydown", onKeydown))
         <article class="card ai-settings-card">
           <p class="eyebrow">04 · 高级限制</p><h2>任务保护参数</h2>
           <div class="ai-limit-grid">
-            <label>快速方案输出上限<input v-model.number="flashTokens" class="text-input" type="number" min="64" max="65536"></label>
-            <label>增强分析输出上限<input v-model.number="proTokens" class="text-input" type="number" min="64" max="65536"></label>
-            <label>单次等待时间（秒）<input v-model.number="timeoutSeconds" class="text-input" type="number" min="1" max="300"></label>
+            <label>快速方案输出上限<input v-model.number="flashTokens" class="text-input" type="number" min="64" max="65536" :disabled="connected"></label>
+            <label>增强分析输出上限<input v-model.number="proTokens" class="text-input" type="number" min="64" max="65536" :disabled="connected"></label>
+            <label>单次等待时间（秒）<input v-model.number="timeoutSeconds" class="text-input" type="number" min="1" max="300" :disabled="connected"></label>
           </div>
         </article>
 
@@ -245,30 +306,32 @@ onMounted(() => window.addEventListener("keydown", onKeydown))
       </div>
     </template>
 
-    <div v-if="modalOpen" data-testid="ai-key-modal-backdrop" class="ai-modal-backdrop" @mousedown.self="closeKeyModal()">
-      <section class="ai-modal" role="dialog" aria-modal="true" aria-labelledby="replace-title">
-        <h2 id="replace-title">更换 API Key</h2><p>先测试新密钥。测试失败时，原来的连接不会改变。</p>
-        <label class="field-label" for="replacement-key">API Key（DeepSeek 提供的访问密钥）</label>
-        <input id="replacement-key" v-model="keyValue" class="text-input" type="password" autocomplete="off" spellcheck="false" autofocus>
-        <div class="ai-settings-actions">
-          <button class="button button-secondary" type="button" :disabled="!keyValue || testMutation.isPending.value" @click="startTest">{{ testMutation.isPending.value ? "正在测试…" : "先测试连接" }}</button>
-          <button class="button button-primary" type="button" :disabled="!testSucceeded || !keyValue || saveMutation.isPending.value" @click="save">{{ saveMutation.isPending.value ? "正在保存…" : "保存并启用" }}</button>
-          <button class="button button-quiet" type="button" @click="wipeKey">清空</button>
-          <button class="button button-quiet" type="button" @click="closeKeyModal()">取消</button>
-        </div>
-      </section>
-    </div>
+    <OperationModal v-if="modalOpen" title="修改 DeepSeek 设置" title-id="replace-title" @close="closeKeyModal()">
+      <div v-if="errorMessage" class="ai-settings-alert" role="alert">{{ errorMessage }}</div>
+      <p>修改 API Key 或限制时，需要重新输入 API Key；系统会测试成功后再保存，失败时原设置不变。</p>
+      <div class="ai-limit-grid">
+        <label>每天最多使用（美元）<input v-model="dailyBudget" class="text-input" type="number" min="0" max="100000" step="0.01"></label>
+        <label>快速方案输出上限<input v-model.number="flashTokens" class="text-input" type="number" min="64" max="65536"></label>
+        <label>增强分析输出上限<input v-model.number="proTokens" class="text-input" type="number" min="64" max="65536"></label>
+        <label>单次等待时间（秒）<input v-model.number="timeoutSeconds" class="text-input" type="number" min="1" max="300"></label>
+      </div>
+      <label class="field-label" for="replacement-key">API Key（DeepSeek 提供的访问密钥）</label>
+      <input id="replacement-key" ref="keyInput" v-model="keyValue" class="text-input" type="password" autocomplete="off" spellcheck="false">
+      <div class="ai-settings-actions">
+        <button class="button button-secondary" type="button" :disabled="!keyValue || testMutation.isPending.value" @click="startTest">{{ testMutation.isPending.value ? "正在测试…" : "先测试连接" }}</button>
+        <button class="button button-primary" type="button" :disabled="!testSucceeded || !keyValue || saveMutation.isPending.value" @click="save">{{ saveMutation.isPending.value ? "正在保存…" : "测试并保存设置" }}</button>
+        <button class="button button-quiet" type="button" @click="wipeKey">清空</button>
+        <button class="button button-quiet" type="button" @click="closeKeyModal()">取消</button>
+      </div>
+    </OperationModal>
 
-    <div v-if="deleteOpen" class="ai-modal-backdrop" @mousedown.self="deleteOpen = false">
-      <section class="ai-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
-        <h2 id="delete-title">确认删除 DeepSeek 连接</h2>
-        <p>删除后，AI 任务将暂停，已有内容和审计记录不会被删除。</p>
-        <div class="ai-settings-actions">
-          <button class="button button-danger" type="button" :disabled="deleteMutation.isPending.value" @click="deleteMutation.mutate()">{{ deleteMutation.isPending.value ? "正在删除…" : "确认删除" }}</button>
-          <button class="button button-secondary" type="button" @click="deleteOpen = false">保留连接</button>
-        </div>
-      </section>
-    </div>
+    <OperationModal v-if="deleteOpen" title="确认删除 DeepSeek 连接" title-id="delete-title" @close="closeDeleteModal">
+      <p>删除后，AI 任务将暂停，已有内容和审计记录不会被删除。</p>
+      <div class="ai-settings-actions">
+        <button class="button button-danger" type="button" :disabled="deleteMutation.isPending.value" @click="removeConnection">{{ deleteMutation.isPending.value ? "正在删除…" : "确认删除" }}</button>
+        <button class="button button-secondary" type="button" @click="closeDeleteModal">保留连接</button>
+      </div>
+    </OperationModal>
   </section>
 </template>
 

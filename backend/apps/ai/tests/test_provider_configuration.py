@@ -12,6 +12,11 @@ from apps.ai.provider_configuration import (
 )
 from apps.identity.models import Organization
 from integrations.ai.providers import ProviderAuthenticationError, ProviderResult
+from integrations.ai.providers import (
+    ProviderBalanceError,
+    ProviderRateLimitError,
+    ProviderUnavailableError,
+)
 from integrations.credentials import CredentialStoreError
 
 
@@ -19,9 +24,10 @@ SECRET = "sk-test-secret-1234567890"
 
 
 class Store:
-    def __init__(self, value=None, *, fail_write=False):
+    def __init__(self, value=None, *, fail_write=False, fail_restore=False):
         self.value = value
         self.fail_write = fail_write
+        self.fail_restore = fail_restore
         self.events = []
 
     def read(self, target):
@@ -30,7 +36,7 @@ class Store:
 
     def write(self, target, secret):
         self.events.append(("write", target))
-        if self.fail_write:
+        if self.fail_write or (self.fail_restore and secret != SECRET):
             raise CredentialStoreError("safe")
         self.value = secret
 
@@ -112,6 +118,98 @@ def test_failed_test_does_not_write_or_create_configuration(context):
     assert caught.value.code == "deepseek_invalid_key"
     assert vault.value is None
     assert not AIProviderConfiguration.objects.exists()
+
+
+@pytest.mark.parametrize(
+    ("provider_error", "code"),
+    [
+        (ProviderBalanceError("safe"), "deepseek_balance_required"),
+        (ProviderRateLimitError(), "deepseek_rate_limited"),
+        (ProviderUnavailableError("safe"), "deepseek_unavailable"),
+    ],
+)
+def test_provider_failures_map_to_fixed_codes_without_logging_secret(
+    context, caplog, provider_error, code
+):
+    organization, _ = context
+    with pytest.raises(ProviderConfigurationError) as caught:
+        check_configuration(
+            organization=organization,
+            api_key=SECRET,
+            credential_store=Store(),
+            provider_factory=lambda credential_store: Provider(
+                credential_store, error=provider_error
+            ),
+        )
+    assert caught.value.code == code
+    assert SECRET not in caplog.text
+
+
+def test_vault_mutations_happen_after_organization_lock(context, monkeypatch):
+    organization, actor = context
+    lock_acquired = False
+    original = Organization.objects.select_for_update
+
+    def select_for_update(*args, **kwargs):
+        nonlocal lock_acquired
+        lock_acquired = True
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(Organization.objects, "select_for_update", select_for_update)
+
+    class LockCheckingStore(Store):
+        def write(self, target, secret):
+            assert lock_acquired
+            super().write(target, secret)
+
+        def delete(self, target):
+            assert lock_acquired
+            return super().delete(target)
+
+    vault = LockCheckingStore()
+    save_configuration(
+        organization=organization, actor=actor, api_key=SECRET,
+        limits=limits(), credential_store=vault, provider_factory=Provider,
+    )
+    lock_acquired = False
+    delete_deepseek_credential(
+        organization=organization, actor=actor, credential_store=vault
+    )
+
+
+@pytest.mark.parametrize("operation", ["put", "delete"])
+def test_failed_database_and_failed_compensation_marks_state_uncertain(
+    context, monkeypatch, operation
+):
+    organization, actor = context
+    AIProviderConfiguration.objects.create(
+        organization=organization, connection_state="CONNECTED", key_suffix="old1",
+        credential_revision=2, **limits(),
+    )
+    vault = Store("sk-old-key", fail_restore=True)
+    original_save = AIProviderConfiguration.save
+
+    def fail_requested_state(self, *args, **kwargs):
+        if self.connection_state != "NEEDS_RECONNECT":
+            raise RuntimeError(f"database failed {SECRET}")
+        return original_save(self, *args, **kwargs)
+
+    monkeypatch.setattr(AIProviderConfiguration, "save", fail_requested_state)
+    with pytest.raises(ProviderConfigurationError) as caught:
+        if operation == "put":
+            save_configuration(
+                organization=organization, actor=actor, api_key=SECRET,
+                limits=limits(), credential_store=vault, provider_factory=Provider,
+            )
+        else:
+            delete_deepseek_credential(
+                organization=organization, actor=actor, credential_store=vault
+            )
+    assert caught.value.code == "deepseek_credential_state_uncertain"
+    configuration = AIProviderConfiguration.objects.get(organization=organization)
+    assert configuration.connection_state == "NEEDS_RECONNECT"
+    assert configuration.key_suffix == ""
+    assert SECRET not in repr(caught.value)
 
 
 def test_invalid_direct_service_limits_are_rejected_before_provider_or_vault(context):

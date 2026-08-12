@@ -8,6 +8,10 @@ from apps.ai.models import AIProviderConfiguration
 from apps.identity.models import Membership, Organization, Role
 from integrations.ai.providers import ProviderResult
 from integrations.credentials import credential_store_override
+from rest_framework.exceptions import ParseError
+from rest_framework.test import APIRequestFactory
+
+from apps.ai.views import DuplicateSafeJSONParser
 
 
 SECRET = "sk-api-secret-1234567890"
@@ -103,3 +107,43 @@ def test_test_endpoint_does_not_save_submitted_replacement(api_context):
         assert response.data == {"connection_state": "CONNECTED", "recovery_code": None}
         assert store.values == {}
         assert not AIProviderConfiguration.objects.exists()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b'{"api_key":"sk-parser-secret-1234567890",', b'\xffsk-parser-secret-1234567890'],
+)
+def test_malformed_json_parse_error_does_not_retain_body_or_secret(body, caplog):
+    parser = DuplicateSafeJSONParser()
+    request = APIRequestFactory().put(URL, body, content_type="application/json")
+    with pytest.raises(ParseError) as caught:
+        parser.parse(request, parser_context={"encoding": "utf-8"})
+    error = caught.value
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    snapshot = repr(vars(error)) + repr(error)
+    assert "sk-parser-secret" not in snapshot
+    assert "sk-parser-secret" not in caplog.text
+
+
+def test_duplicate_json_parse_error_does_not_retain_submitted_secret(caplog):
+    parser = DuplicateSafeJSONParser()
+    secret = "sk-duplicate-parser-secret-1234567890"
+    body = json.dumps({"api_key": secret})[:-1] + f',"api_key":"{secret}"}}'
+    request = APIRequestFactory().put(
+        URL, body.encode(), content_type="application/json"
+    )
+    with pytest.raises(ParseError) as caught:
+        parser.parse(request, parser_context={"encoding": "utf-8"})
+    error = caught.value
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert secret not in repr(vars(error)) + repr(error) + caplog.text
+
+
+def test_openapi_documents_fixed_provider_failure_shape():
+    schema = APIClient().get("/api/v1/schema").json()
+    for path, method in ((URL, "put"), (URL, "delete"), (f"{URL}/test", "post")):
+        response = schema["paths"][path][method]["responses"]["400"]
+        rendered = json.dumps(response)
+        assert "AIProviderConfigurationTestResult" in rendered

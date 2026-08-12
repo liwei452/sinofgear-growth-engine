@@ -22,6 +22,7 @@ from integrations.credentials import (
 )
 
 from .models import AIProviderConfiguration
+from apps.identity.models import Organization
 
 
 class ProviderConfigurationError(RuntimeError):
@@ -149,72 +150,109 @@ def test_and_save_deepseek_configuration(
         credential_store=store,
         provider_factory=provider_factory,
     )
-    target = credential_target(organization.id)
-    try:
-        previous_secret = store.read(target)
-        store.write(target, api_key)
-    except CredentialStoreError:
-        try:
-            if "previous_secret" in locals():
-                if previous_secret is None:
-                    store.delete(target)
-                else:
-                    store.write(target, previous_secret)
-        except CredentialStoreError:
-            pass
-        raise ProviderConfigurationError("deepseek_credential_store_unavailable") from None
-    try:
-        with transaction.atomic():
-            configuration, _ = AIProviderConfiguration.objects.select_for_update().get_or_create(
-                organization=organization
-            )
-            configuration.connection_state = AIProviderConfiguration.ConnectionState.CONNECTED
-            configuration.key_suffix = api_key[-4:]
-            configuration.credential_revision += 1
-            configuration.last_tested_at = timezone.now()
-            configuration.last_tested_by = actor
-            for field, value in limits.items():
-                setattr(configuration, field, value)
-            configuration.full_clean()
-            configuration.save()
-            return configuration
-    except Exception:
-        try:
-            if previous_secret is None:
-                store.delete(target)
-            else:
-                store.write(target, previous_secret)
-        except CredentialStoreError:
-            pass
-        raise
+    outcome, configuration = _mutate_configuration(
+        organization=organization,
+        actor=actor,
+        store=store,
+        replacement_secret=api_key,
+        limits=limits,
+        delete=False,
+    )
+    if outcome:
+        raise ProviderConfigurationError(outcome)
+    return configuration
 
 
 def delete_deepseek_credential(
     *, organization, actor, credential_store=None
 ) -> AIProviderConfiguration:
     store = _store_or_error(credential_store)
-    target = credential_target(organization.id)
+    outcome, configuration = _mutate_configuration(
+        organization=organization,
+        actor=actor,
+        store=store,
+        replacement_secret=None,
+        limits=None,
+        delete=True,
+    )
+    if outcome:
+        raise ProviderConfigurationError(outcome)
+    return configuration
+
+
+def _restore_secret(store, target: str, previous_secret: str | None) -> bool:
     try:
-        previous_secret = store.read(target)
-        store.delete(target)
+        if previous_secret is None:
+            store.delete(target)
+        else:
+            store.write(target, previous_secret)
+        return True
     except CredentialStoreError:
-        raise ProviderConfigurationError("deepseek_credential_store_unavailable") from None
+        return False
+
+
+def _mark_state_uncertain(*, organization, actor) -> None:
     try:
         with transaction.atomic():
-            configuration, _ = AIProviderConfiguration.objects.select_for_update().get_or_create(
+            Organization.objects.select_for_update().get(pk=organization.pk)
+            configuration, _ = AIProviderConfiguration.objects.get_or_create(
                 organization=organization
             )
-            configuration.connection_state = AIProviderConfiguration.ConnectionState.NOT_CONFIGURED
+            configuration.connection_state = AIProviderConfiguration.ConnectionState.NEEDS_RECONNECT
             configuration.key_suffix = ""
             configuration.last_tested_at = None
             configuration.last_tested_by = actor
             configuration.full_clean()
             configuration.save()
-            return configuration
     except Exception:
-        if previous_secret is not None:
+        # The public result remains uncertain even if degraded metadata cannot be saved.
+        return
+
+
+def _mutate_configuration(
+    *, organization, actor, store, replacement_secret: str | None,
+    limits: dict | None, delete: bool,
+) -> tuple[str | None, AIProviderConfiguration | None]:
+    target = credential_target(organization.id)
+    outcome = None
+    result = None
+    uncertain = False
+    with transaction.atomic():
+        Organization.objects.select_for_update().get(pk=organization.pk)
+        try:
+            previous_secret = store.read(target)
+            if delete:
+                store.delete(target)
+            else:
+                store.write(target, replacement_secret)
+        except CredentialStoreError:
+            transaction.set_rollback(True)
+            outcome = "deepseek_credential_store_unavailable"
+        else:
             try:
-                store.write(target, previous_secret)
-            except CredentialStoreError:
-                pass
-        raise
+                configuration, _ = AIProviderConfiguration.objects.get_or_create(
+                    organization=organization
+                )
+                configuration.connection_state = (
+                    AIProviderConfiguration.ConnectionState.NOT_CONFIGURED
+                    if delete else AIProviderConfiguration.ConnectionState.CONNECTED
+                )
+                configuration.key_suffix = "" if delete else replacement_secret[-4:]
+                configuration.credential_revision += 0 if delete else 1
+                configuration.last_tested_at = None if delete else timezone.now()
+                configuration.last_tested_by = actor
+                for field, value in (limits or {}).items():
+                    setattr(configuration, field, value)
+                configuration.full_clean()
+                configuration.save()
+                result = configuration
+            except Exception:
+                transaction.set_rollback(True)
+                if _restore_secret(store, target, previous_secret):
+                    outcome = "deepseek_configuration_update_failed"
+                else:
+                    outcome = "deepseek_credential_state_uncertain"
+                    uncertain = True
+    if uncertain:
+        _mark_state_uncertain(organization=organization, actor=actor)
+    return outcome, result

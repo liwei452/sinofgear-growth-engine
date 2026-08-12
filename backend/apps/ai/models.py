@@ -154,6 +154,7 @@ class AIProviderConfiguration(models.Model):
     class ConnectionState(models.TextChoices):
         NOT_CONFIGURED = "NOT_CONFIGURED", "Not configured"
         CONNECTED = "CONNECTED", "Connected"
+        NEEDS_RECONNECT = "NEEDS_RECONNECT", "Needs reconnect"
 
     organization = models.OneToOneField(
         "identity.Organization",

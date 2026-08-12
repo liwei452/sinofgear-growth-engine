@@ -126,12 +126,15 @@ class DuplicateSafeJSONParser(JSONParser):
                 result[key] = value
             return result
 
+        parsed = None
+        failed = False
         try:
-            return json.loads(raw.decode(charset), object_pairs_hook=unique_pairs)
-        except ParseError:
-            raise
-        except (UnicodeDecodeError, ValueError) as error:
-            raise ParseError("Malformed JSON.") from error
+            parsed = json.loads(raw.decode(charset), object_pairs_hook=unique_pairs)
+        except (ParseError, UnicodeDecodeError, ValueError):
+            failed = True
+        if failed:
+            raise ParseError("Malformed JSON.") from None
+        return parsed
 
 
 def _configuration_for(organization):
@@ -152,7 +155,10 @@ class AIProviderConfigurationView(APIView):
 
     @extend_schema(
         request=AIProviderConfigurationWriteSerializer,
-        responses={200: AIProviderConfigurationSerializer},
+        responses={
+            200: AIProviderConfigurationSerializer,
+            400: AIProviderConfigurationTestResultSerializer,
+        },
     )
     def put(self, request):
         serializer = AIProviderConfigurationWriteSerializer(data=request.data)
@@ -173,7 +179,10 @@ class AIProviderConfigurationView(APIView):
             )
         return Response(AIProviderConfigurationSerializer(configuration).data)
 
-    @extend_schema(responses={200: AIProviderConfigurationSerializer})
+    @extend_schema(responses={
+        200: AIProviderConfigurationSerializer,
+        400: AIProviderConfigurationTestResultSerializer,
+    })
     def delete(self, request):
         try:
             configuration = delete_deepseek_credential(
@@ -194,7 +203,10 @@ class AIProviderConfigurationTestView(APIView):
 
     @extend_schema(
         request=AIProviderConfigurationTestSerializer,
-        responses={200: AIProviderConfigurationTestResultSerializer},
+        responses={
+            200: AIProviderConfigurationTestResultSerializer,
+            400: AIProviderConfigurationTestResultSerializer,
+        },
     )
     def post(self, request):
         serializer = AIProviderConfigurationTestSerializer(data=request.data)

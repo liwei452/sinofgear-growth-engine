@@ -17,7 +17,7 @@ class Migration(migrations.Migration):
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
                 ("provider_code", models.CharField(default="deepseek", editable=False, max_length=32)),
-                ("connection_state", models.CharField(choices=[("NOT_CONFIGURED", "Not configured"), ("CONNECTED", "Connected")], default="NOT_CONFIGURED", max_length=24)),
+                ("connection_state", models.CharField(choices=[("NOT_CONFIGURED", "Not configured"), ("CONNECTED", "Connected"), ("NEEDS_RECONNECT", "Needs reconnect")], default="NOT_CONFIGURED", max_length=24)),
                 ("key_suffix", models.CharField(blank=True, max_length=4)),
                 ("credential_revision", models.PositiveIntegerField(default=0)),
                 ("last_tested_at", models.DateTimeField(blank=True, null=True)),

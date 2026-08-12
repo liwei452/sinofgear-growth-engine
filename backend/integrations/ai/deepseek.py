@@ -27,6 +27,7 @@ from .providers import (
 DEEPSEEK_ENDPOINT = "https://api.deepseek.com/chat/completions"
 SUPPORTED_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro"}
 SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_PARSE_FAILED = object()
 
 
 class DeepSeekProvider:
@@ -59,29 +60,22 @@ class DeepSeekProvider:
         payload = self._payload(request)
         timeout = httpx.Timeout(request.timeout_seconds)
         started = perf_counter()
-        try:
-            with httpx.Client(transport=self._transport, timeout=timeout) as client:
-                response = client.post(
-                    self._endpoint,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-        except httpx.TimeoutException:
-            raise ProviderTimeoutError("AI provider request timed out.") from None
-        except httpx.TransportError:
-            raise ProviderNetworkError("AI provider network request failed.") from None
-
+        transport_status, status_code, retry_after, raw_body = self._send(
+            payload=payload,
+            api_key=api_key,
+            timeout=timeout,
+        )
         duration_ms = max(0, round((perf_counter() - started) * 1000))
-        self._raise_for_status(response)
-        if len(response.content) > self._max_response_bytes:
+        if transport_status == "timeout":
+            raise ProviderTimeoutError("AI provider request timed out.")
+        if transport_status == "network":
+            raise ProviderNetworkError("AI provider network request failed.")
+        if transport_status == "oversized":
             raise ProviderInvalidOutputError("AI provider output exceeded the size limit.")
-        try:
-            body = response.json()
-        except (ValueError, UnicodeError):
-            raise ProviderInvalidOutputError("AI provider returned invalid JSON.") from None
+        self._raise_for_status(status_code, retry_after=retry_after)
+        body = self._parse_json_bytes(raw_body)
+        if body is _PARSE_FAILED:
+            raise ProviderInvalidOutputError("AI provider returned invalid JSON.")
         return self._result(
             body,
             request=request,
@@ -94,6 +88,51 @@ class DeepSeekProvider:
             return self._credential_store.read(target), True
         except CredentialStoreError:
             return None, False
+
+    def _send(
+        self, *, payload: dict[str, Any], api_key: str, timeout: httpx.Timeout
+    ) -> tuple[str, int, str, bytes]:
+        try:
+            with httpx.Client(transport=self._transport, timeout=timeout) as client:
+                with client.stream(
+                    "POST",
+                    self._endpoint,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                ) as response:
+                    status_code = response.status_code
+                    retry_after = response.headers.get("Retry-After", "")
+                    if status_code >= 400:
+                        return "ok", status_code, retry_after, b""
+                    chunks: list[bytes] = []
+                    total = 0
+                    for chunk in response.iter_bytes():
+                        total += len(chunk)
+                        if total > self._max_response_bytes:
+                            return "oversized", status_code, retry_after, b""
+                        chunks.append(chunk)
+                    return "ok", status_code, retry_after, b"".join(chunks)
+        except httpx.TimeoutException:
+            return "timeout", 0, "", b""
+        except httpx.TransportError:
+            return "network", 0, "", b""
+
+    @staticmethod
+    def _parse_json_bytes(raw_body: bytes) -> Any:
+        try:
+            return json.loads(raw_body)
+        except (ValueError, UnicodeError, RecursionError):
+            return _PARSE_FAILED
+
+    @staticmethod
+    def _parse_json_text(content: str) -> Any:
+        try:
+            return json.loads(content)
+        except (ValueError, UnicodeError, RecursionError):
+            return _PARSE_FAILED
 
     @staticmethod
     def _request_from_execution(*, prompt: str, schema: dict, execution) -> ProviderRequest:
@@ -140,15 +179,17 @@ class DeepSeekProvider:
         }
 
     @staticmethod
-    def _raise_for_status(response: httpx.Response) -> None:
-        status = response.status_code
+    def _raise_for_status(status: int, *, retry_after: str) -> None:
         if status in {401, 403}:
             raise ProviderAuthenticationError("AI provider rejected the credential.")
         if status == 402:
             raise ProviderBalanceError("AI provider balance is insufficient.")
         if status == 429:
-            retry_after = response.headers.get("Retry-After", "")
-            seconds = int(retry_after) if retry_after.isdigit() else None
+            seconds = None
+            if len(retry_after) <= 10 and retry_after.isascii() and retry_after.isdigit():
+                candidate = int(retry_after)
+                if candidate <= 86_400:
+                    seconds = candidate
             raise ProviderRateLimitError(retry_after_seconds=seconds)
         if status >= 500:
             raise ProviderUnavailableError("AI provider is temporarily unavailable.")
@@ -180,20 +221,17 @@ class DeepSeekProvider:
             raise ProviderInvalidOutputError("AI provider output contained secret material.")
         if len(content.encode("utf-8")) > self._max_response_bytes:
             raise ProviderInvalidOutputError("AI provider output exceeded the size limit.")
-        try:
-            output = json.loads(content)
-        except (ValueError, UnicodeError):
-            raise ProviderInvalidOutputError("AI provider returned invalid JSON.") from None
+        output = self._parse_json_text(content)
+        if output is _PARSE_FAILED:
+            raise ProviderInvalidOutputError("AI provider returned invalid JSON.")
         if not isinstance(output, dict) or self._json_depth(output) > self._max_json_depth:
             raise ProviderInvalidOutputError("AI provider output structure is invalid.")
-        try:
-            validator_class = validator_for(request.schema)
-            validator_class.check_schema(request.schema)
-        except Exception:
+        validator_class, schema_valid = self._validator_for(request.schema)
+        if not schema_valid:
             raise ProviderInvalidOutputError("AI provider output schema is invalid.") from None
-        try:
-            validator_class(request.schema).validate(output)
-        except JSONSchemaValidationError:
+        if not self._matches_schema(
+            validator_class, schema=request.schema, output=output
+        ):
             raise ProviderInvalidOutputError("AI provider output did not match the schema.") from None
 
         usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
@@ -222,6 +260,23 @@ class DeepSeekProvider:
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0
             else 0
         )
+
+    @staticmethod
+    def _validator_for(schema: dict) -> tuple[Any, bool]:
+        try:
+            validator_class = validator_for(schema)
+            validator_class.check_schema(schema)
+            return validator_class, True
+        except Exception:
+            return None, False
+
+    @staticmethod
+    def _matches_schema(validator_class: Any, *, schema: dict, output: dict) -> bool:
+        try:
+            validator_class(schema).validate(output)
+            return True
+        except JSONSchemaValidationError:
+            return False
 
     @staticmethod
     def _json_depth(value: Any) -> int:

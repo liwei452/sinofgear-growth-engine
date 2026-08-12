@@ -105,6 +105,31 @@ def safe_response(request, payload=None, *, status=200, headers=None):
     )
 
 
+def assert_exception_isolated(error, *forbidden):
+    """Check the whole attached exception graph, not only rendered messages."""
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    pending = [error]
+    seen = set()
+    rendered = []
+    while pending:
+        value = pending.pop()
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        rendered.append(repr(value))
+        if isinstance(value, dict):
+            pending.extend(value.keys())
+            pending.extend(value.values())
+        elif isinstance(value, (list, tuple, set)):
+            pending.extend(value)
+        elif hasattr(value, "__dict__"):
+            pending.extend(vars(value).values())
+    snapshot = " ".join(rendered)
+    for secret in forbidden:
+        assert secret not in snapshot
+
+
 def test_flash_request_disables_thinking_and_requests_json():
     captured = {}
 
@@ -210,11 +235,26 @@ def test_rate_limit_exposes_only_numeric_retry_after():
 )
 def test_transport_failures_are_controlled(transport_error, error_type):
     def handler(request):
+        transport_error.request = request
         raise transport_error
 
     with pytest.raises(error_type) as captured:
         provider_for(handler).generate(prompt="p", schema=SCHEMA, execution=execution())
-    assert "secret" not in f"{captured.value!s} {captured.value!r}"
+    assert_exception_isolated(captured.value, SECRET, f"Bearer {SECRET}", "secret")
+
+
+def test_stream_failure_is_controlled_without_retaining_authorization():
+    class FailingStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'{"id":"partial"'
+            raise httpx.ReadError("stream diagnostic with secret")
+
+    def handler(request):
+        return httpx.Response(200, stream=FailingStream(), request=request)
+
+    with pytest.raises(ProviderNetworkError) as captured:
+        provider_for(handler).generate(prompt="p", schema=SCHEMA, execution=execution())
+    assert_exception_isolated(captured.value, SECRET, f"Bearer {SECRET}", "secret")
 
 
 @pytest.mark.parametrize(
@@ -250,6 +290,86 @@ def test_oversized_response_is_rejected_without_exposing_body():
             prompt="p", schema=SCHEMA, execution=execution()
         )
     assert private not in repr(captured.value)
+
+
+def test_oversized_stream_stops_reading_at_the_cap():
+    read_chunks = []
+
+    class CountingStream(httpx.SyncByteStream):
+        def __iter__(self):
+            for index in range(100):
+                read_chunks.append(index)
+                yield b"x" * 32
+
+    def handler(request):
+        return httpx.Response(200, stream=CountingStream(), request=request)
+
+    with pytest.raises(ProviderInvalidOutputError) as captured:
+        provider_for(handler, max_response_bytes=64).generate(
+            prompt="p", schema=SCHEMA, execution=execution()
+        )
+    assert len(read_chunks) == 3
+    assert_exception_isolated(captured.value, SECRET, f"Bearer {SECRET}")
+
+
+def test_invalid_outer_json_does_not_retain_raw_decoder_document():
+    private = "private-outer-response"
+
+    def handler(request):
+        return httpx.Response(200, content=("{" + private).encode(), request=request)
+
+    with pytest.raises(ProviderInvalidOutputError) as captured:
+        provider_for(handler).generate(prompt="p", schema=SCHEMA, execution=execution())
+    assert_exception_isolated(captured.value, private, SECRET)
+
+
+def test_invalid_content_json_does_not_retain_raw_decoder_document():
+    private = "private-content-response"
+
+    def handler(request):
+        return safe_response(request, response_payload(content="{" + private))
+
+    with pytest.raises(ProviderInvalidOutputError) as captured:
+        provider_for(handler).generate(prompt="p", schema=SCHEMA, execution=execution())
+    assert_exception_isolated(captured.value, private, SECRET)
+
+
+def test_schema_mismatch_does_not_retain_private_output_in_validator_error():
+    private = "private-schema-mismatch"
+
+    def handler(request):
+        return safe_response(
+            request, response_payload(content=json.dumps({"wrong": private}))
+        )
+
+    with pytest.raises(ProviderInvalidOutputError) as captured:
+        provider_for(handler).generate(prompt="p", schema=SCHEMA, execution=execution())
+    assert_exception_isolated(captured.value, private, SECRET)
+
+
+def test_extremely_nested_outer_json_is_a_controlled_error():
+    raw = ("[" * 1100 + "]" * 1100).encode()
+
+    def handler(request):
+        return httpx.Response(200, content=raw, request=request)
+
+    with pytest.raises(ProviderInvalidOutputError) as captured:
+        provider_for(handler).generate(prompt="p", schema=SCHEMA, execution=execution())
+    assert_exception_isolated(captured.value, SECRET, f"Bearer {SECRET}")
+
+
+def test_huge_numeric_retry_after_is_ignored_safely():
+    huge = "9" * 5000
+
+    def handler(request):
+        return httpx.Response(
+            429, headers={"Retry-After": huge}, content=b"private", request=request
+        )
+
+    with pytest.raises(ProviderRateLimitError) as captured:
+        provider_for(handler).generate(prompt="p", schema=SCHEMA, execution=execution())
+    assert captured.value.retry_after_seconds is None
+    assert_exception_isolated(captured.value, huge, SECRET, f"Bearer {SECRET}")
 
 
 def test_excessively_nested_output_is_rejected():

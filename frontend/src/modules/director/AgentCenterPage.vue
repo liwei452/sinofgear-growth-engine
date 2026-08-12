@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { useQuery } from "@tanstack/vue-query"
-import { computed } from "vue"
+import { useQuery, useQueryClient } from "@tanstack/vue-query"
+import { computed, watch } from "vue"
 import { RouterLink } from "vue-router"
 
 import AppIcon, { type AppIconName } from "../../shared/components/AppIcon.vue"
@@ -9,7 +9,7 @@ import { getChannelSummary, analyticsKeys } from "../analytics/api"
 import { currentUserQueryOptions } from "../auth/auth"
 import { directorKeys, getCockpit } from "./api"
 
-type Readiness = "可用" | "需要配置" | "后续批次接入" | "正在核对"
+type Readiness = "可用" | "需要配置" | "后续批次接入" | "正在核对" | "无权核对" | "暂时无法核对"
 type AgentCard = {
   name: string
   responsibility: string
@@ -21,6 +21,7 @@ type AgentCard = {
 }
 
 const currentUser = useQuery(currentUserQueryOptions())
+const queryClient = useQueryClient()
 const organizationId = computed(() => currentUser.data.value?.organization.id ?? "")
 const permissions = computed(() => currentUser.data.value?.membership.permissions ?? [])
 const has = (permission: string) => permissions.value.includes(permission)
@@ -47,6 +48,19 @@ const analytics = useQuery(computed(() => ({
 const aiConnected = computed(() => aiConfiguration.isSuccess.value
   && aiConfiguration.data.value?.connection_state === "CONNECTED")
 
+watch(canReadDirector, (allowed, wasAllowed) => {
+  if (wasAllowed && !allowed && organizationId.value) {
+    queryClient.cancelQueries({ queryKey: directorKeys.all(organizationId.value) })
+    queryClient.removeQueries({ queryKey: directorKeys.all(organizationId.value) })
+  }
+})
+watch(canReadAnalytics, (allowed, wasAllowed) => {
+  if (wasAllowed && !allowed && organizationId.value) {
+    queryClient.cancelQueries({ queryKey: analyticsKeys.all(organizationId.value) })
+    queryClient.removeQueries({ queryKey: analyticsKeys.all(organizationId.value) })
+  }
+})
+
 function permissionReady(required: string[]): boolean {
   return required.every(has)
 }
@@ -55,27 +69,33 @@ const cards = computed<AgentCard[]>(() => {
   const directorPending = cockpit.isPending.value && canReadDirector.value
   const aiPending = aiConfiguration.isPending.value && canManageCredentials.value
   const analyticsPending = analytics.isPending.value && canReadAnalytics.value
-  const contentPermissions = permissionReady(["content.read", "campaigns.read"])
-  const leadPermissions = permissionReady(["leads.read", "sources.manage"])
-  const analyticsHasRecords = analytics.isSuccess.value && (analytics.data.value?.count ?? 0) > 0
+  const contentPermissions = permissionReady(["content.read", "content.manage", "campaigns.read", "campaigns.manage"])
+  const leadPermissions = permissionReady(["sources.read", "sources.manage", "leads.read", "leads.analyze"])
+  const analyticsHasRecords = canReadAnalytics.value && analytics.isSuccess.value && (analytics.data.value?.count ?? 0) > 0
+  const aiReadiness: Readiness = !canManageCredentials.value ? "无权核对"
+    : aiPending ? "正在核对" : aiConfiguration.isError.value ? "暂时无法核对"
+      : aiConnected.value ? "可用" : "需要配置"
+  const aiDetail = !canManageCredentials.value ? "请联系管理员确认 DeepSeek 连接状态。"
+    : aiConfiguration.isError.value ? "DeepSeek 状态暂时无法读取，请稍后重试。"
+      : aiConnected.value ? "DeepSeek 连接已确认。" : "DeepSeek 尚未连接，需要管理员完成配置。"
   return [
     {
       name: "Growth Director", responsibility: "汇总今天需要人工决定的事项，并保留审批边界。",
-      readiness: directorPending ? "正在核对" : cockpit.isSuccess.value ? "可用" : "需要配置",
-      detail: cockpit.isSuccess.value ? "驾驶舱接口已可读取。" : "需要可读取的驾驶舱接口和权限。",
+      readiness: !canReadDirector.value ? "无权核对" : directorPending ? "正在核对" : cockpit.isError.value ? "暂时无法核对" : cockpit.isSuccess.value ? "可用" : "需要配置",
+      detail: !canReadDirector.value ? "当前账号无权读取驾驶舱，请联系管理员。" : cockpit.isError.value ? "驾驶舱状态暂时无法读取，请稍后重试。" : cockpit.isSuccess.value ? "驾驶舱接口已可读取。" : "驾驶舱尚未准备好。",
       action: "查看今天", to: "/", icon: "sparkles",
     },
     {
       name: "Content Agent", responsibility: "根据已确认的产品资料辅助生成推广内容。",
-      readiness: aiPending ? "正在核对" : aiConnected.value && contentPermissions ? "可用" : "需要配置",
-      detail: aiConnected.value && contentPermissions ? "DeepSeek 与内容读取能力均已就绪。" : "需要连接 DeepSeek 并授予内容读取权限。",
+      readiness: aiReadiness !== "可用" ? aiReadiness : contentPermissions ? "可用" : "需要配置",
+      detail: aiReadiness !== "可用" ? aiDetail : contentPermissions ? "DeepSeek 与内容生成权限均已就绪。" : "需要 content.manage、campaigns.manage 及相应读取权限。",
       action: canManageCredentials.value && !aiConnected.value ? "配置 DeepSeek" : "查看内容工作区",
       to: canManageCredentials.value && !aiConnected.value ? "/ai-settings" : "/content-factory", icon: "document",
     },
     {
       name: "Lead Agent", responsibility: "分析公开来源与客户信号，帮助筛选值得关注的机会。",
-      readiness: aiPending ? "正在核对" : aiConnected.value && leadPermissions ? "可用" : "需要配置",
-      detail: aiConnected.value && leadPermissions ? "DeepSeek、客户与来源权限均已就绪。" : "需要连接 DeepSeek 并授予客户及来源权限。",
+      readiness: aiReadiness !== "可用" ? aiReadiness : leadPermissions ? "可用" : "需要配置",
+      detail: aiReadiness !== "可用" ? aiDetail : leadPermissions ? "DeepSeek、客户分析与来源权限均已就绪。" : "需要 leads.analyze、leads.read、sources.read 和 sources.manage 权限。",
       action: "查看客户机会", to: "/lead-radar", icon: "users",
     },
     {
@@ -85,8 +105,8 @@ const cards = computed<AgentCard[]>(() => {
     },
     {
       name: "Analytics Agent", responsibility: "基于真实跟踪记录解释推广效果并提出后续建议。",
-      readiness: analyticsPending ? "正在核对" : canReadAnalytics.value && analyticsHasRecords ? "可用" : "需要配置",
-      detail: analyticsHasRecords ? "已找到可用于分析的真实效果记录。" : "还没有可确认的效果记录，或当前账号无读取权限。",
+      readiness: !canReadAnalytics.value ? "无权核对" : analyticsPending ? "正在核对" : analytics.isError.value ? "暂时无法核对" : analyticsHasRecords ? "可用" : "需要配置",
+      detail: !canReadAnalytics.value ? "当前账号无权读取效果记录，请联系管理员。" : analytics.isError.value ? "效果记录暂时无法读取，请稍后重试。" : analyticsHasRecords ? "已找到可用于分析的真实效果记录。" : "还没有可确认的效果记录。",
       action: "查看效果", to: "/analytics", icon: "chart",
     },
   ]

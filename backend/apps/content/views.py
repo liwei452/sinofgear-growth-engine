@@ -11,7 +11,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.ai.models import PromptVersion
-from apps.ai.routing import create_execution_intent, route_ai_work, routing_snapshot
+from apps.ai.orchestration import _render_prompt
+from apps.ai.routing import (
+    build_provider_input,
+    create_execution_intent,
+    route_ai_work,
+    routing_snapshot,
+)
 from apps.campaigns.models import ContentBrief, ContentBriefPlatform
 from apps.campaigns.services import build_content_generation_input
 from apps.common.openapi import bounded_integer_query_parameter
@@ -357,6 +363,18 @@ class GenerateMasterView(APIView):
                         actor=request.user,
                     )
                     snapshot = {**snapshot, "ai_routing": routing_snapshot(decision)}
+                    rendered = _render_prompt(prompt.template, snapshot)
+                    decision = route_ai_work(
+                        job_type=Job.Type.CONTENT_GENERATE,
+                        snapshot=snapshot,
+                        administrator_override=enhanced,
+                        actor=request.user,
+                        provider_input=build_provider_input(
+                            prompt=rendered,
+                            schema=prompt.output_schema,
+                            snapshot=snapshot,
+                        ),
+                    )
                 job = JobService.create(
                     organization=request.organization,
                     job_type=Job.Type.CONTENT_GENERATE,

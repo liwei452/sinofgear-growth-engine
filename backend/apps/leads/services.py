@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import re
 from contextlib import nullcontext
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -853,6 +854,40 @@ class LeadService:
 
 class LeadAnalysisService:
     @staticmethod
+    def _refresh_snapshot_digest(snapshot):
+        snapshot = dict(snapshot)
+        snapshot.pop("integrity_sha256", None)
+        encoded = json.dumps(
+            snapshot, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        snapshot["integrity_sha256"] = hashlib.sha256(encoded).hexdigest()
+        return snapshot
+
+    @staticmethod
+    def _routing_signals(*, candidate, snapshot) -> dict[str, object]:
+        codes = []
+        quantities = set()
+        conflict_language = False
+        for row in snapshot.get("evidence", []):
+            text = row.get("original_text", "") if isinstance(row, dict) else ""
+            lowered = text.lower()
+            quantities.update(re.findall(r"\b\d+(?:\.\d+)?\s*(?:pcs|pieces|units)\b", lowered))
+            conflict_language = conflict_language or any(
+                marker in lowered
+                for marker in ("correction:", "instead of", "not ", "actually ", "rather than")
+            )
+        if len(quantities) > 1 and conflict_language:
+            codes.append("CONFLICTING_QUANTITIES")
+        latest = candidate.latest_insight
+        if latest is not None and min(
+            latest.evidence_confidence,
+            latest.company_match_confidence,
+            latest.ai_confidence,
+        ) < Decimal("0.6500"):
+            codes.append("LOW_TRUSTED_CONFIDENCE")
+        return {"codes": sorted(codes), "policy_version": 1}
+
+    @staticmethod
     def _matches_existing(
         job, binding, *, candidate_id, evidence_ids, expected_version,
         administrator_override,
@@ -930,9 +965,17 @@ class LeadAnalysisService:
             evidence_ids=requested_ids,
             actor=actor,
         )
+        snapshot = {
+            **snapshot,
+            "routing_signals": LeadAnalysisService._routing_signals(
+                candidate=locked, snapshot=snapshot
+            ),
+        }
+        snapshot = LeadAnalysisService._refresh_snapshot_digest(snapshot)
         decision = None
         if prompt.provider == "deepseek":
-            from apps.ai.routing import route_ai_work, routing_snapshot
+            from apps.ai.routing import build_provider_input, route_ai_work, routing_snapshot
+            from .orchestration import _render_lead_prompt
 
             decision = route_ai_work(
                 job_type=Job.Type.LEAD_ANALYZE,
@@ -941,6 +984,18 @@ class LeadAnalysisService:
                 actor=actor,
             )
             snapshot = {**snapshot, "ai_routing": routing_snapshot(decision)}
+            snapshot = LeadAnalysisService._refresh_snapshot_digest(snapshot)
+            decision = route_ai_work(
+                job_type=Job.Type.LEAD_ANALYZE,
+                snapshot=snapshot,
+                administrator_override=administrator_override,
+                actor=actor,
+                provider_input=build_provider_input(
+                    prompt=_render_lead_prompt(prompt.template, snapshot),
+                    schema=prompt.output_schema,
+                    snapshot=snapshot,
+                ),
+            )
         try:
             job = JobService.create(
                 organization=organization,

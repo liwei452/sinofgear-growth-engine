@@ -6,7 +6,14 @@ from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 from django.utils import timezone
 
-from apps.ai.budget import BudgetExceeded, reconcile_usage, reserve_budget
+from apps.ai.budget import (
+    PRICING_CODE,
+    PRICING_VERSION,
+    BudgetExceeded,
+    calculate_actual_cost,
+    reconcile_usage,
+    reserve_budget,
+)
 from apps.ai.models import (
     AIRun,
     AIProviderConfiguration,
@@ -135,9 +142,12 @@ def test_reconcile_success_failure_and_precall_cancel_are_once_only():
     reconcile_usage(success, {"cost_usd": "9.99"}, AIUsageAttempt.Status.SUCCEEDED)
     success.refresh_from_db()
     day = AIUsageDay.objects.get(organization=organization)
-    assert success.actual_usd == Decimal("0.001200")
+    assert success.actual_usd == calculate_actual_cost(
+        model=intent.model,
+        metadata={"input_tokens": 100, "output_tokens": 20, "cache_hit_tokens": 5},
+    )
     assert day.reserved_usd == 0
-    assert day.actual_usd == Decimal("0.001200")
+    assert day.actual_usd == success.actual_usd
 
     for suffix, status, expected in (
         ("failed", AIUsageAttempt.Status.FAILED, intent.reserved_cost_usd),
@@ -172,10 +182,50 @@ def test_negative_usage_and_database_negative_ledgers_are_rejected():
     organization, intent, run = _context()
     attempt = reserve_budget(intent, run)
     with pytest.raises(ValueError):
-        reconcile_usage(attempt, {"cost_usd": "-0.01"}, AIUsageAttempt.Status.SUCCEEDED)
+        reconcile_usage(attempt, {"input_tokens": -1}, AIUsageAttempt.Status.SUCCEEDED)
     with pytest.raises(IntegrityError):
         AIUsageDay.objects.create(
             organization=organization,
             usage_date=datetime.now(UTC).date(),
             reserved_usd=Decimal("-1"),
         )
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("deepseek-v4-flash", Decimal("0.000029")),
+        ("deepseek-v4-pro", Decimal("0.000116")),
+    ],
+)
+def test_versioned_model_and_cache_aware_actual_pricing(model, expected):
+    metadata = {"input_tokens": 100, "output_tokens": 10, "cache_hit_tokens": 20}
+    assert calculate_actual_cost(model=model, metadata=metadata) == expected
+    assert (PRICING_CODE, PRICING_VERSION) == ("deepseek-v4-pricing", 1)
+
+
+def test_actual_pricing_fails_safe_on_missing_or_invalid_counts():
+    with pytest.raises(ValueError, match="incomplete"):
+        calculate_actual_cost(
+            model="deepseek-v4-flash",
+            metadata={"input_tokens": 1, "output_tokens": 1},
+        )
+    with pytest.raises(ValueError, match="cannot exceed"):
+        calculate_actual_cost(
+            model="deepseek-v4-flash",
+            metadata={"input_tokens": 1, "output_tokens": 1, "cache_hit_tokens": 2},
+        )
+
+
+@pytest.mark.django_db
+def test_success_reconcile_calculates_provider_metadata_cost_and_is_idempotent():
+    _organization, intent, run = _context()
+    attempt = reserve_budget(intent, run)
+    metadata = {"input_tokens": 100, "output_tokens": 10, "cache_hit_tokens": 20}
+
+    reconcile_usage(attempt, metadata, AIUsageAttempt.Status.SUCCEEDED)
+    reconcile_usage(attempt, metadata, AIUsageAttempt.Status.SUCCEEDED)
+
+    attempt.refresh_from_db()
+    assert attempt.actual_usd == calculate_actual_cost(model=intent.model, metadata=metadata)
+    assert (attempt.pricing_code, attempt.pricing_version) == (PRICING_CODE, PRICING_VERSION)

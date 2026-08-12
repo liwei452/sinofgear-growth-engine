@@ -12,6 +12,17 @@ from .models import AIProviderConfiguration, AIUsageAttempt, AIUsageDay
 
 
 _MONEY_QUANTUM = Decimal("0.000001")
+PRICING_CODE = "deepseek-v4-pricing"
+PRICING_VERSION = 1
+# Versioned USD / one million tokens. Cache-hit input is priced separately.
+_PRICING = {
+    "deepseek-v4-flash": {
+        "input": Decimal("0.10"), "cache": Decimal("0.05"), "output": Decimal("2.00"),
+    },
+    "deepseek-v4-pro": {
+        "input": Decimal("0.40"), "cache": Decimal("0.20"), "output": Decimal("8.00"),
+    },
+}
 
 
 class BudgetExceeded(RuntimeError):
@@ -33,6 +44,27 @@ def _token_count(metadata, field):
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{field} must be a non-negative integer.")
     return value
+
+
+def calculate_actual_cost(*, model: str, metadata: dict) -> Decimal:
+    prices = _PRICING.get(model)
+    if prices is None or not isinstance(metadata, dict):
+        raise ValueError("Provider usage pricing is unavailable.")
+    required = {"input_tokens", "output_tokens", "cache_hit_tokens"}
+    if not required <= metadata.keys():
+        raise ValueError("Provider usage counts are incomplete.")
+    input_tokens = _token_count(metadata, "input_tokens")
+    output_tokens = _token_count(metadata, "output_tokens")
+    cache_tokens = _token_count(metadata, "cache_hit_tokens")
+    if cache_tokens > input_tokens:
+        raise ValueError("cache_hit_tokens cannot exceed input_tokens.")
+    uncached = input_tokens - cache_tokens
+    cost = (
+        Decimal(uncached) * prices["input"]
+        + Decimal(cache_tokens) * prices["cache"]
+        + Decimal(output_tokens) * prices["output"]
+    ) / Decimal(1_000_000)
+    return cost.quantize(_MONEY_QUANTUM, rounding=ROUND_UP)
 
 
 @transaction.atomic
@@ -99,8 +131,8 @@ def reconcile_usage(attempt, metadata, status) -> None:
     metadata = metadata if isinstance(metadata, dict) else {}
     if status == AIUsageAttempt.Status.CANCELED:
         actual = Decimal("0")
-    elif "cost_usd" in metadata:
-        actual = _nonnegative_decimal(metadata["cost_usd"], field="cost_usd")
+    elif status == AIUsageAttempt.Status.SUCCEEDED:
+        actual = calculate_actual_cost(model=locked.intent.model, metadata=metadata)
     else:
         # A failed/ambiguous paid call keeps its conservative reservation as
         # actual usage unless the provider reports a lower known amount.
@@ -118,10 +150,12 @@ def reconcile_usage(attempt, metadata, status) -> None:
     locked.input_tokens = input_tokens
     locked.output_tokens = output_tokens
     locked.cache_hit_tokens = cache_hit_tokens
+    locked.pricing_code = PRICING_CODE
+    locked.pricing_version = PRICING_VERSION
     locked.reconciled_at = timezone.now()
     locked.save(
         update_fields=[
             "status", "actual_usd", "input_tokens", "output_tokens",
-            "cache_hit_tokens", "reconciled_at",
+            "cache_hit_tokens", "pricing_code", "pricing_version", "reconciled_at",
         ]
     )

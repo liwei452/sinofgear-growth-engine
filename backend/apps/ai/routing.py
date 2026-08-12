@@ -22,6 +22,32 @@ _PRO_MODEL = "deepseek-v4-pro"
 _INPUT_USD_PER_MILLION = { _FLASH_MODEL: Decimal("0.50"), _PRO_MODEL: Decimal("2.00") }
 _OUTPUT_USD_PER_MILLION = { _FLASH_MODEL: Decimal("2.00"), _PRO_MODEL: Decimal("8.00") }
 _MONEY_QUANTUM = Decimal("0.000001")
+MAX_PROVIDER_INPUT_BYTES = 1_000_000
+
+
+class InputBudgetExceeded(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class ProviderInputBudget:
+    utf8_bytes: int
+
+
+def build_provider_input(*, prompt: str, schema: dict, snapshot: dict) -> ProviderInputBudget:
+    """Measure every bounded component that will be sent to the provider."""
+    if not isinstance(prompt, str) or not isinstance(schema, dict) or not isinstance(snapshot, dict):
+        raise InputBudgetExceeded("Provider input components are invalid.")
+    schema_text = json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    snapshot_text = json.dumps(
+        snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    # The transport includes the schema in its system message. Snapshot is
+    # measured independently as a conservative bound even when already rendered.
+    size = sum(len(value.encode("utf-8")) for value in (prompt, schema_text, snapshot_text))
+    if size > MAX_PROVIDER_INPUT_BYTES:
+        raise InputBudgetExceeded("Provider input exceeds the size limit.")
+    return ProviderInputBudget(utf8_bytes=max(1, size))
 
 
 @dataclass(frozen=True)
@@ -62,17 +88,17 @@ def _can_override(*, actor) -> bool:
 
 
 def _is_complex_lead(snapshot: dict) -> bool:
-    if snapshot.get("conflicting_evidence") is True or snapshot.get("ambiguous") is True:
+    signals = snapshot.get("routing_signals")
+    if (
+        isinstance(signals, dict)
+        and signals.get("policy_version") == 1
+        and any(
+            code in {"CONFLICTING_QUANTITIES", "LOW_TRUSTED_CONFIDENCE", "DOMAIN_AMBIGUITY"}
+            for code in signals.get("codes", [])
+        )
+    ):
         return True
-    confidence = snapshot.get("confidence")
-    if isinstance(confidence, (int, float, Decimal)) and not isinstance(confidence, bool):
-        return Decimal(str(confidence)) < Decimal("0.65")
-    evidence = snapshot.get("evidence", [])
-    return isinstance(evidence, list) and any(
-        isinstance(row, dict)
-        and (row.get("conflicting") is True or row.get("ambiguous") is True)
-        for row in evidence
-    )
+    return False
 
 
 def _estimated_tokens(snapshot: dict) -> int:
@@ -93,6 +119,7 @@ def _reserved_cost(model: str, input_tokens: int, output_tokens: int) -> Decimal
 
 def route_ai_work(
     *, job_type, snapshot, administrator_override=False, actor=None,
+    provider_input=None,
 ) -> RoutingDecision:
     organization_id = _organization_id(snapshot)
     try:
@@ -118,7 +145,11 @@ def route_ai_work(
         configuration.pro_max_output_tokens
         if complex_route else configuration.flash_max_output_tokens
     )
-    estimated_input_tokens = _estimated_tokens(snapshot)
+    estimated_input_tokens = (
+        provider_input.utf8_bytes
+        if isinstance(provider_input, ProviderInputBudget)
+        else _estimated_tokens(snapshot)
+    )
     return RoutingDecision(
         organization_id=configuration.organization_id,
         provider="deepseek",
@@ -174,6 +205,4 @@ def routing_snapshot(decision: RoutingDecision) -> dict[str, object]:
         "override_reason": decision.override_reason,
         "max_output_tokens": decision.max_output_tokens,
         "timeout_seconds": decision.timeout_seconds,
-        "estimated_input_tokens": decision.estimated_input_tokens,
-        "reserved_cost_usd": str(decision.reserved_cost_usd),
     }

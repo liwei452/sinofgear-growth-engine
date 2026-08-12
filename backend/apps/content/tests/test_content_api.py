@@ -299,10 +299,15 @@ def test_generate_admin_freezes_intent_with_job_transactionally(
     )
     PromptVersionService.create(
         purpose="CONTENT_GENERATE", code="deepseek-content", provider="deepseek",
-        model="deepseek-v4-flash", template="{input_json}",
+        model="deepseek-v4-flash", template="Promote {product_name}",
         output_schema={"type": "object"}, status=PromptVersion.Status.PUBLISHED,
     )
-    snapshot = {"organization_id": str(organization.id), "brief_id": str(brief.id)}
+    snapshot = {
+        "organization_id": str(organization.id),
+        "brief_id": str(brief.id),
+        "products": [{"name_en": "Helical gear"}],
+        "ontology_snapshot": {"concept_versions": []},
+    }
     monkeypatch.setattr(
         "apps.content.views.build_content_generation_input",
         lambda _brief_id: type("Snapshot", (), {"to_dict": lambda self: snapshot})(),
@@ -323,4 +328,5 @@ def test_generate_admin_freezes_intent_with_job_transactionally(
     assert (intent.model, intent.thinking_enabled) == ("deepseek-v4-pro", True)
     assert intent.job.input_snapshot["ai_routing"]["policy_code"] == "deepseek-routing-v1"
     assert intent.job.input_snapshot["ai_routing"]["model"] == intent.model
+    assert intent.estimated_input_tokens > len("Promote Helical gear".encode("utf-8"))
     assert dispatched

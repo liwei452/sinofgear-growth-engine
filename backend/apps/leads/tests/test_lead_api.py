@@ -375,6 +375,90 @@ def test_operator_cannot_inject_model_or_request_enhanced_analysis(candidate, ev
     assert model.status_code == enhanced.status_code == 400
 
 
+def test_deepseek_schedule_routes_persisted_conflicting_requirements_to_pro(
+    candidate, evidence, approved_requirement, approved_capability,
+    monkeypatch, django_capture_on_commit_callbacks,
+):
+    del approved_requirement, approved_capability
+    from apps.ai.models import AIExecutionIntent, AIProviderConfiguration
+
+    user, client = _operator(candidate.organization)
+    # Configuration is trusted persisted server state; the operator cannot alter it.
+    AIProviderConfiguration.objects.create(
+        organization=candidate.organization,
+        connection_state="CONNECTED",
+        key_suffix="safe",
+    )
+    PromptVersionService.create(
+        purpose="LEAD_ANALYZE", code="lead-deepseek-routing", provider="deepseek",
+        model="deepseek-v4-flash", template="{input_json}",
+        output_schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
+        status=PromptVersion.Status.PUBLISHED, created_by=user,
+    )
+    # Persisted evidence contains two incompatible quantities for the same need.
+    from apps.sources.models import evidence_service_writes
+    with evidence_service_writes():
+        evidence.original_text = "Need 200 pcs helical gears, correction: need 500 pcs helical gears."
+        evidence.save(update_fields=["original_text", "updated_at"])
+    monkeypatch.setattr("apps.leads.tasks.execute_lead_analysis.delay", lambda *_: None)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        response = client.post(
+            f"/api/v1/lead-candidates/{candidate.id}/analyze",
+            {
+                "expected_version": candidate.version,
+                "evidence_ids": [str(evidence.id)],
+                "idempotency_key": "trusted-conflicting-requirements",
+            },
+            format="json",
+        )
+
+    assert response.status_code == 202
+    intent = AIExecutionIntent.objects.get(job_id=response.json()["job_id"])
+    assert intent.model == "deepseek-v4-pro"
+    assert intent.job.input_snapshot["routing_signals"] == {
+        "codes": ["CONFLICTING_QUANTITIES"],
+        "policy_version": 1,
+    }
+
+
+def test_deepseek_schedule_routes_ordinary_persisted_evidence_to_flash(
+    candidate, evidence, approved_requirement, approved_capability,
+    monkeypatch, django_capture_on_commit_callbacks,
+):
+    del approved_requirement, approved_capability
+    from apps.ai.models import AIExecutionIntent, AIProviderConfiguration
+
+    user, client = _operator(candidate.organization, username="lead-flash-operator")
+    AIProviderConfiguration.objects.create(
+        organization=candidate.organization,
+        connection_state="CONNECTED",
+        key_suffix="safe",
+    )
+    PromptVersionService.create(
+        purpose="LEAD_ANALYZE", code="lead-deepseek-flash", provider="deepseek",
+        model="deepseek-v4-flash", template="{input_json}",
+        output_schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
+        status=PromptVersion.Status.PUBLISHED, created_by=user,
+    )
+    monkeypatch.setattr("apps.leads.tasks.execute_lead_analysis.delay", lambda *_: None)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        response = client.post(
+            f"/api/v1/lead-candidates/{candidate.id}/analyze",
+            {
+                "expected_version": candidate.version,
+                "evidence_ids": [str(evidence.id)],
+                "idempotency_key": "trusted-routine-evidence",
+            }, format="json",
+        )
+
+    assert response.status_code == 202
+    intent = AIExecutionIntent.objects.get(job_id=response.json()["job_id"])
+    assert (intent.model, intent.thinking_enabled) == ("deepseek-v4-flash", False)
+    assert intent.job.input_snapshot["routing_signals"]["codes"] == []
+
+
 def test_reviewer_correction_api_returns_append_only_versions(
     candidate, evidence, ai_run, insight_payload
 ):

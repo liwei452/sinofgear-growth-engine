@@ -323,6 +323,8 @@ class AIUsageAttempt(models.Model):
     input_tokens = models.PositiveIntegerField(default=0)
     output_tokens = models.PositiveIntegerField(default=0)
     cache_hit_tokens = models.PositiveIntegerField(default=0)
+    pricing_code = models.CharField(max_length=64, blank=True)
+    pricing_version = models.PositiveIntegerField(null=True, blank=True)
     reconciled_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

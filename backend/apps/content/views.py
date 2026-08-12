@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Exists, OuterRef
 from django.http import Http404
 from drf_spectacular.utils import (
@@ -10,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.ai.models import PromptVersion
+from apps.ai.routing import create_execution_intent, route_ai_work, routing_snapshot
 from apps.campaigns.models import ContentBrief, ContentBriefPlatform
 from apps.campaigns.services import build_content_generation_input
 from apps.common.openapi import bounded_integer_query_parameter
@@ -337,14 +339,37 @@ class GenerateMasterView(APIView):
         ).order_by("-version").first()
         if prompt is None:
             return _error(ContentStateError("Published generation prompt is unavailable."))
+        enhanced = serializer.validated_data["enhanced_analysis"]
+        if enhanced and "credentials.manage" not in request.membership.role.permissions:
+            return Response(
+                {"errors": {"enhanced_analysis": ["Administrator approval is required."]}},
+                status=400,
+            )
         snapshot = build_content_generation_input(brief.id).to_dict()
-        job = JobService.create(
-            organization=request.organization,
-            job_type=Job.Type.CONTENT_GENERATE,
-            input_snapshot=snapshot,
-            idempotency_key=f"master:{brief.id}:{brief.version}:{prompt.id}",
-            created_by=request.user,
-        )
+        try:
+            with transaction.atomic():
+                decision = None
+                if prompt.provider == "deepseek":
+                    decision = route_ai_work(
+                        job_type=Job.Type.CONTENT_GENERATE,
+                        snapshot=snapshot,
+                        administrator_override=enhanced,
+                        actor=request.user,
+                    )
+                    snapshot = {**snapshot, "ai_routing": routing_snapshot(decision)}
+                job = JobService.create(
+                    organization=request.organization,
+                    job_type=Job.Type.CONTENT_GENERATE,
+                    input_snapshot=snapshot,
+                    idempotency_key=f"master:{brief.id}:{brief.version}:{prompt.id}:{int(enhanced)}",
+                    created_by=request.user,
+                )
+                if decision is not None:
+                    create_execution_intent(
+                        job=job, decision=decision, created_by=request.user
+                    )
+        except (ValidationError, PermissionDenied) as error:
+            return Response({"errors": {"ai": [str(error)]}}, status=400)
         transaction.on_commit(
             lambda: generate_master_content_job.delay(str(job.id), str(prompt.id))
         )

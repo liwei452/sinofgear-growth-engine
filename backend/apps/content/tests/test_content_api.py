@@ -10,6 +10,8 @@ from apps.content.services import (
     create_master_revision, create_platform_revision,
 )
 from apps.identity.models import Membership, Organization, Role
+from apps.ai.models import AIExecutionIntent, AIProviderConfiguration, PromptVersion
+from apps.ai.services import PromptVersionService
 
 
 def _client(organization, role_code):
@@ -266,3 +268,59 @@ def test_platform_revision_requires_platform_payload_at_serializer(content_prove
 
     assert response.status_code == 400
     assert set(response.json()) == {"errors", "code", "message", "recovery_action"}
+
+
+def test_generate_rejects_model_injection_and_operator_enhanced_analysis(content_provenance):
+    organization, _actor, brief, _job, _run = content_provenance
+    client = _client(organization, Role.Code.OPERATOR)
+
+    model = client.post(
+        f"/api/v1/content-briefs/{brief.id}/generate-master-content",
+        {"model": "deepseek-v4-pro"}, format="json",
+    )
+    enhanced = client.post(
+        f"/api/v1/content-briefs/{brief.id}/generate-master-content",
+        {"enhanced_analysis": True}, format="json",
+    )
+
+    assert model.status_code == enhanced.status_code == 400
+    assert not AIExecutionIntent.objects.filter(organization=organization).exists()
+
+
+def test_generate_admin_freezes_intent_with_job_transactionally(
+    content_provenance, monkeypatch, django_capture_on_commit_callbacks,
+):
+    organization, _actor, brief, _job, _run = content_provenance
+    client = _client(organization, Role.Code.ADMINISTRATOR)
+    AIProviderConfiguration.objects.create(
+        organization=organization,
+        connection_state=AIProviderConfiguration.ConnectionState.CONNECTED,
+        key_suffix="safe",
+    )
+    PromptVersionService.create(
+        purpose="CONTENT_GENERATE", code="deepseek-content", provider="deepseek",
+        model="deepseek-v4-flash", template="{input_json}",
+        output_schema={"type": "object"}, status=PromptVersion.Status.PUBLISHED,
+    )
+    snapshot = {"organization_id": str(organization.id), "brief_id": str(brief.id)}
+    monkeypatch.setattr(
+        "apps.content.views.build_content_generation_input",
+        lambda _brief_id: type("Snapshot", (), {"to_dict": lambda self: snapshot})(),
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        "apps.content.tasks.generate_master_content_job.delay",
+        lambda *args: dispatched.append(args),
+    )
+    with django_capture_on_commit_callbacks(execute=True):
+        response = client.post(
+            f"/api/v1/content-briefs/{brief.id}/generate-master-content",
+            {"enhanced_analysis": True}, format="json",
+        )
+
+    assert response.status_code == 202
+    intent = AIExecutionIntent.objects.get(job_id=response.json()["job_id"])
+    assert (intent.model, intent.thinking_enabled) == ("deepseek-v4-pro", True)
+    assert intent.job.input_snapshot["ai_routing"]["policy_code"] == "deepseek-routing-v1"
+    assert intent.job.input_snapshot["ai_routing"]["model"] == intent.model
+    assert dispatched

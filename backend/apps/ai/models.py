@@ -211,3 +211,140 @@ class AIProviderConfiguration(models.Model):
         active = self.connection_state == self.ConnectionState.CONFIGURING
         if active != bool(self.operation_token and self.operation_started_at):
             raise ValidationError({"operation_token": "Configuring state requires an active operation."})
+
+
+class ImmutableIntentQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError("AI execution intents are immutable.")
+
+    def delete(self):
+        raise ValidationError("AI execution intents cannot be deleted.")
+
+
+class ImmutableIntentManager(models.Manager.from_queryset(ImmutableIntentQuerySet)):
+    pass
+
+
+class AIExecutionIntent(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    job = models.OneToOneField(
+        "jobs.Job", on_delete=models.PROTECT, related_name="ai_execution_intent"
+    )
+    organization = models.ForeignKey(
+        "identity.Organization", on_delete=models.PROTECT, related_name="ai_execution_intents"
+    )
+    provider = models.CharField(max_length=64)
+    model = models.CharField(max_length=128)
+    thinking_enabled = models.BooleanField(default=False)
+    policy_code = models.CharField(max_length=64)
+    policy_version = models.PositiveIntegerField()
+    override_reason = models.CharField(max_length=96, blank=True)
+    max_output_tokens = models.PositiveIntegerField()
+    timeout_seconds = models.PositiveSmallIntegerField()
+    estimated_input_tokens = models.PositiveIntegerField()
+    reserved_cost_usd = models.DecimalField(max_digits=12, decimal_places=6)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="created_ai_execution_intents",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ImmutableIntentManager()
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(reserved_cost_usd__gte=0),
+                name="ai_intent_reserved_cost_nonnegative",
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("AI execution intents are immutable.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("AI execution intents cannot be deleted.")
+
+
+class AIUsageDay(models.Model):
+    organization = models.ForeignKey(
+        "identity.Organization", on_delete=models.PROTECT, related_name="ai_usage_days"
+    )
+    usage_date = models.DateField()
+    reserved_usd = models.DecimalField(max_digits=12, decimal_places=6, default=0)
+    actual_usd = models.DecimalField(max_digits=12, decimal_places=6, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-usage_date", "organization_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "usage_date"], name="ai_unique_usage_day"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(reserved_usd__gte=0),
+                name="ai_usage_day_reserved_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(actual_usd__gte=0),
+                name="ai_usage_day_actual_nonnegative",
+            ),
+        ]
+
+
+class AIUsageAttempt(models.Model):
+    class Status(models.TextChoices):
+        RESERVED = "RESERVED", "Reserved"
+        SUCCEEDED = "SUCCEEDED", "Succeeded"
+        FAILED = "FAILED", "Failed"
+        CANCELED = "CANCELED", "Canceled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    run = models.OneToOneField(
+        AIRun, on_delete=models.PROTECT, related_name="usage_attempt"
+    )
+    intent = models.ForeignKey(
+        AIExecutionIntent, on_delete=models.PROTECT, related_name="usage_attempts"
+    )
+    usage_day = models.ForeignKey(
+        AIUsageDay, on_delete=models.PROTECT, related_name="attempts"
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.RESERVED
+    )
+    reserved_usd = models.DecimalField(max_digits=12, decimal_places=6)
+    actual_usd = models.DecimalField(max_digits=12, decimal_places=6, default=0)
+    input_tokens = models.PositiveIntegerField(default=0)
+    output_tokens = models.PositiveIntegerField(default=0)
+    cache_hit_tokens = models.PositiveIntegerField(default=0)
+    reconciled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(reserved_usd__gte=0),
+                name="ai_usage_attempt_reserved_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(actual_usd__gte=0),
+                name="ai_usage_attempt_actual_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(status="RESERVED", reconciled_at__isnull=True)
+                    | models.Q(
+                        status__in=["SUCCEEDED", "FAILED", "CANCELED"],
+                        reconciled_at__isnull=False,
+                    )
+                ),
+                name="ai_usage_attempt_reconcile_state",
+            ),
+        ]

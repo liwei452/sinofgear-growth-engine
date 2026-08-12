@@ -357,6 +357,24 @@ def test_analyze_rejects_redacted_evidence_without_job_or_lease(
     assert not Job.objects.filter(type=Job.Type.LEAD_ANALYZE).exists()
 
 
+def test_operator_cannot_inject_model_or_request_enhanced_analysis(candidate, evidence):
+    _user, client = _operator(candidate.organization)
+    base = {
+        "expected_version": candidate.version,
+        "evidence_ids": [str(evidence.id)],
+        "idempotency_key": "routing-injection",
+    }
+    model = client.post(
+        f"/api/v1/lead-candidates/{candidate.id}/analyze",
+        {**base, "model": "deepseek-v4-pro"}, format="json",
+    )
+    enhanced = client.post(
+        f"/api/v1/lead-candidates/{candidate.id}/analyze",
+        {**base, "enhanced_analysis": True}, format="json",
+    )
+    assert model.status_code == enhanced.status_code == 400
+
+
 def test_reviewer_correction_api_returns_append_only_versions(
     candidate, evidence, ai_run, insight_payload
 ):

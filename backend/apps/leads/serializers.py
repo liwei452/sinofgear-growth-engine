@@ -89,6 +89,7 @@ class LeadAnalyzeRequestSerializer(StrictFieldsMixin, serializers.Serializer):
     idempotency_key = serializers.CharField(
         max_length=128, allow_blank=False, trim_whitespace=True
     )
+    enhanced_analysis = serializers.BooleanField(required=False, default=False)
 
     def validate_evidence_ids(self, value):
         if len(value) != len(set(value)):

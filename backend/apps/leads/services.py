@@ -853,8 +853,12 @@ class LeadService:
 
 class LeadAnalysisService:
     @staticmethod
-    def _matches_existing(job, binding, *, candidate_id, evidence_ids, expected_version):
+    def _matches_existing(
+        job, binding, *, candidate_id, evidence_ids, expected_version,
+        administrator_override,
+    ):
         snapshot = job.input_snapshot
+        routing = snapshot.get("ai_routing", {}) if isinstance(snapshot, dict) else {}
         return (
             binding is not None
             and str(binding.candidate_id) == str(candidate_id)
@@ -863,12 +867,14 @@ class LeadAnalysisService:
             and snapshot.get("analysis_lease_version") == expected_version + 1
             and sorted(row.get("id") for row in snapshot.get("evidence", []))
             == sorted(str(item) for item in evidence_ids)
+            and bool(routing.get("override_reason")) == bool(administrator_override)
         )
 
     @staticmethod
     @transaction.atomic
     def schedule(
-        *, organization, candidate, evidence_ids, expected_version, idempotency_key, actor
+        *, organization, candidate, evidence_ids, expected_version, idempotency_key, actor,
+        administrator_override=False,
     ):
         from .tasks import execute_lead_analysis
         from apps.identity.services import lock_organization_scope
@@ -899,6 +905,7 @@ class LeadAnalysisService:
                 candidate_id=candidate_id,
                 evidence_ids=requested_ids,
                 expected_version=expected_version,
+                administrator_override=administrator_override,
             ):
                 raise LeadIdempotencyConflictError(
                     "Idempotency key already has a different lead-analysis request."
@@ -923,6 +930,17 @@ class LeadAnalysisService:
             evidence_ids=requested_ids,
             actor=actor,
         )
+        decision = None
+        if prompt.provider == "deepseek":
+            from apps.ai.routing import route_ai_work, routing_snapshot
+
+            decision = route_ai_work(
+                job_type=Job.Type.LEAD_ANALYZE,
+                snapshot=snapshot,
+                administrator_override=administrator_override,
+                actor=actor,
+            )
+            snapshot = {**snapshot, "ai_routing": routing_snapshot(decision)}
         try:
             job = JobService.create(
                 organization=organization,
@@ -937,6 +955,10 @@ class LeadAnalysisService:
             raise LeadIdempotencyConflictError(
                 "Idempotency key already has a different lead-analysis request."
             )
+        if decision is not None:
+            from apps.ai.routing import create_execution_intent
+
+            create_execution_intent(job=job, decision=decision, created_by=actor)
         with lead_history_writes():
             LeadAnalysisBinding.objects.create(
                 organization=organization,

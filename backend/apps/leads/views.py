@@ -293,6 +293,13 @@ class LeadCandidateAnalyzeView(APIView):
         if not serializer.is_valid():
             return _validation_response(serializer.errors)
         values = serializer.validated_data
+        if (
+            values["enhanced_analysis"]
+            and "credentials.manage" not in request.membership.role.permissions
+        ):
+            return _validation_response(
+                {"enhanced_analysis": ["Administrator approval is required."]}
+            )
         _require_organization_evidence(
             request.organization,
             values["evidence_ids"],
@@ -305,6 +312,7 @@ class LeadCandidateAnalyzeView(APIView):
                 expected_version=values["expected_version"],
                 idempotency_key=values["idempotency_key"],
                 actor=request.user,
+                administrator_override=values["enhanced_analysis"],
             )
         except LeadIdempotencyConflictError as error:
             return _conflict(error, code="idempotency_conflict")

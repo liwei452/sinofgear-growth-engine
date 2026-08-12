@@ -94,7 +94,7 @@ class PlatformGenerationSerializer(StrictMixin, serializers.Serializer):
 
 
 class EmptySerializer(StrictMixin, serializers.Serializer):
-    pass
+    enhanced_analysis = serializers.BooleanField(required=False, default=False)
 
 
 class JobAcceptedSerializer(serializers.Serializer):

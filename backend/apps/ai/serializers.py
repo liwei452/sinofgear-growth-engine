@@ -9,7 +9,7 @@ from rest_framework import serializers
 from apps.campaigns.generation_schema import CONTENT_GENERATION_INPUT_SCHEMA
 from apps.common.security import normalize_persisted_error
 
-from .models import AIRun
+from .models import AIRun, AIProviderConfiguration
 
 
 _MAX_AUDIT_DEPTH = 6
@@ -250,3 +250,51 @@ class AIRunFilterSerializer(serializers.Serializer):
 
 class AIRunValidationErrorSerializer(serializers.Serializer):
     errors = serializers.DictField()
+
+
+class StrictSerializerMixin:
+    def to_internal_value(self, data):
+        unknown = set(data) - set(self.fields)
+        if unknown:
+            raise serializers.ValidationError(
+                {name: ["Unknown field."] for name in sorted(unknown)}
+            )
+        return super().to_internal_value(data)
+
+
+class AIProviderConfigurationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AIProviderConfiguration
+        fields = [
+            "provider_code", "connection_state", "key_suffix",
+            "credential_revision", "last_tested_at", "last_tested_by_id",
+            "daily_budget_usd", "flash_max_output_tokens",
+            "pro_max_output_tokens", "timeout_seconds", "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class AIProviderConfigurationWriteSerializer(StrictSerializerMixin, serializers.Serializer):
+    api_key = serializers.RegexField(
+        r"^sk-[A-Za-z0-9_-]{8,508}$", write_only=True, max_length=512,
+        trim_whitespace=True,
+    )
+    daily_budget_usd = serializers.DecimalField(
+        max_digits=10, decimal_places=2, min_value=0, max_value=100000
+    )
+    flash_max_output_tokens = serializers.IntegerField(min_value=64, max_value=65536)
+    pro_max_output_tokens = serializers.IntegerField(min_value=64, max_value=65536)
+    timeout_seconds = serializers.IntegerField(min_value=1, max_value=300)
+
+
+class AIProviderConfigurationTestSerializer(StrictSerializerMixin, serializers.Serializer):
+    api_key = serializers.RegexField(
+        r"^sk-[A-Za-z0-9_-]{8,508}$", write_only=True, required=False,
+        max_length=512,
+        trim_whitespace=True,
+    )
+
+
+class AIProviderConfigurationTestResultSerializer(serializers.Serializer):
+    connection_state = serializers.ChoiceField(choices=["CONNECTED", "FAILED"])
+    recovery_code = serializers.CharField(allow_null=True)

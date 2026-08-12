@@ -27,7 +27,8 @@ _SECRET_KEY_SEGMENTS = frozenset(
 _SAFE_KEYS = frozenset(
     {
         "publictokencount", "passwordpolicy", "safetokenizedname",
-        "tokenbudget", "credentialtype",
+        "tokenbudget", "credentialtype", "inputtokens", "outputtokens",
+        "totaltokens", "cachehittokens",
     }
 )
 
@@ -41,6 +42,11 @@ _CONTROLLED_ERROR_MESSAGES = {
     "content_finalize_failed": "Generated content could not be finalized.",
     "SOURCE_IMPORT_FAILED": "Public source import failed.",
 }
+
+_SECRET_VALUE = re.compile(
+    r"(?i)(?:\bauthorization\s*[:=]\s*(?:bearer\s+)?[^\s,;]+|"
+    r"\bbearer\s+sk-[a-z0-9_-]{8,}|\bsk-[a-z0-9_-]{8,})"
+)
 
 
 def is_sensitive_key(key) -> bool:
@@ -69,6 +75,8 @@ def scrub_secrets(value):
         return [scrub_secrets(item) for item in value]
     if isinstance(value, tuple):
         return [scrub_secrets(item) for item in value]
+    if isinstance(value, str) and _SECRET_VALUE.search(value):
+        return "[REDACTED]"
     return deepcopy(value)
 
 

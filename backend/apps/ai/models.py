@@ -1,3 +1,4 @@
+import re
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -147,3 +148,58 @@ class AIRun(AuditModel):
                 fields=["job", "job_attempt"], name="ai_unique_run_per_job_attempt"
             )
         ]
+
+
+class AIProviderConfiguration(models.Model):
+    class ConnectionState(models.TextChoices):
+        NOT_CONFIGURED = "NOT_CONFIGURED", "Not configured"
+        CONNECTED = "CONNECTED", "Connected"
+
+    organization = models.OneToOneField(
+        "identity.Organization",
+        on_delete=models.PROTECT,
+        related_name="ai_provider_configuration",
+    )
+    provider_code = models.CharField(max_length=32, default="deepseek", editable=False)
+    connection_state = models.CharField(
+        max_length=24,
+        choices=ConnectionState.choices,
+        default=ConnectionState.NOT_CONFIGURED,
+    )
+    key_suffix = models.CharField(max_length=4, blank=True)
+    credential_revision = models.PositiveIntegerField(default=0)
+    last_tested_at = models.DateTimeField(null=True, blank=True)
+    last_tested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="tested_ai_provider_configurations",
+    )
+    daily_budget_usd = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=10,
+        validators=[MinValueValidator(0), MaxValueValidator(100000)],
+    )
+    flash_max_output_tokens = models.PositiveIntegerField(
+        default=1200, validators=[MinValueValidator(64), MaxValueValidator(65536)]
+    )
+    pro_max_output_tokens = models.PositiveIntegerField(
+        default=2400, validators=[MinValueValidator(64), MaxValueValidator(65536)]
+    )
+    timeout_seconds = models.PositiveSmallIntegerField(
+        default=30, validators=[MinValueValidator(1), MaxValueValidator(300)]
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["organization_id"]
+
+    def clean(self):
+        super().clean()
+        connected = self.connection_state == self.ConnectionState.CONNECTED
+        if connected and re.fullmatch(r"[A-Za-z0-9_-]{4}", self.key_suffix) is None:
+            raise ValidationError({"key_suffix": "Connected credentials require a 4-character suffix."})
+        if not connected and self.key_suffix:
+            raise ValidationError({"key_suffix": "Unconfigured credentials cannot have a suffix."})

@@ -1,13 +1,14 @@
 from django.http import Http404
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
 from rest_framework import status
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, ParseError
 from rest_framework.pagination import CursorPagination
+from rest_framework.parsers import JSONParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.common.openapi import bounded_integer_query_parameter
-from apps.identity.permissions import CanReadJobs
+from apps.identity.permissions import CanManageCredentials, CanReadJobs
 
 from .models import AIRun
 from .serializers import (
@@ -15,6 +16,17 @@ from .serializers import (
     AIRunListSerializer,
     AIRunSerializer,
     AIRunValidationErrorSerializer,
+    AIProviderConfigurationSerializer,
+    AIProviderConfigurationTestResultSerializer,
+    AIProviderConfigurationTestSerializer,
+    AIProviderConfigurationWriteSerializer,
+)
+from .models import AIProviderConfiguration
+from .provider_configuration import (
+    ProviderConfigurationError,
+    delete_deepseek_credential,
+    test_and_save_deepseek_configuration,
+    test_deepseek_configuration,
 )
 
 
@@ -97,3 +109,104 @@ class AIRunDetailView(APIView):
     @extend_schema(operation_id="ai_runs_retrieve", responses={200: AIRunSerializer})
     def get(self, request, run_id):
         return Response(AIRunSerializer(_run(request.organization, run_id)).data)
+
+
+class DuplicateSafeJSONParser(JSONParser):
+    def parse(self, stream, media_type=None, parser_context=None):
+        import json
+
+        raw = stream.read()
+        charset = (parser_context or {}).get("encoding") or "utf-8"
+
+        def unique_pairs(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ParseError("Duplicate JSON fields are not allowed.")
+                result[key] = value
+            return result
+
+        try:
+            return json.loads(raw.decode(charset), object_pairs_hook=unique_pairs)
+        except ParseError:
+            raise
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ParseError("Malformed JSON.") from error
+
+
+def _configuration_for(organization):
+    try:
+        return AIProviderConfiguration.objects.get(organization=organization)
+    except AIProviderConfiguration.DoesNotExist:
+        return AIProviderConfiguration(organization=organization)
+
+
+@extend_schema(tags=["AIProviderConfiguration"])
+class AIProviderConfigurationView(APIView):
+    permission_classes = [CanManageCredentials]
+    parser_classes = [DuplicateSafeJSONParser]
+
+    @extend_schema(responses={200: AIProviderConfigurationSerializer})
+    def get(self, request):
+        return Response(AIProviderConfigurationSerializer(_configuration_for(request.organization)).data)
+
+    @extend_schema(
+        request=AIProviderConfigurationWriteSerializer,
+        responses={200: AIProviderConfigurationSerializer},
+    )
+    def put(self, request):
+        serializer = AIProviderConfigurationWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = dict(serializer.validated_data)
+        api_key = values.pop("api_key")
+        try:
+            configuration = test_and_save_deepseek_configuration(
+                organization=request.organization,
+                actor=request.user,
+                api_key=api_key,
+                limits=values,
+            )
+        except ProviderConfigurationError as error:
+            return Response(
+                {"connection_state": "FAILED", "recovery_code": error.code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(AIProviderConfigurationSerializer(configuration).data)
+
+    @extend_schema(responses={200: AIProviderConfigurationSerializer})
+    def delete(self, request):
+        try:
+            configuration = delete_deepseek_credential(
+                organization=request.organization, actor=request.user
+            )
+        except ProviderConfigurationError as error:
+            return Response(
+                {"connection_state": "FAILED", "recovery_code": error.code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(AIProviderConfigurationSerializer(configuration).data)
+
+
+@extend_schema(tags=["AIProviderConfiguration"])
+class AIProviderConfigurationTestView(APIView):
+    permission_classes = [CanManageCredentials]
+    parser_classes = [DuplicateSafeJSONParser]
+
+    @extend_schema(
+        request=AIProviderConfigurationTestSerializer,
+        responses={200: AIProviderConfigurationTestResultSerializer},
+    )
+    def post(self, request):
+        serializer = AIProviderConfigurationTestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            test_deepseek_configuration(
+                organization=request.organization,
+                api_key=serializer.validated_data.get("api_key"),
+            )
+        except ProviderConfigurationError as error:
+            return Response(
+                {"connection_state": "FAILED", "recovery_code": error.code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({"connection_state": "CONNECTED", "recovery_code": None})

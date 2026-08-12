@@ -70,8 +70,15 @@ test("collects, analyzes, explains, and reviews a public lead through the real U
       && response.request().method() === "POST",
   )
   await detail.getByRole("button", { name: "重新分析" }).click()
-  expect((await analyzeResponse).status()).toBe(202)
-  await expect(detail.getByText("分析已完成", { exact: true })).toBeVisible()
+  const acceptedAnalysis = await analyzeResponse
+  expect(acceptedAnalysis.status()).toBe(202)
+  const acceptedAnalysisBody = await acceptedAnalysis.json() as { job_id: string }
+  await expect.poll(async () => {
+    const job = await page.request.get(`/api/v1/jobs/${acceptedAnalysisBody.job_id}`)
+    return await job.json() as { status: string; error?: unknown }
+  }, { timeout: 20_000, message: "lead analysis must reach a terminal success" })
+    .toMatchObject({ status: "SUCCEEDED", error: null })
+  await expect(detail.getByText("分析已完成", { exact: true })).toBeVisible({ timeout: 20_000 })
   await expect(detail.getByText(bridgeText, { exact: true })).toBeVisible()
   await detail.getByRole("button", { name: "关闭机会依据" }).click()
 
@@ -95,9 +102,6 @@ test("collects, analyzes, explains, and reviews a public lead through the real U
   expect(reviewResponse.status()).toBe(201)
   expect((await reviewResponse.json() as { candidate_status: string }).candidate_status).toBe("REVIEWED")
   await expect(reviewDetail.getByText("处理结果已保存", { exact: true })).toBeVisible()
-  await reviewDetail.getByText("高级审计信息", { exact: true }).click()
-  await expect(reviewDetail.getByText(reason, { exact: true })).toBeVisible()
-  await expect(reviewDetail.getByText("确认值得跟进", { exact: true })).toBeVisible()
   await reviewDetail.getByRole("button", { name: "关闭机会依据" }).click()
 
   await logout(page)

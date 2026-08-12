@@ -106,7 +106,15 @@ def _map_provider_error(error: ProviderCallError) -> ProviderConfigurationError:
 def _run_test(*, organization, api_key: str, provider_factory) -> None:
     target = credential_target(organization.id)
     temporary_store = _TemporaryCredentialStore(target, api_key)
-    provider = provider_factory(credential_store=temporary_store)
+    provider_options = {"credential_store": temporary_store}
+    from django.conf import settings
+    if provider_factory is DeepSeekProvider and bool(
+        getattr(settings, "DEEPSEEK_E2E_FAKE_ALLOWED", False)
+    ):
+        from integrations.ai.e2e_fake import guarded_e2e_transport
+
+        provider_options["transport"] = guarded_e2e_transport()
+    provider = provider_factory(**provider_options)
     try:
         provider.generate(
             prompt='Return {"connected": true}.',

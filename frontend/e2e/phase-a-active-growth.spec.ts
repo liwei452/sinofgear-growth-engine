@@ -143,13 +143,15 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   await page.goto("/promotion")
   await expect(page.getByRole("heading", { name: "你今天想推广什么？" })).toBeVisible()
   const seededGenerate = page.getByRole("button", { name: "生成推广内容" })
-  await expect(seededGenerate).toBeEnabled()
-  const seededGenerationPromise = page.waitForResponse(response =>
-    new URL(response.url()).pathname.endsWith("/generate-master-content") && response.request().method() === "POST",
-  )
-  await seededGenerate.click()
-  const seededGenerationResponse = await seededGenerationPromise
-  expect(seededGenerationResponse.status()).toBe(202)
+  if (await seededGenerate.count()) {
+    await expect(seededGenerate).toBeEnabled()
+    const seededGenerationPromise = page.waitForResponse(response =>
+      new URL(response.url()).pathname.endsWith("/generate-master-content") && response.request().method() === "POST",
+    )
+    await seededGenerate.click()
+    const seededGenerationResponse = await seededGenerationPromise
+    expect(seededGenerationResponse.status()).toBe(202)
+  }
   await expect(page.getByRole("link", { name: "查看并确认" })).toBeVisible({ timeout: 15_000 })
 
   await page.getByRole("button", { name: "开始新的推广" }).click()

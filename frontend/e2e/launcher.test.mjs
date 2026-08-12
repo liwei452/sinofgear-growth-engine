@@ -7,6 +7,7 @@ import { test } from "node:test"
 import {
   assertOwnedRunRoot,
   buildPhaseB1SeedCommands,
+  buildFrontendInvocation,
   buildE2EEnvironment,
   cleanupOwnedRun,
   generateOwnershipSecret,
@@ -32,6 +33,17 @@ test("Phase B1 browser setup seeds two isolated organizations through the formal
       "--create-demo-identity",
     ],
   ])
+})
+
+test("frontend tools bypass generated wrappers whose non-ASCII paths are corrupt", () => {
+  assert.deepEqual(
+    buildFrontendInvocation("vite", ["--host", "127.0.0.1"]),
+    { command: process.execPath, args: [join(process.cwd(), "node_modules", "vite", "bin", "vite.js"), "--host", "127.0.0.1"] },
+  )
+  assert.deepEqual(
+    buildFrontendInvocation("playwright", ["test", "deepseek-settings.spec.ts"]),
+    { command: process.execPath, args: [join(process.cwd(), "node_modules", "@playwright", "test", "cli.js"), "test", "deepseek-settings.spec.ts"] },
+  )
 })
 
 test("cleanup accepts only marked child-owned temporary roots", async () => {
@@ -63,6 +75,9 @@ test("Playwright artifacts are confined to the owned run root", async () => {
     assert.equal(environment.PLAYWRIGHT_REPORT_DIR, join(runRoot, "playwright", "report"))
     assert.equal(environment.SINO_PHASE_A_E2E_OWNERSHIP_SECRET, "a".repeat(64))
     assert.equal(environment.SINO_PHASE_A_E2E_RUN_ID, runRoot)
+    assert.equal(environment.SINO_DEEPSEEK_E2E_GATE, "a".repeat(64))
+    assert.equal(environment.AI_CREDENTIAL_STORE, "memory")
+    assert.equal(environment.SINO_DEEPSEEK_E2E_FAKE, "1")
   } finally {
     await removeOwnedRunRoot(runRoot)
   }

@@ -19,8 +19,11 @@ from apps.ai.models import (
 from apps.ai.orchestration import (
     GenerationPreflightError,
     ProviderRetryRequired,
+    _create_run,
+    _reconcile_from_calls,
     execute_generation_job,
 )
+from apps.ai.budget import reserve_budget
 from apps.ai.services import PromptVersionService, scrub_secrets
 from apps.identity.models import Organization
 from apps.jobs.models import Job
@@ -346,6 +349,37 @@ def test_active_provider_call_lease_blocks_duplicate_delivery_before_network(
 
     assert returned.pk == audit.pk
     assert provider.executions == []
+
+
+@pytest.mark.django_db
+def test_reservation_mismatch_is_persisted_on_run_and_provider_call(
+    organization, frozen_input, prompt
+):
+    job = _deepseek_job(organization, frozen_input, prompt)
+    claimed = JobService.claim(worker_id="mismatch-worker", job_id=job.id)
+    run = _create_run(
+        job=claimed, prompt=prompt, provider="deepseek",
+        model="deepseek-v4-flash", input_snapshot=claimed.input_snapshot,
+    )
+    usage = reserve_budget(job.ai_execution_intent, run)
+    first = AIProviderCall.objects.create(
+        run=run, generation=1, status=AIProviderCall.Status.SUCCEEDED,
+        reserved_usd="0.001000", actual_usd="0.000100",
+    )
+    second = AIProviderCall.objects.create(
+        run=run, generation=2, status=AIProviderCall.Status.SUCCEEDED,
+        reserved_usd="0.001000", actual_usd="0.000100",
+    )
+
+    code = _reconcile_from_calls(usage, run, AIUsageAttempt.Status.SUCCEEDED)
+
+    run.refresh_from_db()
+    first.refresh_from_db()
+    second.refresh_from_db()
+    assert code == "deepseek_usage_exceeds_reservation"
+    assert run.provider_metadata["reconciliation_anomaly_code"] == code
+    assert first.anomaly_code == code
+    assert second.anomaly_code == code
 
 
 @pytest.mark.django_db

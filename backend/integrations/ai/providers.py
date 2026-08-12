@@ -488,10 +488,16 @@ def register_deepseek_provider(registry: ProviderRegistry = provider_registry) -
     base_url = str(
         getattr(settings, "DEEPSEEK_API_BASE_URL", "https://api.deepseek.com")
     ).rstrip("/")
+    transport = None
+    if bool(getattr(settings, "DEEPSEEK_E2E_FAKE_ALLOWED", False)):
+        from .e2e_fake import guarded_e2e_transport
+
+        transport = guarded_e2e_transport()
     registry.register(
         "deepseek",
         DeepSeekProvider(
             credential_store=credential_store,
+            transport=transport,
             endpoint=f"{base_url}/chat/completions",
             max_response_bytes=int(
                 getattr(settings, "DEEPSEEK_MAX_RESPONSE_BYTES", 1_000_000)

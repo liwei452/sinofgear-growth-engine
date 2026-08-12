@@ -4,9 +4,11 @@ from uuid import UUID
 
 import httpx
 import pytest
+from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
 from integrations.ai.deepseek import DeepSeekProvider
+from integrations.ai.e2e_fake import guarded_e2e_transport
 from integrations.ai.providers import (
     ProviderAuthenticationError,
     ProviderBalanceError,
@@ -508,3 +510,19 @@ def test_registry_registers_deepseek_with_an_available_store(monkeypatch):
     )
     assert register_deepseek_provider(registry) is True
     assert isinstance(registry.get("deepseek"), DeepSeekProvider)
+
+def test_e2e_transport_fails_closed_when_gate_does_not_match_owned_run():
+    with override_settings(
+        DEEPSEEK_E2E_FAKE_ALLOWED=True,
+        DEEPSEEK_E2E_GATE="b" * 64,
+        PHASE_A_E2E_OWNERSHIP_SECRET="a" * 64,
+        PHASE_A_E2E_RUN_ID="owned-run",
+    ):
+        with pytest.raises(ImproperlyConfigured):
+            guarded_e2e_transport()
+
+
+def test_e2e_transport_is_unavailable_without_explicit_test_setting():
+    with override_settings(DEEPSEEK_E2E_FAKE_ALLOWED=False):
+        with pytest.raises(ImproperlyConfigured):
+            guarded_e2e_transport()

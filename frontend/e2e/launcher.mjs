@@ -52,6 +52,9 @@ export function buildE2EEnvironment(runRoot, { apiOrigin, webOrigin, browser, ow
     SINO_PHASE_A_E2E_STORAGE: join(root, "storage"),
     SINO_PHASE_A_E2E_OWNERSHIP_SECRET: ownershipSecret,
     SINO_PHASE_A_E2E_RUN_ID: root,
+    SINO_DEEPSEEK_E2E_GATE: ownershipSecret,
+    SINO_DEEPSEEK_E2E_FAKE: "1",
+    AI_CREDENTIAL_STORE: "memory",
     SINO_PHASE_A_E2E_WEB_ORIGIN: webOrigin,
     VITE_API_PROXY_TARGET: apiOrigin,
     PLAYWRIGHT_BASE_URL: webOrigin,
@@ -113,10 +116,14 @@ function browserExecutable() {
   }) ?? ""
 }
 
-function pnpmInvocation(args) {
-  const cli = process.env.npm_execpath
-  if (!cli) throw new Error("The E2E launcher must be started by pnpm.")
-  return { command: process.execPath, args: [cli, ...args] }
+export function buildFrontendInvocation(tool, args) {
+  const scripts = {
+    vite: join(frontendDir, "node_modules", "vite", "bin", "vite.js"),
+    playwright: join(frontendDir, "node_modules", "@playwright", "test", "cli.js"),
+  }
+  const script = scripts[tool]
+  if (!script || !existsSync(script)) throw new Error(`Frontend tool ${tool} is unavailable.`)
+  return { command: process.execPath, args: [script, ...args] }
 }
 
 export function spawnOwnedChild(command, args, options = {}) {
@@ -258,14 +265,17 @@ async function main() {
         cwd: backendDir, env: environment, children,
       })
     }
+    await run(pythonExecutable(), ["manage.py", "prepare_deepseek_e2e"], {
+      cwd: backendDir, env: environment, children,
+    })
     const backend = spawnOwnedChild(
       pythonExecutable(),
       ["manage.py", "runserver", `127.0.0.1:${apiPort}`, "--noreload"],
       { cwd: backendDir, env: environment, stdio: "inherit", windowsHide: true },
     )
     children.push(backend)
-    const vite = pnpmInvocation([
-      "exec", "vite", "--host", "127.0.0.1", "--port", String(webPort), "--strictPort",
+    const vite = buildFrontendInvocation("vite", [
+      "--host", "127.0.0.1", "--port", String(webPort), "--strictPort",
     ])
     const frontend = spawnOwnedChild(vite.command, vite.args, {
       cwd: frontendDir, env: environment, stdio: "inherit", windowsHide: true,
@@ -275,8 +285,8 @@ async function main() {
       waitFor(`${apiOrigin}/api/v1/auth/csrf`, backend, "Django"),
       waitFor(webOrigin, frontend, "Vite"),
     ])
-    const playwright = pnpmInvocation([
-      "exec", "playwright", "test", ...process.argv.slice(2),
+    const playwright = buildFrontendInvocation("playwright", [
+      "test", ...process.argv.slice(2),
     ])
     await run(playwright.command, playwright.args, {
       cwd: frontendDir, env: environment, children,

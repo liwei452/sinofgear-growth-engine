@@ -69,6 +69,34 @@ def test_registry_fails_closed_when_memory_store_is_not_test_enabled() -> None:
     assert "memory" not in str(captured.value).lower()
 
 
+def test_registry_fails_closed_when_e2e_gate_does_not_match_owned_run() -> None:
+    with override_settings(
+        AI_CREDENTIAL_STORE="memory",
+        AI_CREDENTIAL_STORE_TEST_FAKE_ALLOWED=True,
+        PHASE_A_E2E_RUN_ID="owned-run",
+        PHASE_A_E2E_OWNERSHIP_SECRET="a" * 64,
+        DEEPSEEK_E2E_GATE="b" * 64,
+    ):
+        with pytest.raises(CredentialStoreUnavailableError):
+            get_credential_store()
+
+
+def test_owned_e2e_store_can_start_with_deterministic_nonsecret_placeholder() -> None:
+    gate = "a" * 64
+    with override_settings(
+        AI_CREDENTIAL_STORE="memory", AI_CREDENTIAL_STORE_TEST_FAKE_ALLOWED=True,
+        PHASE_A_E2E_RUN_ID="owned-run", PHASE_A_E2E_OWNERSHIP_SECRET=gate,
+        DEEPSEEK_E2E_GATE=gate, DEEPSEEK_E2E_DEFAULT_CREDENTIAL=True,
+    ):
+        store = get_credential_store()
+        target = credential_target(UUID("12345678-1234-5678-1234-567812345678"))
+        assert store.read(target) == "".join(("s", "k-", "valid-placeholder"))
+        assert store.delete(target) is True
+        assert store.read(target) is None
+        store.write(target, "restored-test-value")
+        assert store.read(target) == "restored-test-value"
+
+
 def test_registry_fails_closed_for_windows_store_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("integrations.credentials.registry.platform.system", lambda: "Linux")
 

@@ -632,7 +632,18 @@ def _reconcile_from_calls(usage_attempt, run, status, metadata=None):
         usage_attempt, metadata or {}, status,
         actual_override=actual,
     )
-    return "deepseek_usage_exceeds_reservation" if anomaly else ""
+    if not anomaly:
+        return ""
+    code = "deepseek_usage_exceeds_reservation"
+    with ai_audit_writes():
+        AIProviderCall.objects.filter(run=run).update(anomaly_code=code)
+        locked_run = AIRun.objects.select_for_update().get(pk=run.pk)
+        locked_run.provider_metadata = {
+            **(locked_run.provider_metadata or {}),
+            "reconciliation_anomaly_code": code,
+        }
+        locked_run.save(update_fields=["provider_metadata"])
+    return code
 
 
 def execute_generation_job(

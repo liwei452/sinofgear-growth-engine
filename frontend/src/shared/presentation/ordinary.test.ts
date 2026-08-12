@@ -1,6 +1,8 @@
 import { expect, it } from "vitest"
 
 import {
+  ordinaryDirectorAction,
+  ordinaryDirectorError,
   formatOrdinaryError,
   ordinaryJobError,
   ordinaryJobProgress,
@@ -9,6 +11,18 @@ import {
   ordinaryStatus,
   ordinaryTerm,
 } from "./ordinary"
+
+it("translates Director actions and hides internal errors", () => {
+  expect(ordinaryDirectorAction("APPROVE")).toBe("批准")
+  expect(ordinaryDirectorAction("REQUEST_ADJUSTMENT")).toBe("要求调整")
+  expect(ordinaryDirectorAction("REJECT")).toBe("拒绝")
+  expect(ordinaryDirectorError({ code: "director_version_conflict", message: "provider exploded" })).toEqual({
+    message: "这件事刚刚发生了变化，已为你刷新最新内容。",
+    refresh: true,
+  })
+  expect(ordinaryDirectorError({ code: "provider_error", message: "secret provider failure" }).message)
+    .toBe("操作未能完成，请稍后重试。")
+})
 
 it.each([
   ["provider_authentication_failed", "AI服务的连接信息已失效，任务没有继续。", "请联系管理员检查连接后重新尝试。"],

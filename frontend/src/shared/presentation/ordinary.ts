@@ -228,6 +228,32 @@ export function formatOrdinaryError(error: unknown): string {
   return "操作未能完成，请稍后重试。"
 }
 
+type DirectorAction = components["schemas"]["DirectorDecisionRequestActionEnum"]
+const directorActions: Readonly<Record<DirectorAction, string>> = {
+  APPROVE: "批准",
+  REQUEST_ADJUSTMENT: "要求调整",
+  REJECT: "拒绝",
+}
+
+export function ordinaryDirectorAction(action: DirectorAction): string {
+  return directorActions[action]
+}
+
+export function ordinaryDirectorError(error: unknown): { message: string; refresh: boolean } {
+  const code = error && typeof error === "object" && "code" in error
+    && typeof error.code === "string" ? error.code : ""
+  if (code === "director_version_conflict") {
+    return { message: "这件事刚刚发生了变化，已为你刷新最新内容。", refresh: true }
+  }
+  if (code === "director_state_conflict" || code === "director_expired") {
+    return { message: "这件事已经处理或过期，已为你刷新最新内容。", refresh: true }
+  }
+  if (code === "director_comment_required") {
+    return { message: "请填写调整或拒绝的原因。", refresh: false }
+  }
+  return { message: "操作未能完成，请稍后重试。", refresh: false }
+}
+
 export function assertNeverOrdinaryValue(value: never): never {
   void value
   throw new Error("普通用户展示值未配置")

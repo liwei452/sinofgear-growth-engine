@@ -63,6 +63,8 @@ class ReviewAction(models.TextChoices):
     REJECT = "REJECT", "Reject"
     DEPRECATE = "DEPRECATE", "Deprecate"
     ARCHIVE = "ARCHIVE", "Archive"
+    REQUEST_ADJUSTMENT = "REQUEST_ADJUSTMENT", "Request adjustment"
+    SUPERSEDE = "SUPERSEDE", "Supersede"
 
 
 class ApprovalRecord(ImmutableAuditModel):
@@ -70,7 +72,7 @@ class ApprovalRecord(ImmutableAuditModel):
     organization = models.ForeignKey("identity.Organization", on_delete=models.PROTECT, related_name="approval_records")
     object_type = models.CharField(max_length=128)
     object_id = models.UUIDField()
-    action = models.CharField(max_length=16, choices=ReviewAction.choices)
+    action = models.CharField(max_length=24, choices=ReviewAction.choices)
     status = models.CharField(max_length=32)
     object_version = models.PositiveIntegerField()
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="approval_records")
@@ -88,7 +90,7 @@ class AuditLog(ImmutableAuditModel):
     organization = models.ForeignKey("identity.Organization", on_delete=models.PROTECT, related_name="audit_logs")
     object_type = models.CharField(max_length=128)
     object_id = models.UUIDField()
-    action = models.CharField(max_length=16, choices=ReviewAction.choices)
+    action = models.CharField(max_length=24, choices=ReviewAction.choices)
     status = models.CharField(max_length=32)
     object_version = models.PositiveIntegerField()
     actor = models.ForeignKey(

@@ -1,26 +1,56 @@
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 
 
+_proposal_state_write = ContextVar("director_proposal_state_write", default=False)
+
+
+@contextmanager
+def director_proposal_state_writes():
+    token = _proposal_state_write.set(True)
+    try:
+        yield
+    finally:
+        _proposal_state_write.reset(token)
+
+
 class DirectorProposalQuerySet(models.QuerySet):
     def update(self, **kwargs):
         if {"organization", "organization_id"} & set(kwargs):
             raise ValidationError("Proposal organization is immutable after creation.")
+        if {"status", "version"} & set(kwargs) and not _proposal_state_write.get():
+            raise ValidationError(
+                "Proposal state may change only through DirectorService."
+            )
         return super().update(**kwargs)
 
     def bulk_update(self, objs, fields, **kwargs):
         field_names = {field.name if hasattr(field, "name") else str(field) for field in fields}
         if {"organization", "organization_id"} & field_names:
             raise ValidationError("Proposal organization is immutable after creation.")
+        if {"status", "version"} & field_names and not _proposal_state_write.get():
+            raise ValidationError(
+                "Proposal state may change only through DirectorService."
+            )
         return super().bulk_update(objs, fields, **kwargs)
 
     def bulk_create(self, objs, **kwargs):
         if kwargs.get("update_conflicts"):
             raise ValidationError("Director proposal upserts are not allowed.")
-        return super().bulk_create(objs, **kwargs)
+        rows = list(objs)
+        if not _proposal_state_write.get() and any(
+            row.status != DirectorProposal.Status.PENDING or row.version != 1
+            for row in rows
+        ):
+            raise ValidationError(
+                "Proposal state may change only through DirectorService."
+            )
+        return super().bulk_create(rows, **kwargs)
 
 
 class DirectorProposal(models.Model):
@@ -72,9 +102,23 @@ class DirectorProposal(models.Model):
 
     def save(self, *args, **kwargs):
         if self.pk and type(self)._base_manager.filter(pk=self.pk).exists():
-            original = type(self).objects.only("organization_id").get(pk=self.pk)
+            original = type(self).objects.only(
+                "organization_id", "status", "version"
+            ).get(pk=self.pk)
             if self.organization_id != original.organization_id:
                 raise ValidationError("Proposal organization is immutable after creation.")
+            if (
+                self.status != original.status or self.version != original.version
+            ) and not _proposal_state_write.get():
+                raise ValidationError(
+                    "Proposal state may change only through DirectorService."
+                )
+        elif (
+            self.status != self.Status.PENDING or self.version != 1
+        ) and not _proposal_state_write.get():
+            raise ValidationError(
+                "Proposal state may change only through DirectorService."
+            )
         return super().save(*args, **kwargs)
 
 

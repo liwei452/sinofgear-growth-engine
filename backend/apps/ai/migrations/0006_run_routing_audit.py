@@ -96,4 +96,22 @@ class Migration(migrations.Migration):
                 ],
             },
         ),
+        migrations.CreateModel(
+            name="AIRetryDispatchOutbox",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("retry_generation", models.PositiveSmallIntegerField()),
+                ("status", models.CharField(choices=[("PENDING", "Pending"), ("DISPATCHING", "Dispatching"), ("ACKED", "Acknowledged")], default="PENDING", max_length=16)),
+                ("available_at", models.DateTimeField()),
+                ("lease_token", models.UUIDField(blank=True, null=True)),
+                ("lease_expires_at", models.DateTimeField(blank=True, null=True)),
+                ("attempts", models.PositiveSmallIntegerField(default=0)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("acknowledged_at", models.DateTimeField(blank=True, null=True)),
+                ("run", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="retry_outbox", to="ai.airun")),
+            ],
+            options={
+                "constraints": [models.UniqueConstraint(fields=("run", "retry_generation"), name="ai_unique_retry_outbox_generation")],
+            },
+        ),
     ]

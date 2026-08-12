@@ -38,6 +38,7 @@ from .models import (
     AIExecutionIntent,
     AIProviderConfiguration,
     AIProviderCall,
+    AIRetryDispatchOutbox,
     AIRun,
     AIUsageAttempt,
     PromptVersion,
@@ -221,7 +222,7 @@ def _record_success(
                 ).exists()
                 else AIUsageAttempt.Status.CANCELED
             )
-            reconcile_usage(usage_attempt, metadata, reconcile_status)
+            _reconcile_from_calls(usage_attempt, run, reconcile_status)
             usage_attempt = None
         return _record_canceled_run(run)
     run.status = AIRun.Status.SUCCEEDED
@@ -249,7 +250,9 @@ def _record_success(
         result_reference=result_reference,
     )
     if usage_attempt is not None:
-        reconcile_usage(usage_attempt, metadata, AIUsageAttempt.Status.SUCCEEDED)
+        _reconcile_from_calls(
+            usage_attempt, run, AIUsageAttempt.Status.SUCCEEDED, metadata
+        )
     return run
 
 
@@ -272,8 +275,8 @@ def _record_failure(
                     AIProviderCall.Status.AMBIGUOUS,
                 ],
             ).exists()
-            reconcile_usage(
-                usage_attempt, usage_metadata or {},
+            _reconcile_from_calls(
+                usage_attempt, run,
                 AIUsageAttempt.Status.FAILED if call_started
                 else AIUsageAttempt.Status.CANCELED,
             )
@@ -290,9 +293,7 @@ def _record_failure(
         )
     JobService.fail(job_id, claim_token=claim_token, error=normalized_error)
     if usage_attempt is not None:
-        reconcile_usage(
-            usage_attempt, usage_metadata or {}, AIUsageAttempt.Status.FAILED
-        )
+        _reconcile_from_calls(usage_attempt, run, AIUsageAttempt.Status.FAILED)
     return run
 
 
@@ -327,6 +328,33 @@ def _reconcile_orphaned_run(*, job_id, run_id) -> AIRun:
     ):
         return run
     if job.status == Job.Status.CANCELED:
+        usage_attempt = AIUsageAttempt.objects.select_for_update().filter(run=run).first()
+        now = timezone.now()
+        for call in AIProviderCall.objects.select_for_update().filter(
+            run=run, status=AIProviderCall.Status.CALLING
+        ):
+            call.status = AIProviderCall.Status.AMBIGUOUS
+            call.actual_usd = call.reserved_usd
+            call.lease_token = None
+            call.lease_expires_at = None
+            call.finished_at = now
+            call.save(update_fields=[
+                "status", "actual_usd", "lease_token", "lease_expires_at",
+                "finished_at",
+            ])
+        if usage_attempt is not None and usage_attempt.reconciled_at is None:
+            started = AIProviderCall.objects.filter(run=run).exclude(
+                status=AIProviderCall.Status.CANCELED_PRE_CALL
+            ).exists()
+            _reconcile_from_calls(
+                usage_attempt, run,
+                AIUsageAttempt.Status.FAILED if started
+                else AIUsageAttempt.Status.CANCELED,
+            )
+        AIRetryDispatchOutbox.objects.filter(run=run).exclude(
+            status=AIRetryDispatchOutbox.Status.ACKED
+        ).update(status=AIRetryDispatchOutbox.Status.ACKED, acknowledged_at=now,
+                 lease_token=None, lease_expires_at=None)
         return _record_canceled_run(run)
     if job.status == Job.Status.FAILED:
         run.status = AIRun.Status.FAILED
@@ -416,6 +444,10 @@ def _schedule_retry(run_id, *, retry_count, countdown):
         run.save(update_fields=[
             "transport_retry_count", "next_retry_at", "next_call_generation"
         ])
+    AIRetryDispatchOutbox.objects.get_or_create(
+        run=run, retry_generation=retry_count,
+        defaults={"available_at": run.next_retry_at},
+    )
     return run
 
 
@@ -436,6 +468,16 @@ def _claim_provider_call(run, usage_attempt):
     generation = locked_run.next_call_generation
     phase = locked_run.next_call_phase
     now = timezone.now()
+    AIRetryDispatchOutbox.objects.filter(
+        run=locked_run, status__in=[
+            AIRetryDispatchOutbox.Status.PENDING,
+            AIRetryDispatchOutbox.Status.DISPATCHING,
+        ],
+        available_at__lte=now,
+    ).update(
+        status=AIRetryDispatchOutbox.Status.ACKED,
+        acknowledged_at=now, lease_token=None, lease_expires_at=None,
+    )
     call = AIProviderCall.objects.select_for_update().filter(
         run=locked_run, generation=generation
     ).first()
@@ -526,6 +568,28 @@ def _repair_prompt(prompt: str) -> str:
         prompt
         + "\n\nREPAIR_INSTRUCTION: Return one JSON object that exactly matches the "
           "frozen JSON Schema. Do not include explanations or markdown."
+    )
+
+
+def _aggregate_call_actual(run) -> Decimal:
+    total = Decimal("0")
+    for call in AIProviderCall.objects.filter(run=run):
+        if call.status == AIProviderCall.Status.CANCELED_PRE_CALL:
+            continue
+        if call.status == AIProviderCall.Status.SUCCEEDED:
+            total += call.actual_usd
+        elif call.status in {
+            AIProviderCall.Status.FAILED, AIProviderCall.Status.AMBIGUOUS,
+            AIProviderCall.Status.CALLING,
+        }:
+            total += call.reserved_usd
+    return total
+
+
+def _reconcile_from_calls(usage_attempt, run, status, metadata=None):
+    reconcile_usage(
+        usage_attempt, metadata or {}, status,
+        actual_override=_aggregate_call_actual(run),
     )
 
 

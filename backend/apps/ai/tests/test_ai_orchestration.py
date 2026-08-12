@@ -445,7 +445,8 @@ def test_cancellation_after_reservation_releases_budget_and_discards_result(
     assert run.status == AIRun.Status.CANCELED
     assert run.output_json is None
     assert usage.status == AIUsageAttempt.Status.FAILED
-    assert usage.actual_usd == usage.reserved_usd
+    assert usage.actual_usd > 0
+    assert usage.actual_usd < usage.reserved_usd
     usage.usage_day.refresh_from_db()
     assert usage.usage_day.reserved_usd == 0
 

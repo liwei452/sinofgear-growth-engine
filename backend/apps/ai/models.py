@@ -420,3 +420,26 @@ class AIProviderCall(models.Model):
                 name="ai_provider_call_cost_nonnegative",
             ),
         ]
+
+
+class AIRetryDispatchOutbox(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        DISPATCHING = "DISPATCHING", "Dispatching"
+        ACKED = "ACKED", "Acknowledged"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    run = models.ForeignKey(AIRun, on_delete=models.PROTECT, related_name="retry_outbox")
+    retry_generation = models.PositiveSmallIntegerField()
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    available_at = models.DateTimeField()
+    lease_token = models.UUIDField(null=True, blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=["run", "retry_generation"], name="ai_unique_retry_outbox_generation"
+        )]

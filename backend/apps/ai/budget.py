@@ -143,7 +143,7 @@ def reserve_budget(intent, run) -> AIUsageAttempt:
 
 
 @transaction.atomic
-def reconcile_usage(attempt, metadata, status) -> None:
+def reconcile_usage(attempt, metadata, status, *, actual_override=None) -> None:
     if status not in {
         AIUsageAttempt.Status.SUCCEEDED,
         AIUsageAttempt.Status.FAILED,
@@ -155,7 +155,9 @@ def reconcile_usage(attempt, metadata, status) -> None:
         return
     day = AIUsageDay.objects.select_for_update().get(pk=locked.usage_day_id)
     metadata = metadata if isinstance(metadata, dict) else {}
-    if status == AIUsageAttempt.Status.CANCELED:
+    if actual_override is not None:
+        actual = _nonnegative_decimal(actual_override, field="actual_override")
+    elif status == AIUsageAttempt.Status.CANCELED:
         actual = Decimal("0")
     elif status == AIUsageAttempt.Status.SUCCEEDED:
         actual = calculate_actual_cost(model=locked.intent.model, metadata=metadata)
@@ -170,7 +172,7 @@ def reconcile_usage(attempt, metadata, status) -> None:
     day.reserved_usd -= total_reserved
     if day.reserved_usd < 0:
         raise ValueError("Usage ledger reservation cannot become negative.")
-    if status == AIUsageAttempt.Status.SUCCEEDED:
+    if actual_override is None and status == AIUsageAttempt.Status.SUCCEEDED:
         actual += locked.additional_reserved_usd
     day.actual_usd += actual
     day.save(update_fields=["reserved_usd", "actual_usd", "updated_at"])

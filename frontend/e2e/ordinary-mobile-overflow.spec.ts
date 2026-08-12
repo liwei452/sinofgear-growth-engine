@@ -31,16 +31,18 @@ test("ordinary routes stay within a real 390px viewport with representative long
   })
 
   const routes = [
-    { path: "/", heading: /今天(?:至少)?有 \d+ 件事需要你决定/ },
-    { path: "/promotion", heading: "你今天想推广什么？" },
-    { path: "/lead-radar", heading: "客户机会" },
-    { path: "/analytics", heading: "效果" },
-    { path: "/company-profile", heading: "AI 对公司的了解" },
+    { path: "/", heading: /今天(?:至少)?有 \d+ 件事需要你决定/, stableApi: "/api/v1/director/cockpit" },
+    { path: "/promotion", heading: "你今天想推广什么？", stableApi: "/api/v1/products" },
+    { path: "/lead-radar", heading: "客户机会", stableApi: "/api/v1/lead-candidates" },
+    { path: "/analytics", heading: "效果", stableApi: "/api/v1/analytics/channel-summary?start=2026-07-15&end=2026-08-13&limit=20&offset=0" },
+    { path: "/company-profile", heading: "产品资料", stableApi: "/api/v1/products" },
   ]
 
   for (const route of routes) {
+    const stableResponse = await page.request.get(route.stableApi)
+    expect(stableResponse.ok(), `${route.path} stable query should succeed`).toBe(true)
     await page.goto(route.path)
-    await expect(page.locator("main")).toBeVisible()
+    await expect(page.getByRole("heading", { name: route.heading, level: 1 })).toBeVisible({ timeout: 15_000 })
     if (route.path === "/company-profile") await expect(page.getByText(longProductName, { exact: true })).toBeVisible()
 
     const width = await page.evaluate(() => ({

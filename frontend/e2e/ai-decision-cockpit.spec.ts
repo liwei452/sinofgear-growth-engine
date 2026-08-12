@@ -73,7 +73,7 @@ test("ordinary cockpit has exactly five entries and opens customer opportunities
   await expect(page.getByRole("heading", { name: "客户机会", level: 1 })).toBeVisible()
 })
 
-test("ordinary results state a conclusion and Product Data remains an ordinary destination", async ({ page }) => {
+test("ordinary results state a conclusion and Product Data exposes a real missing-information task", async ({ page }) => {
   await login(page, "phasea_e2e_operator")
   await page.getByRole("link", { name: "效果", exact: true }).click()
   const conclusion = page.getByRole("region", { name: "AI 结论" })
@@ -82,10 +82,13 @@ test("ordinary results state a conclusion and Product Data remains an ordinary d
 
   await logout(page)
   await login(page, "phaseb1_e2e_foreign")
+  const productResponse = await page.request.get("/api/v1/products?status=ACTIVE")
+  expect(productResponse.ok(), "product data query should succeed").toBe(true)
   await page.goto("/company-profile")
-  await expect(page).toHaveURL(/\/company-profile$/)
-  await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "产品资料" })).toBeVisible()
-  await expect(page.locator("main")).not.toContainText(/ProductLibrary|Ontology|PromptVersion/)
+  await expect(page.getByRole("heading", { name: "产品资料", level: 1 })).toBeVisible({ timeout: 15_000 })
+  const gaps = page.getByRole("region", { name: "建议补充" })
+  await expect(gaps).toContainText("补充产品")
+  await expect(gaps.getByRole("link", { name: "去产品库补充产品" })).toHaveAttribute("href", "/products")
 })
 
 test("a beginner imports a public signal and reads the same evidence through a pre-Task12 fixture", async ({ page }) => {
@@ -213,15 +216,17 @@ for (const viewport of [
     }
 
     const routes = [
-      { path: "/", heading: /今天(?:至少)?有 \d+ 件事需要你决定/ },
-      { path: "/promotion", heading: "你今天想推广什么？" },
-      { path: "/lead-radar", heading: "客户机会" },
-      { path: "/analytics", heading: "效果" },
-      { path: "/company-profile", heading: "AI 对公司的了解" },
+      { path: "/", heading: /今天(?:至少)?有 \d+ 件事需要你决定/, stableApi: "/api/v1/director/cockpit" },
+      { path: "/promotion", heading: "你今天想推广什么？", stableApi: "/api/v1/products" },
+      { path: "/lead-radar", heading: "客户机会", stableApi: "/api/v1/lead-candidates" },
+      { path: "/analytics", heading: "效果", stableApi: "/api/v1/analytics/channel-summary?start=2026-07-15&end=2026-08-13&limit=20&offset=0" },
+      { path: "/company-profile", heading: "产品资料", stableApi: "/api/v1/products" },
     ]
     for (const route of routes) {
+      const stableResponse = await page.request.get(route.stableApi)
+      expect(stableResponse.ok(), `${route.path} stable query should succeed`).toBe(true)
       await page.goto(route.path)
-      await expect(page.locator("main")).toBeVisible()
+      await expect(page.getByRole("heading", { name: route.heading, level: 1 })).toBeVisible({ timeout: 15_000 })
       const bounds = await page.evaluate(() => ({
         clientWidth: document.documentElement.clientWidth,
         scrollWidth: document.documentElement.scrollWidth,

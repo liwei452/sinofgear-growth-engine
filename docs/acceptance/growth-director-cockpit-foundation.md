@@ -45,11 +45,10 @@ pnpm lint
 pnpm typecheck
 pnpm test --run
 pnpm build
-node e2e/launcher.mjs growth-director-cockpit.spec.ts
-node e2e/launcher.mjs ai-decision-cockpit.spec.ts ordinary-mobile-overflow.spec.ts
+pnpm test:e2e
 ```
 
-结果：API 合同、ESLint、TypeScript、545 个单元测试和生产构建通过；新增驾驶舱浏览器验收 6/6 通过；更新后的跨阶段驾驶舱与手机溢出套件 9/9 通过。
+结果：API 合同、ESLint、TypeScript、545 个单元测试和生产构建通过；一次完整 `pnpm test:e2e` 运行中 20/20 通过（47.6s）。
 
 浏览器验收覆盖 1440×900 桌面与 390×844 手机：五入口顺序，加载/错误/空/成功状态，真实批准，调整与拒绝中文理由，只读控制隐藏，五 Agent 诚实状态，导航和对话框焦点返回，横向溢出检查。页面使用蓝白主色、清晰卡片层级和中文普通模式文案；普通模式未发现伪造指标或内部对象名。
 

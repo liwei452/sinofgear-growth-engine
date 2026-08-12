@@ -1013,7 +1013,11 @@ class LeadAnalysisService:
         if decision is not None:
             from apps.ai.routing import create_execution_intent
 
-            create_execution_intent(job=job, decision=decision, created_by=actor)
+            create_execution_intent(
+                job=job, decision=decision, created_by=actor,
+                provider_prompt=_render_lead_prompt(prompt.template, snapshot),
+                provider_schema=prompt.output_schema,
+            )
         with lead_history_writes():
             LeadAnalysisBinding.objects.create(
                 organization=organization,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_UP
 
@@ -176,13 +177,28 @@ def route_ai_work(
 
 
 @transaction.atomic
-def create_execution_intent(*, job, decision, created_by=None) -> AIExecutionIntent:
+def _provider_input_digest(prompt: str, schema: dict) -> str:
+    encoded = json.dumps(
+        {"prompt": prompt, "schema": schema}, ensure_ascii=False,
+        sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def create_execution_intent(
+    *, job, decision, created_by=None, provider_prompt="", provider_schema=None
+) -> AIExecutionIntent:
     locked_job = Job.objects.select_for_update().get(pk=job.pk)
     existing = AIExecutionIntent.objects.filter(job=locked_job).first()
     if existing is not None:
         return existing
     if str(locked_job.organization_id) != str(decision.organization_id):
         raise ValidationError("Routing decision organization does not match the job.")
+    schema = provider_schema if isinstance(provider_schema, dict) else {}
+    if provider_prompt or schema:
+        build_provider_input(
+            prompt=provider_prompt, schema=schema, snapshot=locked_job.input_snapshot
+        )
     return AIExecutionIntent.objects.create(
         job=locked_job,
         organization_id=decision.organization_id,
@@ -196,7 +212,24 @@ def create_execution_intent(*, job, decision, created_by=None) -> AIExecutionInt
         timeout_seconds=decision.timeout_seconds,
         estimated_input_tokens=decision.estimated_input_tokens,
         reserved_cost_usd=decision.reserved_cost_usd,
+        provider_prompt=provider_prompt,
+        provider_schema=schema,
+        provider_input_sha256=(
+            _provider_input_digest(provider_prompt, schema)
+            if provider_prompt or schema else ""
+        ),
         created_by=created_by,
+    )
+
+
+def validate_frozen_provider_input(intent) -> bool:
+    return (
+        isinstance(intent.provider_prompt, str)
+        and isinstance(intent.provider_schema, dict)
+        and bool(intent.provider_prompt)
+        and bool(intent.provider_schema)
+        and intent.provider_input_sha256
+        == _provider_input_digest(intent.provider_prompt, intent.provider_schema)
     )
 
 

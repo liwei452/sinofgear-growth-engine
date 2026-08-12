@@ -384,7 +384,8 @@ class GenerateMasterView(APIView):
                 )
                 if decision is not None:
                     create_execution_intent(
-                        job=job, decision=decision, created_by=request.user
+                        job=job, decision=decision, created_by=request.user,
+                        provider_prompt=rendered, provider_schema=prompt.output_schema,
                     )
         except (ValidationError, PermissionDenied) as error:
             return Response({"errors": {"ai": [str(error)]}}, status=400)

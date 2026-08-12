@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 from string import Formatter
+from uuid import uuid4
 
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -28,6 +29,7 @@ from integrations.ai.providers import (
 
 from .budget import (
     BudgetExceeded,
+    calculate_actual_cost,
     reconcile_usage,
     reserve_additional_call,
     reserve_budget,
@@ -35,12 +37,18 @@ from .budget import (
 from .models import (
     AIExecutionIntent,
     AIProviderConfiguration,
+    AIProviderCall,
     AIRun,
     AIUsageAttempt,
     PromptVersion,
     ai_audit_writes,
 )
-from .routing import InputBudgetExceeded, build_provider_input, validate_routing_snapshot
+from .routing import (
+    InputBudgetExceeded,
+    build_provider_input,
+    validate_frozen_provider_input,
+    validate_routing_snapshot,
+)
 
 
 MAX_PROMPT_CHARS = 50_000
@@ -91,6 +99,7 @@ _RETRYABLE_ERRORS = (
 )
 MAX_TRANSPORT_RETRIES = 2
 MAX_RETRY_DELAY_SECONDS = 300
+CALL_LEASE_SECONDS = 180
 
 
 def _validate_generation_input(snapshot: dict, *, organization_id) -> None:
@@ -199,7 +208,22 @@ def _record_success(
     if run.status != AIRun.Status.RUNNING:
         return run
     if job.status == Job.Status.CANCELED:
-        return _record_canceled_run(run, usage_attempt=usage_attempt)
+        if usage_attempt is not None:
+            reconcile_status = (
+                AIUsageAttempt.Status.FAILED
+                if AIProviderCall.objects.filter(
+                    run=run,
+                    status__in=[
+                        AIProviderCall.Status.CALLING,
+                        AIProviderCall.Status.SUCCEEDED,
+                        AIProviderCall.Status.AMBIGUOUS,
+                    ],
+                ).exists()
+                else AIUsageAttempt.Status.CANCELED
+            )
+            reconcile_usage(usage_attempt, metadata, reconcile_status)
+            usage_attempt = None
+        return _record_canceled_run(run)
     run.status = AIRun.Status.SUCCEEDED
     run.output_json = output
     run.confidence = Decimal("1.0000")
@@ -239,7 +263,21 @@ def _record_failure(
     if run.status != AIRun.Status.RUNNING:
         return run
     if job.status == Job.Status.CANCELED:
-        return _record_canceled_run(run, usage_attempt=usage_attempt)
+        if usage_attempt is not None:
+            call_started = AIProviderCall.objects.filter(
+                run=run,
+                status__in=[
+                    AIProviderCall.Status.CALLING,
+                    AIProviderCall.Status.SUCCEEDED,
+                    AIProviderCall.Status.AMBIGUOUS,
+                ],
+            ).exists()
+            reconcile_usage(
+                usage_attempt, usage_metadata or {},
+                AIUsageAttempt.Status.FAILED if call_started
+                else AIUsageAttempt.Status.CANCELED,
+            )
+        return _record_canceled_run(run)
     run.status = AIRun.Status.FAILED
     run.output_json = None
     normalized_error = normalize_persisted_error(error)
@@ -378,6 +416,110 @@ def _schedule_retry(run_id, *, retry_count, countdown):
     return run
 
 
+@transaction.atomic
+def _reserve_and_schedule_retry(run, usage_attempt, *, retry_count, countdown):
+    # The additional reservation and visible due state commit together. A crash
+    # before commit leaves neither; a crash after commit is recoverable by any
+    # duplicate/periodic task delivery observing next_retry_at.
+    reserve_additional_call(usage_attempt)
+    return _schedule_retry(
+        run.id, retry_count=retry_count, countdown=countdown
+    )
+
+
+@transaction.atomic
+def _claim_provider_call(run, usage_attempt, *, generation: int):
+    locked_run = AIRun.objects.select_for_update().get(pk=run.pk)
+    now = timezone.now()
+    call = AIProviderCall.objects.select_for_update().filter(
+        run=locked_run, generation=generation
+    ).first()
+    if call is not None:
+        if call.status == AIProviderCall.Status.CALLING:
+            if call.lease_expires_at and call.lease_expires_at > now:
+                return None, None
+            call.status = AIProviderCall.Status.AMBIGUOUS
+            call.lease_token = None
+            call.lease_expires_at = None
+            call.finished_at = now
+            call.save(update_fields=[
+                "status", "lease_token", "lease_expires_at", "finished_at"
+            ])
+            if locked_run.transport_retry_count >= MAX_TRANSPORT_RETRIES:
+                return None, None
+            reserve_additional_call(usage_attempt)
+            locked_run.transport_retry_count += 1
+            locked_run.next_retry_at = None
+            with ai_audit_writes():
+                locked_run.save(
+                    update_fields=["transport_retry_count", "next_retry_at"]
+                )
+            generation += 1
+            call = None
+        elif call.status in {
+            AIProviderCall.Status.SUCCEEDED, AIProviderCall.Status.FAILED,
+            AIProviderCall.Status.AMBIGUOUS, AIProviderCall.Status.CANCELED_PRE_CALL,
+        }:
+            return None, None
+    if call is None:
+        call = AIProviderCall.objects.create(
+            run=locked_run, generation=generation,
+            status=AIProviderCall.Status.RESERVED,
+            reserved_usd=usage_attempt.intent.reserved_cost_usd,
+        )
+    token = uuid4()
+    call.status = AIProviderCall.Status.CALLING
+    call.lease_token = token
+    call.lease_expires_at = now + timedelta(seconds=CALL_LEASE_SECONDS)
+    call.save(update_fields=["status", "lease_token", "lease_expires_at"])
+    return call, token
+
+
+@transaction.atomic
+def _finish_provider_call(call_id, token, *, status, metadata=None):
+    call = AIProviderCall.objects.select_for_update().get(pk=call_id)
+    if call.status != AIProviderCall.Status.CALLING or call.lease_token != token:
+        return call
+    safe = metadata if isinstance(metadata, dict) else {}
+    call.status = status
+    call.request_id = str(safe.get("request_id", ""))[:128]
+    call.input_tokens = int(safe.get("input_tokens", 0))
+    call.output_tokens = int(safe.get("output_tokens", 0))
+    call.cache_hit_tokens = int(safe.get("cache_hit_tokens", 0))
+    call.finish_reason = str(safe.get("finish_reason", ""))[:64]
+    call.duration_ms = int(safe.get("duration_ms", safe.get("latency_ms", 0)))
+    if status == AIProviderCall.Status.SUCCEEDED:
+        try:
+            call.actual_usd = calculate_actual_cost(
+                model=call.run.model, metadata=safe
+            )
+        except ValueError:
+            call.actual_usd = call.reserved_usd
+    elif status in {
+        AIProviderCall.Status.FAILED, AIProviderCall.Status.AMBIGUOUS
+    }:
+        call.actual_usd = call.reserved_usd
+    else:
+        call.actual_usd = Decimal("0")
+    call.lease_token = None
+    call.lease_expires_at = None
+    call.finished_at = timezone.now()
+    call.save(update_fields=[
+        "status", "request_id", "input_tokens", "output_tokens",
+        "cache_hit_tokens", "finish_reason", "duration_ms", "lease_token",
+        "lease_expires_at", "finished_at", "actual_usd",
+    ])
+    return call
+
+
+def _repair_prompt(prompt: str) -> str:
+    return (
+        prompt
+        + "\n\nREPAIR_INSTRUCTION: Return one JSON object that exactly matches the "
+          "frozen JSON Schema. Do not include explanations or markdown."
+    )
+
+
 def execute_generation_job(
     job_id, *, prompt_version_id, provider_code: str | None = None,
     worker_id="ai-worker", result_writer=None, input_validator=None,
@@ -468,23 +610,31 @@ def execute_generation_job(
         _validate_generation_input(snapshot, organization_id=job.organization_id)
     else:
         input_validator(snapshot, organization_id=job.organization_id)
-    try:
-        rendered = (
-            _render_prompt(prompt.template, snapshot)
-            if prompt_renderer is None
-            else prompt_renderer(prompt.template, snapshot)
-        )
-    except GenerationError as exc:
-        raise GenerationPreflightError(exc.code, str(exc)) from exc
     if intent is not None:
+        if not validate_frozen_provider_input(intent):
+            raise GenerationPreflightError(
+                "invalid_frozen_provider_input", "Frozen provider input is invalid."
+            )
+        rendered = intent.provider_prompt
+        output_schema = intent.provider_schema
         try:
-            build_provider_input(prompt=rendered, schema=prompt.output_schema, snapshot=snapshot)
+            build_provider_input(prompt=rendered, schema=output_schema, snapshot=snapshot)
         except InputBudgetExceeded as exc:
             raise GenerationPreflightError("provider_input_too_large", str(exc)) from None
+    else:
+        output_schema = prompt.output_schema
+        try:
+            rendered = (
+                _render_prompt(prompt.template, snapshot)
+                if prompt_renderer is None
+                else prompt_renderer(prompt.template, snapshot)
+            )
+        except GenerationError as exc:
+            raise GenerationPreflightError(exc.code, str(exc)) from exc
     try:
-        output_validator_class = validator_for(prompt.output_schema)
-        output_validator_class.check_schema(prompt.output_schema)
-        schema_validator = output_validator_class(prompt.output_schema)
+        output_validator_class = validator_for(output_schema)
+        output_validator_class.check_schema(output_schema)
+        schema_validator = output_validator_class(output_schema)
     except Exception as exc:
         raise GenerationPreflightError(
             "invalid_prompt_schema", "Prompt output schema is invalid."
@@ -544,10 +694,24 @@ def execute_generation_job(
     metadata = {}
     repairs_allowed = max(invalid_output_retries, 1 if intent is not None else 0)
     for invalid_attempt in range(repairs_allowed + 1):
+        call = call_token = None
+        if intent is not None:
+            generation = run.transport_retry_count + invalid_attempt + 1
+            call, call_token = _claim_provider_call(
+                run, usage_attempt, generation=generation
+            )
+            if call is None:
+                return AIRun.objects.get(pk=run.pk)
+            if Job.objects.filter(pk=claimed.id, status=Job.Status.CANCELED).exists():
+                _finish_provider_call(
+                    call.id, call_token,
+                    status=AIProviderCall.Status.CANCELED_PRE_CALL,
+                )
+                return _record_canceled_run(run, usage_attempt=usage_attempt)
         try:
             result = provider.generate(
-                prompt=rendered,
-                schema=prompt.output_schema,
+                prompt=rendered if invalid_attempt == 0 else _repair_prompt(rendered),
+                schema=output_schema,
                 **({"execution": execution} if execution is not None else {}),
             )
             if not isinstance(result, ProviderResult):
@@ -565,36 +729,67 @@ def execute_generation_job(
             if output_validator is not None:
                 output_validator(output, snapshot=snapshot)
         except _RETRYABLE_ERRORS as exc:
+            if call is not None:
+                _finish_provider_call(
+                    call.id, call_token, status=AIProviderCall.Status.AMBIGUOUS
+                )
             if intent is not None and run.transport_retry_count < MAX_TRANSPORT_RETRIES:
+                retry_count = run.transport_retry_count + 1
+                countdown = _retry_delay(exc, retry_count)
                 try:
-                    reserve_additional_call(usage_attempt)
+                    _reserve_and_schedule_retry(
+                        run, usage_attempt, retry_count=retry_count,
+                        countdown=countdown,
+                    )
                 except BudgetExceeded as budget_error:
                     error = {"code": str(budget_error)}
                     break
-                retry_count = run.transport_retry_count + 1
-                countdown = _retry_delay(exc, retry_count)
-                _schedule_retry(run.id, retry_count=retry_count, countdown=countdown)
                 raise ProviderRetryRequired(
                     countdown=countdown, retry_count=retry_count
                 ) from None
             error = _provider_error(exc)
         except (ProviderAuthenticationError, ProviderBalanceError) as exc:
+            if call is not None:
+                _finish_provider_call(
+                    call.id, call_token, status=AIProviderCall.Status.FAILED
+                )
             error = _provider_error(exc)
         except ProviderInvalidOutputError:
+            if call is not None:
+                _finish_provider_call(
+                    call.id, call_token, status=AIProviderCall.Status.FAILED
+                )
             error = {
                 "code": "invalid_provider_output",
                 "message": invalid_output_message,
             }
         except GenerationError as exc:
+            if call is not None:
+                _finish_provider_call(
+                    call.id, call_token, status=AIProviderCall.Status.FAILED
+                )
             error = {"code": exc.code, "message": str(exc)}
         except JSONSchemaValidationError:
+            if call is not None:
+                _finish_provider_call(
+                    call.id, call_token, status=AIProviderCall.Status.FAILED
+                )
             error = {
                 "code": "invalid_provider_output",
                 "message": invalid_output_message,
             }
         except Exception:
+            if call is not None:
+                _finish_provider_call(
+                    call.id, call_token, status=AIProviderCall.Status.AMBIGUOUS
+                )
             error = {"code": "provider_error", "message": "AI provider generation failed."}
         else:
+            if call is not None:
+                _finish_provider_call(
+                    call.id, call_token, status=AIProviderCall.Status.SUCCEEDED,
+                    metadata=metadata,
+                )
             try:
                 return _record_success(
                     run.id,

@@ -1,4 +1,5 @@
 from copy import deepcopy
+from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ from django.utils import timezone
 
 from apps.ai.models import (
     AIExecutionIntent,
+    AIProviderCall,
     AIProviderConfiguration,
     AIRun,
     AIUsageAttempt,
@@ -203,6 +205,7 @@ def _deepseek_job(organization, frozen_input, prompt, *, max_attempts=3):
         input_snapshot=snapshot,
         max_attempts=max_attempts,
     )
+    rendered = "Precision Gear|Germany|LINKEDIN|Request a quote|ALPHA, ZETA"
     AIExecutionIntent.objects.create(
         job=job,
         organization=organization,
@@ -216,6 +219,8 @@ def _deepseek_job(organization, frozen_input, prompt, *, max_attempts=3):
         timeout_seconds=30,
         estimated_input_tokens=100,
         reserved_cost_usd="0.001000",
+        provider_prompt=rendered,
+        provider_schema=OUTPUT_SCHEMA,
     )
     prompt.provider = "deepseek"
     prompt.model = "deepseek-v4-flash"
@@ -231,10 +236,12 @@ class ResultProvider:
     def __init__(self, results):
         self.results = list(results)
         self.executions = []
+        self.prompts = []
 
     def generate(self, *, prompt, schema, execution):
-        del prompt, schema
+        del schema
         self.executions.append(execution)
+        self.prompts.append(prompt)
         result = self.results.pop(0)
         if isinstance(result, Exception):
             raise result
@@ -279,6 +286,64 @@ def test_deepseek_uses_frozen_intent_and_reconciles_safe_metadata(
     assert usage.input_tokens == 20
     assert usage.additional_reserved_usd == 0
     assert "reasoning" not in str(AIRun.objects.values()).lower()
+    call = AIProviderCall.objects.get(run=run)
+    assert call.status == AIProviderCall.Status.SUCCEEDED
+    assert call.request_id == "req-safe"
+
+
+@pytest.mark.django_db
+def test_execution_uses_submission_frozen_prompt_and_schema_after_prompt_changes(
+    organization, frozen_input, prompt
+):
+    job = _deepseek_job(organization, frozen_input, prompt)
+    original_prompt = job.ai_execution_intent.provider_prompt
+    with ai_audit_writes():
+        PromptVersion.objects.filter(pk=prompt.pk).update(
+            template="MUTATED {product_name}", output_schema={"type": "string"}
+        )
+
+    class Capturing(ResultProvider):
+        def generate(self, *, prompt, schema, execution):
+            self.prompt = prompt
+            self.schema = schema
+            return super().generate(prompt=prompt, schema=schema, execution=execution)
+
+    provider = Capturing([ProviderResult(
+        output={"title": "Safe", "body": "Body", "cta": "Act", "concept_codes": ["ALPHA"]},
+        metadata={"model": "deepseek-v4-flash", "input_tokens": 1,
+                  "output_tokens": 1, "cache_hit_tokens": 0},
+    )])
+    provider_registry.register("deepseek", provider, replace=True)
+
+    execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert provider.prompt == original_prompt
+    assert provider.schema == OUTPUT_SCHEMA
+
+
+@pytest.mark.django_db
+def test_active_provider_call_lease_blocks_duplicate_delivery_before_network(
+    organization, frozen_input, prompt
+):
+    job = _deepseek_job(organization, frozen_input, prompt)
+    claimed = JobService.claim(worker_id="first", job_id=job.id)
+    from apps.ai.orchestration import _create_run
+    audit = _create_run(
+        job=claimed, prompt=prompt, provider="deepseek",
+        model="deepseek-v4-flash", input_snapshot=claimed.input_snapshot,
+    )
+    AIProviderCall.objects.create(
+        run=audit, generation=1, status=AIProviderCall.Status.CALLING,
+        lease_token=uuid4(), lease_expires_at=timezone.now() + timedelta(minutes=2),
+        reserved_usd="0.001000",
+    )
+    provider = ResultProvider([])
+    provider_registry.register("deepseek", provider, replace=True)
+
+    returned = execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert returned.pk == audit.pk
+    assert provider.executions == []
 
 
 @pytest.mark.django_db
@@ -377,7 +442,9 @@ def test_cancellation_after_reservation_releases_budget_and_discards_result(
     usage = AIUsageAttempt.objects.get(run=run)
     assert run.status == AIRun.Status.CANCELED
     assert run.output_json is None
-    assert usage.status == AIUsageAttempt.Status.CANCELED
+    assert usage.status == AIUsageAttempt.Status.FAILED
+    assert usage.actual_usd == usage.reserved_usd
+    usage.usage_day.refresh_from_db()
     assert usage.usage_day.reserved_usd == 0
 
 
@@ -407,6 +474,9 @@ def test_invalid_output_gets_one_safe_repair_using_same_intent(
     assert run.repair_attempted is True
     assert len(provider.executions) == 2
     assert provider.executions[0] == provider.executions[1]
+    assert provider.prompts[0] != provider.prompts[1]
+    assert "REPAIR_INSTRUCTION" in provider.prompts[1]
+    assert "invalid" not in provider.prompts[1].lower()
     usage = AIUsageAttempt.objects.get(run=run)
     reserved = Decimal(str(job.ai_execution_intent.reserved_cost_usd))
     assert usage.additional_reserved_usd == reserved

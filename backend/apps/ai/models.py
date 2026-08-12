@@ -246,6 +246,9 @@ class AIExecutionIntent(models.Model):
     timeout_seconds = models.PositiveSmallIntegerField()
     estimated_input_tokens = models.PositiveIntegerField()
     reserved_cost_usd = models.DecimalField(max_digits=12, decimal_places=6)
+    provider_prompt = models.TextField(blank=True)
+    provider_schema = models.JSONField(default=dict)
+    provider_input_sha256 = models.CharField(max_length=64, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -269,6 +272,15 @@ class AIExecutionIntent(models.Model):
     def save(self, *args, **kwargs):
         if not self._state.adding:
             raise ValidationError("AI execution intents are immutable.")
+        if self.provider_prompt and self.provider_schema and not self.provider_input_sha256:
+            import hashlib
+            import json
+
+            encoded = json.dumps(
+                {"prompt": self.provider_prompt, "schema": self.provider_schema},
+                ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")
+            self.provider_input_sha256 = hashlib.sha256(encoded).hexdigest()
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
@@ -358,5 +370,44 @@ class AIUsageAttempt(models.Model):
                     )
                 ),
                 name="ai_usage_attempt_reconcile_state",
+            ),
+        ]
+
+
+class AIProviderCall(models.Model):
+    class Status(models.TextChoices):
+        RESERVED = "RESERVED", "Reserved"
+        CALLING = "CALLING", "Calling"
+        SUCCEEDED = "SUCCEEDED", "Succeeded"
+        FAILED = "FAILED", "Failed"
+        AMBIGUOUS = "AMBIGUOUS", "Ambiguous"
+        CANCELED_PRE_CALL = "CANCELED_PRE_CALL", "Canceled before call"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    run = models.ForeignKey(AIRun, on_delete=models.PROTECT, related_name="provider_calls")
+    generation = models.PositiveSmallIntegerField()
+    status = models.CharField(max_length=24, choices=Status.choices)
+    lease_token = models.UUIDField(null=True, blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    reserved_usd = models.DecimalField(max_digits=12, decimal_places=6)
+    actual_usd = models.DecimalField(max_digits=12, decimal_places=6, default=0)
+    request_id = models.CharField(max_length=128, blank=True)
+    input_tokens = models.PositiveIntegerField(default=0)
+    output_tokens = models.PositiveIntegerField(default=0)
+    cache_hit_tokens = models.PositiveIntegerField(default=0)
+    finish_reason = models.CharField(max_length=64, blank=True)
+    duration_ms = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["run_id", "generation"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run", "generation"], name="ai_unique_provider_call_generation"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(reserved_usd__gte=0, actual_usd__gte=0),
+                name="ai_provider_call_cost_nonnegative",
             ),
         ]

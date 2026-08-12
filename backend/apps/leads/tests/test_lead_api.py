@@ -429,7 +429,7 @@ def test_deepseek_schedule_routes_persisted_conflicting_requirements_to_pro(
 
     provider_registry.register("deepseek", InvalidButReachedProvider(), replace=True)
     run = execute_lead_analysis_job(intent.job_id)
-    assert run.error["code"] == "invalid_provider_output"
+    assert run.error["code"] == "invalid_provider_output_after_repair"
 
 
 def test_deepseek_schedule_routes_ordinary_persisted_evidence_to_flash(

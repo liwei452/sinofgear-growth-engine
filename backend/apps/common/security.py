@@ -36,6 +36,7 @@ _CONTROLLED_ERROR_MESSAGES = {
     "job_error": "Job execution failed.",
     "provider_error": "AI provider generation failed.",
     "invalid_provider_output": "Provider output did not match the required schema.",
+    "invalid_provider_output_after_repair": "Provider output remained invalid after repair.",
     "output_too_large": "Provider output exceeds the size limit.",
     "ai_run_start_failed": "AI audit run could not start.",
     "job_canceled": "Job was canceled.",
@@ -50,6 +51,8 @@ _CONTROLLED_ERROR_MESSAGES = {
     "deepseek_not_connected": "AI provider is not connected.",
     "deepseek_daily_budget_exceeded": "AI daily budget was reached.",
     "deepseek_budget_unavailable": "AI budget reservation failed.",
+    "deepseek_retry_exhausted": "AI provider retry limit was reached.",
+    "deepseek_usage_exceeds_reservation": "AI provider usage exceeded its reservation.",
     "SOURCE_IMPORT_FAILED": "Public source import failed.",
 }
 

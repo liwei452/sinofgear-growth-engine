@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass
+from enum import Enum
 from datetime import timedelta
 from decimal import Decimal
 from string import Formatter
@@ -88,6 +89,12 @@ class ProviderExecution:
     timeout_seconds: int
     policy_code: str
     policy_version: int
+
+
+class ClaimOutcome(Enum):
+    ACQUIRED = "ACQUIRED"
+    ACTIVE = "ACTIVE"
+    RETRY_EXHAUSTED = "RETRY_EXHAUSTED"
 
 
 _SAFE_PROVIDER_METADATA = frozenset({
@@ -335,6 +342,7 @@ def _reconcile_orphaned_run(*, job_id, run_id) -> AIRun:
         ):
             call.status = AIProviderCall.Status.AMBIGUOUS
             call.actual_usd = call.reserved_usd
+            call.actual_usd = call.reserved_usd
             call.lease_token = None
             call.lease_expires_at = None
             call.finished_at = now
@@ -484,16 +492,16 @@ def _claim_provider_call(run, usage_attempt):
     if call is not None:
         if call.status == AIProviderCall.Status.CALLING:
             if call.lease_expires_at and call.lease_expires_at > now:
-                return None, None
+                return ClaimOutcome.ACTIVE, None, None
             call.status = AIProviderCall.Status.AMBIGUOUS
             call.lease_token = None
             call.lease_expires_at = None
             call.finished_at = now
             call.save(update_fields=[
-                "status", "lease_token", "lease_expires_at", "finished_at"
+                "status", "actual_usd", "lease_token", "lease_expires_at", "finished_at"
             ])
             if locked_run.transport_retry_count >= MAX_TRANSPORT_RETRIES:
-                return None, None
+                return ClaimOutcome.RETRY_EXHAUSTED, None, None
             reserve_additional_call(usage_attempt)
             locked_run.transport_retry_count += 1
             locked_run.next_retry_at = None
@@ -508,7 +516,7 @@ def _claim_provider_call(run, usage_attempt):
             AIProviderCall.Status.SUCCEEDED, AIProviderCall.Status.FAILED,
             AIProviderCall.Status.AMBIGUOUS, AIProviderCall.Status.CANCELED_PRE_CALL,
         }:
-            return None, None
+            return ClaimOutcome.ACTIVE, None, None
     if call is None:
         call = AIProviderCall.objects.create(
             run=locked_run, generation=generation,
@@ -523,7 +531,7 @@ def _claim_provider_call(run, usage_attempt):
         seconds=max(CALL_LEASE_SECONDS, int(usage_attempt.intent.timeout_seconds) + 30)
     )
     call.save(update_fields=["status", "lease_token", "lease_expires_at"])
-    return call, token
+    return ClaimOutcome.ACQUIRED, call, token
 
 
 @transaction.atomic
@@ -546,6 +554,9 @@ def _finish_provider_call(call_id, token, *, status, metadata=None):
             )
         except ValueError:
             call.actual_usd = call.reserved_usd
+        if call.actual_usd > call.reserved_usd:
+            call.actual_usd = call.reserved_usd
+            call.anomaly_code = "deepseek_usage_exceeds_reservation"
     elif status in {
         AIProviderCall.Status.FAILED, AIProviderCall.Status.AMBIGUOUS
     }:
@@ -558,7 +569,7 @@ def _finish_provider_call(call_id, token, *, status, metadata=None):
     call.save(update_fields=[
         "status", "request_id", "input_tokens", "output_tokens",
         "cache_hit_tokens", "finish_reason", "duration_ms", "lease_token",
-        "lease_expires_at", "finished_at", "actual_usd",
+        "lease_expires_at", "finished_at", "actual_usd", "anomaly_code",
     ])
     return call
 
@@ -587,9 +598,20 @@ def _aggregate_call_actual(run) -> Decimal:
 
 
 def _reconcile_from_calls(usage_attempt, run, status, metadata=None):
+    usage_attempt.refresh_from_db()
+    total_reserved = usage_attempt.reserved_usd + usage_attempt.additional_reserved_usd
+    call_reserved = sum(
+        (row.reserved_usd for row in AIProviderCall.objects.filter(run=run)),
+        Decimal("0"),
+    )
+    if call_reserved > total_reserved:
+        raise GenerationError(
+            "deepseek_usage_exceeds_reservation", "AI call ledger exceeded reservation."
+        )
+    actual = min(_aggregate_call_actual(run), total_reserved)
     reconcile_usage(
         usage_attempt, metadata or {}, status,
-        actual_override=_aggregate_call_actual(run),
+        actual_override=actual,
     )
 
 
@@ -776,8 +798,14 @@ def execute_generation_job(
     for invalid_attempt in range(repairs_allowed + 1):
         call = call_token = None
         if intent is not None:
-            call, call_token = _claim_provider_call(run, usage_attempt)
-            if call is None:
+            claim_outcome, call, call_token = _claim_provider_call(run, usage_attempt)
+            if claim_outcome == ClaimOutcome.RETRY_EXHAUSTED:
+                return _record_failure(
+                    run.id, job_id=claimed.id, claim_token=token,
+                    error={"code": "deepseek_retry_exhausted"},
+                    usage_attempt=usage_attempt,
+                )
+            if claim_outcome != ClaimOutcome.ACQUIRED:
                 return AIRun.objects.get(pk=run.pk)
             if Job.objects.filter(pk=claimed.id, status=Job.Status.CANCELED).exists():
                 _finish_provider_call(
@@ -841,7 +869,11 @@ def execute_generation_job(
                     call.id, call_token, status=AIProviderCall.Status.FAILED
                 )
             error = {
-                "code": "invalid_provider_output",
+                "code": (
+                    "invalid_provider_output_after_repair"
+                    if call is not None and call.phase == AIProviderCall.Phase.REPAIR
+                    else "invalid_provider_output"
+                ),
                 "message": invalid_output_message,
             }
         except GenerationError as exc:
@@ -856,7 +888,11 @@ def execute_generation_job(
                     call.id, call_token, status=AIProviderCall.Status.FAILED
                 )
             error = {
-                "code": "invalid_provider_output",
+                "code": (
+                    "invalid_provider_output_after_repair"
+                    if call is not None and call.phase == AIProviderCall.Phase.REPAIR
+                    else "invalid_provider_output"
+                ),
                 "message": invalid_output_message,
             }
         except Exception:

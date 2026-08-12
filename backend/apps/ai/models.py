@@ -406,6 +406,7 @@ class AIProviderCall(models.Model):
     cache_hit_tokens = models.PositiveIntegerField(default=0)
     finish_reason = models.CharField(max_length=64, blank=True)
     duration_ms = models.PositiveIntegerField(default=0)
+    anomaly_code = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(null=True, blank=True)
 

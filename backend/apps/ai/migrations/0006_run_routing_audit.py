@@ -84,6 +84,7 @@ class Migration(migrations.Migration):
                 ("cache_hit_tokens", models.PositiveIntegerField(default=0)),
                 ("finish_reason", models.CharField(blank=True, max_length=64)),
                 ("duration_ms", models.PositiveIntegerField(default=0)),
+                ("anomaly_code", models.CharField(blank=True, max_length=64)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("finished_at", models.DateTimeField(blank=True, null=True)),
                 ("run", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="provider_calls", to="ai.airun")),

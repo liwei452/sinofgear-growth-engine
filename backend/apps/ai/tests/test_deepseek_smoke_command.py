@@ -3,7 +3,12 @@ from io import StringIO
 import pytest
 from django.core.management import CommandError, call_command
 
-from apps.ai.models import AIProviderConfiguration
+from apps.ai.models import (
+    AIProviderCall,
+    AIProviderConfiguration,
+    AIRun,
+    AIUsageAttempt,
+)
 from apps.identity.models import Organization
 from integrations.ai.providers import ProviderResult, ProviderUnavailableError
 
@@ -24,8 +29,13 @@ class FakeProvider:
         type(self).calls.append((prompt, schema, execution))
         if type(self).error is not None:
             raise type(self).error
+        output = (
+            {"title": "Gear test", "body": "Schema-bound smoke output."}
+            if "title" in schema.get("properties", {})
+            else {"connected": True}
+        )
         return ProviderResult(
-            output={"connected": True},
+            output=output,
             metadata={
                 "model": "deepseek-v4-flash",
                 "thinking_enabled": False,
@@ -151,6 +161,23 @@ def test_smoke_command_outputs_only_safe_admin_fields(configured_org):
     _, _, execution = FakeProvider.calls[0]
     assert execution.model == "deepseek-v4-flash"
     assert execution.thinking_enabled is False
+    run_id = next(
+        field.split("=", 1)[1]
+        for field in output.split()
+        if field.startswith("run_id=")
+    )
+    run = AIRun.objects.get(pk=run_id)
+    assert run.organization == configured_org
+    assert run.provider == "deepseek"
+    assert run.model == "deepseek-v4-flash"
+    assert run.status == AIRun.Status.SUCCEEDED
+    usage = AIUsageAttempt.objects.get(run=run)
+    assert usage.status == AIUsageAttempt.Status.SUCCEEDED
+    assert usage.input_tokens == 5
+    assert usage.output_tokens == 2
+    assert AIProviderCall.objects.filter(
+        run=run, status=AIProviderCall.Status.SUCCEEDED
+    ).count() == 1
 
 
 def test_content_generation_requires_separate_opt_in(configured_org):
@@ -167,6 +194,40 @@ def test_provider_failure_is_reported_without_provider_detail(configured_org):
         "private provider response test-credential-placeholder"
     )
 
-    with pytest.raises(CommandError, match="deepseek smoke test failed") as caught:
+    with pytest.raises(CommandError, match="provider_unavailable") as caught:
         run_smoke(configured_org)
     assert "test-credential-placeholder" not in str(caught.value)
+    run = AIRun.objects.get(organization=configured_org)
+    assert run.status == AIRun.Status.FAILED
+    assert run.error == {"code": "provider_unavailable"}
+
+    pending = [caught.value]
+    seen = set()
+    while pending:
+        value = pending.pop()
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        assert "test-credential-placeholder" not in repr(value)
+        if isinstance(value, BaseException):
+            pending.extend(item for item in (value.__cause__, value.__context__) if item)
+            traceback = value.__traceback__
+            while traceback is not None:
+                for local_value in traceback.tb_frame.f_locals.values():
+                    assert "test-credential-placeholder" not in repr(local_value)
+                traceback = traceback.tb_next
+
+
+def test_zero_budget_refuses_before_provider_call(configured_org):
+    AIProviderConfiguration.objects.filter(organization=configured_org).update(
+        daily_budget_usd=0
+    )
+
+    with pytest.raises(CommandError, match="deepseek_daily_budget_exceeded"):
+        run_smoke(configured_org)
+
+    assert FakeProvider.calls == []
+    run = AIRun.objects.get(organization=configured_org)
+    assert run.status == AIRun.Status.FAILED
+    assert run.error == {"code": "deepseek_daily_budget_exceeded"}
+    assert not AIProviderCall.objects.filter(run=run).exists()

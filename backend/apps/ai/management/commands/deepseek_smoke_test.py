@@ -1,17 +1,13 @@
 from __future__ import annotations
 
 import platform
-from dataclasses import dataclass
-from uuid import uuid4
-
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
-from apps.ai.budget import calculate_actual_cost
+from apps.ai.deepseek_smoke import run_audited_deepseek_smoke
 from apps.ai.models import AIProviderConfiguration
 from apps.identity.models import Organization
 from integrations.ai.deepseek import DeepSeekProvider
-from integrations.ai.providers import ProviderCallError
 from integrations.credentials import (
     CredentialStoreUnavailableError,
     get_credential_store,
@@ -35,13 +31,27 @@ _GENERATION_SCHEMA = {
 }
 
 
-@dataclass(frozen=True)
-class _SmokeExecution:
-    organization_id: object
-    model: str = "deepseek-v4-flash"
-    thinking_enabled: bool = False
-    max_output_tokens: int = 64
-    timeout_seconds: int = 30
+def _execute_checks(*, organization, credential_store, include_content_generation):
+    provider = DeepSeekProvider(credential_store=credential_store)
+    checks = [('Return exactly {"connected": true}.', _CONNECTION_SCHEMA, "connection")]
+    if include_content_generation:
+        checks.append(
+            (
+                "Write one short industrial gear manufacturing test message.",
+                _GENERATION_SCHEMA,
+                "content-generation",
+            )
+        )
+    return [
+        run_audited_deepseek_smoke(
+            organization=organization,
+            provider=provider,
+            prompt=prompt,
+            schema=schema,
+            check_code=check_code,
+        )
+        for prompt, schema, check_code in checks
+    ]
 
 
 class Command(BaseCommand):
@@ -89,55 +99,30 @@ class Command(BaseCommand):
             credential_store = get_credential_store()
         except CredentialStoreUnavailableError:
             raise CommandError("DeepSeek requires Windows Credential Manager.") from None
-        provider = DeepSeekProvider(credential_store=credential_store)
-        execution = _SmokeExecution(
-            organization_id=organization.id,
-            timeout_seconds=configuration.timeout_seconds,
+        del configuration
+        outcomes = _execute_checks(
+            organization=organization,
+            credential_store=credential_store,
+            include_content_generation=options.get("include_content_generation"),
         )
-        checks = [
-            (
-                'Return exactly {"connected": true}.',
-                _CONNECTION_SCHEMA,
-            )
-        ]
-        if options.get("include_content_generation"):
-            checks.append(
-                (
-                    "Write one short industrial gear manufacturing test message.",
-                    _GENERATION_SCHEMA,
-                )
-            )
-        for prompt, schema in checks:
-            self._run_check(provider, prompt=prompt, schema=schema, execution=execution)
+        del credential_store
+        for outcome in outcomes:
+            if not outcome.passed:
+                raise CommandError(outcome.error_code or "deepseek smoke test failed") from None
+            self._write_outcome(outcome)
 
-    def _run_check(self, provider, *, prompt, schema, execution):
-        run_id = uuid4()
-        try:
-            result = provider.generate(prompt=prompt, schema=schema, execution=execution)
-            metadata = result.metadata if isinstance(result.metadata, dict) else {}
-            usage = {
-                "input_tokens": self._safe_token(metadata.get("input_tokens")),
-                "output_tokens": self._safe_token(metadata.get("output_tokens")),
-                "cache_hit_tokens": self._safe_token(metadata.get("cache_hit_tokens")),
-            }
-            cost = calculate_actual_cost(model=execution.model, metadata=usage)
-        except (ProviderCallError, ValueError):
-            raise CommandError("deepseek smoke test failed") from None
+    def _write_outcome(self, outcome):
         self.stdout.write(
             " ".join(
                 [
                     "PASS",
-                    f"run_id={run_id}",
-                    f"model={execution.model}",
-                    "thinking=false",
-                    f"input_tokens={usage['input_tokens']}",
-                    f"output_tokens={usage['output_tokens']}",
-                    f"cache_hit_tokens={usage['cache_hit_tokens']}",
-                    f"estimated_cost_usd={cost}",
+                    f"run_id={outcome.run_id}",
+                    f"model={outcome.model}",
+                    f"thinking={str(outcome.thinking_enabled).lower()}",
+                    f"input_tokens={outcome.input_tokens}",
+                    f"output_tokens={outcome.output_tokens}",
+                    f"cache_hit_tokens={outcome.cache_hit_tokens}",
+                    f"estimated_cost_usd={outcome.estimated_cost_usd}",
                 ]
             )
         )
-
-    @staticmethod
-    def _safe_token(value) -> int:
-        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0

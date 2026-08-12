@@ -27,3 +27,15 @@ It creates a uniquely marked operating-system temporary directory, uses dynamic 
 See [the Phase A acceptance guide](docs/phase-a-acceptance.md) for prerequisites, test-only credentials, expected statuses, forced publish-failure recovery, evidence, and cleanup boundaries.
 
 See [the AI-native UI acceptance guide](docs/acceptance/ai-native-ui-redesign.md) for the ordinary-mode browser journeys, viewport coverage, deterministic provider boundaries, CRM export behavior, verification commands, and current limitations.
+
+## DeepSeek on Windows
+
+An administrator connects DeepSeek from **Advanced Settings > AI model**. The API
+key is stored for the signed-in Windows user in Windows Credential Manager; it is
+not stored in Git, `.env`, a backup/zip, the database, browser storage, logs, or
+the installer. A different Windows user or computer must enter the key again.
+
+See [DeepSeek Windows credential operations](docs/operations/deepseek-windows-credentials.md)
+for connection testing, rotation, deletion, reinstall/uninstall, backup, and
+incident response. The paid command-line smoke test is opt-in and must never be
+run by automation.

@@ -1,11 +1,11 @@
 import json
+import hashlib
 import uuid
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from apps.audit.models import AuditLog, ReviewAction, approval_audit_writes
 from apps.audit.services import record_audit_event
 from apps.common.security import scrub_secrets
 from apps.identity.models import Membership, Role
@@ -60,8 +60,17 @@ def _proposal_id(*, organization_id, idempotency_key):
     )
 
 
-def _proposal_matches(proposal, values):
-    return all(getattr(proposal, field) == value for field, value in values.items())
+def _request_fingerprint(values):
+    canonical = {
+        **values,
+        "expires_at": (
+            values["expires_at"].isoformat() if values["expires_at"] else None
+        ),
+    }
+    encoded = json.dumps(
+        canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _lock_decider(*, organization, actor):
@@ -121,11 +130,12 @@ class DirectorService:
         proposal_id = _proposal_id(
             organization_id=organization.id, idempotency_key=key
         )
+        fingerprint = _request_fingerprint(values)
         existing = DirectorProposal.objects.select_for_update().filter(
-            pk=proposal_id, organization=organization
+            organization=organization, idempotency_key=key
         ).first()
         if existing is not None:
-            if not _proposal_matches(existing, values):
+            if existing.request_fingerprint != fingerprint:
                 raise DirectorIdempotencyConflict(
                     "Idempotency key already has a different proposal payload."
                 )
@@ -134,6 +144,8 @@ class DirectorService:
         proposal = DirectorProposal(
             id=proposal_id,
             organization=organization,
+            idempotency_key=key,
+            request_fingerprint=fingerprint,
             **values,
         )
         proposal.full_clean()
@@ -208,7 +220,9 @@ class DirectorService:
 
     @staticmethod
     @transaction.atomic
-    def supersede(*, organization, proposal_id, replacement_id) -> DirectorProposal:
+    def supersede(
+        *, organization, proposal_id, replacement_id, actor
+    ) -> DirectorProposal:
         organization = lock_organization_scope(organization=organization)
         if proposal_id == replacement_id:
             raise ValidationError(
@@ -228,6 +242,7 @@ class DirectorService:
             replacement = proposals[replacement_id]
         except KeyError as error:
             raise DirectorProposal.DoesNotExist from error
+        _lock_decider(organization=organization, actor=actor)
         if proposal.status != DirectorProposal.Status.PENDING:
             raise DirectorStateConflict("Only pending proposals may be superseded.")
         if replacement.status != DirectorProposal.Status.PENDING:
@@ -252,18 +267,18 @@ class DirectorService:
             "version": proposal.version,
             "replacement_id": str(replacement.id),
         }
-        with approval_audit_writes():
-            AuditLog.objects.create(
-                organization=organization,
-                object_type="director.DirectorProposal",
-                object_id=proposal.id,
-                action=ReviewAction.SUPERSEDE,
-                status=proposal.status,
-                object_version=proposal.version,
-                actor=None,
-                before_metadata=before,
-                after_metadata=after,
-            )
+        record_audit_event(
+            organization=organization,
+            object_type="director.DirectorProposal",
+            object_id=proposal.id,
+            action="SUPERSEDE",
+            status=proposal.status,
+            object_version=proposal.version,
+            actor=actor,
+            required_permission=PermissionCode.DIRECTOR_DECIDE,
+            before_metadata=before,
+            after_metadata=after,
+        )
         return proposal
 
 

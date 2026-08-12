@@ -27,6 +27,8 @@ class DirectorProposalQuerySet(models.QuerySet):
             raise ValidationError(
                 "Proposal state may change only through DirectorService."
             )
+        if {"idempotency_key", "request_fingerprint"} & set(kwargs):
+            raise ValidationError("Idempotency identity is immutable.")
         return super().update(**kwargs)
 
     def bulk_update(self, objs, fields, **kwargs):
@@ -37,6 +39,8 @@ class DirectorProposalQuerySet(models.QuerySet):
             raise ValidationError(
                 "Proposal state may change only through DirectorService."
             )
+        if {"idempotency_key", "request_fingerprint"} & field_names:
+            raise ValidationError("Idempotency identity is immutable.")
         return super().bulk_update(objs, fields, **kwargs)
 
     def bulk_create(self, objs, **kwargs):
@@ -51,6 +55,9 @@ class DirectorProposalQuerySet(models.QuerySet):
                 "Proposal state may change only through DirectorService."
             )
         return super().bulk_create(rows, **kwargs)
+
+    def delete(self):
+        raise ValidationError("Director proposals cannot be deleted.")
 
 
 class DirectorProposal(models.Model):
@@ -78,6 +85,10 @@ class DirectorProposal(models.Model):
     summary_zh = models.TextField()
     reason_snapshot = models.JSONField(default=dict)
     action_reference = models.JSONField(default=dict)
+    idempotency_key = models.CharField(
+        max_length=128, default=uuid.uuid4
+    )
+    request_fingerprint = models.CharField(max_length=64, default="0" * 64)
     expires_at = models.DateTimeField(null=True, blank=True)
     version = models.PositiveIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -87,6 +98,8 @@ class DirectorProposal(models.Model):
 
     class Meta:
         ordering = ["-created_at", "-id"]
+        base_manager_name = "objects"
+        default_manager_name = "objects"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(priority__gte=1) & models.Q(priority__lte=100),
@@ -98,12 +111,17 @@ class DirectorProposal(models.Model):
             models.CheckConstraint(
                 condition=models.Q(version__gt=0), name="director_proposal_version_positive"
             ),
+            models.UniqueConstraint(
+                fields=["organization", "idempotency_key"],
+                name="director_unique_proposal_idempotency",
+            ),
         ]
 
     def save(self, *args, **kwargs):
         if self.pk and type(self)._base_manager.filter(pk=self.pk).exists():
             original = type(self).objects.only(
-                "organization_id", "status", "version"
+                "organization_id", "status", "version", "idempotency_key",
+                "request_fingerprint",
             ).get(pk=self.pk)
             if self.organization_id != original.organization_id:
                 raise ValidationError("Proposal organization is immutable after creation.")
@@ -113,6 +131,11 @@ class DirectorProposal(models.Model):
                 raise ValidationError(
                     "Proposal state may change only through DirectorService."
                 )
+            if (
+                self.idempotency_key != original.idempotency_key
+                or self.request_fingerprint != original.request_fingerprint
+            ):
+                raise ValidationError("Idempotency identity is immutable.")
         elif (
             self.status != self.Status.PENDING or self.version != 1
         ) and not _proposal_state_write.get():
@@ -120,6 +143,9 @@ class DirectorProposal(models.Model):
                 "Proposal state may change only through DirectorService."
             )
         return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Director proposals cannot be deleted.")
 
 
 class DirectorDecisionQuerySet(models.QuerySet):
@@ -164,6 +190,8 @@ class DirectorDecision(models.Model):
 
     class Meta:
         ordering = ["created_at", "id"]
+        base_manager_name = "objects"
+        default_manager_name = "objects"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(proposal_version__gt=0),

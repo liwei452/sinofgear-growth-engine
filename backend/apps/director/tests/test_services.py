@@ -104,6 +104,85 @@ def test_propose_rejects_same_idempotency_key_with_different_payload(organizatio
 
 
 @pytest.mark.django_db
+def test_idempotent_replay_survives_business_metadata_changes(organization):
+    original = DirectorService.propose(organization=organization, **proposal_values())
+    DirectorProposal.objects.filter(pk=original.id).update(
+        title_zh="Adjusted title",
+        summary_zh="Adjusted summary",
+        priority=25,
+        reason_snapshot={"adjusted": True},
+        action_reference={"kind": "campaign_draft", "id": "draft-2"},
+    )
+
+    replayed = DirectorService.propose(organization=organization, **proposal_values())
+    assert replayed.id == original.id
+    assert replayed.title_zh == "Adjusted title"
+
+    with pytest.raises(DirectorIdempotencyConflict):
+        DirectorService.propose(
+            organization=organization,
+            **proposal_values(title_zh="A different original intent"),
+        )
+
+
+@pytest.mark.django_db
+def test_idempotent_replay_survives_decision(organization, reviewer):
+    original = DirectorService.propose(organization=organization, **proposal_values())
+    DirectorService.decide(
+        organization=organization,
+        proposal_id=original.id,
+        expected_version=1,
+        action=DirectorDecision.Action.APPROVE,
+        actor=reviewer,
+    )
+
+    replayed = DirectorService.propose(organization=organization, **proposal_values())
+    assert replayed.id == original.id
+    assert replayed.status == DirectorProposal.Status.APPROVED
+
+
+@pytest.mark.django_db
+def test_idempotent_replay_survives_supersede(organization, reviewer):
+    original = DirectorService.propose(organization=organization, **proposal_values())
+    replacement = DirectorService.propose(
+        organization=organization,
+        **proposal_values(
+            title_zh="Replacement proposal", idempotency_key="director-proposal-2"
+        ),
+    )
+    DirectorService.supersede(
+        organization=organization,
+        proposal_id=original.id,
+        replacement_id=replacement.id,
+        actor=reviewer,
+    )
+
+    replayed = DirectorService.propose(organization=organization, **proposal_values())
+    assert replayed.id == original.id
+    assert replayed.status == DirectorProposal.Status.SUPERSEDED
+
+
+@pytest.mark.django_db
+def test_idempotency_identity_is_immutable_through_public_orm(organization):
+    proposal = DirectorService.propose(organization=organization, **proposal_values())
+    assert proposal.idempotency_key == "director-proposal-1"
+    assert len(proposal.request_fingerprint) == 64
+
+    proposal.idempotency_key = "forged"
+    proposal.request_fingerprint = "0" * 64
+    with pytest.raises(ValidationError, match="Idempotency"):
+        proposal.save(update_fields=["idempotency_key", "request_fingerprint"])
+    with pytest.raises(ValidationError, match="Idempotency"):
+        DirectorProposal._base_manager.filter(pk=proposal.id).update(
+            idempotency_key="forged"
+        )
+    with pytest.raises(ValidationError, match="Idempotency"):
+        DirectorProposal._base_manager.bulk_update(
+            [proposal], ["request_fingerprint"]
+        )
+
+
+@pytest.mark.django_db
 def test_idempotency_key_is_scoped_to_organization(organization, other_organization):
     own = DirectorService.propose(organization=organization, **proposal_values())
     other = DirectorService.propose(
@@ -274,7 +353,7 @@ def test_decision_and_state_roll_back_when_audit_append_fails(
 
 @pytest.mark.django_db
 def test_supersede_marks_original_and_appends_system_audit(
-    organization, other_organization
+    organization, other_organization, reviewer
 ):
     original = DirectorService.propose(organization=organization, **proposal_values())
     replacement = DirectorService.propose(
@@ -288,13 +367,14 @@ def test_supersede_marks_original_and_appends_system_audit(
         organization=organization,
         proposal_id=original.id,
         replacement_id=replacement.id,
+        actor=reviewer,
     )
 
     audit = AuditLog.objects.get()
     assert result.status == DirectorProposal.Status.SUPERSEDED
     assert result.version == 2
     assert audit.action == ReviewAction.SUPERSEDE
-    assert audit.actor is None
+    assert audit.actor == reviewer
     assert audit.after_metadata["replacement_id"] == str(replacement.id)
 
     with pytest.raises(DirectorProposal.DoesNotExist):
@@ -302,7 +382,69 @@ def test_supersede_marks_original_and_appends_system_audit(
             organization=other_organization,
             proposal_id=replacement.id,
             replacement_id=original.id,
+            actor=reviewer,
         )
+
+
+@pytest.mark.django_db
+def test_supersede_requires_active_authorized_actor(
+    organization, reviewer, read_only_user
+):
+    original = DirectorService.propose(organization=organization, **proposal_values())
+    replacement = DirectorService.propose(
+        organization=organization,
+        **proposal_values(
+            title_zh="Replacement proposal", idempotency_key="director-proposal-2"
+        ),
+    )
+
+    for actor in (None, read_only_user):
+        with pytest.raises(PermissionDenied):
+            DirectorService.supersede(
+                organization=organization,
+                proposal_id=original.id,
+                replacement_id=replacement.id,
+                actor=actor,
+            )
+
+    Membership.objects.filter(user=reviewer).update(status=Membership.Status.INACTIVE)
+    with pytest.raises(PermissionDenied):
+        DirectorService.supersede(
+            organization=organization,
+            proposal_id=original.id,
+            replacement_id=replacement.id,
+            actor=reviewer,
+        )
+
+    original.refresh_from_db()
+    assert original.status == DirectorProposal.Status.PENDING
+    assert not AuditLog.objects.exists()
+
+
+@pytest.mark.django_db
+def test_supersede_rechecks_revoked_role_permission(organization, reviewer):
+    original = DirectorService.propose(organization=organization, **proposal_values())
+    replacement = DirectorService.propose(
+        organization=organization,
+        **proposal_values(
+            title_zh="Replacement proposal", idempotency_key="director-proposal-2"
+        ),
+    )
+    membership = Membership.objects.get(user=reviewer)
+    membership.role.permissions = ["director.read"]
+    membership.role.save(update_fields=["permissions"])
+
+    with pytest.raises(PermissionDenied):
+        DirectorService.supersede(
+            organization=organization,
+            proposal_id=original.id,
+            replacement_id=replacement.id,
+            actor=reviewer,
+        )
+
+    original.refresh_from_db()
+    assert original.status == DirectorProposal.Status.PENDING
+    assert not AuditLog.objects.exists()
 
 
 @pytest.mark.django_db
@@ -326,8 +468,45 @@ def test_proposal_state_and_version_cannot_bypass_director_service(proposal):
 
 
 @pytest.mark.django_db
+def test_base_managers_cannot_bypass_proposal_or_decision_guards(proposal, reviewer):
+    assert DirectorProposal._base_manager is DirectorProposal.objects
+    assert DirectorDecision._base_manager is DirectorDecision.objects
+
+    with pytest.raises(ValidationError, match="DirectorService"):
+        DirectorProposal._base_manager.filter(pk=proposal.id).update(
+            status=DirectorProposal.Status.APPROVED,
+            version=2,
+        )
+    proposal.status = DirectorProposal.Status.APPROVED
+    proposal.version = 2
+    with pytest.raises(ValidationError, match="DirectorService"):
+        DirectorProposal._base_manager.bulk_update(
+            [proposal], ["status", "version"]
+        )
+    with pytest.raises(ValidationError, match="cannot be deleted"):
+        DirectorProposal._base_manager.filter(pk=proposal.id).delete()
+
+    decided = DirectorService.decide(
+        organization=proposal.organization,
+        proposal_id=proposal.id,
+        expected_version=1,
+        action=DirectorDecision.Action.APPROVE,
+        actor=reviewer,
+    )
+    decision = DirectorDecision.objects.get(proposal=decided)
+    with pytest.raises(ValidationError, match="append-only"):
+        DirectorDecision._base_manager.filter(pk=decision.id).update(
+            comment="forged"
+        )
+    with pytest.raises(ValidationError, match="append-only"):
+        DirectorDecision._base_manager.bulk_update([decision], ["comment"])
+    with pytest.raises(ValidationError, match="append-only"):
+        DirectorDecision._base_manager.filter(pk=decision.id).delete()
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("expired_side", ["original", "replacement"])
-def test_supersede_rejects_expired_proposals(organization, expired_side):
+def test_supersede_rejects_expired_proposals(organization, reviewer, expired_side):
     past = timezone.now() - timedelta(seconds=1)
     original = DirectorService.propose(
         organization=organization,
@@ -349,6 +528,7 @@ def test_supersede_rejects_expired_proposals(organization, expired_side):
             organization=organization,
             proposal_id=original.id,
             replacement_id=replacement.id,
+            actor=reviewer,
         )
 
     original.refresh_from_db()
@@ -357,7 +537,7 @@ def test_supersede_rejects_expired_proposals(organization, expired_side):
 
 
 @pytest.mark.django_db
-def test_supersede_requires_same_proposal_type(organization):
+def test_supersede_requires_same_proposal_type(organization, reviewer):
     original = DirectorService.propose(organization=organization, **proposal_values())
     replacement = DirectorService.propose(
         organization=organization,
@@ -373,6 +553,7 @@ def test_supersede_requires_same_proposal_type(organization):
             organization=organization,
             proposal_id=original.id,
             replacement_id=replacement.id,
+            actor=reviewer,
         )
 
     original.refresh_from_db()
@@ -421,5 +602,45 @@ def test_director_audit_action_migration_preserves_existing_rows():
             "REQUEST_ADJUSTMENT",
             "SUPERSEDE",
         }
+    finally:
+        MigrationExecutor(connection).migrate(latest)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_idempotency_migration_backfills_existing_proposals():
+    before = ("director", "0001_initial")
+    after = ("director", "0002_proposal_idempotency")
+    executor = MigrationExecutor(connection)
+    latest = executor.loader.graph.leaf_nodes()
+
+    try:
+        executor.migrate([before])
+        old_apps = executor.loader.project_state([before]).apps
+        organization_model = old_apps.get_model("identity", "Organization")
+        proposal_model = old_apps.get_model("director", "DirectorProposal")
+        organization = organization_model.objects.create(
+            name="Idempotency Migration", slug="director-idempotency-migration"
+        )
+        proposal = proposal_model.objects.create(
+            organization=organization,
+            proposal_type="PROMOTION_PLAN",
+            title_zh="Legacy proposal",
+            summary_zh="Created before explicit idempotency metadata.",
+            reason_snapshot={"evidence_count": 1},
+            action_reference={"kind": "campaign_draft", "id": "legacy"},
+        )
+
+        executor = MigrationExecutor(connection)
+        executor.migrate([after])
+        migrated_model = executor.loader.project_state([after]).apps.get_model(
+            "director", "DirectorProposal"
+        )
+        migrated = migrated_model.objects.get(pk=proposal.id)
+        assert migrated.idempotency_key == f"legacy:{proposal.id}"
+        assert len(migrated.request_fingerprint) == 64
+        constraint_names = {
+            constraint.name for constraint in migrated_model._meta.constraints
+        }
+        assert "director_unique_proposal_idempotency" in constraint_names
     finally:
         MigrationExecutor(connection).migrate(latest)

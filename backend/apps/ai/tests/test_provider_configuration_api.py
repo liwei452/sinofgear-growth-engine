@@ -1,8 +1,10 @@
 import json
+from datetime import timedelta
 from types import TracebackType
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.ai.models import AIProviderConfiguration
@@ -13,7 +15,6 @@ from rest_framework.exceptions import ParseError
 from rest_framework.test import APIRequestFactory
 
 from apps.ai.views import DuplicateSafeJSONParser
-from apps.ai.provider_configuration import _clear_uncertain
 
 
 SECRET = "sk-api-secret-1234567890"
@@ -50,9 +51,7 @@ def api_context(db, monkeypatch):
     Membership.objects.create(user=operator, organization=own, role=roles[Role.Code.OPERATOR])
     Membership.objects.create(user=other_admin, organization=other, role=roles[Role.Code.ADMINISTRATOR])
     monkeypatch.setattr("apps.ai.provider_configuration.DeepSeekProvider", Provider)
-    yield own, other, admin, operator, other_admin
-    _clear_uncertain(own.id)
-    _clear_uncertain(other.id)
+    return own, other, admin, operator, other_admin
 
 
 def payload():
@@ -193,7 +192,9 @@ def test_uncertain_registry_forces_fail_closed_get_and_is_organization_scoped(
     original_save = AIProviderConfiguration.save
 
     def fail_every_save(self, *args, **kwargs):
-        raise RuntimeError(f"database failure {SECRET}")
+        if self.connection_state != "CONFIGURING":
+            raise RuntimeError(f"database failure {SECRET}")
+        return original_save(self, *args, **kwargs)
 
     monkeypatch.setattr(AIProviderConfiguration, "save", fail_every_save)
     from apps.ai.provider_configuration import delete_deepseek_credential
@@ -211,13 +212,16 @@ def test_uncertain_registry_forces_fail_closed_get_and_is_organization_scoped(
         delete_deepseek_credential(organization=own, actor=admin)
 
     response = authenticated(admin).get(URL)
-    assert response.data["connection_state"] == "NEEDS_RECONNECT"
+    assert response.data["connection_state"] == "CONFIGURING"
     assert response.data["key_suffix"] == ""
     other_response = authenticated(other_admin).get(URL)
     assert other_response.data["connection_state"] == "CONNECTED"
     assert other_response.data["key_suffix"] == "safe"
 
     monkeypatch.setattr(AIProviderConfiguration, "save", original_save)
+    AIProviderConfiguration.objects.filter(organization=own).update(
+        operation_started_at=timezone.now() - timedelta(minutes=10)
+    )
     with credential_store_override(store):
         repaired = authenticated(admin).put(URL, payload(), format="json")
     assert repaired.status_code == 200

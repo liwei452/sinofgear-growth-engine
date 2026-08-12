@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import re
-from copy import copy
 from dataclasses import dataclass
-from threading import RLock
+from datetime import timedelta
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -72,32 +71,6 @@ _LIMIT_FIELDS = frozenset(
         "timeout_seconds",
     }
 )
-_uncertain_lock = RLock()
-_uncertain_organizations: set[str] = set()
-
-
-def _set_uncertain(organization_id) -> None:
-    with _uncertain_lock:
-        _uncertain_organizations.add(str(organization_id))
-
-
-def _clear_uncertain(organization_id) -> None:
-    with _uncertain_lock:
-        _uncertain_organizations.discard(str(organization_id))
-
-
-def configuration_for_display(configuration: AIProviderConfiguration):
-    with _uncertain_lock:
-        uncertain = str(configuration.organization_id) in _uncertain_organizations
-    if not uncertain:
-        return configuration
-    safe = copy(configuration)
-    safe.connection_state = AIProviderConfiguration.ConnectionState.NEEDS_RECONNECT
-    safe.key_suffix = ""
-    safe.last_tested_at = None
-    return safe
-
-
 def _store_or_error(credential_store):
     if credential_store is not None:
         return credential_store
@@ -164,48 +137,51 @@ def test_deepseek_configuration(
     )
 
 
-def test_and_save_deepseek_configuration(
-    *, organization, actor, api_key: str, limits: dict,
-    credential_store=None, provider_factory=None,
-) -> AIProviderConfiguration:
-    store = _store_or_error(credential_store)
-    limits = _validated_limits(organization=organization, limits=limits)
-    test_deepseek_configuration(
-        organization=organization,
-        api_key=api_key,
-        credential_store=store,
-        provider_factory=provider_factory,
-    )
-    outcome, configuration = _mutate_configuration(
-        organization=organization,
-        actor=actor,
-        store=store,
-        replacement_secret=api_key,
-        limits=limits,
-        delete=False,
-    )
-    if outcome:
-        raise ProviderConfigurationError(outcome)
-    _clear_uncertain(organization.id)
-    return configuration
+@dataclass(frozen=True)
+class ConfigurationOperation:
+    organization_id: object
+    revision: int
+    token: object
 
 
-def delete_deepseek_credential(
-    *, organization, actor, credential_store=None
-) -> AIProviderConfiguration:
-    store = _store_or_error(credential_store)
-    outcome, configuration = _mutate_configuration(
-        organization=organization,
-        actor=actor,
-        store=store,
-        replacement_secret=None,
-        limits=None,
-        delete=True,
-    )
-    if outcome:
-        raise ProviderConfigurationError(outcome)
-    _clear_uncertain(organization.id)
-    return configuration
+_OPERATION_TAKEOVER_AFTER = timedelta(minutes=5)
+
+
+def _begin_configuration_mutation(*, organization, actor) -> ConfigurationOperation:
+    import uuid
+
+    try:
+        with transaction.atomic():
+            Organization.objects.select_for_update().get(pk=organization.pk)
+            configuration, _ = AIProviderConfiguration.objects.get_or_create(
+                organization=organization
+            )
+            if (
+                configuration.connection_state
+                == AIProviderConfiguration.ConnectionState.CONFIGURING
+                and configuration.operation_started_at is not None
+                and configuration.operation_started_at
+                > timezone.now() - _OPERATION_TAKEOVER_AFTER
+            ):
+                raise ProviderConfigurationError("deepseek_configuration_busy")
+            configuration.operation_revision += 1
+            configuration.operation_token = uuid.uuid4()
+            configuration.operation_started_at = timezone.now()
+            configuration.connection_state = AIProviderConfiguration.ConnectionState.CONFIGURING
+            configuration.key_suffix = ""
+            configuration.last_tested_at = None
+            configuration.last_tested_by = actor
+            configuration.full_clean()
+            configuration.save()
+            return ConfigurationOperation(
+                organization_id=organization.id,
+                revision=configuration.operation_revision,
+                token=configuration.operation_token,
+            )
+    except ProviderConfigurationError:
+        raise
+    except Exception:
+        raise ProviderConfigurationError("deepseek_configuration_update_failed") from None
 
 
 def _restore_secret(store, target: str, previous_secret: str | None) -> bool:
@@ -219,35 +195,46 @@ def _restore_secret(store, target: str, previous_secret: str | None) -> bool:
         return False
 
 
-def _mark_state_uncertain(*, organization, actor) -> None:
-    _set_uncertain(organization.id)
+def _mark_operation_failed(*, operation, organization, actor) -> None:
     try:
         with transaction.atomic():
             Organization.objects.select_for_update().get(pk=organization.pk)
-            configuration, _ = AIProviderConfiguration.objects.get_or_create(
-                organization=organization
-            )
+            configuration = AIProviderConfiguration.objects.get(organization=organization)
+            if (
+                configuration.operation_revision != operation.revision
+                or configuration.operation_token != operation.token
+            ):
+                return
             configuration.connection_state = AIProviderConfiguration.ConnectionState.NEEDS_RECONNECT
+            configuration.operation_token = None
+            configuration.operation_started_at = None
             configuration.key_suffix = ""
             configuration.last_tested_at = None
             configuration.last_tested_by = actor
             configuration.full_clean()
             configuration.save()
     except Exception:
-        # The public result remains uncertain even if degraded metadata cannot be saved.
+        # The already committed CONFIGURING premark remains persistently fail closed.
         return
 
 
-def _mutate_configuration(
-    *, organization, actor, store, replacement_secret: str | None,
+def _complete_configuration_mutation(
+    *, operation, organization, actor, store, replacement_secret: str | None,
     limits: dict | None, delete: bool,
-) -> tuple[str | None, AIProviderConfiguration | None]:
+) -> AIProviderConfiguration:
     target = credential_target(organization.id)
     outcome = None
     result = None
-    uncertain = False
     with transaction.atomic():
         Organization.objects.select_for_update().get(pk=organization.pk)
+        configuration = AIProviderConfiguration.objects.get(organization=organization)
+        if (
+            configuration.operation_revision != operation.revision
+            or configuration.operation_token != operation.token
+            or configuration.connection_state
+            != AIProviderConfiguration.ConnectionState.CONFIGURING
+        ):
+            raise ProviderConfigurationError("deepseek_configuration_superseded")
         try:
             previous_secret = store.read(target)
             if delete:
@@ -259,15 +246,14 @@ def _mutate_configuration(
             outcome = "deepseek_credential_store_unavailable"
         else:
             try:
-                configuration, _ = AIProviderConfiguration.objects.get_or_create(
-                    organization=organization
-                )
                 configuration.connection_state = (
                     AIProviderConfiguration.ConnectionState.NOT_CONFIGURED
                     if delete else AIProviderConfiguration.ConnectionState.CONNECTED
                 )
                 configuration.key_suffix = "" if delete else replacement_secret[-4:]
                 configuration.credential_revision += 0 if delete else 1
+                configuration.operation_token = None
+                configuration.operation_started_at = None
                 configuration.last_tested_at = None if delete else timezone.now()
                 configuration.last_tested_by = actor
                 for field, value in (limits or {}).items():
@@ -281,7 +267,37 @@ def _mutate_configuration(
                     outcome = "deepseek_configuration_update_failed"
                 else:
                     outcome = "deepseek_credential_state_uncertain"
-                    uncertain = True
-    if uncertain:
-        _mark_state_uncertain(organization=organization, actor=actor)
-    return outcome, result
+    if outcome:
+        _mark_operation_failed(
+            operation=operation, organization=organization, actor=actor
+        )
+        raise ProviderConfigurationError(outcome)
+    return result
+
+
+def test_and_save_deepseek_configuration(
+    *, organization, actor, api_key: str, limits: dict,
+    credential_store=None, provider_factory=None,
+) -> AIProviderConfiguration:
+    store = _store_or_error(credential_store)
+    limits = _validated_limits(organization=organization, limits=limits)
+    test_deepseek_configuration(
+        organization=organization, api_key=api_key, credential_store=store,
+        provider_factory=provider_factory,
+    )
+    operation = _begin_configuration_mutation(organization=organization, actor=actor)
+    return _complete_configuration_mutation(
+        operation=operation, organization=organization, actor=actor, store=store,
+        replacement_secret=api_key, limits=limits, delete=False,
+    )
+
+
+def delete_deepseek_credential(
+    *, organization, actor, credential_store=None
+) -> AIProviderConfiguration:
+    store = _store_or_error(credential_store)
+    operation = _begin_configuration_mutation(organization=organization, actor=actor)
+    return _complete_configuration_mutation(
+        operation=operation, organization=organization, actor=actor, store=store,
+        replacement_secret=None, limits=None, delete=True,
+    )

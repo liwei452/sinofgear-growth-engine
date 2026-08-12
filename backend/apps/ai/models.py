@@ -155,6 +155,7 @@ class AIProviderConfiguration(models.Model):
         NOT_CONFIGURED = "NOT_CONFIGURED", "Not configured"
         CONNECTED = "CONNECTED", "Connected"
         NEEDS_RECONNECT = "NEEDS_RECONNECT", "Needs reconnect"
+        CONFIGURING = "CONFIGURING", "Configuring"
 
     organization = models.OneToOneField(
         "identity.Organization",
@@ -169,6 +170,9 @@ class AIProviderConfiguration(models.Model):
     )
     key_suffix = models.CharField(max_length=4, blank=True)
     credential_revision = models.PositiveIntegerField(default=0)
+    operation_revision = models.PositiveBigIntegerField(default=0)
+    operation_token = models.UUIDField(null=True, blank=True, editable=False)
+    operation_started_at = models.DateTimeField(null=True, blank=True)
     last_tested_at = models.DateTimeField(null=True, blank=True)
     last_tested_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -204,3 +208,6 @@ class AIProviderConfiguration(models.Model):
             raise ValidationError({"key_suffix": "Connected credentials require a 4-character suffix."})
         if not connected and self.key_suffix:
             raise ValidationError({"key_suffix": "Unconfigured credentials cannot have a suffix."})
+        active = self.connection_state == self.ConnectionState.CONFIGURING
+        if active != bool(self.operation_token and self.operation_started_at):
+            raise ValidationError({"operation_token": "Configuring state requires an active operation."})

@@ -17,9 +17,12 @@ class Migration(migrations.Migration):
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
                 ("provider_code", models.CharField(default="deepseek", editable=False, max_length=32)),
-                ("connection_state", models.CharField(choices=[("NOT_CONFIGURED", "Not configured"), ("CONNECTED", "Connected"), ("NEEDS_RECONNECT", "Needs reconnect")], default="NOT_CONFIGURED", max_length=24)),
+                ("connection_state", models.CharField(choices=[("NOT_CONFIGURED", "Not configured"), ("CONNECTED", "Connected"), ("NEEDS_RECONNECT", "Needs reconnect"), ("CONFIGURING", "Configuring")], default="NOT_CONFIGURED", max_length=24)),
                 ("key_suffix", models.CharField(blank=True, max_length=4)),
                 ("credential_revision", models.PositiveIntegerField(default=0)),
+                ("operation_revision", models.PositiveBigIntegerField(default=0)),
+                ("operation_token", models.UUIDField(blank=True, editable=False, null=True)),
+                ("operation_started_at", models.DateTimeField(blank=True, null=True)),
                 ("last_tested_at", models.DateTimeField(blank=True, null=True)),
                 ("daily_budget_usd", models.DecimalField(decimal_places=2, default=10, max_digits=10, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(100000)])),
                 ("flash_max_output_tokens", models.PositiveIntegerField(default=1200, validators=[django.core.validators.MinValueValidator(64), django.core.validators.MaxValueValidator(65536)])),

@@ -1,7 +1,9 @@
 from decimal import Decimal
+from datetime import timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 
 from apps.ai.models import AIProviderConfiguration
 from apps.ai.provider_configuration import (
@@ -9,7 +11,8 @@ from apps.ai.provider_configuration import (
     delete_deepseek_credential,
     test_and_save_deepseek_configuration as save_configuration,
     test_deepseek_configuration as check_configuration,
-    _clear_uncertain,
+    _begin_configuration_mutation,
+    _complete_configuration_mutation,
 )
 from apps.identity.models import Organization
 from integrations.ai.providers import ProviderAuthenticationError, ProviderResult
@@ -64,8 +67,7 @@ class Provider:
 def context(db):
     organization = Organization.objects.create(name="AI Own", slug="ai-own")
     actor = get_user_model().objects.create_user(username="ai-admin")
-    yield organization, actor
-    _clear_uncertain(organization.id)
+    return organization, actor
 
 
 def limits(**overrides):
@@ -192,7 +194,8 @@ def test_failed_database_and_failed_compensation_marks_state_uncertain(
     original_save = AIProviderConfiguration.save
 
     def fail_requested_state(self, *args, **kwargs):
-        if self.connection_state != "NEEDS_RECONNECT":
+        target_state = "CONNECTED" if operation == "put" else "NOT_CONFIGURED"
+        if self.connection_state == target_state:
             raise RuntimeError(f"database failed {SECRET}")
         return original_save(self, *args, **kwargs)
 
@@ -212,6 +215,88 @@ def test_failed_database_and_failed_compensation_marks_state_uncertain(
     assert configuration.connection_state == "NEEDS_RECONNECT"
     assert configuration.key_suffix == ""
     assert SECRET not in repr(caught.value)
+
+
+def test_premark_is_persistent_fail_closed_without_process_memory(context):
+    organization, actor = context
+    AIProviderConfiguration.objects.create(
+        organization=organization, connection_state="CONNECTED", key_suffix="old1",
+        credential_revision=3, **limits(),
+    )
+    operation = _begin_configuration_mutation(
+        organization=organization, actor=actor
+    )
+    configuration = AIProviderConfiguration.objects.get(organization=organization)
+    assert configuration.connection_state == "CONFIGURING"
+    assert configuration.key_suffix == ""
+    assert configuration.operation_revision == operation.revision
+    assert str(configuration.operation_token) == str(operation.token)
+
+
+def test_active_operation_is_busy_but_stale_premark_can_be_taken_over(context):
+    organization, actor = context
+    first = _begin_configuration_mutation(organization=organization, actor=actor)
+    with pytest.raises(ProviderConfigurationError) as caught:
+        _begin_configuration_mutation(organization=organization, actor=actor)
+    assert caught.value.code == "deepseek_configuration_busy"
+    configuration = AIProviderConfiguration.objects.get(organization=organization)
+    assert configuration.operation_revision == first.revision
+
+    AIProviderConfiguration.objects.filter(organization=organization).update(
+        operation_started_at=timezone.now() - timedelta(minutes=10)
+    )
+    takeover = _begin_configuration_mutation(organization=organization, actor=actor)
+    assert takeover.revision == first.revision + 1
+
+
+def test_stale_operation_cannot_overwrite_newer_success(context):
+    organization, actor = context
+    vault = Store("sk-old-key")
+    old = _begin_configuration_mutation(organization=organization, actor=actor)
+    AIProviderConfiguration.objects.filter(organization=organization).update(
+        operation_started_at=timezone.now() - timedelta(minutes=10)
+    )
+    new = _begin_configuration_mutation(organization=organization, actor=actor)
+    result = _complete_configuration_mutation(
+        operation=new, organization=organization, actor=actor, store=vault,
+        replacement_secret=SECRET, limits=limits(), delete=False,
+    )
+    assert result.connection_state == "CONNECTED"
+
+    with pytest.raises(ProviderConfigurationError) as caught:
+        _complete_configuration_mutation(
+            operation=old, organization=organization, actor=actor, store=vault,
+            replacement_secret="sk-stale-secret-123456", limits=limits(), delete=False,
+        )
+    assert caught.value.code == "deepseek_configuration_superseded"
+    configuration = AIProviderConfiguration.objects.get(organization=organization)
+    assert configuration.connection_state == "CONNECTED"
+    assert configuration.key_suffix == SECRET[-4:]
+
+
+def test_stale_success_cannot_clear_newer_failed_operation(context):
+    organization, actor = context
+    vault = Store("sk-old-key")
+    old = _begin_configuration_mutation(organization=organization, actor=actor)
+    AIProviderConfiguration.objects.filter(organization=organization).update(
+        operation_started_at=timezone.now() - timedelta(minutes=10)
+    )
+    new = _begin_configuration_mutation(organization=organization, actor=actor)
+    vault.fail_write = True
+    with pytest.raises(ProviderConfigurationError):
+        _complete_configuration_mutation(
+            operation=new, organization=organization, actor=actor, store=vault,
+            replacement_secret=SECRET, limits=limits(), delete=False,
+        )
+    with pytest.raises(ProviderConfigurationError) as caught:
+        _complete_configuration_mutation(
+            operation=old, organization=organization, actor=actor, store=vault,
+            replacement_secret=SECRET, limits=limits(), delete=False,
+        )
+    assert caught.value.code == "deepseek_configuration_superseded"
+    configuration = AIProviderConfiguration.objects.get(organization=organization)
+    assert configuration.connection_state in {"CONFIGURING", "NEEDS_RECONNECT"}
+    assert configuration.key_suffix == ""
 
 
 def test_invalid_direct_service_limits_are_rejected_before_provider_or_vault(context):
@@ -255,7 +340,8 @@ def test_vault_failure_keeps_previous_database_configuration(context):
 
     assert caught.value.code == "deepseek_credential_store_unavailable"
     configuration.refresh_from_db()
-    assert configuration.key_suffix == "old1"
+    assert configuration.key_suffix == ""
+    assert configuration.connection_state == "NEEDS_RECONNECT"
     assert configuration.credential_revision == 4
     assert configuration.daily_budget_usd == Decimal("10.00")
 

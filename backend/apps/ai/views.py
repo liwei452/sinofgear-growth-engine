@@ -24,7 +24,6 @@ from .serializers import (
 from .models import AIProviderConfiguration
 from .provider_configuration import (
     ProviderConfigurationError,
-    configuration_for_display,
     delete_deepseek_credential,
     test_and_save_deepseek_configuration,
     test_deepseek_configuration,
@@ -153,7 +152,7 @@ def _configuration_for(organization):
         configuration = AIProviderConfiguration.objects.get(organization=organization)
     except AIProviderConfiguration.DoesNotExist:
         configuration = AIProviderConfiguration(organization=organization)
-    return configuration_for_display(configuration)
+    return configuration
 
 
 @extend_schema(tags=["AIProviderConfiguration"])

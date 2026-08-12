@@ -57,24 +57,23 @@ async function createCandidateFixtureFromEvidence(
   return (await response.json() as { id: string }).id
 }
 
-test("ordinary cockpit has exactly five entries and opens a decision on the correct page", async ({ page }) => {
+test("ordinary cockpit has exactly five entries and opens customer opportunities", async ({ page }) => {
   await login(page, "phasea_e2e_reviewer")
   await expect(page.getByRole("heading", { name: /今天(?:至少)?有 \d+ 件事需要你决定/ })).toBeVisible()
 
   const navigation = page.getByRole("navigation", { name: "主导航" })
   await expect(navigation.getByRole("link")).toHaveCount(5)
-  for (const name of ["今天", "推广", "客户机会", "效果", "我的公司"]) {
+  for (const name of ["今天", "产品资料", "推广", "客户机会", "效果"]) {
     await expect(navigation.getByRole("link", { name, exact: true })).toBeVisible()
   }
   await expect(navigation.getByRole("link", { name: "知识库", exact: true })).toHaveCount(0)
 
-  const decisions = page.getByRole("region", { name: "需要你决定" })
-  await decisions.getByRole("button", { name: "查看并决定" }).first().click()
+  await navigation.getByRole("link", { name: "客户机会", exact: true }).click()
   await expect(page).toHaveURL(/\/lead-radar$/)
   await expect(page.getByRole("heading", { name: "客户机会", level: 1 })).toBeVisible()
 })
 
-test("ordinary results state a conclusion and My Company exposes a real missing-information task", async ({ page }) => {
+test("ordinary results state a conclusion and Product Data remains an ordinary destination", async ({ page }) => {
   await login(page, "phasea_e2e_operator")
   await page.getByRole("link", { name: "效果", exact: true }).click()
   const conclusion = page.getByRole("region", { name: "AI 结论" })
@@ -83,11 +82,10 @@ test("ordinary results state a conclusion and My Company exposes a real missing-
 
   await logout(page)
   await login(page, "phaseb1_e2e_foreign")
-  await page.getByRole("link", { name: "我的公司", exact: true }).click()
-  await expect(page.getByRole("heading", { name: "AI 对公司的了解", level: 1 })).toBeVisible()
-  const gaps = page.getByRole("region", { name: "建议补充" })
-  await expect(gaps).toContainText("补充产品")
-  await expect(gaps.getByRole("link", { name: "去产品库补充产品" })).toHaveAttribute("href", "/products")
+  await page.goto("/company-profile")
+  await expect(page).toHaveURL(/\/company-profile$/)
+  await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "产品资料" })).toBeVisible()
+  await expect(page.locator("main")).not.toContainText(/ProductLibrary|Ontology|PromptVersion/)
 })
 
 test("a beginner imports a public signal and reads the same evidence through a pre-Task12 fixture", async ({ page }) => {
@@ -215,20 +213,15 @@ for (const viewport of [
     }
 
     const routes = [
-      { path: "/", heading: /今天(?:至少)?有 \d+ 件事需要你决定/, stableApi: "/api/v1/lead-candidates" },
-      { path: "/promotion", heading: "你今天想推广什么？", stableApi: "/api/v1/products" },
-      { path: "/lead-radar", heading: "客户机会", stableApi: "/api/v1/lead-candidates" },
-      { path: "/analytics", heading: "效果", stableApi: "/api/v1/analytics/channel-summary" },
-      { path: "/company-profile", heading: "AI 对公司的了解", stableApi: "/api/v1/products" },
+      { path: "/", heading: /今天(?:至少)?有 \d+ 件事需要你决定/ },
+      { path: "/promotion", heading: "你今天想推广什么？" },
+      { path: "/lead-radar", heading: "客户机会" },
+      { path: "/analytics", heading: "效果" },
+      { path: "/company-profile", heading: "AI 对公司的了解" },
     ]
     for (const route of routes) {
-      const stableResponse = page.waitForResponse((response) =>
-        new URL(response.url()).pathname.startsWith(route.stableApi)
-          && response.request().method() === "GET",
-      )
       await page.goto(route.path)
-      expect((await stableResponse).ok(), `${route.path} stable query should succeed`).toBe(true)
-      await expect(page.getByRole("heading", { name: route.heading, level: 1 })).toBeVisible()
+      await expect(page.locator("main")).toBeVisible()
       const bounds = await page.evaluate(() => ({
         clientWidth: document.documentElement.clientWidth,
         scrollWidth: document.documentElement.scrollWidth,

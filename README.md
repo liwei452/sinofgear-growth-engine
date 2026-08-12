@@ -11,7 +11,9 @@ Only the frontend (`http://localhost:3000`) and API (`http://localhost:8000`) ar
 
 Production secrets must differ from the development values in `.env.example`.
 
-Open `http://localhost:3000` in a browser after the stack starts. The signed-in product opens in ordinary mode by default, with five work destinations: Today, Promotion, Customer Opportunities, Results, and My Company. If advanced navigation is already selected in that browser, use **返回普通功能** to return to the ordinary experience without signing out or changing organization.
+Open `http://localhost:3000` in a browser after the stack starts. The signed-in product opens in ordinary mode by default, with five work destinations: **今天、产品资料、推广、客户机会、效果**. If advanced navigation is already selected in that browser, use **返回普通功能** to return to the ordinary experience without signing out or changing organization.
+
+This batch delivers the Growth Director cockpit, audited human decisions, the five-entry beginner navigation and the read-only AI Agent Center. It is an orchestration foundation: approvals are recorded but do not pretend to perform platform publishing or CRM handoff that has not yet been connected. See [the cockpit acceptance record](docs/acceptance/growth-director-cockpit-foundation.md) for exact verified and deferred scope.
 
 ## Phase A acceptance
 

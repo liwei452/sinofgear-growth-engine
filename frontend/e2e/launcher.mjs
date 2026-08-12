@@ -82,6 +82,18 @@ export function buildPhaseB1SeedCommands() {
   ]
 }
 
+export function buildDirectorSeedCommand() {
+  const code = [
+    "from apps.director.models import DirectorProposal",
+    "from apps.director.services import DirectorService",
+    "from apps.identity.models import Organization",
+    "organization = Organization.objects.get(slug='phase-a-e2e-only')",
+    "fixtures = [('e2e-director-approve', '批准德国市场推广方案', 95), ('e2e-director-adjust', '调整斜齿轮内容方案', 90), ('e2e-director-reject', '确认未经核实的成本建议', 85), ('e2e-director-readonly', '复核包装机械客户机会', 80)]",
+    "[DirectorService.propose(organization=organization, proposal_type=DirectorProposal.ProposalType.PROMOTION_PLAN, title_zh=title, summary_zh='依据已确认的产品资料和真实记录生成，等待人工决定。', reason_snapshot={'source': 'isolated_e2e'}, action_reference={'kind': 'e2e_fixture'}, priority=priority, idempotency_key=key) for key, title, priority in fixtures]",
+  ].join("; ")
+  return ["manage.py", "shell", "-c", code]
+}
+
 async function reservePort() {
   return await new Promise((resolvePort, reject) => {
     const server = createServer()
@@ -265,6 +277,9 @@ async function main() {
         cwd: backendDir, env: environment, children,
       })
     }
+    await run(pythonExecutable(), buildDirectorSeedCommand(), {
+      cwd: backendDir, env: environment, children,
+    })
     await run(pythonExecutable(), ["manage.py", "prepare_deepseek_e2e"], {
       cwd: backendDir, env: environment, children,
     })

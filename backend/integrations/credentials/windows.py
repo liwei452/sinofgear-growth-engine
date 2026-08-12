@@ -6,7 +6,7 @@ from ctypes import wintypes
 from .base import CredentialStoreError
 
 CRED_TYPE_GENERIC = 1
-CRED_PERSIST_SESSION = 1
+CRED_PERSIST_LOCAL_MACHINE = 2
 ERROR_NOT_FOUND = 1168
 
 
@@ -58,7 +58,7 @@ def _windows_credential_api() -> object:
 
 
 class WindowsCredentialStore:
-    """Windows Credential Manager adapter for generic session credentials."""
+    """Store generic credentials for this Windows user on this local machine."""
 
     def __init__(self, *, api: object | None = None) -> None:
         self._api = api if api is not None else _windows_credential_api()
@@ -93,7 +93,7 @@ class WindowsCredentialStore:
             TargetName=target,
             CredentialBlobSize=len(secret_blob),
             CredentialBlob=ctypes.cast(blob_buffer, ctypes.POINTER(ctypes.c_ubyte)),
-            Persist=CRED_PERSIST_SESSION,
+            Persist=CRED_PERSIST_LOCAL_MACHINE,
         )
         try:
             written = self._api.CredWriteW(ctypes.pointer(credential), 0)

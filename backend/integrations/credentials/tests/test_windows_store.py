@@ -5,7 +5,7 @@ import ctypes
 import pytest
 
 from integrations.credentials.windows import (
-    CRED_PERSIST_SESSION,
+    CRED_PERSIST_LOCAL_MACHINE,
     CRED_TYPE_GENERIC,
     ERROR_NOT_FOUND,
     CREDENTIALW,
@@ -34,7 +34,7 @@ class FakeWincred:
         assert flags == 0
         value = credential.contents
         assert value.Type == CRED_TYPE_GENERIC
-        assert value.Persist == CRED_PERSIST_SESSION
+        assert value.Persist == CRED_PERSIST_LOCAL_MACHINE
         assert value.CredentialBlobSize % 2 == 0
         blob = ctypes.string_at(value.CredentialBlob, value.CredentialBlobSize)
         assert value.CredentialBlobSize == len(blob)
@@ -59,7 +59,7 @@ class FakeWincred:
         buffer = ctypes.create_string_buffer(blob, len(blob))
         credential = CREDENTIALW()
         credential.Type = CRED_TYPE_GENERIC
-        credential.Persist = CRED_PERSIST_SESSION
+        credential.Persist = CRED_PERSIST_LOCAL_MACHINE
         credential.CredentialBlobSize = len(blob)
         credential.CredentialBlob = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte))
         self.allocated.append((credential, buffer))

@@ -15,6 +15,7 @@ from .serializers import (
     DirectorConflictSerializer,
     DirectorDecisionRequestSerializer,
     DirectorDecisionResultSerializer,
+    DirectorReadErrorSerializer,
     DirectorValidationErrorSerializer,
 )
 from .services import DirectorService, DirectorStateConflict, DirectorVersionConflict
@@ -34,7 +35,11 @@ class DirectorCockpitView(APIView):
 
     @extend_schema(
         operation_id="director_cockpit_retrieve",
-        responses={200: DirectorCockpitSerializer},
+        responses={
+            200: DirectorCockpitSerializer,
+            401: DirectorReadErrorSerializer,
+            403: DirectorReadErrorSerializer,
+        },
     )
     def get(self, request):
         snapshot = cockpit_snapshot(
@@ -55,6 +60,9 @@ class DirectorProposalDecisionView(APIView):
         responses={
             200: DirectorDecisionResultSerializer,
             400: DirectorValidationErrorSerializer,
+            401: DirectorReadErrorSerializer,
+            403: DirectorReadErrorSerializer,
+            404: DirectorReadErrorSerializer,
             409: DirectorConflictSerializer,
         },
     )

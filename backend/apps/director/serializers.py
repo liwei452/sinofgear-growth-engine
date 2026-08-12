@@ -62,5 +62,12 @@ class DirectorConflictSerializer(serializers.Serializer):
     detail = serializers.CharField()
 
 
+class DirectorReadErrorSerializer(serializers.Serializer):
+    code = serializers.CharField(required=False)
+    detail = serializers.CharField(required=False)
+    message = serializers.CharField(required=False)
+    recovery_action = serializers.CharField(required=False)
+
+
 class DirectorValidationErrorSerializer(serializers.Serializer):
     errors = serializers.DictField()

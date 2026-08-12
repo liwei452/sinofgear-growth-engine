@@ -25,6 +25,8 @@ class FakeWincred:
         self.write_calls = 0
         self.fail_write = False
         self.raise_write_os_error = False
+        self.raise_read_os_error = False
+        self.raise_delete_os_error = False
         self.raw_error_text = "raw operating-system failure text"
 
     def CredWriteW(self, credential, flags: int) -> bool:  # noqa: N802
@@ -47,6 +49,8 @@ class FakeWincred:
     def CredReadW(self, target: str, credential_type: int, flags: int, result) -> bool:  # noqa: N802
         assert credential_type == CRED_TYPE_GENERIC
         assert flags == 0
+        if self.raise_read_os_error:
+            raise OSError(self.raw_error_text)
         blob = self.entries.get(target)
         if blob is None:
             self.last_error = ERROR_NOT_FOUND
@@ -66,6 +70,8 @@ class FakeWincred:
     def CredDeleteW(self, target: str, credential_type: int, flags: int) -> bool:  # noqa: N802
         assert credential_type == CRED_TYPE_GENERIC
         assert flags == 0
+        if self.raise_delete_os_error:
+            raise OSError(self.raw_error_text)
         if target not in self.entries:
             self.last_error = ERROR_NOT_FOUND
             return False
@@ -130,6 +136,28 @@ def test_windows_store_replaces_raw_os_errors_without_exposing_target_or_secret(
 
     with pytest.raises(CredentialStoreError) as captured:
         store.write(target, secret)
+
+    _assert_exception_chain_excludes(
+        captured.value,
+        fake_wincred.raw_error_text,
+        target,
+        secret,
+    )
+
+
+@pytest.mark.parametrize("operation", ["read", "delete"])
+def test_windows_store_drops_read_and_delete_os_errors_from_exception_chain(
+    fake_wincred: FakeWincred,
+    operation: str,
+) -> None:
+    store = WindowsCredentialStore(api=fake_wincred)
+    target = "SinofGear/DeepSeek/target-not-for-errors"
+    secret = "sk-not-for-errors"
+    fake_wincred.entries[target] = secret.encode("utf-16-le")
+    setattr(fake_wincred, f"raise_{operation}_os_error", True)
+
+    with pytest.raises(CredentialStoreError) as captured:
+        getattr(store, operation)(target)
 
     _assert_exception_chain_excludes(
         captured.value,

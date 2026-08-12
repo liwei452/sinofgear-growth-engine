@@ -65,20 +65,22 @@ class WindowsCredentialStore:
 
     def read(self, target: str) -> str | None:
         credential_pointer = PCREDENTIALW()
-        if not self._api.CredReadW(
-            target,
-            CRED_TYPE_GENERIC,
-            0,
-            ctypes.byref(credential_pointer),
-        ):
-            if self._last_error() == ERROR_NOT_FOUND:
-                return None
-            self._raise_operation_error()
-
         try:
-            return self._decode_secret(credential_pointer.contents)
-        finally:
-            self._api.CredFree(credential_pointer)
+            found = self._api.CredReadW(
+                target,
+                CRED_TYPE_GENERIC,
+                0,
+                ctypes.byref(credential_pointer),
+            )
+        except OSError:
+            pass
+        else:
+            if not found:
+                if self._last_error() == ERROR_NOT_FOUND:
+                    return None
+                self._raise_operation_error()
+            return self._read_credential(credential_pointer)
+        self._raise_operation_error()
 
     def write(self, target: str, secret: str) -> None:
         if not secret:
@@ -101,11 +103,23 @@ class WindowsCredentialStore:
             self._raise_operation_error()
 
     def delete(self, target: str) -> bool:
-        if self._api.CredDeleteW(target, CRED_TYPE_GENERIC, 0):
-            return True
-        if self._last_error() == ERROR_NOT_FOUND:
-            return False
+        try:
+            deleted = self._api.CredDeleteW(target, CRED_TYPE_GENERIC, 0)
+        except OSError:
+            pass
+        else:
+            if deleted:
+                return True
+            if self._last_error() == ERROR_NOT_FOUND:
+                return False
+            self._raise_operation_error()
         self._raise_operation_error()
+
+    def _read_credential(self, credential_pointer: PCREDENTIALW) -> str:
+        try:
+            return self._decode_secret(credential_pointer.contents)
+        finally:
+            self._api.CredFree(credential_pointer)
 
     def _last_error(self) -> int:
         get_last_error = getattr(self._api, "get_last_error", ctypes.get_last_error)

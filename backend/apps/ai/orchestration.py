@@ -410,9 +410,12 @@ def _schedule_retry(run_id, *, retry_count, countdown):
     if run.status != AIRun.Status.RUNNING:
         return run
     run.transport_retry_count = retry_count
+    run.next_call_generation += 1
     run.next_retry_at = timezone.now() + timedelta(seconds=countdown)
     with ai_audit_writes():
-        run.save(update_fields=["transport_retry_count", "next_retry_at"])
+        run.save(update_fields=[
+            "transport_retry_count", "next_retry_at", "next_call_generation"
+        ])
     return run
 
 
@@ -428,8 +431,10 @@ def _reserve_and_schedule_retry(run, usage_attempt, *, retry_count, countdown):
 
 
 @transaction.atomic
-def _claim_provider_call(run, usage_attempt, *, generation: int):
+def _claim_provider_call(run, usage_attempt):
     locked_run = AIRun.objects.select_for_update().get(pk=run.pk)
+    generation = locked_run.next_call_generation
+    phase = locked_run.next_call_phase
     now = timezone.now()
     call = AIProviderCall.objects.select_for_update().filter(
         run=locked_run, generation=generation
@@ -454,7 +459,8 @@ def _claim_provider_call(run, usage_attempt, *, generation: int):
                 locked_run.save(
                     update_fields=["transport_retry_count", "next_retry_at"]
                 )
-            generation += 1
+            locked_run.next_call_generation += 1
+            generation = locked_run.next_call_generation
             call = None
         elif call.status in {
             AIProviderCall.Status.SUCCEEDED, AIProviderCall.Status.FAILED,
@@ -464,13 +470,16 @@ def _claim_provider_call(run, usage_attempt, *, generation: int):
     if call is None:
         call = AIProviderCall.objects.create(
             run=locked_run, generation=generation,
+            phase=phase,
             status=AIProviderCall.Status.RESERVED,
             reserved_usd=usage_attempt.intent.reserved_cost_usd,
         )
     token = uuid4()
     call.status = AIProviderCall.Status.CALLING
     call.lease_token = token
-    call.lease_expires_at = now + timedelta(seconds=CALL_LEASE_SECONDS)
+    call.lease_expires_at = now + timedelta(
+        seconds=max(CALL_LEASE_SECONDS, int(usage_attempt.intent.timeout_seconds) + 30)
+    )
     call.save(update_fields=["status", "lease_token", "lease_expires_at"])
     return call, token
 
@@ -551,21 +560,28 @@ def execute_generation_job(
         if not retry_due:
             return existing
 
+    intent = AIExecutionIntent.objects.filter(job=job).first()
+    frozen_prompt_id = (
+        intent.prompt_version_id_snapshot
+        if intent is not None and intent.prompt_version_id_snapshot
+        else prompt_version_id
+    )
     try:
-        prompt = PromptVersion.objects.get(
-            pk=prompt_version_id, status=PromptVersion.Status.PUBLISHED
-        )
+        prompt_query = PromptVersion.objects.filter(pk=frozen_prompt_id)
+        if intent is None:
+            prompt_query = prompt_query.filter(status=PromptVersion.Status.PUBLISHED)
+        prompt = prompt_query.get()
     except PromptVersion.DoesNotExist as exc:
         raise GenerationPreflightError(
             "prompt_not_available", "Published prompt version is not available."
         ) from exc
     expected_purpose = JOB_PROMPT_PURPOSES.get(job.type)
-    if expected_purpose is None or prompt.purpose != expected_purpose:
+    actual_purpose = intent.prompt_purpose if intent is not None else prompt.purpose
+    if expected_purpose is None or actual_purpose != expected_purpose:
         raise GenerationPreflightError(
             "prompt_purpose_mismatch",
             "Prompt purpose is not compatible with the job type.",
         )
-    intent = AIExecutionIntent.objects.filter(job=job).first()
     routing = job.input_snapshot.get("ai_routing") if isinstance(job.input_snapshot, dict) else None
     if intent is not None:
         if not validate_routing_snapshot(routing, intent=intent):
@@ -696,10 +712,7 @@ def execute_generation_job(
     for invalid_attempt in range(repairs_allowed + 1):
         call = call_token = None
         if intent is not None:
-            generation = run.transport_retry_count + invalid_attempt + 1
-            call, call_token = _claim_provider_call(
-                run, usage_attempt, generation=generation
-            )
+            call, call_token = _claim_provider_call(run, usage_attempt)
             if call is None:
                 return AIRun.objects.get(pk=run.pk)
             if Job.objects.filter(pk=claimed.id, status=Job.Status.CANCELED).exists():
@@ -710,7 +723,11 @@ def execute_generation_job(
                 return _record_canceled_run(run, usage_attempt=usage_attempt)
         try:
             result = provider.generate(
-                prompt=rendered if invalid_attempt == 0 else _repair_prompt(rendered),
+                prompt=(
+                    _repair_prompt(rendered)
+                    if call is not None and call.phase == AIProviderCall.Phase.REPAIR
+                    else rendered
+                ),
                 schema=output_schema,
                 **({"execution": execution} if execution is not None else {}),
             )
@@ -821,8 +838,12 @@ def execute_generation_job(
                 error = {"code": str(exc)}
                 break
             run.repair_attempted = True
+            run.next_call_generation += 1
+            run.next_call_phase = AIProviderCall.Phase.REPAIR
             with ai_audit_writes():
-                run.save(update_fields=["repair_attempted"])
+                run.save(update_fields=[
+                    "repair_attempted", "next_call_generation", "next_call_phase"
+                ])
     return _record_failure(
         run.id, job_id=claimed.id, claim_token=token, error=error,
         usage_attempt=usage_attempt, usage_metadata=metadata,

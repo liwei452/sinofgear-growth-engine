@@ -386,6 +386,8 @@ class GenerateMasterView(APIView):
                     create_execution_intent(
                         job=job, decision=decision, created_by=request.user,
                         provider_prompt=rendered, provider_schema=prompt.output_schema,
+                        prompt_purpose=prompt.purpose,
+                        prompt_version_id=prompt.id,
                     )
         except (ValidationError, PermissionDenied) as error:
             return Response({"errors": {"ai": [str(error)]}}, status=400)

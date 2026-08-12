@@ -1017,6 +1017,8 @@ class LeadAnalysisService:
                 job=job, decision=decision, created_by=actor,
                 provider_prompt=_render_lead_prompt(prompt.template, snapshot),
                 provider_schema=prompt.output_schema,
+                prompt_purpose=prompt.purpose,
+                prompt_version_id=prompt.id,
             )
         with lead_history_writes():
             LeadAnalysisBinding.objects.create(

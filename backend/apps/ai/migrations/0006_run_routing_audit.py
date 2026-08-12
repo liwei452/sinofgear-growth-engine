@@ -21,6 +21,14 @@ class Migration(migrations.Migration):
             field=models.JSONField(default=dict),
         ),
         migrations.AddField(
+            model_name="aiexecutionintent", name="prompt_purpose",
+            field=models.CharField(blank=True, max_length=64),
+        ),
+        migrations.AddField(
+            model_name="aiexecutionintent", name="prompt_version_id_snapshot",
+            field=models.UUIDField(blank=True, null=True),
+        ),
+        migrations.AddField(
             model_name="aiusageattempt",
             name="additional_reserved_usd",
             field=models.DecimalField(decimal_places=6, default=0, max_digits=12),
@@ -40,6 +48,18 @@ class Migration(migrations.Migration):
             name="next_retry_at",
             field=models.DateTimeField(blank=True, null=True),
         ),
+        migrations.AddField(
+            model_name="airun", name="next_call_generation",
+            field=models.PositiveSmallIntegerField(default=1),
+        ),
+        migrations.AddField(
+            model_name="airun", name="next_call_phase",
+            field=models.CharField(default="NORMAL", max_length=12),
+        ),
+        migrations.AddField(
+            model_name="airun", name="retry_dispatch_token",
+            field=models.UUIDField(blank=True, null=True),
+        ),
         migrations.AddConstraint(
             model_name="aiusageattempt",
             constraint=models.CheckConstraint(
@@ -52,6 +72,7 @@ class Migration(migrations.Migration):
             fields=[
                 ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
                 ("generation", models.PositiveSmallIntegerField()),
+                ("phase", models.CharField(choices=[("NORMAL", "Normal"), ("REPAIR", "Repair")], default="NORMAL", max_length=12)),
                 ("status", models.CharField(choices=[("RESERVED", "Reserved"), ("CALLING", "Calling"), ("SUCCEEDED", "Succeeded"), ("FAILED", "Failed"), ("AMBIGUOUS", "Ambiguous"), ("CANCELED_PRE_CALL", "Canceled before call")], max_length=24)),
                 ("lease_token", models.UUIDField(blank=True, null=True)),
                 ("lease_expires_at", models.DateTimeField(blank=True, null=True)),

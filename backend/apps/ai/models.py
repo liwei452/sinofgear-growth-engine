@@ -128,6 +128,9 @@ class AIRun(AuditModel):
     transport_retry_count = models.PositiveSmallIntegerField(default=0)
     repair_attempted = models.BooleanField(default=False)
     next_retry_at = models.DateTimeField(null=True, blank=True)
+    next_call_generation = models.PositiveSmallIntegerField(default=1)
+    next_call_phase = models.CharField(max_length=12, default="NORMAL")
+    retry_dispatch_token = models.UUIDField(null=True, blank=True)
     error = models.JSONField(null=True, blank=True)
     human_correction = models.JSONField(null=True, blank=True)
     reviewed_by = models.ForeignKey(
@@ -249,6 +252,8 @@ class AIExecutionIntent(models.Model):
     provider_prompt = models.TextField(blank=True)
     provider_schema = models.JSONField(default=dict)
     provider_input_sha256 = models.CharField(max_length=64, blank=True)
+    prompt_purpose = models.CharField(max_length=64, blank=True)
+    prompt_version_id_snapshot = models.UUIDField(null=True, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -375,6 +380,9 @@ class AIUsageAttempt(models.Model):
 
 
 class AIProviderCall(models.Model):
+    class Phase(models.TextChoices):
+        NORMAL = "NORMAL", "Normal"
+        REPAIR = "REPAIR", "Repair"
     class Status(models.TextChoices):
         RESERVED = "RESERVED", "Reserved"
         CALLING = "CALLING", "Calling"
@@ -386,6 +394,7 @@ class AIProviderCall(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     run = models.ForeignKey(AIRun, on_delete=models.PROTECT, related_name="provider_calls")
     generation = models.PositiveSmallIntegerField()
+    phase = models.CharField(max_length=12, choices=Phase.choices, default=Phase.NORMAL)
     status = models.CharField(max_length=24, choices=Status.choices)
     lease_token = models.UUIDField(null=True, blank=True)
     lease_expires_at = models.DateTimeField(null=True, blank=True)

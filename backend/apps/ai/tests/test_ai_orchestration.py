@@ -221,6 +221,8 @@ def _deepseek_job(organization, frozen_input, prompt, *, max_attempts=3):
         reserved_cost_usd="0.001000",
         provider_prompt=rendered,
         provider_schema=OUTPUT_SCHEMA,
+        prompt_purpose="CONTENT_GENERATE",
+        prompt_version_id_snapshot=prompt.id,
     )
     prompt.provider = "deepseek"
     prompt.model = "deepseek-v4-flash"

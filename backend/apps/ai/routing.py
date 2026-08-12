@@ -186,7 +186,9 @@ def _provider_input_digest(prompt: str, schema: dict) -> str:
 
 
 def create_execution_intent(
-    *, job, decision, created_by=None, provider_prompt="", provider_schema=None
+    *, job, decision, created_by=None, provider_prompt="", provider_schema=None,
+    prompt_purpose="",
+    prompt_version_id=None,
 ) -> AIExecutionIntent:
     locked_job = Job.objects.select_for_update().get(pk=job.pk)
     existing = AIExecutionIntent.objects.filter(job=locked_job).first()
@@ -218,6 +220,8 @@ def create_execution_intent(
             _provider_input_digest(provider_prompt, schema)
             if provider_prompt or schema else ""
         ),
+        prompt_purpose=prompt_purpose,
+        prompt_version_id_snapshot=prompt_version_id,
         created_by=created_by,
     )
 

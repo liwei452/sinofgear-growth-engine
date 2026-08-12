@@ -60,3 +60,15 @@ Round 1 verification:
 - Targeted GREEN: 24/24 tests passed.
 - Full frontend GREEN: 45 files, 520/520 tests passed.
 - Type check, ESLint, production build, generated API check, and diff check passed.
+
+## Review fix round 2
+
+- `OperationModal` now teleports to `document.body`, keeping the modal outside the inert application subtree. While open, all body siblings receive reference-counted `inert` and `aria-hidden="true"`; their original values are restored on close or unmount.
+- Delete failures remain inside the deletion dialog with one safe `role="alert"` / assertive live region. Focus moves to that feedback, the dialog stays open, and the administrator can retry or cancel without page-level error focus escaping behind the modal.
+
+Round 2 verification:
+
+- RED: 2 new regression tests failed for inert modal ancestry and delete-failure feedback.
+- Targeted GREEN: 11/11 DeepSeek page tests passed.
+- Full frontend GREEN: 45 files, 522/522 tests passed.
+- Type check, ESLint, production build, generated API check, and diff check passed.

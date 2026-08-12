@@ -22,7 +22,9 @@ const deleteOpen = ref(false)
 const testSucceeded = ref(false)
 const statusMessage = ref("")
 const errorMessage = ref("")
+const deleteErrorMessage = ref("")
 const errorElement = ref<HTMLElement | null>(null)
+const deleteErrorElement = ref<HTMLElement | null>(null)
 const keyInput = ref<HTMLInputElement | null>(null)
 const dailyBudget = ref("5.00")
 const flashTokens = ref(4096)
@@ -73,6 +75,7 @@ function resetSensitiveState() {
   deleteOpen.value = false
   statusMessage.value = ""
   errorMessage.value = ""
+  deleteErrorMessage.value = ""
   applyConfiguration(configuration.data.value)
 }
 
@@ -143,10 +146,13 @@ const deleteMutation = useMutation({
     if (!isCurrent(context)) return
     queryClient.setQueryData(aiSettingsKeys.configuration(context.organizationId), value)
     statusMessage.value = "DeepSeek 连接已删除。"
+    deleteErrorMessage.value = ""
     deleteOpen.value = false
   },
   onError: () => {
-    if (isCurrent(pendingDeleteContext)) safeFailure("暂时无法删除连接，请稍后重试。")
+    if (!isCurrent(pendingDeleteContext)) return
+    deleteErrorMessage.value = "暂时无法删除连接，请稍后重试。"
+    void nextTick(() => deleteErrorElement.value?.focus())
   },
   onSettled: () => { pendingDeleteContext = undefined },
 })
@@ -198,10 +204,13 @@ function closeKeyModal(restoreFocus = true) {
 }
 
 function openDeleteModal() {
-  if (canManage.value) deleteOpen.value = true
+  if (!canManage.value) return
+  deleteErrorMessage.value = ""
+  deleteOpen.value = true
 }
 
 function closeDeleteModal() {
+  deleteErrorMessage.value = ""
   deleteOpen.value = false
 }
 
@@ -326,9 +335,14 @@ onBeforeUnmount(resetSensitiveState)
     </OperationModal>
 
     <OperationModal v-if="deleteOpen" title="确认删除 DeepSeek 连接" title-id="delete-title" @close="closeDeleteModal">
+      <div v-if="deleteErrorMessage" ref="deleteErrorElement" class="ai-settings-alert" role="alert" aria-live="assertive" tabindex="-1">
+        {{ deleteErrorMessage }}
+      </div>
       <p>删除后，AI 任务将暂停，已有内容和审计记录不会被删除。</p>
       <div class="ai-settings-actions">
-        <button class="button button-danger" type="button" :disabled="deleteMutation.isPending.value" @click="removeConnection">{{ deleteMutation.isPending.value ? "正在删除…" : "确认删除" }}</button>
+        <button class="button button-danger" type="button" :disabled="deleteMutation.isPending.value" @click="removeConnection">
+          {{ deleteMutation.isPending.value ? "正在删除…" : deleteErrorMessage ? "重新删除" : "确认删除" }}
+        </button>
         <button class="button button-secondary" type="button" @click="closeDeleteModal">保留连接</button>
       </div>
     </OperationModal>

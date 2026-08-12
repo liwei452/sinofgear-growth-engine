@@ -10,12 +10,14 @@ const initialFocus = ref<HTMLElement|null>(null)
 useModalFocus({backdrop,dialog,initialFocus,close:()=>emit("close")})
 </script>
 <template>
-  <div ref="backdrop" class="operation-backdrop" data-testid="operation-modal-backdrop" @click.self="emit('close')">
-    <section ref="dialog" class="operation-dialog" role="dialog" aria-modal="true" :aria-labelledby="titleId">
-      <h2 :id="titleId" ref="initialFocus" tabindex="-1">{{ title }}</h2>
-      <slot />
-    </section>
-  </div>
+  <Teleport to="body">
+    <div ref="backdrop" class="operation-backdrop" data-testid="operation-modal-backdrop" @click.self="emit('close')">
+      <section ref="dialog" class="operation-dialog" role="dialog" aria-modal="true" :aria-labelledby="titleId">
+        <h2 :id="titleId" ref="initialFocus" tabindex="-1">{{ title }}</h2>
+        <slot />
+      </section>
+    </div>
+  </Teleport>
 </template>
 <style scoped>
 .operation-backdrop{position:fixed;inset:0;background:#0008;display:grid;place-items:center;padding:1rem;z-index:10}

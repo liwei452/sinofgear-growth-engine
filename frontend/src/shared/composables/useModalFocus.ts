@@ -1,6 +1,12 @@
 import { nextTick, onBeforeUnmount, onMounted, type Ref } from "vue"
 
-type InertState = { count: number; hadAttribute: boolean; value: string | null }
+type InertState = {
+  count: number
+  hadAttribute: boolean
+  value: string | null
+  hadAriaHidden: boolean
+  ariaHidden: string | null
+}
 
 const inertStates = new Map<HTMLElement, InertState>()
 const modalStack: symbol[] = []
@@ -24,8 +30,11 @@ function setInert(element: HTMLElement): void {
     count: 1,
     hadAttribute: element.hasAttribute("inert"),
     value: element.getAttribute("inert"),
+    hadAriaHidden: element.hasAttribute("aria-hidden"),
+    ariaHidden: element.getAttribute("aria-hidden"),
   })
   element.setAttribute("inert", "")
+  element.setAttribute("aria-hidden", "true")
 }
 
 function releaseInert(element: HTMLElement): void {
@@ -36,6 +45,8 @@ function releaseInert(element: HTMLElement): void {
   inertStates.delete(element)
   if (current.hadAttribute) element.setAttribute("inert", current.value ?? "")
   else element.removeAttribute("inert")
+  if (current.hadAriaHidden) element.setAttribute("aria-hidden", current.ariaHidden ?? "")
+  else element.removeAttribute("aria-hidden")
 }
 
 function focusableElements(dialog: HTMLElement): HTMLElement[] {

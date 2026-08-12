@@ -298,3 +298,61 @@ it("traps focus in both dialogs and restores the exact opener on every close pat
   await user.click(within(deleteDialog).getByRole("button", { name: /保留连接/ }))
   expect(deleteOpener).toHaveFocus()
 })
+
+it("teleports both dialogs outside the inert application background and restores it on close", async () => {
+  const connected = { ...disconnected, connection_state: "CONNECTED", key_suffix: "1234", credential_revision: 2 }
+  const { container } = renderPage(vi.fn(async () => response(connected)), connected)
+  const user = userEvent.setup()
+  await screen.findByText("尾号 1234")
+  const applicationRoot = container
+
+  await user.click(screen.getByRole("button", { name: "修改限制" }))
+  let dialog = screen.getByRole("dialog", { name: /修改 DeepSeek 设置/ })
+  expect(applicationRoot).toHaveAttribute("inert")
+  expect(applicationRoot).toHaveAttribute("aria-hidden", "true")
+  expect(dialog.closest("[inert]")).toBeNull()
+  expect(applicationRoot).not.toContainElement(dialog)
+  await user.click(within(dialog).getByRole("button", { name: "取消" }))
+  expect(applicationRoot).not.toHaveAttribute("inert")
+  expect(applicationRoot).not.toHaveAttribute("aria-hidden")
+
+  await user.click(screen.getByRole("button", { name: /删除连接/ }))
+  dialog = screen.getByRole("dialog", { name: /确认删除/ })
+  expect(applicationRoot).toHaveAttribute("inert")
+  expect(applicationRoot).toHaveAttribute("aria-hidden", "true")
+  expect(dialog.closest("[inert]")).toBeNull()
+  await user.click(within(dialog).getByRole("button", { name: /保留连接/ }))
+  expect(applicationRoot).not.toHaveAttribute("inert")
+  expect(applicationRoot).not.toHaveAttribute("aria-hidden")
+})
+
+it("keeps a failed delete inside its dialog with focused safe feedback and supports retry or cancel", async () => {
+  document.cookie = "csrftoken=csrf; path=/"
+  const connected = { ...disconnected, connection_state: "CONNECTED", key_suffix: "1234", credential_revision: 2 }
+  let attempts = 0
+  const fetchMock = vi.fn(async (_path: string, init?: RequestInit) => {
+    if (init?.method === "DELETE" && attempts++ === 0) return response({ detail: "secret trace" }, 503)
+    if (init?.method === "DELETE") return response(disconnected)
+    return response(connected)
+  })
+  renderPage(fetchMock, connected)
+  const user = userEvent.setup()
+  await screen.findByText("尾号 1234")
+  const opener = screen.getByRole("button", { name: /删除连接/ })
+  await user.click(opener)
+  const dialog = screen.getByRole("dialog", { name: /确认删除/ })
+  await user.click(within(dialog).getByRole("button", { name: /确认删除/ }))
+
+  const alert = await within(dialog).findByRole("alert")
+  expect(alert).toHaveFocus()
+  expect(alert).toHaveTextContent("暂时无法删除连接")
+  expect(alert).not.toHaveTextContent("secret trace")
+  expect(screen.getAllByRole("alert")).toHaveLength(1)
+  expect(dialog).toContainElement(document.activeElement)
+  expect(within(dialog).getByRole("button", { name: /重新删除/ })).toBeEnabled()
+
+  await user.click(within(dialog).getByRole("button", { name: /重新删除/ }))
+  expect(await screen.findByText("DeepSeek 尚未连接")).toBeInTheDocument()
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  expect(opener).not.toBeInTheDocument()
+})

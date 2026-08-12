@@ -23,6 +23,7 @@ function response(value: unknown, status = 200) {
 
 async function renderPage(options: {
   connected?: boolean
+  connectionState?: "CONNECTED" | "NOT_CONFIGURED" | "NEEDS_RECONNECT" | "CONFIGURING"
   analyticsCount?: number
   permissions?: string[]
   fail?: "provider" | "director" | "analytics"
@@ -34,7 +35,7 @@ async function renderPage(options: {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
     if (path === "/api/v1/ai-provider-configuration") return options.fail === "provider" ? response({}, 503) : response({
-      provider_code: "deepseek", connection_state: options.connected === false ? "NOT_CONFIGURED" : "CONNECTED",
+      provider_code: "deepseek", connection_state: options.connectionState ?? (options.connected === false ? "NOT_CONFIGURED" : "CONNECTED"),
       key_suffix: "1234", credential_revision: 1, last_tested_at: "2026-08-12T08:00:00Z", last_tested_by_id: 1,
       daily_budget_usd: "5.00", flash_max_output_tokens: 4096, pro_max_output_tokens: 8192,
       timeout_seconds: 60, updated_at: "2026-08-12T08:00:00Z",
@@ -63,6 +64,25 @@ it("shows exactly the five approved agents and no fake scheduler controls", asyn
   ])
   expect(screen.queryByRole("switch")).not.toBeInTheDocument()
   expect(screen.queryByText(/运行中|自动调度已开启/)).not.toBeInTheDocument()
+})
+
+it("keeps pending badges, explanations, and actions in a checking state", async () => {
+  let finish!: (response: Response) => void
+  const pending = new Promise<Response>((resolve) => { finish = resolve })
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, user)
+  vi.stubGlobal("fetch", vi.fn(() => pending))
+  render(AgentCenterPage, {
+    global: { plugins: [[VueQueryPlugin, { queryClient }]], stubs: { RouterLink: { template: "<a :href='to'><slot /></a>", props: ["to"] } } },
+  })
+  const cards = await screen.findAllByRole("article")
+  for (const index of [0, 1, 2, 4]) {
+    expect(within(cards[index]).getByText("正在核对")).toBeInTheDocument()
+    expect(within(cards[index]).getAllByText(/正在核对.*状态/).length).toBeGreaterThan(0)
+    expect(within(cards[index]).queryByText(/尚未|没有可确认|需要管理员完成配置/)).not.toBeInTheDocument()
+  }
+  expect(within(cards[1]).getByText("正在核对状态")).toHaveAttribute("aria-disabled", "true")
+  finish(response({}, 503))
 })
 
 it("derives readiness from real connection, permissions and records", async () => {
@@ -138,4 +158,15 @@ it.each([
   const cards = await screen.findAllByRole("article")
   expect(await within(cards[cardIndex]).findByText("暂时无法核对")).toBeInTheDocument()
   expect(within(cards[cardIndex]).queryByText("需要配置")).not.toBeInTheDocument()
+  expect(within(cards[cardIndex]).getByText("重新核对")).toBeInTheDocument()
+})
+
+it("shows configuration in progress without offering another configure action", async () => {
+  await renderPage({ connectionState: "CONFIGURING" })
+  const cards = await screen.findAllByRole("article")
+  for (const index of [1, 2]) {
+    expect(await within(cards[index]).findByText("配置进行中")).toBeInTheDocument()
+    expect(within(cards[index]).getByText(/正在配置 DeepSeek/)).toBeInTheDocument()
+    expect(within(cards[index]).queryByText("配置 DeepSeek")).not.toBeInTheDocument()
+  }
 })

@@ -10,7 +10,8 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from jsonschema import ValidationError as JSONSchemaValidationError
 
-from apps.ai.models import AIRun, PromptVersion
+from apps.ai.models import AIExecutionIntent, AIRun, PromptVersion
+from apps.ai.routing import validate_routing_snapshot
 from apps.ai.orchestration import (
     MAX_PROMPT_CHARS,
     GenerationError,
@@ -59,6 +60,10 @@ def _validate_lead_input(snapshot: dict, *, organization_id) -> None:
         "ontology_snapshot",
         "capability_bindings",
     }
+    if "routing_signals" in frozen:
+        expected_fields.add("routing_signals")
+    if "ai_routing" in frozen:
+        expected_fields.add("ai_routing")
     if (
         set(frozen) != expected_fields
         or frozen.get("schema") != "LEAD_ANALYSIS_INPUT_V1"
@@ -77,6 +82,27 @@ def _validate_lead_input(snapshot: dict, *, organization_id) -> None:
     }:
         raise GenerationPreflightError(
             "invalid_lead_analysis_input", "Frozen candidate fields are invalid."
+        )
+    signals = frozen.get("routing_signals")
+    signals_invalid = signals is not None and (
+        not isinstance(signals, dict)
+        or set(signals) != {"codes", "policy_version"}
+        or signals.get("policy_version") != 1
+        or not isinstance(signals.get("codes"), list)
+        or signals["codes"] != sorted(set(signals["codes"]))
+        or not set(signals["codes"]) <= {
+            "CONFLICTING_QUANTITIES", "LOW_TRUSTED_CONFIDENCE", "DOMAIN_AMBIGUITY"
+        }
+    )
+    if signals_invalid or (
+        "ai_routing" in frozen
+        and (
+            signals is None
+            or not validate_routing_snapshot(frozen["ai_routing"])
+        )
+    ):
+        raise GenerationPreflightError(
+            "invalid_lead_analysis_input", "Frozen routing signals are invalid."
         )
     try:
         UUID(str(frozen["analysis_lease_id"]))
@@ -336,11 +362,21 @@ def _bound_prompt(job, prompt_version_id):
         "ontology_snapshot",
         "capability_bindings",
     }
+    if "routing_signals" in frozen:
+        expected_fields.add("routing_signals")
+    if "ai_routing" in frozen:
+        expected_fields.add("ai_routing")
     snapshot_integrity_valid = (
         set(frozen) == expected_fields
         and frozen.get("schema") == "LEAD_ANALYSIS_INPUT_V1"
         and isinstance(digest, str)
         and hmac.compare_digest(digest, _snapshot_digest(frozen))
+    )
+    intent = AIExecutionIntent.objects.filter(job=job).first()
+    routing = snapshot.get("ai_routing") if isinstance(snapshot, dict) else None
+    routing_valid = (
+        (intent is None and routing is None)
+        or (intent is not None and validate_routing_snapshot(routing, intent=intent))
     )
     valid = (
         binding is not None
@@ -351,6 +387,7 @@ def _bound_prompt(job, prompt_version_id):
         and snapshot.get("organization_id") == str(job.organization_id)
         and snapshot.get("lead_candidate_id") == str(binding.candidate_id)
         and snapshot_integrity_valid
+        and routing_valid
         and binding.prompt_version.purpose == "LEAD_ANALYZE"
         and binding.prompt_version.status == PromptVersion.Status.PUBLISHED
         and binding.prompt_version.output_schema == LEAD_ANALYSIS_OUTPUT_SCHEMA

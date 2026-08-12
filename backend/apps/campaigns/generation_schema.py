@@ -140,6 +140,23 @@ ONTOLOGY_SNAPSHOT_SCHEMA = object_schema(
     ["organization_id", "concept_versions", "relation_versions", "evidence_references", "generated_at"],
 )
 
+AI_ROUTING_SCHEMA = object_schema(
+    {
+        "provider": {"const": "deepseek"},
+        "model": {"enum": ["deepseek-v4-flash", "deepseek-v4-pro"]},
+        "thinking_enabled": {"type": "boolean"},
+        "policy_code": {"const": "deepseek-routing-v1"},
+        "policy_version": {"const": 1},
+        "override_reason": {"enum": ["", "administrator_enhanced_analysis"]},
+        "max_output_tokens": {"type": "integer", "minimum": 1},
+        "timeout_seconds": {"type": "integer", "minimum": 1},
+    },
+    [
+        "provider", "model", "thinking_enabled", "policy_code", "policy_version",
+        "override_reason", "max_output_tokens", "timeout_seconds",
+    ],
+)
+
 CONTENT_GENERATION_INPUT_SCHEMA = object_schema(
     {
         "schema_version": {"const": CONTENT_GENERATION_INPUT_SCHEMA_VERSION},
@@ -163,6 +180,7 @@ CONTENT_GENERATION_INPUT_SCHEMA = object_schema(
         "target_platforms": {"type": "array", "items": PLATFORM_SCHEMA, "minItems": 1},
         "ontology_snapshot": ONTOLOGY_SNAPSHOT_SCHEMA,
         "generated_at": {"type": "string", "format": "date-time"},
+        "ai_routing": AI_ROUTING_SCHEMA,
     },
     [
         "schema_version", "organization_id", "brief_id", "brief_version", "campaign_id",

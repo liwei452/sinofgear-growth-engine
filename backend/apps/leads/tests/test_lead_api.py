@@ -420,6 +420,16 @@ def test_deepseek_schedule_routes_persisted_conflicting_requirements_to_pro(
         "codes": ["CONFLICTING_QUANTITIES"],
         "policy_version": 1,
     }
+    from apps.leads.orchestration import execute_lead_analysis_job
+    from integrations.ai.providers import provider_registry
+
+    class InvalidButReachedProvider:
+        def generate(self, *, prompt, schema):
+            return {}
+
+    provider_registry.register("deepseek", InvalidButReachedProvider(), replace=True)
+    run = execute_lead_analysis_job(intent.job_id)
+    assert run.error["code"] == "invalid_provider_output"
 
 
 def test_deepseek_schedule_routes_ordinary_persisted_evidence_to_flash(

@@ -28,7 +28,7 @@ _SAFE_KEYS = frozenset(
     {
         "publictokencount", "passwordpolicy", "safetokenizedname",
         "tokenbudget", "credentialtype", "inputtokens", "outputtokens",
-        "totaltokens", "cachehittokens",
+        "totaltokens", "cachehittokens", "maxoutputtokens",
     }
 )
 

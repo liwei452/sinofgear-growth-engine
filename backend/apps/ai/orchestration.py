@@ -13,7 +13,8 @@ from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService
 from integrations.ai.providers import provider_registry
 
-from .models import AIRun, PromptVersion, ai_audit_writes
+from .models import AIExecutionIntent, AIRun, PromptVersion, ai_audit_writes
+from .routing import validate_routing_snapshot
 
 
 MAX_PROMPT_CHARS = 50_000
@@ -48,6 +49,10 @@ def _validate_generation_input(snapshot: dict, *, organization_id) -> None:
         raise GenerationPreflightError(
             "generation_input_organization_mismatch",
             "Frozen generation input does not belong to the job organization.",
+        )
+    if "ai_routing" in snapshot and not validate_routing_snapshot(snapshot["ai_routing"]):
+        raise GenerationPreflightError(
+            "invalid_generation_input", "Frozen AI routing metadata is invalid."
         )
 
 
@@ -233,6 +238,17 @@ def _reconcile_orphaned_run(*, job_id, run_id) -> AIRun:
     return run
 
 
+def _validate_job_routing(job, snapshot) -> None:
+    intent = AIExecutionIntent.objects.filter(job=job).first()
+    routing = snapshot.get("ai_routing") if isinstance(snapshot, dict) else None
+    if intent is None and routing is None:
+        return
+    if intent is None or not validate_routing_snapshot(routing, intent=intent):
+        raise GenerationPreflightError(
+            "invalid_ai_routing", "Frozen AI routing does not match its execution intent."
+        )
+
+
 def execute_generation_job(
     job_id, *, prompt_version_id, provider_code: str | None = None,
     worker_id="ai-worker", result_writer=None, input_validator=None,
@@ -285,6 +301,7 @@ def execute_generation_job(
     snapshot = scrub_secrets(
         job.input_snapshot if input_snapshot is None else input_snapshot
     )
+    _validate_job_routing(job, snapshot)
     if input_validator is None:
         _validate_generation_input(snapshot, organization_id=job.organization_id)
     else:

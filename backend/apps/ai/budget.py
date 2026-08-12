@@ -12,15 +12,18 @@ from .models import AIProviderConfiguration, AIUsageAttempt, AIUsageDay
 
 
 _MONEY_QUANTUM = Decimal("0.000001")
-PRICING_CODE = "deepseek-v4-pricing"
-PRICING_VERSION = 1
-# Versioned USD / one million tokens. Cache-hit input is priced separately.
+# Official DeepSeek pricing verified 2026-08-12. Provider prices can change;
+# changing these values requires a new immutable version for audit replay.
+PRICING_CODE = "deepseek-official-usd-2026-08-12"
+PRICING_VERSION = 2
+# USD / one million tokens. Reservation rates in routing.py are intentionally
+# separate conservative ceilings and remain above these actual rates.
 _PRICING = {
     "deepseek-v4-flash": {
-        "input": Decimal("0.10"), "cache": Decimal("0.05"), "output": Decimal("2.00"),
+        "input": Decimal("0.14"), "cache": Decimal("0.0028"), "output": Decimal("0.28"),
     },
     "deepseek-v4-pro": {
-        "input": Decimal("0.40"), "cache": Decimal("0.20"), "output": Decimal("8.00"),
+        "input": Decimal("0.435"), "cache": Decimal("0.003625"), "output": Decimal("0.87"),
     },
 }
 

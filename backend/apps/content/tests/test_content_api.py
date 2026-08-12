@@ -12,6 +12,14 @@ from apps.content.services import (
 from apps.identity.models import Membership, Organization, Role
 from apps.ai.models import AIExecutionIntent, AIProviderConfiguration, PromptVersion
 from apps.ai.services import PromptVersionService
+from apps.ai.orchestration import (
+    GenerationPreflightError,
+    _validate_generation_input,
+    _validate_job_routing,
+    execute_generation_job,
+)
+from integrations.ai.providers import provider_registry
+from apps.campaigns.generation_schema import generation_input_errors
 
 
 def _client(organization, role_code):
@@ -330,3 +338,75 @@ def test_generate_admin_freezes_intent_with_job_transactionally(
     assert intent.job.input_snapshot["ai_routing"]["model"] == intent.model
     assert intent.estimated_input_tokens > len("Promote Helical gear".encode("utf-8"))
     assert dispatched
+
+
+def test_deepseek_content_frozen_route_passes_preflight_and_tamper_fails(
+    content_provenance, monkeypatch, django_capture_on_commit_callbacks,
+):
+    organization, _actor, brief, _job, _run = content_provenance
+    client = _client(organization, Role.Code.ADMINISTRATOR)
+    AIProviderConfiguration.objects.create(
+        organization=organization, connection_state="CONNECTED", key_suffix="safe"
+    )
+    PromptVersionService.create(
+        purpose="CONTENT_GENERATE", code="deepseek-preflight", provider="deepseek",
+        model="deepseek-v4-flash", template="Promote {product_name}",
+        output_schema={"type": "object"}, status=PromptVersion.Status.PUBLISHED,
+    )
+    snapshot = {
+        "schema_version": "1.0", "organization_id": str(organization.id),
+        "brief_id": str(brief.id), "brief_version": 1,
+        "campaign_id": str(brief.campaign_id), "campaign_version": 1,
+        "products": [], "assets": [], "target_country": "DE", "customer_type": "OEM",
+        "content_objective": "leads", "cta": "quote", "landing_page_url": "https://x.example",
+        "language": "en", "keywords": [], "prohibited_claims": [], "selling_points": [],
+        "advantages": [], "target_platforms": [],
+        "ontology_snapshot": {"organization_id": str(organization.id), "concept_versions": [],
+          "relation_versions": [], "evidence_references": [], "generated_at": "2026-08-12T00:00:00Z"},
+        "generated_at": "2026-08-12T00:00:00Z",
+    }
+    # Use valid non-empty objects from the real fixture builder schema via focused substitutions.
+    snapshot["products"] = [{
+        "product_id": str(brief.id), "product_version": 1, "name_zh": "", "name_en": "Gear",
+        "module_min": "1", "module_max": "2", "tooth_count_min": 10, "tooth_count_max": 20,
+        "pressure_angle": "20", "accuracy_grade": "DIN6", "heat_treatment": "",
+        "surface_treatment": "", "manufacturing_capabilities": [], "inspection_capabilities": [],
+        "moq": 1, "lead_time": "2w", "landing_page_url": "", "status": "ACTIVE",
+        "concept_versions": [],
+    }]
+    snapshot["target_platforms"] = [{
+        "platform_id": str(brief.id), "code": "LINKEDIN", "name": "LinkedIn",
+        "capability_codes": [],
+    }]
+    monkeypatch.setattr(
+        "apps.content.views.build_content_generation_input",
+        lambda _id: type("S", (), {"to_dict": lambda self: snapshot})(),
+    )
+    monkeypatch.setattr("apps.content.tasks.generate_master_content_job.delay", lambda *_: None)
+    with django_capture_on_commit_callbacks(execute=True):
+        response = client.post(
+            f"/api/v1/content-briefs/{brief.id}/generate-master-content", {}, format="json"
+        )
+    assert response.status_code == 202
+    intent = AIExecutionIntent.objects.get(job_id=response.json()["job_id"])
+    errors = generation_input_errors(intent.job.input_snapshot)
+    assert not errors, [error.message for error in errors]
+    _validate_generation_input(intent.job.input_snapshot, organization_id=organization.id)
+    class Provider:
+        def generate(self, *, prompt, schema):
+            return {}
+
+    provider_registry.register("deepseek", Provider(), replace=True)
+    run = execute_generation_job(
+        intent.job_id,
+        prompt_version_id=PromptVersion.objects.get(code="deepseek-preflight").id,
+    )
+    assert run.status == "SUCCEEDED"
+    tampered_route = {
+        **intent.job.input_snapshot["ai_routing"],
+        "model": "deepseek-v4-pro",
+        "thinking_enabled": True,
+    }
+    tampered = {**intent.job.input_snapshot, "ai_routing": tampered_route}
+    with pytest.raises(GenerationPreflightError):
+        _validate_job_routing(intent.job, tampered)

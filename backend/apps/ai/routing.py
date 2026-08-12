@@ -23,6 +23,12 @@ _INPUT_USD_PER_MILLION = { _FLASH_MODEL: Decimal("0.50"), _PRO_MODEL: Decimal("2
 _OUTPUT_USD_PER_MILLION = { _FLASH_MODEL: Decimal("2.00"), _PRO_MODEL: Decimal("8.00") }
 _MONEY_QUANTUM = Decimal("0.000001")
 MAX_PROVIDER_INPUT_BYTES = 1_000_000
+ROUTING_SNAPSHOT_FIELDS = frozenset(
+    {
+        "provider", "model", "thinking_enabled", "policy_code", "policy_version",
+        "override_reason", "max_output_tokens", "timeout_seconds",
+    }
+)
 
 
 class InputBudgetExceeded(ValueError):
@@ -206,3 +212,41 @@ def routing_snapshot(decision: RoutingDecision) -> dict[str, object]:
         "max_output_tokens": decision.max_output_tokens,
         "timeout_seconds": decision.timeout_seconds,
     }
+
+
+def validate_routing_snapshot(value, *, intent=None) -> bool:
+    if not isinstance(value, dict) or set(value) != ROUTING_SNAPSHOT_FIELDS:
+        return False
+    if (
+        value.get("provider") != "deepseek"
+        or value.get("model") not in {_FLASH_MODEL, _PRO_MODEL}
+        or not isinstance(value.get("thinking_enabled"), bool)
+        or value.get("thinking_enabled") != (value.get("model") == _PRO_MODEL)
+        or value.get("policy_code") != POLICY_CODE
+        or value.get("policy_version") != POLICY_VERSION
+        or value.get("override_reason") not in {"", "administrator_enhanced_analysis"}
+        or not isinstance(value.get("max_output_tokens"), int)
+        or isinstance(value.get("max_output_tokens"), bool)
+        or value.get("max_output_tokens") <= 0
+        or not isinstance(value.get("timeout_seconds"), int)
+        or isinstance(value.get("timeout_seconds"), bool)
+        or value.get("timeout_seconds") <= 0
+    ):
+        return False
+    if intent is None:
+        return True
+    return value == routing_snapshot(
+        RoutingDecision(
+            organization_id=intent.organization_id,
+            provider=intent.provider,
+            model=intent.model,
+            thinking_enabled=intent.thinking_enabled,
+            policy_code=intent.policy_code,
+            policy_version=intent.policy_version,
+            override_reason=intent.override_reason,
+            max_output_tokens=intent.max_output_tokens,
+            timeout_seconds=intent.timeout_seconds,
+            estimated_input_tokens=intent.estimated_input_tokens,
+            reserved_cost_usd=intent.reserved_cost_usd,
+        )
+    )

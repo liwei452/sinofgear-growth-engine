@@ -194,14 +194,16 @@ def test_negative_usage_and_database_negative_ledgers_are_rejected():
 @pytest.mark.parametrize(
     ("model", "expected"),
     [
-        ("deepseek-v4-flash", Decimal("0.000029")),
-        ("deepseek-v4-pro", Decimal("0.000116")),
+        ("deepseek-v4-flash", Decimal("0.000015")),
+        ("deepseek-v4-pro", Decimal("0.000044")),
     ],
 )
 def test_versioned_model_and_cache_aware_actual_pricing(model, expected):
     metadata = {"input_tokens": 100, "output_tokens": 10, "cache_hit_tokens": 20}
     assert calculate_actual_cost(model=model, metadata=metadata) == expected
-    assert (PRICING_CODE, PRICING_VERSION) == ("deepseek-v4-pricing", 1)
+    assert (PRICING_CODE, PRICING_VERSION) == (
+        "deepseek-official-usd-2026-08-12", 2
+    )
 
 
 def test_actual_pricing_fails_safe_on_missing_or_invalid_counts():

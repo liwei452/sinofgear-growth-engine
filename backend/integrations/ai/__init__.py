@@ -1,6 +1,16 @@
 from .providers import (
     AIProvider,
     FakeAIProvider,
+    ProviderAuthenticationError,
+    ProviderBalanceError,
+    ProviderCallError,
+    ProviderInvalidOutputError,
+    ProviderNetworkError,
+    ProviderRateLimitError,
+    ProviderRequest,
+    ProviderResult,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
     SchemaAwareFakeAIProvider,
     provider_registry,
 )
@@ -8,6 +18,16 @@ from .providers import (
 __all__ = [
     "AIProvider",
     "FakeAIProvider",
+    "ProviderAuthenticationError",
+    "ProviderBalanceError",
+    "ProviderCallError",
+    "ProviderInvalidOutputError",
+    "ProviderNetworkError",
+    "ProviderRateLimitError",
+    "ProviderRequest",
+    "ProviderResult",
+    "ProviderTimeoutError",
+    "ProviderUnavailableError",
     "SchemaAwareFakeAIProvider",
     "provider_registry",
 ]

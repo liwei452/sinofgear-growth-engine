@@ -13,8 +13,63 @@ def _schema_fake_allowed() -> bool:
     return bool(getattr(settings, "PHASE_B1_SCHEMA_FAKE_ALLOWED", False))
 
 
+@dataclass(frozen=True)
+class ProviderRequest:
+    model: str
+    thinking_enabled: bool
+    prompt: str
+    schema: dict
+    max_tokens: int
+    timeout_seconds: float
+
+
+@dataclass(frozen=True)
+class ProviderResult:
+    output: dict
+    metadata: dict
+
+
+class ProviderCallError(RuntimeError):
+    code = "provider_error"
+
+    def __init__(self, message: str = "AI provider call failed.") -> None:
+        super().__init__(message)
+
+
+class ProviderAuthenticationError(ProviderCallError):
+    code = "provider_authentication_failed"
+
+
+class ProviderBalanceError(ProviderCallError):
+    code = "provider_balance_required"
+
+
+class ProviderRateLimitError(ProviderCallError):
+    code = "provider_rate_limited"
+
+    def __init__(self, *, retry_after_seconds: int | None = None) -> None:
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__("AI provider rate limit reached.")
+
+
+class ProviderUnavailableError(ProviderCallError):
+    code = "provider_unavailable"
+
+
+class ProviderTimeoutError(ProviderCallError):
+    code = "provider_timeout"
+
+
+class ProviderNetworkError(ProviderCallError):
+    code = "provider_network_error"
+
+
+class ProviderInvalidOutputError(ProviderCallError):
+    code = "provider_invalid_output"
+
+
 class AIProvider(Protocol):
-    def generate(self, *, prompt: str, schema: dict) -> dict: ...
+    def generate(self, *, prompt: str, schema: dict, **kwargs): ...
 
 
 class ProviderRegistry:
@@ -411,3 +466,39 @@ class SchemaAwareFakeAIProvider:
 
 provider_registry = ProviderRegistry()
 provider_registry.register("fake", FakeAIProvider())
+
+
+def register_deepseek_provider(registry: ProviderRegistry = provider_registry) -> bool:
+    """Register the paid provider only when an approved vault is available."""
+    from django.conf import settings
+
+    from integrations.credentials import (
+        CredentialStoreUnavailableError,
+        get_credential_store,
+    )
+
+    from .deepseek import DeepSeekProvider
+
+    try:
+        credential_store = get_credential_store()
+    except CredentialStoreUnavailableError:
+        return False
+    base_url = str(
+        getattr(settings, "DEEPSEEK_API_BASE_URL", "https://api.deepseek.com")
+    ).rstrip("/")
+    registry.register(
+        "deepseek",
+        DeepSeekProvider(
+            credential_store=credential_store,
+            endpoint=f"{base_url}/chat/completions",
+            max_response_bytes=int(
+                getattr(settings, "DEEPSEEK_MAX_RESPONSE_BYTES", 1_000_000)
+            ),
+            max_json_depth=int(getattr(settings, "DEEPSEEK_MAX_JSON_DEPTH", 64)),
+        ),
+        replace=True,
+    )
+    return True
+
+
+register_deepseek_provider()

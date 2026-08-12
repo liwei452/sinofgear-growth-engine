@@ -53,12 +53,13 @@ def test_schema_fake_is_deterministic_for_a_supported_nested_schema():
     second = provider.generate(prompt="A generic deterministic fixture", schema=schema)
 
     assert first == second
+    first = first.output
     validator = validator_for(schema)(schema)
     assert list(validator.iter_errors(first)) == []
     assert (
         provider_registry.get("schema-fake").generate(
             prompt="A generic deterministic fixture", schema=schema
-        )
+        ).output
         == first
     )
 
@@ -95,7 +96,7 @@ def test_schema_fake_extracts_actual_fields_from_explicit_frozen_evidence():
     output = SchemaAwareFakeAIProvider().generate(
         prompt=prompt,
         schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
-    )
+    ).output
 
     assert lead_analysis_errors(output, snapshot=snapshot) == []
     assert output["company_name"] == "Fixture Packaging GmbH"
@@ -143,7 +144,7 @@ def test_schema_fake_does_not_invent_requirements_for_ordinary_engagement():
     output = provider_registry.get("schema-fake").generate(
         prompt=prompt,
         schema=LEAD_ANALYSIS_OUTPUT_SCHEMA,
-    )
+    ).output
 
     assert lead_analysis_errors(output, snapshot=snapshot) == []
     assert output["insufficient_evidence"] is True

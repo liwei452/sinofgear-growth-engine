@@ -893,7 +893,7 @@ class Command(BaseCommand):
         expected_output = SchemaAwareFakeAIProvider().generate(
             prompt=rendered,
             schema=prompt.output_schema,
-        )
+        ).output
         insights = list(
             LeadInsight.objects.filter(
                 organization=organization,

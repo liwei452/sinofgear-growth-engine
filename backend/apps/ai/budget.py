@@ -32,6 +32,29 @@ class BudgetExceeded(RuntimeError):
     pass
 
 
+@transaction.atomic
+def reserve_additional_call(attempt) -> None:
+    locked = AIUsageAttempt.objects.select_for_update().select_related("intent").get(
+        pk=attempt.pk
+    )
+    if locked.reconciled_at is not None:
+        return
+    Organization.objects.select_for_update().get(pk=locked.intent.organization_id)
+    day = AIUsageDay.objects.select_for_update().get(pk=locked.usage_day_id)
+    configuration = AIProviderConfiguration.objects.select_for_update().get(
+        organization_id=locked.intent.organization_id
+    )
+    reservation = _nonnegative_decimal(
+        locked.intent.reserved_cost_usd, field="reserved_cost_usd"
+    )
+    if day.reserved_usd + day.actual_usd + reservation > configuration.daily_budget_usd:
+        raise BudgetExceeded("deepseek_daily_budget_exceeded")
+    day.reserved_usd += reservation
+    day.save(update_fields=["reserved_usd", "updated_at"])
+    locked.additional_reserved_usd += reservation
+    locked.save(update_fields=["additional_reserved_usd"])
+
+
 def _nonnegative_decimal(value, *, field: str) -> Decimal:
     try:
         parsed = Decimal(str(value)).quantize(_MONEY_QUANTUM, rounding=ROUND_UP)
@@ -139,13 +162,16 @@ def reconcile_usage(attempt, metadata, status) -> None:
     else:
         # A failed/ambiguous paid call keeps its conservative reservation as
         # actual usage unless the provider reports a lower known amount.
-        actual = locked.reserved_usd
+        actual = locked.reserved_usd + locked.additional_reserved_usd
     input_tokens = _token_count(metadata, "input_tokens")
     output_tokens = _token_count(metadata, "output_tokens")
     cache_hit_tokens = _token_count(metadata, "cache_hit_tokens")
-    day.reserved_usd -= locked.reserved_usd
+    total_reserved = locked.reserved_usd + locked.additional_reserved_usd
+    day.reserved_usd -= total_reserved
     if day.reserved_usd < 0:
         raise ValueError("Usage ledger reservation cannot become negative.")
+    if status == AIUsageAttempt.Status.SUCCEEDED:
+        actual += locked.additional_reserved_usd
     day.actual_usd += actual
     day.save(update_fields=["reserved_usd", "actual_usd", "updated_at"])
     locked.status = status

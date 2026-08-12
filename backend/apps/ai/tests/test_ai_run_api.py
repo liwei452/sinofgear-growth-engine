@@ -72,8 +72,9 @@ def test_ai_run_detail_is_organization_scoped_and_recursively_scrubbed(ai_api):
         "id", "job_id", "job_attempt", "status", "prompt", "provider", "model",
         "confidence", "human_correction", "reviewer", "created_at", "started_at",
         "finished_at", "reviewed_at", "input_snapshot", "output_json", "error",
-        "provider_metadata",
-    }
+            "provider_metadata",
+            "transport_retry_count", "repair_attempted", "next_retry_at",
+        }
     assert data["prompt"] == {
         "purpose": "CONTENT_GENERATE", "code": "prompt-safe", "version": 1,
         "provider": "fake", "model": "fake-v1",

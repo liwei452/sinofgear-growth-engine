@@ -1,16 +1,36 @@
 from copy import deepcopy
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
-from apps.ai.models import AIRun, PromptVersion
-from apps.ai.orchestration import GenerationPreflightError, execute_generation_job
+from apps.ai.models import (
+    AIExecutionIntent,
+    AIProviderConfiguration,
+    AIRun,
+    AIUsageAttempt,
+    PromptVersion,
+    ai_audit_writes,
+)
+from apps.ai.orchestration import (
+    GenerationPreflightError,
+    ProviderRetryRequired,
+    execute_generation_job,
+)
 from apps.ai.services import PromptVersionService, scrub_secrets
 from apps.identity.models import Organization
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
-from integrations.ai.providers import FakeAIProvider, provider_registry
+from integrations.ai.providers import (
+    FakeAIProvider,
+    ProviderAuthenticationError,
+    ProviderInvalidOutputError,
+    ProviderRateLimitError,
+    ProviderResult,
+    provider_registry,
+)
 
 
 OUTPUT_SCHEMA = {
@@ -151,12 +171,261 @@ def test_fake_ai_is_deterministic_and_uses_sorted_approved_codes(frozen_input):
     second = provider.generate(prompt=prompt_text, schema=OUTPUT_SCHEMA)
 
     assert first == second
-    assert first == {
+    assert first.output == {
         "title": "Precision Gear for Germany on LINKEDIN",
         "body": "Precision Gear for Germany. Approved concepts: ALPHA, ZETA.",
         "cta": "Request a quote",
         "concept_codes": ["ALPHA", "ZETA"],
     }
+
+
+def _deepseek_job(organization, frozen_input, prompt, *, max_attempts=3):
+    AIProviderConfiguration.objects.create(
+        organization=organization,
+        connection_state=AIProviderConfiguration.ConnectionState.CONNECTED,
+        key_suffix="safe",
+        daily_budget_usd="10.00",
+    )
+    routing = {
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "thinking_enabled": False,
+        "policy_code": "deepseek-routing-v1",
+        "policy_version": 1,
+        "override_reason": "",
+        "max_output_tokens": 1200,
+        "timeout_seconds": 30,
+    }
+    snapshot = {**deepcopy(frozen_input), "ai_routing": routing}
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=snapshot,
+        max_attempts=max_attempts,
+    )
+    AIExecutionIntent.objects.create(
+        job=job,
+        organization=organization,
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        thinking_enabled=False,
+        policy_code="deepseek-routing-v1",
+        policy_version=1,
+        override_reason="",
+        max_output_tokens=1200,
+        timeout_seconds=30,
+        estimated_input_tokens=100,
+        reserved_cost_usd="0.001000",
+    )
+    prompt.provider = "deepseek"
+    prompt.model = "deepseek-v4-flash"
+    # Prompt versions are immutable through services; this fixture intentionally
+    # creates its DeepSeek identity through the protected audit write boundary.
+    from apps.ai.models import ai_audit_writes
+    with ai_audit_writes():
+        prompt.save(update_fields=["provider", "model"])
+    return job
+
+
+class ResultProvider:
+    def __init__(self, results):
+        self.results = list(results)
+        self.executions = []
+
+    def generate(self, *, prompt, schema, execution):
+        del prompt, schema
+        self.executions.append(execution)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+@pytest.mark.django_db
+def test_deepseek_uses_frozen_intent_and_reconciles_safe_metadata(
+    organization, frozen_input, prompt
+):
+    job = _deepseek_job(organization, frozen_input, prompt)
+    provider = ResultProvider([
+        ProviderResult(
+            output={
+                "title": "Safe", "body": "Body", "cta": "Act",
+                "concept_codes": ["ALPHA"],
+            },
+            metadata={
+                "model": "deepseek-v4-flash", "request_id": "req-safe",
+                "finish_reason": "stop", "input_tokens": 20,
+                "output_tokens": 10, "cache_hit_tokens": 5,
+                "duration_ms": 12, "reasoning_content": "must disappear",
+            },
+        )
+    ])
+    provider_registry.register("deepseek", provider, replace=True)
+
+    run = execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert run.status == AIRun.Status.SUCCEEDED
+    assert provider.executions[0].model == "deepseek-v4-flash"
+    assert provider.executions[0].thinking_enabled is False
+    assert run.model == "deepseek-v4-flash"
+    assert run.provider_metadata == {
+        "provider_code": "deepseek", "model": "deepseek-v4-flash",
+        "request_id": "req-safe", "finish_reason": "stop",
+        "input_tokens": 20, "output_tokens": 10, "cache_hit_tokens": 5,
+        "duration_ms": 12,
+    }
+    usage = AIUsageAttempt.objects.get(run=run)
+    assert usage.status == AIUsageAttempt.Status.SUCCEEDED
+    assert usage.input_tokens == 20
+    assert usage.additional_reserved_usd == 0
+    assert "reasoning" not in str(AIRun.objects.values()).lower()
+
+
+@pytest.mark.django_db
+def test_deepseek_budget_failure_happens_before_provider_call(
+    organization, frozen_input, prompt
+):
+    job = _deepseek_job(organization, frozen_input, prompt)
+    AIProviderConfiguration.objects.filter(organization=organization).update(
+        daily_budget_usd="0.00"
+    )
+    provider = ResultProvider([])
+    provider_registry.register("deepseek", provider, replace=True)
+
+    run = execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert provider.executions == []
+    assert run.status == AIRun.Status.FAILED
+    assert run.error["code"] == "deepseek_daily_budget_exceeded"
+
+
+@pytest.mark.django_db
+def test_retryable_provider_error_persists_bounded_retry_without_terminalizing(
+    organization, frozen_input, prompt
+):
+    job = _deepseek_job(organization, frozen_input, prompt)
+    provider = ResultProvider([ProviderRateLimitError(retry_after_seconds=999999)])
+    provider_registry.register("deepseek", provider, replace=True)
+
+    with pytest.raises(ProviderRetryRequired) as retry:
+        execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    run = AIRun.objects.get(job=job)
+    job.refresh_from_db()
+    assert retry.value.countdown <= 300
+    assert run.status == AIRun.Status.RUNNING
+    assert run.transport_retry_count == 1
+    assert run.next_retry_at is not None
+    assert job.status == Job.Status.RUNNING
+    assert AIUsageAttempt.objects.get(run=run).status == AIUsageAttempt.Status.RESERVED
+
+
+@pytest.mark.django_db
+def test_retryable_provider_error_stops_after_two_persisted_retries(
+    organization, frozen_input, prompt
+):
+    job = _deepseek_job(organization, frozen_input, prompt)
+    provider = ResultProvider([
+        ProviderRateLimitError(), ProviderRateLimitError(), ProviderRateLimitError()
+    ])
+    provider_registry.register("deepseek", provider, replace=True)
+
+    for expected in (1, 2):
+        with pytest.raises(ProviderRetryRequired) as retry:
+            execute_generation_job(job.id, prompt_version_id=prompt.id)
+        assert retry.value.retry_count == expected
+        with ai_audit_writes():
+            AIRun.objects.filter(job=job).update(next_retry_at=timezone.now())
+
+    run = execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert run.status == AIRun.Status.FAILED
+    assert run.transport_retry_count == 2
+    assert run.error["code"] == "provider_rate_limited"
+    assert len(provider.executions) == 3
+    assert AIUsageAttempt.objects.get(run=run).status == AIUsageAttempt.Status.FAILED
+
+
+class CancelingResultProvider(ResultProvider):
+    def __init__(self, job_id, result):
+        super().__init__([result])
+        self.job_id = job_id
+
+    def generate(self, *, prompt, schema, execution):
+        JobService.cancel(self.job_id)
+        return super().generate(prompt=prompt, schema=schema, execution=execution)
+
+
+@pytest.mark.django_db
+def test_cancellation_after_reservation_releases_budget_and_discards_result(
+    organization, frozen_input, prompt
+):
+    job = _deepseek_job(organization, frozen_input, prompt)
+    result = ProviderResult(
+        output={
+            "title": "Late", "body": "Late", "cta": "Late",
+            "concept_codes": ["ALPHA"],
+        },
+        metadata={"model": "deepseek-v4-flash", "input_tokens": 1,
+                  "output_tokens": 1, "cache_hit_tokens": 0},
+    )
+    provider = CancelingResultProvider(job.id, result)
+    provider_registry.register("deepseek", provider, replace=True)
+
+    run = execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    usage = AIUsageAttempt.objects.get(run=run)
+    assert run.status == AIRun.Status.CANCELED
+    assert run.output_json is None
+    assert usage.status == AIUsageAttempt.Status.CANCELED
+    assert usage.usage_day.reserved_usd == 0
+
+
+@pytest.mark.django_db
+def test_invalid_output_gets_one_safe_repair_using_same_intent(
+    organization, frozen_input, prompt
+):
+    job = _deepseek_job(organization, frozen_input, prompt)
+    provider = ResultProvider([
+        ProviderInvalidOutputError(),
+        ProviderResult(
+            output={
+                "title": "Fixed", "body": "Body", "cta": "Act",
+                "concept_codes": ["ALPHA"],
+            },
+            metadata={
+                "model": "deepseek-v4-flash", "input_tokens": 20,
+                "output_tokens": 10, "cache_hit_tokens": 0,
+            },
+        ),
+    ])
+    provider_registry.register("deepseek", provider, replace=True)
+
+    run = execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert run.status == AIRun.Status.SUCCEEDED
+    assert run.repair_attempted is True
+    assert len(provider.executions) == 2
+    assert provider.executions[0] == provider.executions[1]
+    usage = AIUsageAttempt.objects.get(run=run)
+    reserved = Decimal(str(job.ai_execution_intent.reserved_cost_usd))
+    assert usage.additional_reserved_usd == reserved
+    assert usage.actual_usd > reserved
+
+
+@pytest.mark.django_db
+def test_authentication_failure_is_fixed_and_never_retried(
+    organization, frozen_input, prompt
+):
+    job = _deepseek_job(organization, frozen_input, prompt)
+    provider = ResultProvider([ProviderAuthenticationError("key=do-not-store")])
+    provider_registry.register("deepseek", provider, replace=True)
+
+    run = execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert run.status == AIRun.Status.FAILED
+    assert run.error["code"] == "provider_authentication_failed"
+    assert "do-not-store" not in str(AIRun.objects.values())
 
 
 @pytest.mark.django_db
@@ -230,7 +499,9 @@ def test_missing_required_prompt_input_fails_with_controlled_error(
 
 class InvalidProvider:
     def generate(self, *, prompt, schema):
-        return {"title": "missing required fields"}
+        return ProviderResult(
+            output={"title": "missing required fields"}, metadata={}
+        )
 
 
 class RaisingProvider:

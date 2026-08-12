@@ -42,6 +42,8 @@ _PROVIDER_METADATA_SCHEMA = {
         "output_tokens": {"type": "integer"},
         "total_tokens": {"type": "integer"},
         "latency_ms": {"type": "number"},
+        "duration_ms": {"type": "number"},
+        "cache_hit_tokens": {"type": "integer"},
     },
 }
 
@@ -186,6 +188,7 @@ class AIRunSerializer(serializers.ModelSerializer):
             "confidence", "human_correction", "reviewer", "created_at", "started_at",
             "finished_at", "reviewed_at", "input_snapshot", "output_json", "error",
             "provider_metadata",
+            "transport_retry_count", "repair_attempted", "next_retry_at",
         ]
         read_only_fields = fields
 

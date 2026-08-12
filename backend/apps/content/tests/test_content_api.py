@@ -392,9 +392,14 @@ def test_deepseek_content_frozen_route_passes_preflight_and_tamper_fails(
     errors = generation_input_errors(intent.job.input_snapshot)
     assert not errors, [error.message for error in errors]
     _validate_generation_input(intent.job.input_snapshot, organization_id=organization.id)
+    from integrations.ai.providers import ProviderResult
     class Provider:
-        def generate(self, *, prompt, schema):
-            return {}
+        def generate(self, *, prompt, schema, execution):
+            return ProviderResult(
+                output={},
+                metadata={"model": execution.model, "input_tokens": 1,
+                          "output_tokens": 1, "cache_hit_tokens": 0},
+            )
 
     provider_registry.register("deepseek", Provider(), replace=True)
     run = execute_generation_job(

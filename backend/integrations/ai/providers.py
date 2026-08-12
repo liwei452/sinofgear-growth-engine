@@ -97,16 +97,17 @@ class ProviderRegistry:
 
 
 class FakeAIProvider:
-    def generate(self, *, prompt: str, schema: dict) -> dict:
+    def generate(self, *, prompt: str, schema: dict, execution=None) -> ProviderResult:
+        del execution
         del schema
         product, country, platform, cta, codes_text = prompt.split("|", 4)
         codes = [item.strip() for item in codes_text.split(",") if item.strip()]
-        return {
+        return ProviderResult(output={
             "title": f"{product} for {country} on {platform}",
             "body": f"{product} for {country}. Approved concepts: {', '.join(codes)}.",
             "cta": cta,
             "concept_codes": codes,
-        }
+        }, metadata={})
 
 
 @dataclass
@@ -450,7 +451,8 @@ class SchemaAwareFakeAIProvider:
     required by the schema being generated.
     """
 
-    def generate(self, *, prompt: str, schema: dict) -> dict:
+    def generate(self, *, prompt: str, schema: dict, execution=None) -> ProviderResult:
+        del execution
         validator_class = validator_for(schema)
         validator_class.check_schema(schema)
         output = _SchemaValueBuilder(_SchemaContext.from_prompt(prompt)).build(schema)
@@ -461,7 +463,7 @@ class SchemaAwareFakeAIProvider:
             )
         if not isinstance(output, dict):
             raise ValueError("Schema fake requires an object output schema.")
-        return output
+        return ProviderResult(output=output, metadata={})
 
 
 provider_registry = ProviderRegistry()

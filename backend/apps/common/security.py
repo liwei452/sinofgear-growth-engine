@@ -40,6 +40,16 @@ _CONTROLLED_ERROR_MESSAGES = {
     "ai_run_start_failed": "AI audit run could not start.",
     "job_canceled": "Job was canceled.",
     "content_finalize_failed": "Generated content could not be finalized.",
+    "invalid_provider_contract": "AI provider returned an unsupported result.",
+    "provider_authentication_failed": "AI provider authentication failed.",
+    "provider_balance_required": "AI provider balance is insufficient.",
+    "provider_rate_limited": "AI provider rate limit was reached.",
+    "provider_unavailable": "AI provider is temporarily unavailable.",
+    "provider_timeout": "AI provider request timed out.",
+    "provider_network_error": "AI provider network request failed.",
+    "deepseek_not_connected": "AI provider is not connected.",
+    "deepseek_daily_budget_exceeded": "AI daily budget was reached.",
+    "deepseek_budget_unavailable": "AI budget reservation failed.",
     "SOURCE_IMPORT_FAILED": "Public source import failed.",
 }
 

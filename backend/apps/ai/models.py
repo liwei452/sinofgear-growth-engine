@@ -125,6 +125,9 @@ class AIRun(AuditModel):
         validators=[MinValueValidator(0), MaxValueValidator(1)],
     )
     provider_metadata = models.JSONField(default=dict)
+    transport_retry_count = models.PositiveSmallIntegerField(default=0)
+    repair_attempted = models.BooleanField(default=False)
+    next_retry_at = models.DateTimeField(null=True, blank=True)
     error = models.JSONField(null=True, blank=True)
     human_correction = models.JSONField(null=True, blank=True)
     reviewed_by = models.ForeignKey(
@@ -319,6 +322,9 @@ class AIUsageAttempt(models.Model):
         max_length=16, choices=Status.choices, default=Status.RESERVED
     )
     reserved_usd = models.DecimalField(max_digits=12, decimal_places=6)
+    additional_reserved_usd = models.DecimalField(
+        max_digits=12, decimal_places=6, default=0
+    )
     actual_usd = models.DecimalField(max_digits=12, decimal_places=6, default=0)
     input_tokens = models.PositiveIntegerField(default=0)
     output_tokens = models.PositiveIntegerField(default=0)
@@ -338,6 +344,10 @@ class AIUsageAttempt(models.Model):
             models.CheckConstraint(
                 condition=models.Q(actual_usd__gte=0),
                 name="ai_usage_attempt_actual_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(additional_reserved_usd__gte=0),
+                name="ai_usage_attempt_extra_reserved_nonnegative",
             ),
             models.CheckConstraint(
                 condition=(

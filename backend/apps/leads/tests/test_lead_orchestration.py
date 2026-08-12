@@ -31,7 +31,7 @@ from apps.leads.services import (
     build_analysis_snapshot,
     lead_analysis_attempt_lease,
 )
-from integrations.ai.providers import provider_registry
+from integrations.ai.providers import ProviderResult, provider_registry
 
 from .test_analysis_snapshot import _valid_output
 
@@ -45,7 +45,7 @@ class SequenceProvider:
         del prompt, schema
         output = self.outputs[self.calls]
         self.calls += 1
-        return deepcopy(output)
+        return ProviderResult(output=deepcopy(output), metadata={})
 
 
 class RaisingProvider:
@@ -66,7 +66,7 @@ class CancelingLeadProvider:
     def generate(self, *, prompt, schema):
         del prompt, schema
         JobService.cancel(self.job_id)
-        return deepcopy(self.output)
+        return ProviderResult(output=deepcopy(self.output), metadata={})
 
 
 class ReclaimingLeadProvider:
@@ -93,7 +93,7 @@ class ReclaimingLeadProvider:
             ),
         )
         JobService.claim(worker_id="replacement-worker", job_id=job.id)
-        return deepcopy(self.output)
+        return ProviderResult(output=deepcopy(self.output), metadata={})
 
 
 class OldRecoveryDuringRetryProvider:
@@ -113,7 +113,7 @@ class OldRecoveryDuringRetryProvider:
             started_from=self.old_snapshot["candidate_status_at_start"],
             analysis_lease_token=self.old_snapshot["analysis_lease_id"],
         )
-        return deepcopy(self.output)
+        return ProviderResult(output=deepcopy(self.output), metadata={})
 
 
 def _analysis_context(candidate, evidence, user):

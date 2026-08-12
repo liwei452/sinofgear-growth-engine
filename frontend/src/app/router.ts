@@ -23,6 +23,7 @@ export type AppRouteComponents = {
   LeadRadar: Component
   CompanyProfile: Component
   AISettings: Component
+  AgentCenter: Component
 }
 
 type RouterOptions = {
@@ -102,7 +103,13 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
       path: "company-profile",
       name: "company-profile",
       component: options.components.CompanyProfile,
-      meta: { title: "我的公司" },
+      meta: { title: "产品资料" },
+    },
+    {
+      path: "agent-center",
+      name: "agent-center",
+      component: options.components.AgentCenter,
+      meta: { title: "AI Agent 中心", permission: "director.read" },
     },
     {
       path: "ai-settings",

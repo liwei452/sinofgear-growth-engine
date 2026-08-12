@@ -43,6 +43,7 @@ const permissions = [
   "campaigns.review", "content.read", "content.manage", "content.review",
   "jobs.read", "jobs.manage", "memberships.read", "publishing.read",
   "tracking.read", "tracking.manage", "leads.read", "leads.review", "leads.manage", "sources.manage",
+  "director.read", "director.decide",
 ]
 
 const currentUser: CurrentUser = {
@@ -160,6 +161,15 @@ function effectiveBackgroundColor(element: HTMLElement): string {
 
 function fixtureFetch(input: RequestInfo | URL): Promise<Response> {
   const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+  if (path === "/api/v1/director/cockpit") return Promise.resolve(json({
+    decisions: [{
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", type: "LEAD_HANDOFF",
+      title: "北方传动值得联系", explanation: "公开信息显示明确的齿轮需求。",
+      priority: 88, version: 1, actions: ["APPROVE", "REQUEST_ADJUSTMENT", "REJECT"],
+    }],
+    active_work: [{ job_id: ids.run, label: "正在分析公开客户线索", status: "RUNNING", progress: 40, progress_is_determinate: true }],
+    recent_outcomes: [], generated_at: "2026-08-12T08:00:00Z",
+  }))
   if (path === `/api/v1/lead-candidates/${encodeURIComponent(lead.id)}`) return Promise.resolve(json(leadDetail))
   if (path.startsWith("/api/v1/lead-candidates")) return Promise.resolve(page([lead]))
   if (path === "/api/v1/jobs?status=RUNNING") return Promise.resolve(page([runningJob]))
@@ -197,6 +207,7 @@ async function renderOrdinaryRoute(path: string, options: { fetcher?: typeof fix
     LeadRadar: LeadRadarPage, Analytics: AnalyticsPage, CompanyProfile: CompanyProfilePage,
     Products: Placeholder, Knowledge: Placeholder, ContentFactory: Placeholder, Reviews: Placeholder,
     Assets: Placeholder, PublishingCalendar: Placeholder, PlatformAccounts: Placeholder,
+    AISettings: Placeholder, AgentCenter: Placeholder,
   }
   const router = createAppRouter(queryClient, { history: createMemoryHistory(), components })
   await router.push(path)
@@ -207,7 +218,7 @@ async function renderOrdinaryRoute(path: string, options: { fetcher?: typeof fix
     "/promotion": { heading: "你今天想推广什么？", ready: "可推广产品" },
     "/lead-radar": { heading: "客户机会", ready: "需要更换斜齿轮。" },
     "/analytics": { heading: "效果", ready: "Campaign HIGH ACTIVE 德国获客" },
-    "/company-profile": { heading: "AI 对公司的了解", ready: "Campaign HIGH ACTIVE 精密齿轮" },
+    "/company-profile": { heading: "产品资料", ready: "Campaign HIGH ACTIVE 精密齿轮" },
   }
   const expected = routeExpectations[path]
   await screen.findByRole("heading", { name: expected.heading, level: 1 })

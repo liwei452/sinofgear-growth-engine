@@ -244,8 +244,8 @@ function refetchCapabilities() {
   <div class="page-stack company-profile-page">
     <header class="company-profile-header">
       <div>
-        <p class="eyebrow">我的公司</p>
-        <h1>AI 对公司的了解</h1>
+        <p class="eyebrow">AI 对公司的了解</p>
+        <h1>产品资料</h1>
         <p>以下内容只来自当前组织可读取的真实资料；缺失项不会由 AI 自行补写。</p>
       </div>
     </header>

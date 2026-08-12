@@ -22,7 +22,7 @@ const currentUser = {
     permissions: [
       "products.read", "knowledge.read", "assets.read", "campaigns.read", "content.read",
       "publishing.read", "tracking.read", "leads.read",
-      "credentials.manage",
+      "credentials.manage", "director.read",
     ],
   },
 }
@@ -66,6 +66,7 @@ async function renderShell(
           { path: "lead-radar", component: PlaceholderPage, meta: { title: "客户机会" } },
           { path: "analytics", component: PlaceholderPage, meta: { title: "效果" } },
           { path: "company-profile", component: PlaceholderPage, meta: { title: "我的公司" } },
+          { path: "agent-center", component: PlaceholderPage, meta: { title: "AI Agent 中心" } },
           { path: "products", component: PlaceholderPage, meta: { title: "产品库" } },
           { path: "ai-settings", component: PlaceholderPage, meta: { title: "DeepSeek 设置" } },
           { path: ":pathMatch(.*)*", component: PlaceholderPage, meta: { title: "功能" } },
@@ -105,14 +106,14 @@ it("shows exactly five ordinary work destinations with icons", async () => {
 
   const navigation = screen.getByRole("navigation", { name: "主导航" })
   expect(within(navigation).getAllByRole("link").map((item) => item.textContent?.trim())).toEqual([
-    "今天", "推广", "客户机会", "效果", "我的公司",
+    "今天", "产品资料", "推广", "客户机会", "效果",
   ])
   expect(within(navigation).getAllByTestId(/^app-icon-/)).toHaveLength(5)
-  expect(within(navigation).getByRole("link", { name: "我的公司" })).toHaveAttribute("href", "/company-profile")
+  expect(within(navigation).getByRole("link", { name: "产品资料" })).toHaveAttribute("href", "/company-profile")
   expect(within(navigation).queryByRole("link", { name: "知识库" })).not.toBeInTheDocument()
   expect(screen.getByText("示例组织")).toBeInTheDocument()
   expect(screen.getByText("operator")).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "我的公司" })).toHaveAttribute("aria-current", "page")
+  expect(screen.getByRole("link", { name: "产品资料" })).toHaveAttribute("aria-current", "page")
   expect(screen.getByRole("heading", { name: "我的公司" })).toBeInTheDocument()
   expect(screen.getByText("这个入口已经准备好，具体业务能力将在后续阶段接入。")).toBeInTheDocument()
   expect(screen.getByRole("link", { name: "返回首页" })).toHaveAttribute("href", "/")
@@ -149,8 +150,16 @@ it("reveals permitted administration routes in advanced mode and persists the pr
   expect(screen.getByRole("link", { name: "知识库" })).toBeVisible()
   expect(screen.getByRole("link", { name: "平台账户" })).toBeVisible()
   expect(screen.getByRole("link", { name: "DeepSeek 设置" })).toBeVisible()
+  expect(screen.getByRole("link", { name: "AI Agent 中心" })).toHaveAttribute("href", "/agent-center")
   expect(screen.queryByRole("link", { name: "推广" })).not.toBeInTheDocument()
   expect(window.localStorage.getItem("sinofgear-navigation-mode-v1")).toBe("advanced")
+})
+
+it("hides the Agent Center in advanced mode without director read permission", async () => {
+  const user = userEvent.setup()
+  await renderShell("/", { permissions: ["knowledge.read"] })
+  await user.click(screen.getByRole("button", { name: "打开高级功能" }))
+  expect(screen.queryByRole("link", { name: "AI Agent 中心" })).not.toBeInTheDocument()
 })
 
 it("shows a non-blocking first-run DeepSeek guide only to credential administrators", async () => {

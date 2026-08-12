@@ -54,6 +54,11 @@ async function renderCompany(
 
 afterEach(() => vi.unstubAllGlobals())
 
+it("uses the beginner-facing product information title", async () => {
+  await renderCompany(vi.fn(() => Promise.resolve(page([]))))
+  expect(screen.getByRole("heading", { level: 1, name: "产品资料" })).toBeInTheDocument()
+})
+
 it("shows what AI knows, computes coverage from real data, and prioritizes missing tasks", async () => {
   const fetchMock = vi.fn((path: string) => {
     if (path === "/api/v1/products?status=ACTIVE") return Promise.resolve(page([{
@@ -71,7 +76,7 @@ it("shows what AI knows, computes coverage from real data, and prioritizes missi
   })
   await renderCompany(fetchMock)
 
-  expect(await screen.findByRole("heading", { name: "AI 对公司的了解" })).toBeVisible()
+  expect(await screen.findByRole("heading", { name: "产品资料" })).toBeVisible()
   expect(screen.getByRole("region", { name: "公司身份" })).toHaveTextContent("示例组织")
   expect(await within(screen.getByRole("region", { name: "产品" })).findByText("精密齿轮")).toBeVisible()
   expect(screen.getByRole("region", { name: "能力" })).toHaveTextContent("滚齿")
@@ -517,7 +522,7 @@ it("summarizes only currently available company data and links to existing edito
   })
   await renderCompany(fetchMock)
 
-  expect(await screen.findByRole("heading", { name: "AI 对公司的了解" })).toBeVisible()
+  expect(await screen.findByRole("heading", { name: "产品资料" })).toBeVisible()
   expect(await screen.findByText("已读取全部 2 个启用产品")).toBeVisible()
   expect(await screen.findByText("当前可见 1 条知识")).toBeVisible()
   expect(await screen.findByText("当前页有 3 份素材")).toBeVisible()

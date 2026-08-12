@@ -18,10 +18,10 @@ const ordinaryNavigation: NavigationSection[] = [
     group: "日常工作",
     items: [
       { label: "今天", to: "/", icon: "home" },
+      { label: "产品资料", to: "/company-profile", icon: "company" },
       { label: "推广", to: "/promotion", icon: "megaphone" },
       { label: "客户机会", to: "/lead-radar", icon: "users" },
       { label: "效果", to: "/analytics", icon: "chart" },
-      { label: "我的公司", to: "/company-profile", icon: "company" },
     ],
   },
 ]
@@ -59,6 +59,7 @@ const advancedNavigation: NavigationSection[] = [
   {
     group: "系统设置",
     items: [
+      { label: "AI Agent 中心", to: "/agent-center", icon: "sparkles", permission: "director.read" },
       { label: "DeepSeek 设置", to: "/ai-settings", icon: "key", permission: "credentials.manage" },
     ],
   },

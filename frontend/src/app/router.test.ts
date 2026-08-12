@@ -22,6 +22,7 @@ const Analytics = defineComponent({ name: "AnalyticsStub", template: "<p>真实�
 const LeadRadar = defineComponent({ name: "LeadRadarStub", template: "<p>真实客户机会</p>" })
 const CompanyProfile = defineComponent({ name: "CompanyProfileStub", template: "<p>真实公司资料</p>" })
 const AISettings = defineComponent({ name: "AISettingsStub", template: "<p>真实 DeepSeek 设置</p>" })
+const AgentCenter = defineComponent({ name: "AgentCenterStub", template: "<p>真实 AI Agent 中心</p>" })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
 function deferred<T>() {
@@ -39,7 +40,7 @@ function router(client = queryClient(), initialPath?: string) {
   if (initialPath) history.push(initialPath)
   return createAppRouter(client, {
     history,
-    components: { Login, Shell, Dashboard, Promotion, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LeadRadar, CompanyProfile, AISettings },
+    components: { Login, Shell, Dashboard, Promotion, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LeadRadar, CompanyProfile, AISettings, AgentCenter },
   })
 }
 
@@ -153,7 +154,22 @@ describe("protected routing", () => {
 
     await appRouter.push("/company-profile")
     expect(await screen.findByText("真实公司资料")).toBeInTheDocument()
-    expect(appRouter.currentRoute.value.meta.title).toBe("我的公司")
+    expect(appRouter.currentRoute.value.meta.title).toBe("产品资料")
+  })
+
+  it("guards the administrator Agent Center with director read permission", async () => {
+    const allowed = queryClient()
+    allowed.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: ["director.read"] } })
+    const allowedRouter = router(allowed)
+    await allowedRouter.push("/agent-center")
+    expect(allowedRouter.currentRoute.value.name).toBe("agent-center")
+    expect(allowedRouter.currentRoute.value.meta.title).toBe("AI Agent 中心")
+
+    const denied = queryClient()
+    denied.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: [] } })
+    const deniedRouter = router(denied)
+    await deniedRouter.push("/agent-center")
+    expect(deniedRouter.currentRoute.value.name).toBe("home")
   })
 
   it("allows only credential administrators to enter DeepSeek settings", async () => {

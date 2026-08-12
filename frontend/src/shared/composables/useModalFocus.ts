@@ -65,6 +65,19 @@ export function useModalFocus(options: {
   const token = Symbol("modal")
   const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
   const inerted: HTMLElement[] = []
+  let disposed = false
+  let cleanedUp = false
+
+  function cleanup(): void {
+    if (cleanedUp) return
+    cleanedUp = true
+    document.removeEventListener("keydown", onKeydown)
+    const index = modalStack.lastIndexOf(token)
+    if (index >= 0) modalStack.splice(index, 1)
+    for (const element of inerted) releaseInert(element)
+    inerted.length = 0
+    if (opener?.isConnected) opener.focus()
+  }
 
   function onKeydown(event: KeyboardEvent): void {
     if (modalStack.at(-1) !== token) return
@@ -102,23 +115,33 @@ export function useModalFocus(options: {
 
   onMounted(async () => {
     await nextTick()
+    if (disposed) return
     const backdrop = options.backdrop.value
     if (!backdrop) return
     for (const child of [...document.body.children]) {
+      if (disposed) {
+        cleanup()
+        return
+      }
       if (!(child instanceof HTMLElement) || child === backdrop || child.contains(backdrop)) continue
       setInert(child)
       inerted.push(child)
     }
+    if (disposed) {
+      cleanup()
+      return
+    }
     modalStack.push(token)
     document.addEventListener("keydown", onKeydown)
+    if (disposed) {
+      cleanup()
+      return
+    }
     options.initialFocus.value?.focus()
   })
 
   onBeforeUnmount(() => {
-    document.removeEventListener("keydown", onKeydown)
-    const index = modalStack.lastIndexOf(token)
-    if (index >= 0) modalStack.splice(index, 1)
-    for (const element of inerted) releaseInert(element)
-    if (opener?.isConnected) opener.focus()
+    disposed = true
+    cleanup()
   })
 }

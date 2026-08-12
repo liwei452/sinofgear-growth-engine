@@ -61,6 +61,19 @@ Round 1 verification:
 - Full frontend GREEN: 45 files, 520/520 tests passed.
 - Type check, ESLint, production build, generated API check, and diff check passed.
 
+## Review fix round 3
+
+- The shared modal focus lifecycle now marks itself disposed before any unmount cleanup and uses idempotent cleanup.
+- Deferred `nextTick` setup exits immediately after an early unmount and also checks disposal between inerting, stack registration, listener registration, and focus.
+- Added direct lifecycle coverage with persistent element refs to prove immediate unmount cannot leave delayed `inert`, `aria-hidden`, keyboard listeners, stack behavior, or focus side effects.
+
+Round 3 verification:
+
+- RED: the persistent-ref immediate-unmount regression failed by leaving background `inert`.
+- Targeted GREEN: 13/13 modal and DeepSeek page tests passed.
+- Full frontend GREEN: 46 files, 524/524 tests passed.
+- Type check, ESLint, and production build passed.
+
 ## Review fix round 2
 
 - `OperationModal` now teleports to `document.body`, keeping the modal outside the inert application subtree. While open, all body siblings receive reference-counted `inert` and `aria-hidden="true"`; their original values are restored on close or unmount.

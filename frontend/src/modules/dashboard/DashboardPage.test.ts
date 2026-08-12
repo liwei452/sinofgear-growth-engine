@@ -134,3 +134,94 @@ it("explains a version conflict and refreshes the cockpit", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("这件事刚刚发生了变化")
   await waitFor(() => expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/director/cockpit")).toHaveLength(2))
 })
+
+it("keeps each proposal disabled until its own overlapping submission settles", async () => {
+  const posts = new Map<string, (response: Response) => void>()
+  const fetchMock = vi.fn((path: string, options?: RequestInit) => {
+    if (options?.method === "POST") return new Promise<Response>((resolve) => posts.set(path, resolve))
+    return Promise.resolve(json(cockpit))
+  })
+  vi.spyOn(window, "confirm").mockReturnValue(true)
+  const user = userEvent.setup()
+  await renderDashboard(fetchMock)
+  const first = (await screen.findByRole("heading", { name: "确认德国市场推广方案" })).closest("article")!
+  const second = screen.getByRole("heading", { name: "5 条内容已经准备好" }).closest("article")!
+
+  await user.click(within(first).getByRole("button", { name: "批准" }))
+  await user.click(within(second).getByRole("button", { name: "批准" }))
+  expect(within(first).getAllByRole("button", { name: "正在提交" }).every((button) => button.hasAttribute("disabled"))).toBe(true)
+  expect(within(second).getAllByRole("button", { name: "正在提交" }).every((button) => button.hasAttribute("disabled"))).toBe(true)
+
+  posts.get("/api/v1/director/proposals/p2/decisions")!(json({ id: "p2", status: "APPROVED", version: 2 }))
+  await waitFor(() => expect(within(second).getByRole("button", { name: "批准" })).toBeEnabled())
+  expect(within(first).getAllByRole("button", { name: "正在提交" }).every((button) => button.hasAttribute("disabled"))).toBe(true)
+
+  posts.get("/api/v1/director/proposals/p1/decisions")!(json({ id: "p1", status: "APPROVED", version: 3 }))
+  await waitFor(() => expect(within(first).getByRole("button", { name: "批准" })).toBeEnabled())
+})
+
+it("keeps a retryable adjustment error visible and accessible inside its modal", async () => {
+  const fetchMock = vi.fn((path: string, options?: RequestInit) => options?.method === "POST"
+    ? Promise.resolve(json({ detail: "provider exploded" }, 503))
+    : Promise.resolve(json(cockpit)))
+  const user = userEvent.setup()
+  await renderDashboard(fetchMock)
+  const opener = within((await screen.findByRole("heading", { name: "确认德国市场推广方案" })).closest("article")!)
+    .getByRole("button", { name: "要求调整" })
+  await user.click(opener)
+  const dialog = screen.getByRole("dialog", { name: "请说明需要怎样调整" })
+  await user.type(within(dialog).getByLabelText("原因"), "请补充明确的产品参数。")
+  await user.click(within(dialog).getByRole("button", { name: "提交" }))
+
+  const alert = await within(dialog).findByRole("alert")
+  expect(alert).toHaveTextContent("操作未能完成，请稍后重试")
+  expect(alert).toHaveFocus()
+  expect(screen.queryByText("provider exploded")).not.toBeInTheDocument()
+
+  await user.keyboard("{Escape}")
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  expect(opener).toHaveFocus()
+})
+
+it("closes a stale reason dialog, explains conflict, and refreshes its captured organization", async () => {
+  const fetchMock = vi.fn((path: string, options?: RequestInit) => options?.method === "POST"
+    ? Promise.resolve(json({ code: "director_version_conflict", detail: "stale" }, 409))
+    : Promise.resolve(json(cockpit)))
+  const user = userEvent.setup()
+  const { queryClient } = await renderDashboard(fetchMock)
+  const invalidate = vi.spyOn(queryClient, "invalidateQueries")
+  await user.click(within((await screen.findByRole("heading", { name: "确认德国市场推广方案" })).closest("article")!)
+    .getByRole("button", { name: "拒绝" }))
+  const dialog = screen.getByRole("dialog", { name: "请说明拒绝原因" })
+  await user.type(within(dialog).getByLabelText("原因"), "公开证据不足，暂时不能批准。")
+  await user.click(within(dialog).getByRole("button", { name: "提交" }))
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("这件事刚刚发生了变化")
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  expect(invalidate).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["director", "org-1", "cockpit"] }))
+})
+
+it("does not leak an old organization completion into the newly active organization", async () => {
+  let finish!: (response: Response) => void
+  const fetchMock = vi.fn((path: string, options?: RequestInit) => options?.method === "POST"
+    ? new Promise<Response>((resolve) => { finish = resolve })
+    : Promise.resolve(json(cockpit)))
+  vi.spyOn(window, "confirm").mockReturnValue(true)
+  const user = userEvent.setup()
+  const { queryClient } = await renderDashboard(fetchMock)
+  const invalidate = vi.spyOn(queryClient, "invalidateQueries")
+  await user.click(within((await screen.findByRole("heading", { name: "确认德国市场推广方案" })).closest("article")!)
+    .getByRole("button", { name: "批准" }))
+
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, {
+    ...currentUser,
+    organization: { id: "org-2", name: "新组织", slug: "new" },
+  })
+  await waitFor(() => expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/director/cockpit").length).toBeGreaterThan(1))
+  invalidate.mockClear()
+  finish(json({ id: "p1", status: "APPROVED", version: 3 }))
+
+  await waitFor(() => expect(invalidate).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["director", "org-1", "cockpit"] })))
+  expect(invalidate).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["director", "org-2", "cockpit"] }))
+  expect(screen.queryByText("已提交你的决定。")).not.toBeInTheDocument()
+})

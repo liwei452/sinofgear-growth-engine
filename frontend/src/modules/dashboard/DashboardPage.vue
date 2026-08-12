@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
+import { useQuery, useQueryClient } from "@tanstack/vue-query"
 import { computed, nextTick, ref } from "vue"
 
 import { currentUserQueryOptions } from "../auth/auth"
@@ -23,48 +23,90 @@ const decisions = computed(() => (cockpitQuery.data.value?.decisions ?? []).slic
 const heading = computed(() => decisions.value.length
   ? `今天有 ${decisions.value.length} 件事需要你决定`
   : "今天没有需要你决定的事")
-const busyId = ref<string | null>(null)
+const pendingKeys = ref(new Set<string>())
 const notice = ref("")
-const dialog = ref<{ decision: DirectorDecision; action: Exclude<DirectorAction, "APPROVE"> } | null>(null)
+const dialog = ref<{
+  decision: DirectorDecision
+  action: Exclude<DirectorAction, "APPROVE">
+  organizationId: string
+} | null>(null)
 const reason = ref("")
 const reasonError = ref("")
+const dialogError = ref("")
 const reasonInput = ref<HTMLTextAreaElement | null>(null)
+const dialogErrorElement = ref<HTMLElement | null>(null)
 
-const mutation = useMutation({
-  mutationFn: ({ decision, action, comment }: { decision: DirectorDecision; action: DirectorAction; comment: string }) => {
-    busyId.value = decision.id
-    return decideProposal(decision.id, { action, expected_version: decision.version, comment })
-  },
-  onSuccess: async () => {
-    closeDialog()
-    notice.value = "已提交你的决定。"
-    await queryClient.invalidateQueries({ queryKey: directorKeys.cockpit(organizationId.value) })
-  },
-  onError: async (error) => {
+const submissionKey = (organization: string, proposalId: string): string => `${organization}:${proposalId}`
+const isBusy = (proposalId: string): boolean => pendingKeys.value.has(submissionKey(organizationId.value, proposalId))
+const dialogBusy = computed(() => dialog.value
+  ? pendingKeys.value.has(submissionKey(dialog.value.organizationId, dialog.value.decision.id))
+  : false)
+
+async function submitDecision(input: {
+  organizationId: string
+  decision: DirectorDecision
+  action: DirectorAction
+  comment: string
+}): Promise<void> {
+  const key = submissionKey(input.organizationId, input.decision.id)
+  if (pendingKeys.value.has(key)) return
+  pendingKeys.value = new Set(pendingKeys.value).add(key)
+  try {
+    await decideProposal(input.decision.id, {
+      action: input.action,
+      expected_version: input.decision.version,
+      comment: input.comment,
+    })
+    await queryClient.invalidateQueries({ queryKey: directorKeys.cockpit(input.organizationId) })
+    if (organizationId.value === input.organizationId) {
+      if (dialog.value?.organizationId === input.organizationId
+        && dialog.value.decision.id === input.decision.id) closeDialog()
+      notice.value = "已提交你的决定。"
+    }
+  } catch (error) {
     const safe = ordinaryDirectorError(error)
-    notice.value = safe.message
-    if (safe.refresh) await queryClient.invalidateQueries({ queryKey: directorKeys.cockpit(organizationId.value) })
-  },
-  onSettled: () => { busyId.value = null },
-})
+    if (safe.refresh) await queryClient.invalidateQueries({ queryKey: directorKeys.cockpit(input.organizationId) })
+    if (organizationId.value !== input.organizationId) return
+    const matchingDialog = dialog.value?.organizationId === input.organizationId
+      && dialog.value.decision.id === input.decision.id
+    if (safe.refresh) {
+      if (matchingDialog) closeDialog()
+      notice.value = safe.message
+      return
+    }
+    if (matchingDialog) {
+      dialogError.value = safe.message
+      await nextTick()
+      dialogErrorElement.value?.focus()
+    } else {
+      notice.value = safe.message
+    }
+  } finally {
+    const next = new Set(pendingKeys.value)
+    next.delete(key)
+    pendingKeys.value = next
+  }
+}
 
 function decide(decision: DirectorDecision, action: DirectorAction): void {
   notice.value = ""
   if (action === "APPROVE") {
     if (window.confirm(`确认批准“${decision.title}”吗？`)) {
-      mutation.mutate({ decision, action, comment: "" })
+      void submitDecision({ organizationId: organizationId.value, decision, action, comment: "" })
     }
     return
   }
-  dialog.value = { decision, action }
+  dialog.value = { decision, action, organizationId: organizationId.value }
   reason.value = ""
   reasonError.value = ""
+  dialogError.value = ""
 }
 
 function closeDialog(): void {
   dialog.value = null
   reason.value = ""
   reasonError.value = ""
+  dialogError.value = ""
 }
 
 function submitReason(): void {
@@ -74,7 +116,7 @@ function submitReason(): void {
     void nextTick(() => reasonInput.value?.focus())
     return
   }
-  mutation.mutate({ ...dialog.value, comment: reason.value.trim() })
+  void submitDecision({ ...dialog.value, comment: reason.value.trim() })
 }
 
 function statusTone(status: string): "brand" | "warning" | "neutral" {
@@ -118,7 +160,7 @@ function statusTone(status: string): "brand" | "warning" | "neutral" {
             :title="decision.title"
             :explanation="decision.explanation"
             :actions="decision.actions"
-            :busy="busyId === decision.id"
+            :busy="isBusy(decision.id)"
             @decide="decide(decision, $event)"
           />
         </div>
@@ -170,9 +212,18 @@ function statusTone(status: string): "brand" | "warning" | "neutral" {
           @input="reasonError = ''"
         />
         <p v-if="reasonError" id="director-reason-error" class="field-error" role="alert">{{ reasonError }}</p>
+        <p
+          v-if="dialogError"
+          ref="dialogErrorElement"
+          class="field-error"
+          role="alert"
+          tabindex="-1"
+        >
+          {{ dialogError }}
+        </p>
         <div class="reason-actions">
-          <button type="button" class="button button-quiet" :disabled="mutation.isPending.value" @click="closeDialog">取消</button>
-          <button type="submit" class="button button-primary" :disabled="mutation.isPending.value">{{ mutation.isPending.value ? '正在提交' : '提交' }}</button>
+          <button type="button" class="button button-quiet" :disabled="dialogBusy" @click="closeDialog">取消</button>
+          <button type="submit" class="button button-primary" :disabled="dialogBusy">{{ dialogBusy ? '正在提交' : '提交' }}</button>
         </div>
       </form>
     </OperationModal>

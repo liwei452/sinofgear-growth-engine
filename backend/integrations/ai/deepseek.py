@@ -6,7 +6,6 @@ from time import perf_counter
 from typing import Any
 
 import httpx
-from jsonschema import ValidationError as JSONSchemaValidationError
 from jsonschema.validators import validator_for
 
 from integrations.credentials import CredentialStore, CredentialStoreError, credential_target
@@ -275,7 +274,7 @@ class DeepSeekProvider:
         try:
             validator_class(schema).validate(output)
             return True
-        except JSONSchemaValidationError:
+        except Exception:
             return False
 
     @staticmethod

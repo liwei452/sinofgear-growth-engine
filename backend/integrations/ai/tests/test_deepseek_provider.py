@@ -347,6 +347,34 @@ def test_schema_mismatch_does_not_retain_private_output_in_validator_error():
     assert_exception_isolated(captured.value, private, SECRET)
 
 
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"$ref": "bad://private-resolver-target"},
+        {"$ref": "#"},
+    ],
+)
+def test_hostile_schema_resolution_is_controlled_and_isolated(schema):
+    private = "private-output-for-hostile-schema"
+
+    def handler(request):
+        return safe_response(
+            request, response_payload(content=json.dumps({"title": private}))
+        )
+
+    with pytest.raises(ProviderInvalidOutputError) as captured:
+        provider_for(handler).generate(
+            prompt="p", schema=schema, execution=execution()
+        )
+    assert_exception_isolated(
+        captured.value,
+        private,
+        SECRET,
+        "bad://private-resolver-target",
+        "private-resolver-target",
+    )
+
+
 def test_extremely_nested_outer_json_is_a_controlled_error():
     raw = ("[" * 1100 + "]" * 1100).encode()
 

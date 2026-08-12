@@ -84,7 +84,7 @@ class WindowsCredentialStore:
         if not secret:
             raise CredentialStoreError("Credential secret must not be empty.")
 
-        secret_blob = secret.encode("utf-16-le")
+        secret_blob = self._encode_secret(secret)
         blob_buffer = (ctypes.c_ubyte * len(secret_blob)).from_buffer_copy(secret_blob)
         credential = CREDENTIALW(
             Type=CRED_TYPE_GENERIC,
@@ -93,7 +93,11 @@ class WindowsCredentialStore:
             CredentialBlob=ctypes.cast(blob_buffer, ctypes.POINTER(ctypes.c_ubyte)),
             Persist=CRED_PERSIST_SESSION,
         )
-        if not self._api.CredWriteW(ctypes.pointer(credential), 0):
+        try:
+            written = self._api.CredWriteW(ctypes.pointer(credential), 0)
+        except OSError:
+            written = False
+        if not written:
             self._raise_operation_error()
 
     def delete(self, target: str) -> bool:
@@ -115,9 +119,18 @@ class WindowsCredentialStore:
                 credential.CredentialBlobSize,
             )
             return raw_secret.decode("utf-16-le")
-        except (UnicodeDecodeError, ValueError, OSError) as error:
-            raise CredentialStoreError("Windows credential operation failed.") from error
+        except (UnicodeDecodeError, ValueError, OSError):
+            pass
+        raise CredentialStoreError("Windows credential operation failed.") from None
+
+    @staticmethod
+    def _encode_secret(secret: str) -> bytes:
+        try:
+            return secret.encode("utf-16-le")
+        except UnicodeEncodeError:
+            pass
+        raise CredentialStoreError("Windows credential operation failed.") from None
 
     @staticmethod
     def _raise_operation_error() -> None:
-        raise CredentialStoreError("Windows credential operation failed.")
+        raise CredentialStoreError("Windows credential operation failed.") from None

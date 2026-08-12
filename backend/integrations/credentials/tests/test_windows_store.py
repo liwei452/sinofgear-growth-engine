@@ -24,6 +24,7 @@ class FakeWincred:
         self.freed = 0
         self.write_calls = 0
         self.fail_write = False
+        self.raise_write_os_error = False
         self.raw_error_text = "raw operating-system failure text"
 
     def CredWriteW(self, credential, flags: int) -> bool:  # noqa: N802
@@ -35,6 +36,8 @@ class FakeWincred:
         assert value.CredentialBlobSize % 2 == 0
         blob = ctypes.string_at(value.CredentialBlob, value.CredentialBlobSize)
         assert value.CredentialBlobSize == len(blob)
+        if self.raise_write_os_error:
+            raise OSError(self.raw_error_text)
         if self.fail_write:
             self.last_error = 5
             return False
@@ -121,14 +124,64 @@ def test_windows_store_replaces_raw_os_errors_without_exposing_target_or_secret(
     fake_wincred: FakeWincred,
 ) -> None:
     store = WindowsCredentialStore(api=fake_wincred)
-    fake_wincred.fail_write = True
+    fake_wincred.raise_write_os_error = True
     target = "SinofGear/DeepSeek/target-not-for-errors"
     secret = "sk-not-for-errors"
 
     with pytest.raises(CredentialStoreError) as captured:
         store.write(target, secret)
 
-    message = str(captured.value)
-    assert fake_wincred.raw_error_text not in message
-    assert target not in message
-    assert secret not in message
+    _assert_exception_chain_excludes(
+        captured.value,
+        fake_wincred.raw_error_text,
+        target,
+        secret,
+    )
+
+
+def test_windows_store_drops_unencodable_secret_from_exception_chain(
+    fake_wincred: FakeWincred,
+) -> None:
+    store = WindowsCredentialStore(api=fake_wincred)
+    secret = "sk-\ud800-not-for-exceptions"
+
+    with pytest.raises(CredentialStoreError) as captured:
+        store.write("SinofGear/DeepSeek/org-1", secret)
+
+    _assert_exception_chain_excludes(captured.value, secret)
+
+
+def test_windows_store_drops_malformed_credential_blob_from_exception_chain(
+    fake_wincred: FakeWincred,
+) -> None:
+    store = WindowsCredentialStore(api=fake_wincred)
+    target = "SinofGear/DeepSeek/org-1"
+    malformed_blob = b"\x00"
+    fake_wincred.entries[target] = malformed_blob
+
+    with pytest.raises(CredentialStoreError) as captured:
+        store.read(target)
+
+    _assert_exception_chain_excludes(captured.value, malformed_blob)
+
+
+def _assert_exception_chain_excludes(error: BaseException, *forbidden: object) -> None:
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        values = (str(current), repr(current), current.args, getattr(current, "object", None))
+        for value in values:
+            for sensitive_value in forbidden:
+                assert not _contains_sensitive_value(value, sensitive_value)
+        current = current.__cause__ or current.__context__
+
+
+def _contains_sensitive_value(value: object, sensitive_value: object) -> bool:
+    if isinstance(value, tuple):
+        return any(_contains_sensitive_value(item, sensitive_value) for item in value)
+    if isinstance(value, str) and isinstance(sensitive_value, str):
+        return sensitive_value in value
+    if isinstance(value, bytes) and isinstance(sensitive_value, bytes):
+        return sensitive_value in value
+    return value == sensitive_value

@@ -34,6 +34,8 @@ class PermissionCode(StrEnum):
     LEADS_ANALYZE = "leads.analyze"
     LEADS_REVIEW = "leads.review"
     LEADS_HANDOFF = "leads.handoff"
+    DIRECTOR_READ = "director.read"
+    DIRECTOR_DECIDE = "director.decide"
 
 
 class HasOrganizationPermission(BasePermission):
@@ -169,3 +171,11 @@ class CanReviewLeads(HasOrganizationPermission):
 
 class CanHandoffLeads(HasOrganizationPermission):
     permission_code = PermissionCode.LEADS_HANDOFF
+
+
+class CanReadDirector(HasOrganizationPermission):
+    permission_code = PermissionCode.DIRECTOR_READ
+
+
+class CanDecideDirector(HasOrganizationPermission):
+    permission_code = PermissionCode.DIRECTOR_DECIDE

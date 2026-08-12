@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "apps.jobs.apps.JobsConfig",
     "apps.sources.apps.SourcesConfig",
     "apps.leads.apps.LeadsConfig",
+    "apps.director.apps.DirectorConfig",
     "apps.ai.apps.AIConfig",
     "apps.content.apps.ContentConfig",
     "apps.publishing.apps.PublishingConfig",

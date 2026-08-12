@@ -90,6 +90,8 @@ class Role(models.Model):
                 PermissionCode.SOURCES_MANAGE,
                 PermissionCode.LEADS_READ,
                 PermissionCode.LEADS_ANALYZE,
+                PermissionCode.DIRECTOR_READ,
+                PermissionCode.DIRECTOR_DECIDE,
             ),
         ),
         Code.REVIEWER: (
@@ -110,6 +112,8 @@ class Role(models.Model):
                 PermissionCode.SOURCES_READ,
                 PermissionCode.LEADS_READ,
                 PermissionCode.LEADS_REVIEW,
+                PermissionCode.DIRECTOR_READ,
+                PermissionCode.DIRECTOR_DECIDE,
             ),
         ),
         Code.READ_ONLY: (
@@ -126,6 +130,7 @@ class Role(models.Model):
                 PermissionCode.TRACKING_READ,
                 PermissionCode.SOURCES_READ,
                 PermissionCode.LEADS_READ,
+                PermissionCode.DIRECTOR_READ,
             ),
         ),
     }

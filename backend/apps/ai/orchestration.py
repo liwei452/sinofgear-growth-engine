@@ -108,6 +108,8 @@ _RETRYABLE_ERRORS = (
 MAX_TRANSPORT_RETRIES = 2
 MAX_RETRY_DELAY_SECONDS = 300
 CALL_LEASE_SECONDS = 180
+MAX_SAFE_TOKEN_COUNT = 100_000_000
+MAX_SAFE_DURATION_MS = 600_000
 
 
 def _validate_generation_input(snapshot: dict, *, organization_id) -> None:
@@ -423,6 +425,23 @@ def _safe_metadata(metadata, *, intent) -> dict:
     return scrub_secrets(result)
 
 
+def _bounded_usage_metadata(metadata) -> tuple[dict, str]:
+    safe = dict(metadata) if isinstance(metadata, dict) else {}
+    anomaly = ""
+    for field in ("input_tokens", "output_tokens", "cache_hit_tokens", "total_tokens"):
+        value = safe.get(field, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_SAFE_TOKEN_COUNT:
+            safe[field] = 0
+            anomaly = "deepseek_invalid_usage"
+    duration = safe.get("duration_ms", safe.get("latency_ms", 0))
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not 0 <= duration <= MAX_SAFE_DURATION_MS:
+        safe["duration_ms"] = 0
+        anomaly = "deepseek_invalid_usage"
+    else:
+        safe["duration_ms"] = int(duration)
+    return safe, anomaly
+
+
 def _provider_error(error) -> dict:
     if isinstance(error, ProviderCallError):
         return {"code": error.code}
@@ -494,6 +513,7 @@ def _claim_provider_call(run, usage_attempt):
             if call.lease_expires_at and call.lease_expires_at > now:
                 return ClaimOutcome.ACTIVE, None, None
             call.status = AIProviderCall.Status.AMBIGUOUS
+            call.actual_usd = call.reserved_usd
             call.lease_token = None
             call.lease_expires_at = None
             call.finished_at = now
@@ -539,7 +559,7 @@ def _finish_provider_call(call_id, token, *, status, metadata=None):
     call = AIProviderCall.objects.select_for_update().get(pk=call_id)
     if call.status != AIProviderCall.Status.CALLING or call.lease_token != token:
         return call
-    safe = metadata if isinstance(metadata, dict) else {}
+    safe, usage_anomaly = _bounded_usage_metadata(metadata)
     call.status = status
     call.request_id = str(safe.get("request_id", ""))[:128]
     call.input_tokens = int(safe.get("input_tokens", 0))
@@ -547,6 +567,8 @@ def _finish_provider_call(call_id, token, *, status, metadata=None):
     call.cache_hit_tokens = int(safe.get("cache_hit_tokens", 0))
     call.finish_reason = str(safe.get("finish_reason", ""))[:64]
     call.duration_ms = int(safe.get("duration_ms", safe.get("latency_ms", 0)))
+    if usage_anomaly:
+        call.anomaly_code = usage_anomaly
     if status == AIProviderCall.Status.SUCCEEDED:
         try:
             call.actual_usd = calculate_actual_cost(
@@ -604,15 +626,13 @@ def _reconcile_from_calls(usage_attempt, run, status, metadata=None):
         (row.reserved_usd for row in AIProviderCall.objects.filter(run=run)),
         Decimal("0"),
     )
-    if call_reserved > total_reserved:
-        raise GenerationError(
-            "deepseek_usage_exceeds_reservation", "AI call ledger exceeded reservation."
-        )
+    anomaly = call_reserved > total_reserved
     actual = min(_aggregate_call_actual(run), total_reserved)
     reconcile_usage(
         usage_attempt, metadata or {}, status,
         actual_override=actual,
     )
+    return "deepseek_usage_exceeds_reservation" if anomaly else ""
 
 
 def execute_generation_job(
@@ -903,10 +923,13 @@ def execute_generation_job(
             error = {"code": "provider_error", "message": "AI provider generation failed."}
         else:
             if call is not None:
-                _finish_provider_call(
+                finished_call = _finish_provider_call(
                     call.id, call_token, status=AIProviderCall.Status.SUCCEEDED,
                     metadata=metadata,
                 )
+                if finished_call.anomaly_code:
+                    error = {"code": finished_call.anomaly_code}
+                    break
             try:
                 return _record_success(
                     run.id,

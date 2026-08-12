@@ -502,6 +502,33 @@ def test_authentication_failure_is_fixed_and_never_retried(
 
 
 @pytest.mark.django_db
+def test_huge_usage_metadata_is_not_persisted_and_fails_with_controlled_code(
+    organization, frozen_input, prompt
+):
+    job = _deepseek_job(organization, frozen_input, prompt)
+    provider_registry.register("deepseek", ResultProvider([ProviderResult(
+        output={"title": "Safe", "body": "Body", "cta": "Act", "concept_codes": ["ALPHA"]},
+        metadata={"model": "deepseek-v4-flash", "input_tokens": 2**80,
+                  "output_tokens": 2**80, "cache_hit_tokens": 0,
+                  "duration_ms": 2**80},
+    )]), replace=True)
+
+    run = execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    job.refresh_from_db()
+    usage = AIUsageAttempt.objects.get(run=run)
+    call = AIProviderCall.objects.get(run=run)
+    usage.usage_day.refresh_from_db()
+    assert run.status == AIRun.Status.FAILED
+    assert job.status == Job.Status.FAILED
+    assert run.error["code"] == "deepseek_invalid_usage"
+    assert (call.input_tokens, call.output_tokens, call.duration_ms) == (0, 0, 0)
+    assert usage.reconciled_at is not None
+    assert usage.actual_usd <= usage.reserved_usd + usage.additional_reserved_usd
+    assert usage.usage_day.reserved_usd == 0
+
+
+@pytest.mark.django_db
 def test_successful_run_freezes_scrubbed_input_and_completes_job(
     organization, frozen_input, prompt
 ):

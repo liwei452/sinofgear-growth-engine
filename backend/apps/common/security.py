@@ -53,6 +53,7 @@ _CONTROLLED_ERROR_MESSAGES = {
     "deepseek_budget_unavailable": "AI budget reservation failed.",
     "deepseek_retry_exhausted": "AI provider retry limit was reached.",
     "deepseek_usage_exceeds_reservation": "AI provider usage exceeded its reservation.",
+    "deepseek_invalid_usage": "AI provider returned invalid usage data.",
     "SOURCE_IMPORT_FAILED": "Public source import failed.",
 }
 

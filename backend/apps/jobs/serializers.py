@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from django.db.models import Q
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
@@ -28,9 +29,14 @@ class JobSerializerList(serializers.ListSerializer):
     def to_representation(self, data):
         items = list(data)
         latest = {}
-        runs = AIRun.objects.filter(job_id__in=[item.id for item in items]).order_by(
-            "job_id", "-job_attempt", "-created_at", "-id"
-        )
+        exact_runs = Q(pk__in=[])
+        for item in items:
+            exact_runs |= Q(
+                job_id=item.id,
+                organization_id=item.organization_id,
+                job_attempt=item.attempt,
+            )
+        runs = AIRun.objects.filter(exact_runs).order_by("job_id", "-created_at", "-id")
         for run in runs:
             latest.setdefault(run.job_id, run)
         for item in items:
@@ -48,7 +54,9 @@ class JobSerializer(serializers.ModelSerializer):
     def _latest_run(self, obj):
         if hasattr(obj, "_public_ai_run"):
             return obj._public_ai_run
-        return obj.ai_runs.order_by("-job_attempt", "-created_at", "-id").first()
+        return obj.ai_runs.filter(
+            organization_id=obj.organization_id, job_attempt=obj.attempt,
+        ).order_by("-created_at", "-id").first()
 
     @extend_schema_field({"type": "object", "nullable": True})
     def get_error(self, obj):
@@ -62,7 +70,14 @@ class JobSerializer(serializers.ModelSerializer):
     @extend_schema_field(serializers.DateTimeField(allow_null=True))
     def get_next_retry_at(self, obj):
         run = self._latest_run(obj)
-        return run.next_retry_at if run is not None else None
+        retry_scheduled = (
+            obj.status in {Job.Status.QUEUED, Job.Status.RUNNING, Job.Status.RETRY_QUEUED}
+            and run is not None
+            and run.status == AIRun.Status.RUNNING
+            and run.transport_retry_count > 0
+            and run.next_retry_at is not None
+        )
+        return run.next_retry_at if retry_scheduled else None
 
     @extend_schema_field(JobSourceReferenceSerializer(allow_null=True))
     def get_source_reference(self, obj):

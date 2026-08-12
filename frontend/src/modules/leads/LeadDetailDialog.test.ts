@@ -115,7 +115,7 @@ afterEach(() => {
 })
 
 it("orders judgment, reasons, source evidence, uncertainty, decision, and CRM export", async () => {
-  renderDialog()
+  renderDialog(["leads.read", "leads.analyze", "leads.review", "leads.handoff", "credentials.manage"])
   const original = await screen.findByText("We need replacement helical gears, 200 pcs.")
   const judgment = screen.getByRole("heading", { name: "AI 判断" })
   const explanation = screen.getByRole("heading", { name: "判断理由" })
@@ -133,6 +133,24 @@ it("orders judgment, reasons, source evidence, uncertainty, decision, and CRM ex
   expect(screen.getByRole("link", { name: "打开公开来源" })).toHaveAttribute("target", "_blank")
   expect(screen.getByRole("link", { name: "打开公开来源" })).toHaveAttribute("rel", "noopener noreferrer")
   expect(screen.getByText("高级审计信息").closest("details")).not.toHaveAttribute("open")
+})
+
+it("does not put technical AI audit data in the DOM for ordinary lead readers", async () => {
+  const technical = {
+    ...detail,
+    latest_insight: {
+      ...detail.latest_insight,
+      ai_audit: {
+        ai_run_id: "run-private", provider: "deepseek", model: "deepseek-v4-pro",
+        routing: { reason: "private-route" }, cost: "private-cost",
+      },
+    },
+  }
+  renderDialog(["leads.read"], vi.fn(async () => json(technical)))
+
+  await screen.findByText("ABC Packaging")
+  expect(screen.queryByText("高级审计信息")).not.toBeInTheDocument()
+  expect(document.body).not.toHaveTextContent(/deepseek|v4|private-route|private-cost|分析模型|服务提供方/i)
 })
 
 it("requires a reason before dismissing", async () => {
@@ -748,7 +766,7 @@ it("shows every review reason and correction in the collapsed audit history", as
       { id: "review-2", action: "REQUEST_MORE_EVIDENCE", reason: "Need a public capability page.", correction: null, reviewer: 3, insight_id: "insight-2", candidate_status: "REVIEWED", candidate_version: 4, created_at: "2026-08-10T03:00:00Z" },
     ],
   }
-  renderDialog(["leads.read"], vi.fn(async () => json(history)))
+  renderDialog(["leads.read", "credentials.manage"], vi.fn(async () => json(history)))
   const audit = (await screen.findByText("高级审计信息")).closest("details")!
   await userEvent.click(within(audit).getByText("高级审计信息"))
   expect(within(audit).getByText("Corrected identity.")).toBeVisible()
@@ -769,7 +787,7 @@ it("localizes audit keys without hiding their recorded values", async () => {
       },
     },
   }
-  renderDialog(["leads.read"], vi.fn(async () => json(auditDetail)))
+  renderDialog(["leads.read", "credentials.manage"], vi.fn(async () => json(auditDetail)))
   const audit = (await screen.findByText("高级审计信息")).closest("details")!
   await userEvent.click(within(audit).getByText("高级审计信息"))
 

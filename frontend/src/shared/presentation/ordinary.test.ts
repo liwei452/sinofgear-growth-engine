@@ -24,6 +24,12 @@ it.each([
   ["deepseek_invalid_key", "AI服务的连接信息无效，设置没有保存。", "请联系管理员重新填写连接信息。"],
   ["deepseek_configuration_busy", "另一项AI设置正在处理中。", "请等待管理员完成设置后再试。"],
   ["administrator_approval_required", "这项操作需要管理员确认。", "请联系管理员确认后重新尝试。"],
+  ["job_error", "这次没有处理完成。", "请稍后手动重试；仍有问题请联系管理员。"],
+  ["provider_error", "AI服务没有完成本次处理。", "请稍后手动重试；仍有问题请联系管理员。"],
+  ["output_too_large", "需要生成的内容超出处理范围，任务已停止。", "请减少输入资料或生成要求后重新尝试。"],
+  ["ai_run_start_failed", "AI任务没有成功启动。", "请稍后手动重试；仍有问题请联系管理员。"],
+  ["content_finalize_failed", "内容已经生成，但没有成功保存。", "请重新生成；仍有问题请联系管理员。"],
+  ["invalid_provider_contract", "AI服务返回了无法处理的结果，任务已停止。", "请联系管理员检查后再重试。"],
 ] as const)("maps controlled job error %s to beginner Chinese", (code, message, recovery) => {
   expect(ordinaryJobError({ code, message: "raw secret V4 Flash Pro 模型" })).toEqual({ message, recovery })
 })

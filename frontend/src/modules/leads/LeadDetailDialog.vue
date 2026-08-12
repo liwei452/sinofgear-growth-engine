@@ -59,6 +59,7 @@ const canAnalyze = computed(() => permissions.value.includes("leads.analyze"))
 const canReview = computed(() => permissions.value.includes("leads.review"))
 const canHandoff = computed(() => permissions.value.includes("leads.handoff"))
 const canRead = computed(() => permissions.value.includes("leads.read"))
+const canReadTechnicalAudit = computed(() => permissions.value.includes("credentials.manage"))
 
 const detailQuery = useQuery({
   queryKey: computed(() => leadKeys.detail(props.organizationId, props.candidateId ?? "")),
@@ -677,7 +678,7 @@ onBeforeUnmount(() => {
           <button ref="crmHandoffButton" class="primary-action" type="button" :disabled="!handoffEligible" @click="openHandoff">交给 CRM</button>
         </section>
 
-        <details class="detail-section audit-section">
+        <details v-if="canReadTechnicalAudit" class="detail-section audit-section">
           <summary>高级审计信息</summary>
           <section v-if="insight" aria-labelledby="score-dimensions-title">
             <h4 id="score-dimensions-title">评分维度</h4>

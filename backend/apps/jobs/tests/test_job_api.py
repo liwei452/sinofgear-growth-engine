@@ -120,6 +120,106 @@ def test_job_retry_progress_exposes_only_count_and_due_time(api_organizations, a
 
 
 @pytest.mark.django_db
+def test_job_retry_progress_uses_only_current_same_organization_scheduled_run(
+    api_organizations, api_roles,
+):
+    own, _ = api_organizations
+    job = _job(own, "bounded-retry-source")
+    due = timezone.now() + timedelta(minutes=4)
+    with ai_audit_writes():
+        prompt = PromptVersion.objects.create(
+            purpose="CONTENT_GENERATE", code="job-bounded-retry", provider="deepseek",
+            model="private", template="prompt", output_schema={"type": "object"},
+            version=1, status=PromptVersion.Status.PUBLISHED,
+        )
+        for organization, attempt, count, retry_at in [
+            (own, 0, 7, due + timedelta(hours=1)),
+            (own, 2, 8, due + timedelta(hours=2)),
+        ]:
+            AIRun.objects.create(
+                organization=organization, job=job, job_attempt=attempt,
+                prompt_version=prompt, provider="deepseek", model="private",
+                input_snapshot={}, status=AIRun.Status.RUNNING,
+                started_at=timezone.now(), transport_retry_count=count,
+                next_retry_at=retry_at,
+            )
+        AIRun.objects.create(
+            organization=own, job=job, job_attempt=1, prompt_version=prompt,
+            provider="deepseek", model="private", input_snapshot={},
+            status=AIRun.Status.RUNNING, started_at=timezone.now(),
+            transport_retry_count=1, next_retry_at=due,
+        )
+    _, client = member_client(
+        organization=own, role=api_roles[Role.Code.READ_ONLY],
+        username="jobs-bounded-retry-source",
+    )
+
+    detail = client.get(f"/api/v1/jobs/{job.id}").json()
+    listed = client.get("/api/v1/jobs", {"job_id": job.id}).json()["results"][0]
+
+    assert detail["retry_count"] == listed["retry_count"] == 1
+    assert detail["next_retry_at"] == listed["next_retry_at"] == due.isoformat().replace("+00:00", "Z")
+
+
+@pytest.mark.django_db
+def test_job_retry_progress_ignores_cross_organization_corruption(api_organizations, api_roles):
+    own, other = api_organizations
+    job = _job(own, "cross-org-retry")
+    with ai_audit_writes():
+        prompt = PromptVersion.objects.create(
+            purpose="CONTENT_GENERATE", code="job-cross-org-retry", provider="deepseek",
+            model="private", template="prompt", output_schema={"type": "object"},
+            version=1, status=PromptVersion.Status.PUBLISHED,
+        )
+        AIRun.objects.create(
+            organization=other, job=job, job_attempt=1, prompt_version=prompt,
+            provider="deepseek", model="private", input_snapshot={},
+            status=AIRun.Status.RUNNING, started_at=timezone.now(),
+            transport_retry_count=9,
+            next_retry_at=timezone.now() + timedelta(hours=3),
+        )
+    _, client = member_client(
+        organization=own, role=api_roles[Role.Code.READ_ONLY],
+        username="jobs-cross-org-retry",
+    )
+
+    payload = client.get(f"/api/v1/jobs/{job.id}").json()
+
+    assert payload["retry_count"] == 0
+    assert payload["next_retry_at"] is None
+
+
+@pytest.mark.django_db
+def test_terminal_job_never_claims_an_automatic_retry(api_organizations, api_roles):
+    own, _ = api_organizations
+    job = _job(own, "terminal-retry")
+    due = timezone.now() + timedelta(minutes=2)
+    with job_service_writes():
+        Job.objects.filter(pk=job.id).update(status=Job.Status.FAILED)
+    with ai_audit_writes():
+        prompt = PromptVersion.objects.create(
+            purpose="CONTENT_GENERATE", code="job-terminal-retry", provider="deepseek",
+            model="private", template="prompt", output_schema={"type": "object"},
+            version=1, status=PromptVersion.Status.PUBLISHED,
+        )
+        AIRun.objects.create(
+            organization=own, job=job, job_attempt=1, prompt_version=prompt,
+            provider="deepseek", model="private", input_snapshot={},
+            status=AIRun.Status.RUNNING, started_at=timezone.now(),
+            transport_retry_count=2, next_retry_at=due,
+        )
+    _, client = member_client(
+        organization=own, role=api_roles[Role.Code.READ_ONLY],
+        username="jobs-terminal-retry",
+    )
+
+    payload = client.get(f"/api/v1/jobs/{job.id}").json()
+
+    assert payload["retry_count"] == 2
+    assert payload["next_retry_at"] is None
+
+
+@pytest.mark.django_db
 def test_content_job_list_and_detail_return_only_a_valid_brief_source_reference(
     api_organizations, api_roles,
 ):

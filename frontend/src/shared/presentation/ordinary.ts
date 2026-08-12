@@ -83,6 +83,24 @@ type PublicJobProgress = {
 }
 
 const jobErrors: Readonly<Record<string, OrdinaryJobNotice>> = {
+  job_error: {
+    message: "这次没有处理完成。", recovery: "请稍后手动重试；仍有问题请联系管理员。",
+  },
+  provider_error: {
+    message: "AI服务没有完成本次处理。", recovery: "请稍后手动重试；仍有问题请联系管理员。",
+  },
+  output_too_large: {
+    message: "需要生成的内容超出处理范围，任务已停止。", recovery: "请减少输入资料或生成要求后重新尝试。",
+  },
+  ai_run_start_failed: {
+    message: "AI任务没有成功启动。", recovery: "请稍后手动重试；仍有问题请联系管理员。",
+  },
+  content_finalize_failed: {
+    message: "内容已经生成，但没有成功保存。", recovery: "请重新生成；仍有问题请联系管理员。",
+  },
+  invalid_provider_contract: {
+    message: "AI服务返回了无法处理的结果，任务已停止。", recovery: "请联系管理员检查后再重试。",
+  },
   provider_authentication_failed: {
     message: "AI服务的连接信息已失效，任务没有继续。", recovery: "请联系管理员检查连接后重新尝试。",
   },
@@ -164,7 +182,7 @@ const jobErrors: Readonly<Record<string, OrdinaryJobNotice>> = {
 }
 
 const defaultJobError: OrdinaryJobNotice = {
-  message: "这次没有处理完成。", recovery: "请稍后重新尝试；仍有问题请联系管理员。",
+  message: "这次没有处理完成。", recovery: "请稍后手动重试；仍有问题请联系管理员。",
 }
 
 export function ordinaryJobError(error: PublicJobError): OrdinaryJobNotice {

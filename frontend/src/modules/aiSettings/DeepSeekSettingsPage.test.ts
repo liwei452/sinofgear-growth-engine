@@ -132,6 +132,25 @@ it("wipes replacement secrets on Escape, backdrop close, reset, and a failed rep
   expect(document.body).not.toHaveTextContent(secret)
 })
 
+it("explains the exact safe recovery action when DeepSeek reports insufficient balance", async () => {
+  document.cookie = "csrftoken=csrf; path=/"
+  const fetchMock = vi.fn(async (path: string) => path.endsWith("/test")
+    ? response({ connection_state: "FAILED", recovery_code: "deepseek_balance_required" }, 400)
+    : response(disconnected))
+  renderPage(fetchMock)
+  const user = userEvent.setup()
+
+  const input = await screen.findByLabelText("API Key（DeepSeek 提供的访问密钥）")
+  await user.click(input)
+  await user.paste(secret)
+  await user.click(screen.getByRole("button", { name: "先测试连接" }))
+
+  const alert = await screen.findByRole("alert")
+  expect(alert).toHaveTextContent("AI账户余额不足")
+  expect(alert).toHaveTextContent("充值后重新尝试")
+  expect(document.body).not.toHaveTextContent(secret)
+})
+
 it("disables duplicate submissions and announces progress to screen readers", async () => {
   document.cookie = "csrftoken=csrf; path=/"
   let finish!: (value: Response) => void

@@ -6,6 +6,7 @@ type ErrorPayload = {
   recovery_action?: unknown
   errors?: unknown
   code?: unknown
+  recovery_code?: unknown
   current_version?: unknown
 }
 
@@ -100,7 +101,11 @@ async function errorFromResponse(response: Response): Promise<ApiError> {
     recovery,
     {
       fieldErrors: fieldErrors(payload.errors),
-      code: typeof payload.code === "string" ? payload.code : undefined,
+      code: typeof payload.code === "string"
+        ? payload.code
+        : typeof payload.recovery_code === "string"
+          ? payload.recovery_code
+          : undefined,
       currentVersion: typeof payload.current_version === "number"
         ? payload.current_version
         : undefined,

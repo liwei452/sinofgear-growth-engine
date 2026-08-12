@@ -9,6 +9,8 @@ import {
 } from "./api"
 import AppIcon from "../../shared/components/AppIcon.vue"
 import OperationModal from "../../shared/components/OperationModal.vue"
+import { ApiError } from "../../api/client"
+import { ordinaryJobError } from "../../shared/presentation/ordinary"
 
 const queryClient = useQueryClient()
 const currentUser = useQuery(currentUserQueryOptions())
@@ -87,6 +89,15 @@ function safeFailure(message = "连接没有成功，请检查 API Key 和网络
   void nextTick(() => (modalOpen.value ? keyInput.value : errorElement.value)?.focus())
 }
 
+function safeProviderFailure(error: unknown) {
+  if (error instanceof ApiError && error.code?.startsWith("deepseek_")) {
+    const notice = ordinaryJobError({ code: error.code })
+    safeFailure(`${notice.message}${notice.recovery}`)
+    return
+  }
+  safeFailure()
+}
+
 const testMutation = useMutation({
   mutationFn: async () => {
     const context = pendingTestContext
@@ -109,8 +120,8 @@ const testMutation = useMutation({
       statusMessage.value = "现有连接可用。"
     }
   },
-  onError: () => {
-    if (isCurrent(pendingTestContext)) safeFailure()
+  onError: (error) => {
+    if (isCurrent(pendingTestContext)) safeProviderFailure(error)
   },
 })
 

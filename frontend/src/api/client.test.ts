@@ -52,6 +52,18 @@ describe("apiRequest", () => {
     })
   })
 
+  it("preserves provider recovery codes returned by connection tests", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      connection_state: "FAILED",
+      recovery_code: "deepseek_balance_required",
+    }), { status: 400, headers: { "Content-Type": "application/json" } })))
+
+    await expect(apiRequest("/api/v1/ai-provider-configuration/test")).rejects.toMatchObject({
+      status: 400,
+      code: "deepseek_balance_required",
+    })
+  })
+
   it("bootstraps CSRF and sends its cookie on unsafe requests", async () => {
     const fetchMock = vi.fn()
       .mockImplementationOnce(async () => {

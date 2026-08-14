@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from .capabilities import resolve_account_capabilities
 from .codes import AccountCapability
 from .models import ConnectorCredential, Platform, SocialAccount
+from .oauth import validate_return_path
 
 
 class StrictMixin:
@@ -236,3 +237,34 @@ class ConnectorCredentialUpdateSerializer(StrictMixin, serializers.ModelSerializ
 
 class ConnectorCredentialListSerializer(serializers.Serializer):
     results = ConnectorCredentialReadSerializer(many=True)
+
+
+class PlatformConnectionSerializer(serializers.Serializer):
+    platform = serializers.CharField()
+    platform_name = serializers.CharField()
+    status = serializers.ChoiceField(choices=[
+        "NOT_CONNECTED", "CONNECTED", "REAUTHORIZATION_REQUIRED", "CONFIGURATION_REQUIRED",
+    ])
+    connection_label = serializers.CharField()
+    recovery_action = serializers.CharField(allow_blank=True)
+    mode = serializers.CharField(allow_blank=True)
+
+
+class PlatformConnectionListSerializer(serializers.Serializer):
+    results = PlatformConnectionSerializer(many=True)
+
+
+class PlatformAuthorizationRequestSerializer(StrictMixin, serializers.Serializer):
+    return_path = serializers.CharField(default="/promotion", max_length=512)
+
+    def validate_return_path(self, value):
+        try:
+            return validate_return_path(value)
+        except ValueError as error:
+            raise serializers.ValidationError(str(error)) from error
+
+
+class PlatformAuthorizationResponseSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=["AUTHORIZATION_REQUIRED"])
+    authorization_url = serializers.URLField()
+    expires_at = serializers.DateTimeField()

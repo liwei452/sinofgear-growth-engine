@@ -171,3 +171,32 @@ ASSET_SPOOL_MEMORY_BYTES = int(
     os.environ.get("ASSET_SPOOL_MEMORY_BYTES", str(8 * 1024 * 1024))
 )
 PLATFORM_CONNECTOR_CAPABILITIES = {}
+
+
+def _provider_enabled(name: str) -> bool:
+    return os.environ.get(f"{name}_OAUTH_ENABLED", "false").lower() == "true"
+
+
+SOCIAL_PROVIDER_CONFIG = {
+    "META": {
+        "enabled": _provider_enabled("META"),
+        "client_id": os.environ.get("META_CLIENT_ID", ""),
+        "authorization_url": "https://www.facebook.com/v23.0/dialog/oauth",
+        "redirect_uri": os.environ.get("META_OAUTH_REDIRECT_URI", ""),
+        "scopes": ("pages_show_list", "pages_manage_posts", "instagram_content_publish"),
+    },
+    "TIKTOK": {
+        "enabled": _provider_enabled("TIKTOK"),
+        "client_id": os.environ.get("TIKTOK_CLIENT_KEY", ""),
+        "authorization_url": "https://www.tiktok.com/v2/auth/authorize/",
+        "redirect_uri": os.environ.get("TIKTOK_OAUTH_REDIRECT_URI", ""),
+        "scopes": ("user.info.basic", "video.publish", "video.upload"),
+    },
+    "LINKEDIN": {
+        "enabled": _provider_enabled("LINKEDIN"),
+        "client_id": os.environ.get("LINKEDIN_CLIENT_ID", ""),
+        "authorization_url": "https://www.linkedin.com/oauth/v2/authorization",
+        "redirect_uri": os.environ.get("LINKEDIN_OAUTH_REDIRECT_URI", ""),
+        "scopes": ("w_organization_social",),
+    },
+}

@@ -1,3 +1,6 @@
+from urllib.parse import urlencode
+
+from django.conf import settings
 from django.http import Http404
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
@@ -8,12 +11,16 @@ from rest_framework.views import APIView
 from apps.identity.permissions import CanManageCredentials, CanReadMemberships, CanReadPublishing
 
 from .models import ConnectorCredential, Platform, SocialAccount
+from .connection_status import connection_summary
+from .oauth import create_authorization_attempt
 from .serializers import (
     ConnectorCredentialCreateSerializer, ConnectorCredentialListSerializer,
     ConnectorCredentialReadSerializer, ConnectorCredentialUpdateSerializer,
     PlatformListSerializer, PlatformSerializer, SocialAccountCreateSerializer,
     SocialAccountConnectionSerializer, SocialAccountListSerializer, SocialAccountReadSerializer,
     SocialAccountUpdateSerializer,
+    PlatformAuthorizationRequestSerializer, PlatformAuthorizationResponseSerializer,
+    PlatformConnectionListSerializer,
 )
 
 
@@ -152,3 +159,83 @@ class ConnectorCredentialDetailView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         return Response(ConnectorCredentialReadSerializer(serializer.save()).data)
+
+
+PLATFORM_CONNECTIONS = (
+    ("LINKEDIN", "LinkedIn"),
+    ("FACEBOOK", "Facebook"),
+    ("INSTAGRAM", "Instagram"),
+    ("TIKTOK", "TikTok"),
+)
+
+
+@extend_schema(tags=["PlatformConnections"])
+class PlatformConnectionListView(APIView):
+    permission_classes = [CanReadPublishing]
+
+    @extend_schema(responses={200: PlatformConnectionListSerializer})
+    def get(self, request: Request) -> Response:
+        results = []
+        for code, name in PLATFORM_CONNECTIONS:
+            summary = connection_summary(
+                organization=request.organization, platform_code=code,
+            )
+            results.append({
+                "platform": code,
+                "platform_name": name,
+                "status": summary.status,
+                "connection_label": summary.connection_label,
+                "recovery_action": summary.recovery_action,
+                "mode": summary.mode,
+            })
+        return Response({"results": results})
+
+
+@extend_schema(tags=["PlatformConnections"])
+class PlatformAuthorizationView(APIView):
+    permission_classes = [CanManageCredentials]
+
+    @extend_schema(
+        request=PlatformAuthorizationRequestSerializer,
+        responses={201: PlatformAuthorizationResponseSerializer},
+    )
+    def post(self, request: Request, platform_code: str) -> Response:
+        try:
+            platform = Platform.objects.get(code=platform_code)
+        except Platform.DoesNotExist as error:
+            raise Http404 from error
+        if platform_code not in {code for code, _name in PLATFORM_CONNECTIONS}:
+            raise Http404
+        serializer = PlatformAuthorizationRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        provider_key = "META" if platform_code in {"FACEBOOK", "INSTAGRAM"} else platform_code
+        config = settings.SOCIAL_PROVIDER_CONFIG.get(provider_key, {})
+        required = ("client_id", "authorization_url", "redirect_uri")
+        if not config.get("enabled") or any(not config.get(field) for field in required):
+            return Response({
+                "code": "CONFIGURATION_REQUIRED",
+                "message": "官方账号连接尚未配置。",
+                "recovery_action": "由管理员完成平台应用配置后再连接",
+                "detail": "Official platform authorization is disabled.",
+            }, status=status.HTTP_409_CONFLICT)
+        started = create_authorization_attempt(
+            organization=request.organization,
+            actor=request.user,
+            platform=platform,
+            return_path=serializer.validated_data["return_path"],
+        )
+        query = {
+            "client_id": config["client_id"],
+            "redirect_uri": config["redirect_uri"],
+            "response_type": "code",
+            "state": started.raw_state,
+        }
+        scopes = config.get("scopes", ())
+        if scopes:
+            query["scope"] = " ".join(scopes)
+        authorization_url = f"{config['authorization_url']}?{urlencode(query)}"
+        return Response({
+            "status": "AUTHORIZATION_REQUIRED",
+            "authorization_url": authorization_url,
+            "expires_at": started.expires_at,
+        }, status=status.HTTP_201_CREATED)

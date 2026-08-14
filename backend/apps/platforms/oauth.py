@@ -25,7 +25,7 @@ def _state_hash(raw_state: str) -> str:
     return hashlib.sha256(raw_state.encode("utf-8")).hexdigest()
 
 
-def _validate_return_path(return_path: str) -> str:
+def validate_return_path(return_path: str) -> str:
     if not isinstance(return_path, str):
         raise ValueError("A safe local return path is required.")
     parsed = urlsplit(return_path)
@@ -43,7 +43,7 @@ def _validate_return_path(return_path: str) -> str:
 def create_authorization_attempt(
     *, organization, actor, platform, return_path: str,
 ) -> AuthorizationStart:
-    safe_return_path = _validate_return_path(return_path)
+    safe_return_path = validate_return_path(return_path)
     raw_state = secrets.token_urlsafe(32)
     expires_at = timezone.now() + timedelta(minutes=10)
     attempt = OAuthConnectionAttempt.objects.create(

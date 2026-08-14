@@ -24,7 +24,7 @@ it("reviews an ICP and a complete TikTok manual publishing package", async () =>
   expect(tiktok).toHaveTextContent("标题 / 标签 / CTA")
   expect(tiktok).toHaveTextContent("UTM")
   expect(tiktok).toHaveTextContent("手工发布包")
-  expect(tiktok).toHaveTextContent("Fake Connector")
+  expect(tiktok).toHaveTextContent("Demo / Fake")
   await user.click(screen.getByRole("button", { name: "批准内容包" }))
   expect(screen.getByRole("status")).toHaveTextContent("已批准，等待人工下载或手工发布")
 })
@@ -175,7 +175,9 @@ it("publishes all approved channels once and retries only failed channels", asyn
   const workspace = {
     target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
     outreach_drafts: [], field_provenance: [], metric_receipts: [],
-    connectors: channels.map(channel => ({ channel, status: "FAKE_CONNECTOR", mode: "ONE_CLICK_DEMO" })),
+    connectors: channels.map(channel => ({
+      channel, status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "DEMO_FAKE",
+    })),
     channel_packages: channels.map((channel, index) => ({
       id: `10000000-0000-4000-8000-00000000120${index + 1}`,
       account_id: null,
@@ -385,4 +387,59 @@ it("loads company provenance and persists human verification", async () => {
   await user.click(screen.getByRole("button", { name: "确认 DIN 6" }))
   await waitFor(() => expect(screen.getByText("已确认", { selector: "span" })).toBeInTheDocument())
   expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/verify"))).toBe(true)
+})
+
+it("shows safe channel connection states and starts authorization without publishing", async () => {
+  document.cookie = "csrftoken=connection-state-test-token"
+  const channels = ["LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"]
+  const workspace = {
+    target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
+    outreach_drafts: [], field_provenance: [], metric_receipts: [], publish_batches: [],
+    connectors: [
+      { channel: "LINKEDIN", status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "OFFICIAL" },
+      { channel: "FACEBOOK", status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "DEMO_FAKE" },
+      { channel: "INSTAGRAM", status: "NOT_CONNECTED", connection_label: "未连接", recovery_action: "连接账号", mode: "" },
+      { channel: "TIKTOK", status: "REAUTHORIZATION_REQUIRED", connection_label: "需要重新授权", recovery_action: "重新连接", mode: "OFFICIAL" },
+    ],
+    channel_packages: channels.map((channel, index) => ({
+      id: `20000000-0000-4000-8000-00000000120${index + 1}`,
+      account_id: null, channel, payload: { title: `${channel} package` },
+      status: "APPROVED", is_demo: channel === "FACEBOOK",
+      data_label: channel === "FACEBOOK" ? "Demo / Fake" : "Reviewed content package",
+      delivery: "MANUAL_ONLY", created_at: "2026-08-14T08:00:00Z", updated_at: "2026-08-14T08:00:00Z",
+    })),
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === "/api/v1/growth/workspace") {
+      return new Response(JSON.stringify(workspace), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/platform-connections/TIKTOK/authorize") {
+      return new Response(JSON.stringify({
+        code: "CONFIGURATION_REQUIRED", message: "官方账号连接尚未配置。", recovery_action: "完成平台应用配置后再连接",
+      }), { status: 409, headers: { "Content-Type": "application/json" } })
+    }
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+  render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  await screen.findByText("LINKEDIN package")
+  const linkedIn = screen.getByRole("article", { name: "LinkedIn Company Page 内容包" })
+  const facebook = screen.getByRole("article", { name: "Facebook Page 内容包" })
+  const instagram = screen.getByRole("article", { name: "Instagram Business 内容包" })
+  const tiktok = screen.getByRole("article", { name: "TikTok 内容包" })
+  expect(linkedIn).toHaveTextContent("已连接")
+  expect(facebook).toHaveTextContent("已连接 · Demo / Fake")
+  expect(instagram).toHaveTextContent("未连接")
+  expect(tiktok).toHaveTextContent("需要重新授权")
+  expect(within(instagram).getByRole("button", { name: "连接 Instagram 账号" })).toBeEnabled()
+  await user.click(within(tiktok).getByRole("button", { name: "重新连接 TikTok 账号" }))
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("官方账号连接尚未配置")
+  expect(fetchMock.mock.calls.some(([path]) => String(path) === "/api/v1/platform-connections/TIKTOK/authorize")).toBe(true)
+  expect(fetchMock.mock.calls.some(([path]) => String(path) === "/api/v1/growth/publish-batches")).toBe(false)
+  expect(document.body.textContent?.toLowerCase()).not.toMatch(/access_token|client_secret|oauth scope/)
 })

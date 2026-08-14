@@ -4,6 +4,7 @@ import { computed, ref, watchEffect } from "vue"
 
 import {
   approveChannelPackage,
+  authorizePlatformConnection,
   createPublishBatch,
   exportChannelPackage,
   growthQueryKeys,
@@ -11,6 +12,7 @@ import {
   retryFailedPublishBatch,
   type ChannelPackage,
   type ManualPackageExport,
+  type PlatformConnection,
   type PublishBatch,
 } from "./api"
 
@@ -23,6 +25,7 @@ const downloadMessage = ref("")
 const downloadError = ref("")
 const publishBatch = ref<PublishBatch | null>(null)
 const publishError = ref("")
+const connectionError = ref("")
 const publishKey = ref("")
 const publishSignature = ref("")
 const publishKeySequence = ref(0)
@@ -40,8 +43,11 @@ function isApproved(channelPackage: ChannelPackage | undefined): boolean {
 const approved = computed(() => activePackage.value
   ? isApproved(activePackage.value)
   : fallbackApproved.value)
+const connectionsByChannel = computed(() => new Map(
+  (workspaceQuery.data.value?.connectors ?? []).map(item => [item.channel, item]),
+))
 const eligiblePackages = computed(() => (workspaceQuery.data.value?.channel_packages ?? [])
-  .filter(channelPackage => isApproved(channelPackage)))
+  .filter(channelPackage => isApproved(channelPackage) && connectionFor(channelPackage.channel)?.status === "CONNECTED"))
 const failedPublishItems = computed(() => publishBatch.value?.items
   .filter(item => item.status === "FAILED") ?? [])
 const succeededPublishCount = computed(() => publishBatch.value?.items
@@ -69,6 +75,45 @@ const retryPublishMutation = useMutation({
   onSuccess: result => { publishBatch.value = result },
   onError: () => { publishError.value = "失败渠道暂时无法重试，请稍后再试。" },
 })
+const connectionMutation = useMutation({
+  mutationFn: authorizePlatformConnection,
+  onSuccess: result => {
+    const destination = new URL(result.authorization_url)
+    if (destination.protocol !== "https:") {
+      connectionError.value = "账号连接地址无效，请联系管理员。"
+      return
+    }
+    window.location.assign(destination.href)
+  },
+  onError: () => { connectionError.value = "官方账号连接尚未配置。" },
+})
+
+function connectionFor(channel: string): PlatformConnection | undefined {
+  return connectionsByChannel.value.get(channel)
+}
+
+function connectionDisplay(channel: string): string {
+  const connection = connectionFor(channel)
+  if (!connection) return "未连接"
+  return connection.mode === "DEMO_FAKE"
+    ? `${connection.connection_label} · Demo / Fake`
+    : connection.connection_label
+}
+
+function modeLabel(channel: string): string {
+  return connectionFor(channel)?.mode === "OFFICIAL" ? "官方连接" : "Demo / Fake"
+}
+
+function connectionActionLabel(channel: string, channelName: string): string {
+  const action = connectionFor(channel)?.recovery_action || "连接"
+  const conciseAction = action.endsWith("账号") ? action.slice(0, -2) : action
+  return `${conciseAction} ${channelName} 账号`
+}
+
+async function connectChannel(channel: PlatformConnection["channel"]): Promise<void> {
+  connectionError.value = ""
+  await connectionMutation.mutateAsync(channel).catch(() => undefined)
+}
 
 async function approve(): Promise<void> {
   await approvePackage(activePackage.value)
@@ -146,7 +191,12 @@ function channelLabel(channel: string): string {
   } as Record<string, string>)[channel] ?? channel
 }
 
-const channels = [
+const channels: Array<{
+  code: PlatformConnection["channel"]
+  actionName: string
+  name: string
+  format: string
+}> = [
   { code: "LINKEDIN", actionName: "LinkedIn", name: "LinkedIn Company Page", format: "英文专业短帖 + 中文对照" },
   { code: "FACEBOOK", actionName: "Facebook", name: "Facebook Page", format: "案例图文 + CTA" },
   { code: "INSTAGRAM", actionName: "Instagram", name: "Instagram Business", format: "轮播提纲 + Reels 文案" },
@@ -180,7 +230,19 @@ const channels = [
       <div class="growth-heading"><div><h2>各渠道内容包</h2><p>先审核内容，再一次提交到所有可用渠道。</p></div><span class="connector-state">Fake Connector · 一键发布演示</span></div>
       <div class="package-grid">
         <article v-for="channel in channels" :key="channel.name" :aria-label="`${channel.name} 内容包`">
-          <span class="fake-label">Demo / Fake</span><h3>{{ channel.name }}</h3>
+          <span class="fake-label">{{ modeLabel(channel.code) }}</span><h3>{{ channel.name }}</h3>
+          <div class="channel-connection">
+            <span>{{ connectionDisplay(channel.code) }}</span>
+            <button
+              v-if="connectionFor(channel.code)?.status !== 'CONNECTED'"
+              class="button button-secondary" type="button"
+              :disabled="connectionMutation.isPending.value"
+              :aria-label="connectionActionLabel(channel.code, channel.actionName)"
+              @click="connectChannel(channel.code)"
+            >
+              {{ connectionFor(channel.code)?.recovery_action || "连接账号" }}
+            </button>
+          </div>
           <p class="package-source">{{ String(packageFor(channel.code)?.payload.title ?? channel.format) }}</p>
           <p>{{ channel.format }}</p><strong>手工发布包</strong>
           <div v-if="packageFor(channel.code)" class="package-actions">
@@ -202,9 +264,21 @@ const channels = [
           </div>
         </article>
         <article class="tiktok-package" aria-label="TikTok 内容包">
-          <span class="fake-label">Demo / Fake</span><h3>TikTok</h3>
+          <span class="fake-label">{{ modeLabel('TIKTOK') }}</span><h3>TikTok</h3>
+          <div class="channel-connection">
+            <span>{{ connectionDisplay('TIKTOK') }}</span>
+            <button
+              v-if="connectionFor('TIKTOK')?.status !== 'CONNECTED'"
+              class="button button-secondary" type="button"
+              :disabled="connectionMutation.isPending.value"
+              :aria-label="connectionActionLabel('TIKTOK', 'TikTok')"
+              @click="connectChannel('TIKTOK')"
+            >
+              {{ connectionFor('TIKTOK')?.recovery_action || "连接账号" }}
+            </button>
+          </div>
           <p v-if="packageTitle" class="package-source">{{ packageTitle }}</p>
-          <p class="package-lead">30 秒 · 9:16 · 手工发布包 · Fake Connector</p>
+          <p class="package-lead">30 秒 · 9:16 · 手工发布包 · {{ modeLabel('TIKTOK') }}</p>
           <dl>
             <div><dt>脚本</dt><dd>15–60 秒结构：痛点 4 秒 → 检测过程 18 秒 → 证据与 CTA 8 秒</dd></div>
             <div><dt>分镜</dt><dd>1. 齿面特写 2. 测量仪读数 3. 检测报告 4. 包装线应用</dd></div>
@@ -273,6 +347,7 @@ const channels = [
         </button>
       </section>
       <p v-if="publishError" role="alert" class="approval-status">{{ publishError }}</p>
+      <p v-if="connectionError" role="alert" class="approval-status connection-error">{{ connectionError }}</p>
       <div class="approval-row">
         <p>批准后状态：{{ approved ? "等待人工下载或手工发布" : "等待你的审核" }}</p>
         <div class="page-actions">

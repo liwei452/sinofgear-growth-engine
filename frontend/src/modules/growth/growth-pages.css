@@ -8,6 +8,9 @@
 .calendar-strip, .package-grid, .evidence-columns, .metric-grid { display: grid; gap: 12px; margin-top: 16px; }.calendar-strip { grid-template-columns: repeat(3, 1fr); }.calendar-strip article, .package-grid article, .evidence-columns section { display: grid; gap: 7px; border: 1px solid var(--sg-line); border-radius: 10px; padding: 15px; }.calendar-strip time, .calendar-strip span { color: var(--sg-muted); font-size: .78rem; }
 .package-grid { grid-template-columns: repeat(3, 1fr); }.package-grid h3 { margin: 3px 0; }.package-grid p { color: var(--sg-muted); line-height: 1.55; }.package-grid article > strong { color: var(--sg-brand); }.tiktok-package { grid-column: 1 / -1; }.tiktok-package dl { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 5px 0 0; }.tiktok-package dl div { border-radius: 8px; background: #f6f9fc; padding: 11px; }.tiktok-package dt { color: var(--sg-muted); font-size: .74rem; }.tiktok-package dd { margin: 4px 0 0; line-height: 1.5; }.package-lead { margin: 0; }.connector-state { border-radius: 8px; background: #fff6e7; padding: 7px 10px; color: #875500 !important; }
 .package-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.channel-connection { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-radius: 8px; background: #f4f8fc; padding: 9px 10px; color: #31536e; font-size: .8rem; font-weight: 800; }
+.channel-connection .button { min-height: 34px; padding: 6px 10px; font-size: .76rem; }
+.connection-error { background: #fff3df; color: #805200; }
 .publish-panel { margin-top: 22px; padding: 20px; border: 1px solid #bfdbfe; border-radius: 12px; background: #eff6ff; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
 .publish-panel h3, .publish-results h3 { margin: 4px 0 6px; }
 .publish-panel p { margin: 0; }

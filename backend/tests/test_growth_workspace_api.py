@@ -67,7 +67,13 @@ def test_workspace_route_exposes_four_separate_collections(growth_client):
         "connectors",
     }
     assert response.data["connectors"] == [
-        {"channel": channel, "status": "FAKE_CONNECTOR", "mode": "ONE_CLICK_DEMO"}
+        {
+            "channel": channel,
+            "status": "NOT_CONNECTED",
+            "connection_label": "未连接",
+            "recovery_action": "连接账号",
+            "mode": "",
+        }
         for channel in ("LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK")
     ]
 

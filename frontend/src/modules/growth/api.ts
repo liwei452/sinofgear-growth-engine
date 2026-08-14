@@ -77,6 +77,14 @@ export type FieldProvenance = {
   updated_at: string
 }
 
+export type PlatformConnection = {
+  channel: "LINKEDIN" | "FACEBOOK" | "INSTAGRAM" | "TIKTOK"
+  status: "NOT_CONNECTED" | "CONNECTED" | "REAUTHORIZATION_REQUIRED" | "CONFIGURATION_REQUIRED"
+  connection_label: string
+  recovery_action: string
+  mode: "" | "DEMO_FAKE" | "OFFICIAL"
+}
+
 export type GrowthWorkspace = {
   target_accounts: TargetAccount[]
   contacts: Array<Record<string, unknown>>
@@ -88,7 +96,7 @@ export type GrowthWorkspace = {
   publish_batches: PublishBatch[]
   metric_receipts: MetricReceipt[]
   field_provenance: FieldProvenance[]
-  connectors: Array<Record<string, unknown>>
+  connectors: PlatformConnection[]
 }
 
 export type DraftActionResponse = {
@@ -161,10 +169,29 @@ export type PublishBatchItem = {
   status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED"
   attempt_number: number
   external_post_url: string
+  mode: "DEMO_FAKE" | "OFFICIAL"
   error_code: string
+  retryable: boolean
   recovery_action: string
   created_at: string
   updated_at: string
+}
+
+export type PlatformAuthorizationStart = {
+  status: "AUTHORIZATION_REQUIRED"
+  authorization_url: string
+  expires_at: string
+}
+
+export async function authorizePlatformConnection(
+  channel: PlatformConnection["channel"],
+): Promise<PlatformAuthorizationStart> {
+  const result = await apiRequest<PlatformAuthorizationStart>(
+    `/api/v1/platform-connections/${channel}/authorize`,
+    { method: "POST", body: { return_path: "/promotion" } },
+  )
+  if (!result) throw new Error("账号连接响应为空。")
+  return result
 }
 
 export type PublishBatch = {

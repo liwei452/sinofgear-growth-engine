@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.identity.permissions import CanManageCampaigns, CanReadCampaigns
+from apps.platforms.connection_status import connection_summary
 
 from .models import (
     ChannelPackage,
@@ -46,10 +47,20 @@ from .services import (
 )
 
 
-CONNECTOR_READINESS = [
-    {"channel": channel, "status": "FAKE_CONNECTOR", "mode": "ONE_CLICK_DEMO"}
-    for channel in ("LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK")
-]
+def connector_readiness(organization):
+    results = []
+    for channel in ("LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"):
+        summary = connection_summary(
+            organization=organization, platform_code=channel,
+        )
+        results.append({
+            "channel": channel,
+            "status": summary.status,
+            "connection_label": summary.connection_label,
+            "recovery_action": summary.recovery_action,
+            "mode": summary.mode,
+        })
+    return results
 
 
 class GrowthWorkspaceView(APIView):
@@ -81,7 +92,7 @@ class GrowthWorkspaceView(APIView):
             "field_provenance": FieldProvenanceSerializer(
                 FieldProvenance.objects.filter(organization=organization), many=True,
             ).data,
-            "connectors": CONNECTOR_READINESS,
+            "connectors": connector_readiness(organization),
         })
 
 

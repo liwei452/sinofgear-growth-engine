@@ -23,9 +23,9 @@ Use a two-step completion flow rather than creating a `SocialAccount` directly i
 
 1. The callback consumes the existing one-time, short-lived, actor/provider-bound authorization attempt.
 2. A provider-specific authorization adapter exchanges the fixture code, resolves granted capabilities, and discovers manageable publishing accounts.
-3. The backend stores a short-lived `AccountConnectionSession` containing only encrypted/opaque token-store reference data and normalized account candidates. The raw provider code and token are discarded before the response.
+3. The backend stores a short-lived `AccountConnectionSession` containing only an encrypted credential-bundle reference and normalized account candidates. The raw provider code and token are discarded before the response.
 4. The browser returns to `/promotion` with only a local connection-session identifier. It displays a compact account picker when more than one candidate exists.
-5. A credential manager confirms one candidate. The backend revalidates ownership, session expiry, actor, organization, provider, and candidate membership, then atomically creates or updates `SocialAccount` and `ConnectorCredential`.
+5. A credential manager confirms one candidate. The token store binds the encrypted bundle to that candidate and returns a new opaque account-specific reference; the backend then revalidates ownership, session expiry, actor, organization, provider, and candidate membership before atomically creating or updating `SocialAccount` and `ConnectorCredential`.
 6. Connection readiness changes to `CONNECTED` only when required publishing capabilities and an unexpired credential reference are present.
 
 This prevents a callback from silently selecting the wrong Page or Company and keeps provider secrets outside ordinary request and response data.
@@ -43,7 +43,7 @@ Add `AccountConnectionSession`, scoped to organization, actor, and platform, wit
 
 The session may contain at most 100 candidates. Candidate display names and identifiers have strict length limits. Unknown fields, duplicate provider account identifiers, unsupported channels, and candidates without publishing capability are rejected before persistence.
 
-`SocialAccount.connector_metadata.connection_kind` is set to `official_oauth`. Its external identifier and display name come from the selected provider candidate. `ConnectorCredential.secret_reference` stores only the token-store reference. Account and credential updates occur in one database transaction.
+`SocialAccount.connector_metadata.connection_kind` is set to `official_oauth`. Its external identifier and display name come from the selected provider candidate. `ConnectorCredential.secret_reference` stores only the account-specific reference returned by `TokenStore.bind`; Meta Page credentials therefore cannot be confused across selected Pages. Account and credential updates occur in one database transaction.
 
 ## Provider Authorization Interfaces
 
@@ -51,7 +51,8 @@ Add provider-neutral contracts under `backend/integrations/platforms`:
 
 - `AuthorizationCodeExchange.exchange(code, redirect_uri, pkce_reference) -> OAuthTokenSet`
 - `ManagedAccountDiscovery.discover(token_set) -> list[ManagedPublishingAccount]`
-- `TokenStore.store(token_set, context) -> secret_reference`
+- `TokenStore.store(provider_credential_bundle, context) -> bundle_reference`
+- `TokenStore.bind(bundle_reference, candidate_id) -> account_credential_reference`
 - `TokenStore.delete(secret_reference)` for compensation when session creation or confirmation fails.
 
 Provider adapters normalize these outcomes:

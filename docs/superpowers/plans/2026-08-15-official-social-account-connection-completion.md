@@ -53,7 +53,7 @@
 - Produces: `get_connection_session(*, session_id, organization, actor) -> AccountConnectionSession`.
 - Produces: `confirm_connection_session(*, session, candidate_id) -> SocialAccount`.
 - Produces: `TokenStoreContext(organization_id, actor_id, platform_code, attempt_id)`.
-- Extends: `TokenStore.store(token_set, context: TokenStoreContext) -> str` and `TokenStore.delete(reference) -> None` while retaining `resolve(reference)`.
+- Extends: `TokenStore.store(provider_credential_bundle, context: TokenStoreContext) -> str`, `TokenStore.bind(bundle_reference, candidate_id) -> str`, and `TokenStore.delete(reference) -> None` while retaining `resolve(reference)`.
 
 - [ ] **Step 1: Write failing session lifecycle tests**
 
@@ -87,7 +87,7 @@ Add an organization-scoped model with actor/platform foreign keys, `secret_refer
 
 - [ ] **Step 4: Implement atomic confirmation**
 
-Inside one `transaction.atomic()` block, lock the session, validate actor/organization/expiry/consumption and exact candidate membership, create or update one `ConnectorCredential`, create or update one `SocialAccount` with `connection_kind="official_oauth"`, set `publish_mode=API_CONFIRM`, and mark the session consumed. Same-candidate replay returns the already connected account; a different candidate returns `CONNECTION_SESSION_CONSUMED`.
+After the orchestration layer obtains an account-specific opaque reference from `TokenStore.bind`, enter one `transaction.atomic()` block, lock the session, validate actor/organization/expiry/consumption and exact candidate membership, create or update one `ConnectorCredential` with the bound reference, create or update one `SocialAccount` with `connection_kind="official_oauth"`, set `publish_mode=API_CONFIRM`, and mark the session consumed. Same-candidate replay returns the already connected account; a different candidate returns `CONNECTION_SESSION_CONSUMED`.
 
 - [ ] **Step 5: Run focused tests and migration drift check**
 
@@ -191,7 +191,7 @@ Expected: 404 for the three missing routes.
 
 - [ ] **Step 3: Implement strict serializers and callback orchestration**
 
-Add query serializers for exact `code`, `state`, and stable provider error values. Callback order is: validate configuration → consume attempt → exchange/discover → convert each `ManagedPublishingAccount` to a strict `ConnectionCandidate` → store token set with `TokenStoreContext` → create session → redirect safely. If any step after `store` fails, call `delete(reference)`. Return provider-neutral Chinese recovery messages without provider text.
+Add query serializers for exact `code`, `state`, and stable provider error values. Callback order is: validate configuration → consume attempt → exchange/discover → convert each `ManagedPublishingAccount` to a strict `ConnectionCandidate` → store the provider credential bundle with `TokenStoreContext` → create session → redirect safely. Confirmation calls `TokenStore.bind` before the database transaction and persists only its account-specific opaque reference. If any step after `store` fails, call `delete(reference)`. Return provider-neutral Chinese recovery messages without provider text.
 
 - [ ] **Step 4: Implement safe session read and confirmation views**
 

@@ -45,6 +45,8 @@ def connection_summary(*, organization, platform_code: str) -> ConnectionSummary
     account = accounts[0]
     metadata = account.connector_metadata if isinstance(account.connector_metadata, dict) else {}
     connection_kind = metadata.get("connection_kind", "")
+    if not connection_kind and metadata.get("fixture") == "phase-a-e2e":
+        connection_kind = "demo_fake"
     if connection_kind == "demo_fake":
         if account.publish_mode not in {
             SocialAccount.PublishMode.API_AUTO,

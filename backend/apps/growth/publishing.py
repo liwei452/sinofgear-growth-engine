@@ -3,9 +3,12 @@ import json
 from uuid import UUID
 
 from django.db import transaction
+from django.utils import timezone
 
 from apps.platforms.models import SocialAccount
+from integrations.platforms.base import ConnectorConfigurationRequired, OfficialPublishRequest
 from integrations.platforms.manual_fake import simulate_publish
+from integrations.platforms.registry import ConnectorRegistry
 
 from .models import ChannelPackage, GrowthPublishBatch, GrowthPublishItem
 
@@ -49,10 +52,62 @@ def _account_for_package(package: ChannelPackage):
         organization=package.organization,
         platform__code=package.channel,
         status=SocialAccount.Status.ACTIVE,
-        publish_mode=SocialAccount.PublishMode.API_AUTO,
-        connector_metadata__fixture="phase-a-e2e",
-    ).order_by("id")[:2])
+        publish_mode__in=[
+            SocialAccount.PublishMode.API_AUTO,
+            SocialAccount.PublishMode.API_CONFIRM,
+        ],
+    ).select_related("credential", "platform").order_by("id")[:2])
     return accounts[0] if len(accounts) == 1 else None
+
+
+def get_connector_registry() -> ConnectorRegistry:
+    return ConnectorRegistry()
+
+
+def _preflight_error(account: SocialAccount, package: ChannelPackage) -> dict | None:
+    metadata = account.connector_metadata if isinstance(account.connector_metadata, dict) else {}
+    connection_kind = metadata.get("connection_kind")
+    if not connection_kind and metadata.get("fixture") == "phase-a-e2e":
+        connection_kind = "demo_fake"
+    if connection_kind == "demo_fake":
+        if package.is_demo:
+            return None
+        return {
+            "code": "CONNECTOR_MODE_MISMATCH",
+            "message": "真实内容不能通过 Demo / Fake 连接器发布。",
+            "retryable": False,
+            "retry_after_seconds": None,
+        }
+    if connection_kind != "official_oauth":
+        return {
+            "code": "CONFIGURATION_REQUIRED",
+            "message": "请先通过官方授权连接平台账号。",
+            "retryable": False,
+            "retry_after_seconds": None,
+        }
+    if package.is_demo:
+        return {
+            "code": "CONNECTOR_MODE_MISMATCH",
+            "message": "Demo / Fake 内容不能通过真实平台连接器发布。",
+            "retryable": False,
+            "retry_after_seconds": None,
+        }
+    credential = account.credential
+    if credential is None or not credential.secret_reference:
+        return {
+            "code": "CONFIGURATION_REQUIRED",
+            "message": "官方账号凭据尚未配置。",
+            "retryable": False,
+            "retry_after_seconds": None,
+        }
+    if credential.expires_at and credential.expires_at <= timezone.now():
+        return {
+            "code": "REAUTHORIZATION_REQUIRED",
+            "message": "平台授权已过期，请重新连接账号。",
+            "retryable": False,
+            "retry_after_seconds": None,
+        }
+    return None
 
 
 def _refresh_batch_status(batch: GrowthPublishBatch) -> GrowthPublishBatch:
@@ -81,7 +136,8 @@ def _refresh_batch_status(batch: GrowthPublishBatch) -> GrowthPublishBatch:
 def _execute_item(item_id) -> None:
     with transaction.atomic():
         item = GrowthPublishItem.objects.select_for_update().select_related(
-            "channel_package", "social_account",
+            "batch", "channel_package", "social_account__credential",
+            "social_account__platform",
         ).get(pk=item_id)
         if item.status not in {GrowthPublishItem.Status.QUEUED, GrowthPublishItem.Status.FAILED}:
             return
@@ -90,25 +146,67 @@ def _execute_item(item_id) -> None:
         item.last_error = None
         item.save(update_fields=["status", "attempt_number", "last_error", "updated_at"])
 
-        metadata = item.social_account.connector_metadata
-        outcome = metadata.get("mock_outcome", "provider_error") if isinstance(metadata, dict) else "provider_error"
-        receipt = simulate_publish(
-            channel=item.channel,
-            payload=item.payload_snapshot,
-            item_id=str(item.id),
-            attempt_number=item.attempt_number,
-            outcome=outcome,
-            is_demo=item.channel_package.is_demo,
-        )
-        if receipt.succeeded:
+        account = item.social_account
+        metadata = account.connector_metadata if isinstance(account.connector_metadata, dict) else {}
+        connection_kind = metadata.get("connection_kind")
+        if not connection_kind and metadata.get("fixture") == "phase-a-e2e":
+            connection_kind = "demo_fake"
+        if connection_kind == "demo_fake":
+            receipt = simulate_publish(
+                channel=item.channel,
+                payload=item.payload_snapshot,
+                item_id=str(item.id),
+                attempt_number=item.attempt_number,
+                outcome=metadata.get("mock_outcome", "provider_error"),
+                is_demo=item.channel_package.is_demo,
+            )
+            succeeded = receipt.succeeded
+            external_id = receipt.external_id
+            external_url = receipt.external_url
+            error_code = receipt.error_code
+            error_message = receipt.error_message
+            retryable = receipt.error_code in {"PROVIDER_ERROR", "RATE_LIMITED"}
+            retry_after_seconds = None
+        else:
+            try:
+                connector = get_connector_registry().resolve(account)
+                consent = item.payload_snapshot.get("consent", {})
+                if not isinstance(consent, dict):
+                    consent = {}
+                receipt = connector.publish(OfficialPublishRequest(
+                    channel=item.channel,
+                    account_external_id=account.external_id,
+                    credential_reference=account.credential.secret_reference,
+                    payload=item.payload_snapshot,
+                    idempotency_key=f"{item.batch.idempotency_key}:{item.channel}",
+                    consent=consent,
+                ))
+                succeeded = receipt.succeeded
+                external_id = receipt.external_id
+                external_url = receipt.external_url
+                error_code = receipt.error_code
+                error_message = receipt.error_message
+                retryable = receipt.retryable
+                retry_after_seconds = receipt.retry_after_seconds
+            except ConnectorConfigurationRequired as error:
+                succeeded = False
+                external_id = ""
+                external_url = ""
+                error_code = "CONFIGURATION_REQUIRED"
+                error_message = str(error)
+                retryable = False
+                retry_after_seconds = None
+        if succeeded:
             item.status = GrowthPublishItem.Status.SUCCEEDED
-            item.external_post_id = receipt.external_id
-            item.external_post_url = receipt.external_url
+            item.external_post_id = external_id
+            item.external_post_url = external_url
         else:
             item.status = GrowthPublishItem.Status.FAILED
             item.last_error = {
-                "code": receipt.error_code,
-                "message": receipt.error_message,
+                "code": error_code,
+                "message": error_message,
+                "retryable": retryable,
+                "retry_after_seconds": retry_after_seconds,
             }
         item.save(update_fields=[
             "status", "external_post_id", "external_post_url", "last_error", "updated_at",
@@ -163,6 +261,11 @@ def create_publish_batch(
             else:
                 item_status = GrowthPublishItem.Status.QUEUED
                 last_error = None
+            if account is not None:
+                preflight_error = _preflight_error(account, package)
+                if preflight_error is not None:
+                    item_status = GrowthPublishItem.Status.SKIPPED
+                    last_error = preflight_error
             item = GrowthPublishItem.objects.create(
                 organization=organization,
                 batch=batch,
@@ -186,6 +289,7 @@ def retry_failed_items(*, batch: GrowthPublishBatch, actor) -> GrowthPublishBatc
     del actor
     failed_ids = list(batch.items.filter(
         status=GrowthPublishItem.Status.FAILED,
+        last_error__retryable=True,
     ).values_list("id", flat=True))
     for item_id in failed_ids:
         _execute_item(item_id)

@@ -24,19 +24,33 @@ class PublishBatchCreateSerializer(serializers.Serializer):
 class GrowthPublishItemSerializer(serializers.ModelSerializer):
     error_code = serializers.SerializerMethodField()
     recovery_action = serializers.SerializerMethodField()
+    mode = serializers.SerializerMethodField()
+    retryable = serializers.SerializerMethodField()
 
     class Meta:
         model = GrowthPublishItem
         fields = [
             "id", "channel", "status", "attempt_number", "external_post_url",
-            "error_code", "recovery_action", "created_at", "updated_at",
+            "mode", "error_code", "retryable", "recovery_action", "created_at", "updated_at",
         ]
+
+    def get_mode(self, obj: GrowthPublishItem) -> str:
+        return "DEMO_FAKE" if obj.channel_package.is_demo else "OFFICIAL"
+
+    def get_retryable(self, obj: GrowthPublishItem) -> bool:
+        return bool((obj.last_error or {}).get("retryable", False))
 
     def get_error_code(self, obj: GrowthPublishItem) -> str:
         return str((obj.last_error or {}).get("code", ""))
 
     def get_recovery_action(self, obj: GrowthPublishItem) -> str:
         return {
+            "CONFIGURATION_REQUIRED": "完成官方平台配置后再发布。",
+            "CONNECTOR_MODE_MISMATCH": "请选择与内容类型匹配的发布连接。",
+            "PROVIDER_UNAVAILABLE": "平台暂时不可用，请稍后重试。",
+            "REAUTHORIZATION_REQUIRED": "请重新连接账号。",
+            "VALIDATION_REJECTED": "请检查该渠道内容后重试。",
+            "OUTCOME_UNKNOWN": "系统核对发布结果后再重试。",
             "CONTENT_NOT_APPROVED": "请先审核该渠道内容。",
             "ACCOUNT_NOT_CONNECTED": "连接账号后可发布。",
             "PROVIDER_ERROR": "可重试该失败渠道。",

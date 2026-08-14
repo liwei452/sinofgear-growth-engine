@@ -202,6 +202,83 @@ def test_workspace_keeps_growth_objects_distinct_and_organization_scoped(growth_
 
 
 @pytest.mark.django_db
+def test_workspace_explains_opportunity_evidence_and_priority(growth_client):
+    client, organization = growth_client
+    from apps.growth.models import IntentSignal, TargetAccount
+
+    account = TargetAccount.objects.create(
+        organization=organization, name="Evidence Buyer", country="Germany", is_demo=True,
+    )
+    IntentSignal.objects.create(
+        organization=organization,
+        account=account,
+        signal_type="HIRING",
+        source_label="Public careers page",
+        source_url="https://example.invalid/evidence",
+        evidence_text="Hiring a precision transmission buyer",
+        confidence=88,
+        is_demo=True,
+        collection_method="DEMO_FIXTURE",
+        content_hash="a" * 64,
+        score_breakdown={
+            "icp_fit": 20, "intent_strength": 24, "recency": 14,
+            "role_relevance": 12, "evidence_coverage": 18, "risk_penalty": 0,
+        },
+        scoring_rule_version="opportunity-v1",
+        uncertainty_notes=["采购时间仍需人工确认"],
+    )
+
+    response = client.get("/api/v1/growth/workspace")
+
+    assert response.status_code == 200
+    signal = response.data["intent_signals"][0]
+    assert signal["collection_method"] == "DEMO_FIXTURE"
+    assert signal["collection_method_label"] == "本地演示样本"
+    assert signal["content_hash"] == "a" * 64
+    assert signal["score_breakdown"] == {
+        "icp_fit": 20, "intent_strength": 24, "recency": 14,
+        "role_relevance": 12, "evidence_coverage": 18, "risk_penalty": 0,
+    }
+    assert signal["scoring_rule_version"] == "opportunity-v1"
+    assert signal["uncertainty_notes"] == ["采购时间仍需人工确认"]
+    assert signal["priority_label"] == "优先跟进"
+
+
+@pytest.mark.django_db
+def test_high_total_without_enough_evidence_stays_in_observation(growth_client):
+    client, organization = growth_client
+    from apps.growth.models import IntentSignal, TargetAccount
+
+    account = TargetAccount.objects.create(
+        organization=organization, name="Thin Evidence Buyer", country="Italy", is_demo=True,
+    )
+    IntentSignal.objects.create(
+        organization=organization,
+        account=account,
+        signal_type="EXPANSION",
+        source_label="Public product page",
+        source_url="https://example.invalid/thin-evidence",
+        evidence_text="Possible expansion",
+        confidence=90,
+        is_demo=True,
+        collection_method="MANUAL_URL",
+        content_hash="b" * 64,
+        score_breakdown={
+            "icp_fit": 25, "intent_strength": 25, "recency": 20,
+            "role_relevance": 10, "evidence_coverage": 10, "risk_penalty": 0,
+        },
+        scoring_rule_version="opportunity-v1",
+        uncertainty_notes=["只有单一来源"],
+    )
+
+    response = client.get("/api/v1/growth/workspace")
+
+    assert response.status_code == 200
+    assert response.data["intent_signals"][0]["collection_method_label"] == "人工导入网页"
+    assert response.data["intent_signals"][0]["priority_label"] == "继续观察"
+
+
+@pytest.mark.django_db
 def test_follow_up_is_idempotent_and_draft_is_never_sent(growth_client):
     client, organization = growth_client
     from apps.growth.models import OutreachDraft, TargetAccount

@@ -92,13 +92,33 @@ class ContactSerializer(serializers.ModelSerializer):
 
 class IntentSignalSerializer(serializers.ModelSerializer):
     data_label = serializers.SerializerMethodField()
+    collection_method_label = serializers.SerializerMethodField()
+    priority_label = serializers.SerializerMethodField()
 
     class Meta:
         model = IntentSignal
-        fields = ["id", "account_id", "signal_type", "source_label", "source_url", "evidence_text", "confidence", "observed_at", "data_label"]
+        fields = [
+            "id", "account_id", "signal_type", "source_label", "source_url",
+            "evidence_text", "confidence", "observed_at", "data_label",
+            "collection_method", "collection_method_label", "content_hash",
+            "score_breakdown", "scoring_rule_version", "uncertainty_notes",
+            "priority_label",
+        ]
 
     def get_data_label(self, obj: IntentSignal) -> str:
         return "Demo / Fake" if obj.is_demo else "Licensed / permitted source"
+
+    def get_collection_method_label(self, obj: IntentSignal) -> str:
+        return {
+            "DEMO_FIXTURE": "本地演示样本",
+            "MANUAL_URL": "人工导入网页",
+            "LICENSED_API": "许可数据接口",
+            "INBOUND": "主动入站",
+        }.get(obj.collection_method, "采集方式未说明")
+
+    def get_priority_label(self, obj: IntentSignal) -> str:
+        coverage = int((obj.score_breakdown or {}).get("evidence_coverage", 0))
+        return "优先跟进" if obj.confidence >= 80 and coverage >= 15 else "继续观察"
 
 
 class InboundLeadSerializer(serializers.ModelSerializer):

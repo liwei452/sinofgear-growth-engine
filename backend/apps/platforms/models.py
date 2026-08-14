@@ -61,6 +61,35 @@ class OAuthConnectionAttempt(OrganizationScopedModel):
         ]
 
 
+class AccountConnectionSession(OrganizationScopedModel):
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="platform_connection_sessions",
+    )
+    platform = models.ForeignKey(
+        Platform,
+        on_delete=models.PROTECT,
+        related_name="connection_sessions",
+    )
+    secret_reference = models.CharField(max_length=512)
+    candidates = models.JSONField(default=list)
+    granted_capabilities = models.JSONField(default=list, validators=[validate_capability_list])
+    credential_expires_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    confirmed_candidate_id = models.CharField(max_length=64, blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["organization", "platform", "expires_at"],
+                name="platforms_connect_org_exp_idx",
+            ),
+        ]
+
+
 class SocialAccount(OrganizationScopedModel):
     class Status(models.TextChoices):
         ACTIVE = "ACTIVE", "Active"

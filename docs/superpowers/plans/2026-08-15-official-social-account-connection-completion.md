@@ -49,7 +49,7 @@
 
 **Interfaces:**
 - Produces: `ConnectionCandidate(candidate_id, external_id, display_name, channel, capabilities, discovered_at)` as the strict session-domain value converted from provider discovery output.
-- Produces: `create_connection_session(*, organization, actor, platform, secret_reference, candidates, granted_capabilities) -> AccountConnectionSession`.
+- Produces: `create_connection_session(*, organization, actor, platform, secret_reference, credential_expires_at, candidates, granted_capabilities) -> AccountConnectionSession`.
 - Produces: `get_connection_session(*, session_id, organization, actor) -> AccountConnectionSession`.
 - Produces: `confirm_connection_session(*, session, candidate_id) -> SocialAccount`.
 - Produces: `TokenStoreContext(organization_id, actor_id, platform_code, attempt_id)`.
@@ -65,7 +65,8 @@ session = create_connection_session(
     actor=admin,
     platform=meta,
     secret_reference="vault://fixture/abc",
-    candidates=[facebook_page],
+        credential_expires_at=timezone.now() + timedelta(hours=1),
+        candidates=[facebook_page],
     granted_capabilities=["PUBLISH"],
 )
 assert session.expires_at == session.created_at + timedelta(minutes=10)
@@ -82,7 +83,7 @@ Expected: collection fails because `AccountConnectionSession` and the new interf
 
 - [ ] **Step 3: Implement the model, migration, validation service, and token-store contract**
 
-Add an organization-scoped model with actor/platform foreign keys, `secret_reference`, bounded candidate JSON, validated internal capabilities, `expires_at`, `consumed_at`, and `confirmed_candidate_id`. Add an organization/platform/expiry index. Define `TokenStoreContext` using UUID/string identifiers only. Keep default token storage disabled: `store`, `resolve`, and `delete` all raise `ConnectorConfigurationRequired` without inspecting or returning token material.
+Add an organization-scoped model with actor/platform foreign keys, `secret_reference`, bounded candidate JSON, validated internal capabilities, session `expires_at`, nullable provider `credential_expires_at`, `consumed_at`, and `confirmed_candidate_id`. Add an organization/platform/expiry index. Define `TokenStoreContext` using UUID/string identifiers only. Keep default token storage disabled: `store`, `resolve`, and `delete` all raise `ConnectorConfigurationRequired` without inspecting or returning token material.
 
 - [ ] **Step 4: Implement atomic confirmation**
 

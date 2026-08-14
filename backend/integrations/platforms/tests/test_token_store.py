@@ -20,9 +20,14 @@ def test_disabled_token_store_fails_closed_for_every_token_operation() -> None:
     )
     token_set = OAuthTokenSet(access_token="fixture-access", refresh_token="fixture-refresh")
 
+    assert "fixture-access" not in repr(token_set)
+    assert "fixture-refresh" not in repr(token_set)
+
     with pytest.raises(ConnectorConfigurationRequired):
         store.store(token_set, context)
     with pytest.raises(ConnectorConfigurationRequired):
         store.resolve("vault://fixture/account")
+    with pytest.raises(ConnectorConfigurationRequired):
+        store.bind("vault://fixture/account", "candidate-123")
     with pytest.raises(ConnectorConfigurationRequired):
         store.delete("vault://fixture/account")

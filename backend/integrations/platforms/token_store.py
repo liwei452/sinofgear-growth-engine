@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -8,8 +8,8 @@ from .base import ConnectorConfigurationRequired
 
 @dataclass(frozen=True)
 class OAuthTokenSet:
-    access_token: str
-    refresh_token: str = ""
+    access_token: str = field(repr=False)
+    refresh_token: str = field(default="", repr=False)
     expires_at: datetime | None = None
 
 
@@ -26,6 +26,8 @@ class TokenStore(Protocol):
 
     def resolve(self, reference: str) -> OAuthTokenSet: ...
 
+    def bind(self, reference: str, candidate_id: str) -> str: ...
+
     def delete(self, reference: str) -> None: ...
 
 
@@ -36,6 +38,10 @@ class DisabledTokenStore:
 
     def resolve(self, reference: str) -> OAuthTokenSet:
         del reference
+        raise ConnectorConfigurationRequired("Official token storage is not configured.")
+
+    def bind(self, reference: str, candidate_id: str) -> str:
+        del reference, candidate_id
         raise ConnectorConfigurationRequired("Official token storage is not configured.")
 
     def delete(self, reference: str) -> None:

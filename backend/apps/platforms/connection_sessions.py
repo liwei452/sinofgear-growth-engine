@@ -16,6 +16,7 @@ from .models import (
 
 
 SUPPORTED_CHANNELS = frozenset({"FACEBOOK", "INSTAGRAM", "LINKEDIN", "TIKTOK"})
+SUPPORTED_PUBLICATION_MODES = frozenset({"PUBLIC", "PRIVATE_ONLY"})
 MAX_CANDIDATES = 100
 
 
@@ -30,6 +31,7 @@ class ConnectionCandidate:
     display_name: str
     channel: str
     capabilities: tuple[str, ...]
+    publication_mode: str
     discovered_at: datetime
 
 
@@ -55,6 +57,8 @@ def _candidate_payload(candidate: ConnectionCandidate) -> dict:
         raise ValueError("Candidate display name is invalid.")
     if candidate.channel not in SUPPORTED_CHANNELS:
         raise ValueError("Candidate channel is unsupported.")
+    if candidate.publication_mode not in SUPPORTED_PUBLICATION_MODES:
+        raise ValueError("Candidate publication mode is unsupported.")
     if not isinstance(candidate.discovered_at, datetime) or timezone.is_naive(candidate.discovered_at):
         raise ValueError("Candidate discovery time must be timezone-aware.")
     return {
@@ -63,6 +67,7 @@ def _candidate_payload(candidate: ConnectionCandidate) -> dict:
         "display_name": candidate.display_name,
         "channel": candidate.channel,
         "capabilities": _validated_capabilities(candidate.capabilities),
+        "publication_mode": candidate.publication_mode,
         "discovered_at": candidate.discovered_at.isoformat(),
     }
 
@@ -128,7 +133,10 @@ def _candidate_for(session: AccountConnectionSession, candidate_id: str) -> dict
 
 def confirm_connection_session(
     *, session: AccountConnectionSession, candidate_id: str,
+    credential_reference: str,
 ) -> SocialAccount:
+    if not isinstance(credential_reference, str) or not 1 <= len(credential_reference) <= 512:
+        raise ConnectionSessionInvalid("CREDENTIAL_REFERENCE_INVALID")
     with transaction.atomic():
         locked = AccountConnectionSession.objects.select_for_update().get(pk=session.pk)
         if locked.expires_at <= timezone.now():
@@ -154,7 +162,7 @@ def confirm_connection_session(
         credential, _created = ConnectorCredential.objects.update_or_create(
             organization=locked.organization,
             platform=platform,
-            secret_reference=locked.secret_reference,
+            secret_reference=credential_reference,
             defaults={
                 "granted_scopes": locked.granted_capabilities,
                 "expires_at": locked.credential_expires_at,

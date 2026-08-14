@@ -25,6 +25,7 @@ from apps.platforms.models import (
 def candidate(
     *, channel: str = "FACEBOOK", external_id: str = "page-123",
     display_name: str = "Acme Page", candidate_id: str | None = None,
+    publication_mode: str = "PUBLIC",
 ) -> ConnectionCandidate:
     return ConnectionCandidate(
         candidate_id=candidate_id or str(uuid4()),
@@ -32,6 +33,7 @@ def candidate(
         display_name=display_name,
         channel=channel,
         capabilities=("PUBLISH", "METRICS_READ"),
+        publication_mode=publication_mode,
         discovered_at=timezone.now(),
     )
 
@@ -69,6 +71,7 @@ def test_connection_session_is_short_lived_and_persists_only_safe_candidates(ses
         "display_name": "Acme Page",
         "channel": "FACEBOOK",
         "capabilities": ["PUBLISH", "METRICS_READ"],
+        "publication_mode": "PUBLIC",
         "discovered_at": selected.discovered_at.isoformat(),
     }]
     assert "token" not in json.dumps(session.candidates).lower()
@@ -83,6 +86,7 @@ def test_connection_session_rejects_unbounded_duplicate_or_unsupported_candidate
         [candidate(external_id=f"page-{index}") for index in range(101)],
         [candidate(candidate_id=duplicate_id), candidate(candidate_id=duplicate_id, external_id="page-456")],
         [candidate(external_id="page-duplicate"), candidate(external_id="page-duplicate")],
+        [candidate(publication_mode="UNREVIEWED")],
         [candidate(channel="YOUTUBE")],
     ]
 
@@ -149,9 +153,21 @@ def test_confirmation_atomically_connects_exact_candidate_and_is_same_candidate_
     )
 
     with pytest.raises(ConnectionSessionInvalid, match="CANDIDATE_NOT_FOUND"):
-        confirm_connection_session(session=session, candidate_id=str(uuid4()))
-    account = confirm_connection_session(session=session, candidate_id=selected.candidate_id)
-    replay = confirm_connection_session(session=session, candidate_id=selected.candidate_id)
+        confirm_connection_session(
+            session=session,
+            candidate_id=str(uuid4()),
+            credential_reference="vault://fixture/account-3/missing",
+        )
+    account = confirm_connection_session(
+        session=session,
+        candidate_id=selected.candidate_id,
+        credential_reference="vault://fixture/account-3/page-123",
+    )
+    replay = confirm_connection_session(
+        session=session,
+        candidate_id=selected.candidate_id,
+        credential_reference="vault://fixture/account-3/page-123",
+    )
 
     session.refresh_from_db()
     assert replay.id == account.id
@@ -160,7 +176,7 @@ def test_confirmation_atomically_connects_exact_candidate_and_is_same_candidate_
     assert ConnectorCredential.objects.filter(
         organization=organization,
         platform=platform,
-        secret_reference="vault://fixture/account-3",
+        secret_reference="vault://fixture/account-3/page-123",
         granted_scopes=["PUBLISH", "METRICS_READ"],
     ).count() == 1
     assert SocialAccount.objects.filter(
@@ -178,4 +194,8 @@ def test_confirmation_atomically_connects_exact_candidate_and_is_same_candidate_
         )
 
     with pytest.raises(ConnectionSessionInvalid, match="CONNECTION_SESSION_CONSUMED"):
-        confirm_connection_session(session=session, candidate_id=unselected.candidate_id)
+        confirm_connection_session(
+            session=session,
+            candidate_id=unselected.candidate_id,
+            credential_reference="vault://fixture/account-3/page-456",
+        )

@@ -1,7 +1,7 @@
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from django.conf import settings
-from django.http import Http404
+from django.http import Http404, HttpResponseRedirect
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.request import Request
@@ -9,10 +9,28 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.identity.permissions import CanManageCredentials, CanReadMemberships, CanReadPublishing
+from integrations.platforms.authorization import (
+    AuthorizationCompletion,
+    ProviderAuthorizationError,
+)
+from integrations.platforms.authorization_registry import AuthorizationAdapterRegistry
+from integrations.platforms.base import ConnectorConfigurationRequired
+from integrations.platforms.token_store import DisabledTokenStore, TokenStoreContext
 
-from .models import ConnectorCredential, Platform, SocialAccount
+from .models import AccountConnectionSession, ConnectorCredential, Platform, SocialAccount
 from .connection_status import connection_summary
-from .oauth import create_authorization_attempt
+from .connection_sessions import (
+    ConnectionCandidate,
+    ConnectionSessionInvalid,
+    confirm_connection_session,
+    create_connection_session,
+    get_connection_session,
+)
+from .oauth import (
+    AuthorizationAttemptInvalid,
+    consume_authorization_attempt,
+    create_authorization_attempt,
+)
 from .serializers import (
     ConnectorCredentialCreateSerializer, ConnectorCredentialListSerializer,
     ConnectorCredentialReadSerializer, ConnectorCredentialUpdateSerializer,
@@ -21,7 +39,14 @@ from .serializers import (
     SocialAccountUpdateSerializer,
     PlatformAuthorizationRequestSerializer, PlatformAuthorizationResponseSerializer,
     PlatformConnectionListSerializer,
+    AccountConnectionConfirmationResponseSerializer,
+    AccountConnectionConfirmationSerializer, AccountConnectionSessionSerializer,
+    PlatformAuthorizationCallbackSerializer,
 )
+
+
+authorization_registry = AuthorizationAdapterRegistry()
+connection_token_store = DisabledTokenStore()
 
 
 def _account(organization, account_id):
@@ -239,3 +264,206 @@ class PlatformAuthorizationView(APIView):
             "authorization_url": authorization_url,
             "expires_at": started.expires_at,
         }, status=status.HTTP_201_CREATED)
+
+
+def _platform_or_404(platform_code: str) -> Platform:
+    if platform_code not in {code for code, _name in PLATFORM_CONNECTIONS}:
+        raise Http404
+    try:
+        return Platform.objects.get(code=platform_code)
+    except Platform.DoesNotExist as error:
+        raise Http404 from error
+
+
+def _safe_callback_redirect(return_path: str, **values: str) -> str:
+    parsed = urlsplit(return_path)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update(values)
+    return urlunsplit(("", "", parsed.path, urlencode(query), ""))
+
+
+@extend_schema(tags=["PlatformConnections"])
+class PlatformAuthorizationCallbackView(APIView):
+    permission_classes = [CanManageCredentials]
+
+    @extend_schema(responses={302: None})
+    def get(self, request: Request, platform_code: str):
+        platform = _platform_or_404(platform_code)
+        serializer = PlatformAuthorizationCallbackSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        provider_key = "META" if platform_code in {"FACEBOOK", "INSTAGRAM"} else platform_code
+        config = settings.SOCIAL_PROVIDER_CONFIG.get(provider_key, {})
+        if not config.get("enabled") or not config.get("redirect_uri"):
+            return Response({
+                "code": "CONFIGURATION_REQUIRED",
+                "message": "官方账号连接尚未配置。",
+            }, status=status.HTTP_409_CONFLICT)
+        try:
+            attempt = consume_authorization_attempt(
+                raw_state=serializer.validated_data["state"],
+                actor=request.user,
+                platform_code=platform_code,
+            )
+        except AuthorizationAttemptInvalid:
+            return Response({
+                "code": "AUTHORIZATION_REJECTED",
+                "message": "授权未完成，请重新连接。",
+            }, status=status.HTTP_400_BAD_REQUEST)
+        if serializer.validated_data.get("error"):
+            return HttpResponseRedirect(_safe_callback_redirect(
+                attempt.return_path, connection_status="authorization_rejected",
+            ))
+        try:
+            adapter = authorization_registry.resolve(platform_code)
+            bundle, managed_accounts, granted_capabilities = adapter.complete(
+                AuthorizationCompletion(
+                    code=serializer.validated_data["code"],
+                    redirect_uri=config["redirect_uri"],
+                    pkce_reference=attempt.pkce_verifier_reference,
+                )
+            )
+            bundle_reference = connection_token_store.store(
+                bundle,
+                TokenStoreContext(
+                    organization_id=request.organization.id,
+                    actor_id=request.user.id,
+                    platform_code=platform_code,
+                    attempt_id=attempt.id,
+                ),
+            )
+            try:
+                session = create_connection_session(
+                    organization=request.organization,
+                    actor=request.user,
+                    platform=platform,
+                    secret_reference=bundle_reference,
+                    credential_expires_at=bundle.primary.expires_at,
+                    candidates=[ConnectionCandidate(
+                        candidate_id=item.candidate_id,
+                        external_id=item.external_id,
+                        display_name=item.display_name,
+                        channel=item.channel,
+                        capabilities=item.capabilities,
+                        publication_mode=item.publication_mode,
+                        discovered_at=item.discovered_at,
+                    ) for item in managed_accounts],
+                    granted_capabilities=list(granted_capabilities),
+                )
+            except Exception:
+                connection_token_store.delete(bundle_reference)
+                raise
+        except (ConnectorConfigurationRequired, ProviderAuthorizationError, ValueError) as error:
+            error_code = getattr(error, "code", "CONFIGURATION_REQUIRED")
+            return HttpResponseRedirect(_safe_callback_redirect(
+                attempt.return_path,
+                connection_status=str(error_code).lower(),
+            ))
+        return HttpResponseRedirect(_safe_callback_redirect(
+            attempt.return_path,
+            connection_session=str(session.id),
+            connection_status="ready",
+        ))
+
+
+def _session_or_404(request: Request, session_id) -> AccountConnectionSession:
+    session = AccountConnectionSession.objects.filter(
+        pk=session_id,
+        organization=request.organization,
+        actor=request.user,
+    ).select_related("platform").first()
+    if session is None:
+        raise Http404
+    return session
+
+
+def _safe_candidate(item: dict) -> dict:
+    publication_mode = item.get("publication_mode")
+    return {
+        "candidate_id": item.get("candidate_id"),
+        "display_name": item.get("display_name"),
+        "channel": item.get("channel"),
+        "capability_label": "仅私密发布" if publication_mode == "PRIVATE_ONLY" else "可发布",
+        "publication_mode": publication_mode,
+    }
+
+
+@extend_schema(tags=["PlatformConnections"])
+class AccountConnectionSessionView(APIView):
+    permission_classes = [CanManageCredentials]
+
+    @extend_schema(responses={200: AccountConnectionSessionSerializer})
+    def get(self, request: Request, session_id):
+        session = _session_or_404(request, session_id)
+        try:
+            session = get_connection_session(
+                session_id=session.id,
+                organization=request.organization,
+                actor=request.user,
+            )
+        except ConnectionSessionInvalid as error:
+            return Response({
+                "code": str(error),
+                "message": "连接已超时，请重新连接。",
+            }, status=status.HTTP_410_GONE)
+        return Response({
+            "id": session.id,
+            "platform": session.platform.code,
+            "platform_name": session.platform.name,
+            "expires_at": session.expires_at,
+            "candidates": [_safe_candidate(item) for item in session.candidates],
+        })
+
+
+@extend_schema(tags=["PlatformConnections"])
+class AccountConnectionConfirmationView(APIView):
+    permission_classes = [CanManageCredentials]
+
+    @extend_schema(
+        request=AccountConnectionConfirmationSerializer,
+        responses={200: AccountConnectionConfirmationResponseSerializer},
+    )
+    def post(self, request: Request, session_id):
+        serializer = AccountConnectionConfirmationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        session = _session_or_404(request, session_id)
+        candidate_id = str(serializer.validated_data["candidate_id"])
+        candidate = next((
+            item for item in session.candidates
+            if isinstance(item, dict) and item.get("candidate_id") == candidate_id
+        ), None)
+        if candidate is None:
+            return Response({
+                "code": "CANDIDATE_NOT_FOUND",
+                "message": "该发布账号已不可用，请重新连接。",
+            }, status=status.HTTP_400_BAD_REQUEST)
+        bound_reference = session.secret_reference
+        did_bind = False
+        try:
+            if session.consumed_at is None:
+                bound_reference = connection_token_store.bind(
+                    session.secret_reference, candidate_id,
+                )
+                did_bind = True
+            account = confirm_connection_session(
+                session=session,
+                candidate_id=candidate_id,
+                credential_reference=bound_reference,
+            )
+        except (ConnectorConfigurationRequired, ConnectionSessionInvalid) as error:
+            if did_bind:
+                connection_token_store.delete(bound_reference)
+            return Response({
+                "code": getattr(error, "code", str(error)),
+                "message": "账号连接暂时无法完成，请重新连接。",
+            }, status=status.HTTP_409_CONFLICT)
+        summary = connection_summary(
+            organization=request.organization,
+            platform_code=account.platform.code,
+        )
+        return Response({
+            "platform": account.platform.code,
+            "status": summary.status,
+            "connection_label": summary.connection_label,
+            "recovery_action": summary.recovery_action,
+            "mode": summary.mode,
+        })

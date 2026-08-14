@@ -2,7 +2,8 @@ from django.urls import path
 
 from .views import (
     ConnectorCredentialDetailView, ConnectorCredentialListView, PlatformListView,
-    PlatformAuthorizationView, PlatformConnectionListView,
+    AccountConnectionConfirmationView, AccountConnectionSessionView,
+    PlatformAuthorizationCallbackView, PlatformAuthorizationView, PlatformConnectionListView,
     SocialAccountConnectionView, SocialAccountDetailView, SocialAccountListView,
 )
 
@@ -13,6 +14,21 @@ urlpatterns = [
         "platform-connections/<str:platform_code>/authorize",
         PlatformAuthorizationView.as_view(),
         name="platform-connection-authorize",
+    ),
+    path(
+        "platform-connections/<str:platform_code>/callback",
+        PlatformAuthorizationCallbackView.as_view(),
+        name="platform-connection-callback",
+    ),
+    path(
+        "platform-connection-sessions/<uuid:session_id>",
+        AccountConnectionSessionView.as_view(),
+        name="platform-connection-session",
+    ),
+    path(
+        "platform-connection-sessions/<uuid:session_id>/confirm",
+        AccountConnectionConfirmationView.as_view(),
+        name="platform-connection-session-confirm",
     ),
     path("social-accounts", SocialAccountListView.as_view(), name="social-account-list"),
     path("social-accounts/connect", SocialAccountConnectionView.as_view(), name="social-account-connect"),

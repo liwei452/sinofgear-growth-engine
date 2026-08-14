@@ -22,7 +22,7 @@ class TokenStoreContext:
 
 
 class TokenStore(Protocol):
-    def store(self, token_set: OAuthTokenSet, context: TokenStoreContext) -> str: ...
+    def store(self, credential_bundle: object, context: TokenStoreContext) -> str: ...
 
     def resolve(self, reference: str) -> OAuthTokenSet: ...
 
@@ -32,8 +32,8 @@ class TokenStore(Protocol):
 
 
 class DisabledTokenStore:
-    def store(self, token_set: OAuthTokenSet, context: TokenStoreContext) -> str:
-        del token_set, context
+    def store(self, credential_bundle: object, context: TokenStoreContext) -> str:
+        del credential_bundle, context
         raise ConnectorConfigurationRequired("Official token storage is not configured.")
 
     def resolve(self, reference: str) -> OAuthTokenSet:

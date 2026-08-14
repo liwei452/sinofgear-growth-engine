@@ -268,3 +268,42 @@ class PlatformAuthorizationResponseSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=["AUTHORIZATION_REQUIRED"])
     authorization_url = serializers.URLField()
     expires_at = serializers.DateTimeField()
+
+
+class PlatformAuthorizationCallbackSerializer(StrictMixin, serializers.Serializer):
+    code = serializers.CharField(max_length=2048, required=False, trim_whitespace=False)
+    state = serializers.CharField(max_length=512, trim_whitespace=False)
+    error = serializers.CharField(max_length=255, required=False)
+
+    def validate(self, attrs):
+        if not attrs.get("code") and not attrs.get("error"):
+            raise serializers.ValidationError({"code": "Authorization code is required."})
+        return attrs
+
+
+class ConnectionCandidateSerializer(serializers.Serializer):
+    candidate_id = serializers.UUIDField()
+    display_name = serializers.CharField()
+    channel = serializers.ChoiceField(choices=["FACEBOOK", "INSTAGRAM", "LINKEDIN", "TIKTOK"])
+    capability_label = serializers.CharField()
+    publication_mode = serializers.ChoiceField(choices=["PUBLIC", "PRIVATE_ONLY"])
+
+
+class AccountConnectionSessionSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    platform = serializers.CharField()
+    platform_name = serializers.CharField()
+    expires_at = serializers.DateTimeField()
+    candidates = ConnectionCandidateSerializer(many=True)
+
+
+class AccountConnectionConfirmationSerializer(StrictMixin, serializers.Serializer):
+    candidate_id = serializers.UUIDField()
+
+
+class AccountConnectionConfirmationResponseSerializer(serializers.Serializer):
+    platform = serializers.CharField()
+    status = serializers.CharField()
+    connection_label = serializers.CharField()
+    recovery_action = serializers.CharField(allow_blank=True)
+    mode = serializers.CharField()

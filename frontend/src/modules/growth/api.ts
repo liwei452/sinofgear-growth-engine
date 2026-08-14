@@ -183,6 +183,52 @@ export type PlatformAuthorizationStart = {
   expires_at: string
 }
 
+export type PlatformConnectionCandidate = {
+  candidate_id: string
+  display_name: string
+  channel: PlatformConnection["channel"]
+  capability_label: string
+  publication_mode: "PUBLIC" | "PRIVATE_ONLY"
+}
+
+export type PlatformConnectionSession = {
+  id: string
+  platform: PlatformConnection["channel"]
+  platform_name: string
+  expires_at: string
+  candidates: PlatformConnectionCandidate[]
+}
+
+export type PlatformConnectionConfirmation = {
+  platform: PlatformConnection["channel"]
+  status: "CONNECTED"
+  connection_label: string
+  recovery_action: string
+  mode: "OFFICIAL"
+}
+
+export async function getPlatformConnectionSession(
+  sessionId: string,
+): Promise<PlatformConnectionSession> {
+  const result = await apiRequest<PlatformConnectionSession>(
+    `/api/v1/platform-connection-sessions/${sessionId}`,
+  )
+  if (!result) throw new Error("账号选择响应为空。")
+  return result
+}
+
+export async function confirmPlatformConnection(input: {
+  sessionId: string
+  candidateId: string
+}): Promise<PlatformConnectionConfirmation> {
+  const result = await apiRequest<PlatformConnectionConfirmation>(
+    `/api/v1/platform-connection-sessions/${input.sessionId}/confirm`,
+    { method: "POST", body: { candidate_id: input.candidateId } },
+  )
+  if (!result) throw new Error("账号连接响应为空。")
+  return result
+}
+
 export async function authorizePlatformConnection(
   channel: PlatformConnection["channel"],
 ): Promise<PlatformAuthorizationStart> {

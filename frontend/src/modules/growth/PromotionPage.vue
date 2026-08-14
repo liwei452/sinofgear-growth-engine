@@ -1,18 +1,21 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
-import { computed, ref, watchEffect } from "vue"
+import { computed, nextTick, ref, watchEffect } from "vue"
 
 import {
   approveChannelPackage,
   authorizePlatformConnection,
+  confirmPlatformConnection,
   createPublishBatch,
   exportChannelPackage,
   growthQueryKeys,
   growthWorkspaceQueryOptions,
+  getPlatformConnectionSession,
   retryFailedPublishBatch,
   type ChannelPackage,
   type ManualPackageExport,
   type PlatformConnection,
+  type PlatformConnectionCandidate,
   type PublishBatch,
 } from "./api"
 
@@ -26,9 +29,27 @@ const downloadError = ref("")
 const publishBatch = ref<PublishBatch | null>(null)
 const publishError = ref("")
 const connectionError = ref("")
+const connectionMessage = ref("")
+const selectedCandidateId = ref("")
+const connectionHeading = ref<HTMLElement | null>(null)
 const publishKey = ref("")
 const publishSignature = ref("")
 const publishKeySequence = ref(0)
+
+function initialConnectionSessionId(): string {
+  const value = new URL(window.location.href).searchParams.get("connection_session") ?? ""
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    ? value
+    : ""
+}
+
+const connectionSessionId = ref(initialConnectionSessionId())
+const connectionSessionQuery = useQuery({
+  queryKey: computed(() => ["platform-connection-session", connectionSessionId.value]),
+  queryFn: () => getPlatformConnectionSession(connectionSessionId.value),
+  enabled: computed(() => Boolean(connectionSessionId.value)),
+  retry: false,
+})
 const activePackage = computed(() => workspaceQuery.data.value?.channel_packages
   .find((item) => item.channel === "TIKTOK"))
 const packageTitle = computed(() => String(activePackage.value?.payload.title ?? ""))
@@ -87,6 +108,56 @@ const connectionMutation = useMutation({
   },
   onError: () => { connectionError.value = "官方账号连接尚未配置。" },
 })
+const confirmConnectionMutation = useMutation({
+  mutationFn: confirmPlatformConnection,
+  onSuccess: async () => {
+    const selected = connectionSessionQuery.data.value?.candidates
+      .find(candidate => candidate.candidate_id === selectedCandidateId.value)
+    connectionMessage.value = `${selected?.display_name ?? "发布账号"} 已连接。`
+    clearConnectionSessionFromUrl()
+    connectionSessionId.value = ""
+    selectedCandidateId.value = ""
+    await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+  },
+  onError: () => { connectionError.value = "账号连接暂时无法完成，请重新连接。" },
+})
+
+watchEffect(async () => {
+  const candidates = connectionSessionQuery.data.value?.candidates ?? []
+  if (!candidates.length) return
+  if (!candidates.some(candidate => candidate.candidate_id === selectedCandidateId.value)) {
+    selectedCandidateId.value = candidates[0].candidate_id
+  }
+  await nextTick()
+  connectionHeading.value?.focus()
+})
+
+function clearConnectionSessionFromUrl(): void {
+  const current = new URL(window.location.href)
+  current.searchParams.delete("connection_session")
+  current.searchParams.delete("connection_status")
+  window.history.replaceState({}, "", `${current.pathname}${current.search}${current.hash}`)
+}
+
+function cancelConnectionSelection(): void {
+  clearConnectionSessionFromUrl()
+  connectionSessionId.value = ""
+  selectedCandidateId.value = ""
+}
+
+async function confirmSelectedConnection(): Promise<void> {
+  if (!connectionSessionId.value || !selectedCandidateId.value) return
+  connectionError.value = ""
+  connectionMessage.value = ""
+  await confirmConnectionMutation.mutateAsync({
+    sessionId: connectionSessionId.value,
+    candidateId: selectedCandidateId.value,
+  }).catch(() => undefined)
+}
+
+function candidateChannel(candidate: PlatformConnectionCandidate): string {
+  return channelLabel(candidate.channel)
+}
 
 function connectionFor(channel: string): PlatformConnection | undefined {
   return connectionsByChannel.value.get(channel)
@@ -209,6 +280,45 @@ const channels: Array<{
       <div><p class="eyebrow">推广</p><h1>推广计划与内容包</h1><p>AI 已准备内容；人工批准后，可一次发布到所有已连接渠道。</p></div>
       <span class="fake-label">Demo / Fake</span>
     </header>
+
+    <section v-if="connectionSessionId" class="growth-card account-picker" aria-labelledby="account-picker-title">
+      <p v-if="connectionSessionQuery.isPending.value">正在读取可发布账号…</p>
+      <div v-else-if="connectionSessionQuery.isError.value" class="account-picker-error">
+        <p role="alert">连接信息已失效，请重新连接账号。</p>
+        <button class="button button-secondary" type="button" @click="cancelConnectionSelection">关闭</button>
+      </div>
+      <template v-else-if="connectionSessionQuery.data.value">
+        <div class="growth-heading">
+          <div>
+            <p class="eyebrow">账号连接</p>
+            <h2 id="account-picker-title" ref="connectionHeading" tabindex="-1">选择要用于发布的账号</h2>
+            <p>授权已完成；选择账号后仍需单独点击一键发布。</p>
+          </div>
+          <span>{{ connectionSessionQuery.data.value.platform_name }}</span>
+        </div>
+        <fieldset class="account-candidates">
+          <legend class="sr-only">可用于发布的账号</legend>
+          <label v-for="candidate in connectionSessionQuery.data.value.candidates" :key="candidate.candidate_id">
+            <input v-model="selectedCandidateId" type="radio" name="publishing-account" :value="candidate.candidate_id">
+            <span>
+              <strong>{{ candidate.display_name }}</strong>
+              <small>{{ candidateChannel(candidate) }} · {{ candidate.capability_label }}</small>
+            </span>
+          </label>
+        </fieldset>
+        <div class="page-actions account-picker-actions">
+          <button class="button button-secondary" type="button" @click="cancelConnectionSelection">暂不连接</button>
+          <button
+            class="button button-primary" type="button"
+            :disabled="!selectedCandidateId || confirmConnectionMutation.isPending.value"
+            @click="confirmSelectedConnection"
+          >
+            {{ confirmConnectionMutation.isPending.value ? "正在连接…" : "使用此账号" }}
+          </button>
+        </div>
+      </template>
+    </section>
+    <p v-if="connectionMessage" role="status" class="approval-status connection-success">{{ connectionMessage }}</p>
 
     <section class="growth-card plan-summary">
       <div><span>目标市场</span><strong>德国 · 包装机械</strong></div>

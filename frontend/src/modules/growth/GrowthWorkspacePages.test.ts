@@ -443,3 +443,95 @@ it("shows safe channel connection states and starts authorization without publis
   expect(fetchMock.mock.calls.some(([path]) => String(path) === "/api/v1/growth/publish-batches")).toBe(false)
   expect(document.body.textContent?.toLowerCase()).not.toMatch(/access_token|client_secret|oauth scope/)
 })
+
+it("requires explicit account selection after authorization and never publishes during connection", async () => {
+  document.cookie = "csrftoken=account-picker-test-token"
+  window.history.replaceState({}, "", "/promotion?connection_session=30000000-0000-4000-8000-000000000001&connection_status=ready&keep=1")
+  let connected = false
+  const baseWorkspace = {
+    target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
+    outreach_drafts: [], field_provenance: [], metric_receipts: [], publish_batches: [], channel_packages: [],
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === "/api/v1/growth/workspace") {
+      return new Response(JSON.stringify({
+        ...baseWorkspace,
+        connectors: [
+          { channel: "FACEBOOK", status: "NOT_CONNECTED", connection_label: "未连接", recovery_action: "连接账号", mode: "" },
+          { channel: "INSTAGRAM", status: connected ? "CONNECTED" : "NOT_CONNECTED", connection_label: connected ? "已连接" : "未连接", recovery_action: connected ? "" : "连接账号", mode: connected ? "OFFICIAL" : "" },
+        ],
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/platform-connection-sessions/30000000-0000-4000-8000-000000000001") {
+      return new Response(JSON.stringify({
+        id: "30000000-0000-4000-8000-000000000001", platform: "FACEBOOK", platform_name: "Meta",
+        expires_at: "2026-08-15T09:10:00Z", candidates: [
+          { candidate_id: "30000000-0000-4000-8000-000000000011", display_name: "Acme Facebook", channel: "FACEBOOK", capability_label: "可发布", publication_mode: "PUBLIC" },
+          { candidate_id: "30000000-0000-4000-8000-000000000012", display_name: "Acme Instagram", channel: "INSTAGRAM", capability_label: "可发布", publication_mode: "PUBLIC" },
+        ],
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path.endsWith("/confirm")) {
+      expect(JSON.parse(String(init?.body))).toEqual({ candidate_id: "30000000-0000-4000-8000-000000000012" })
+      connected = true
+      return new Response(JSON.stringify({
+        platform: "INSTAGRAM", status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "OFFICIAL",
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+  render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  expect(await screen.findByRole("heading", { name: "选择要用于发布的账号" })).toBeInTheDocument()
+  expect(screen.getByRole("radio", { name: /Acme Facebook/ })).toBeChecked()
+  expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/confirm"))).toBe(false)
+  await user.click(screen.getByRole("radio", { name: /Acme Instagram/ }))
+  await user.click(screen.getByRole("button", { name: "使用此账号" }))
+
+  expect(await screen.findByRole("status")).toHaveTextContent("Acme Instagram 已连接")
+  await waitFor(() => expect(screen.queryByRole("heading", { name: "选择要用于发布的账号" })).not.toBeInTheDocument())
+  expect(window.location.search).toBe("?keep=1")
+  expect(fetchMock.mock.calls.some(([path]) => String(path) === "/api/v1/growth/publish-batches")).toBe(false)
+  expect(document.body.textContent?.toLowerCase()).not.toMatch(/access_token|client_secret|oauth scope/)
+  window.history.replaceState({}, "", "/promotion")
+})
+
+it("shows private-only TikTok readiness and lets the owner leave without connecting", async () => {
+  window.history.replaceState({}, "", "/promotion?connection_session=30000000-0000-4000-8000-000000000002&connection_status=ready")
+  const workspace = {
+    target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
+    outreach_drafts: [], field_provenance: [], metric_receipts: [], publish_batches: [], channel_packages: [], connectors: [],
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === "/api/v1/growth/workspace") {
+      return new Response(JSON.stringify(workspace), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path.includes("platform-connection-sessions")) {
+      return new Response(JSON.stringify({
+        id: "30000000-0000-4000-8000-000000000002", platform: "TIKTOK", platform_name: "TikTok",
+        expires_at: "2026-08-15T09:10:00Z", candidates: [{
+          candidate_id: "30000000-0000-4000-8000-000000000021", display_name: "Acme TikTok",
+          channel: "TIKTOK", capability_label: "仅私密发布", publication_mode: "PRIVATE_ONLY",
+        }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+  render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  expect(await screen.findByText(/仅私密发布/)).toBeInTheDocument()
+  expect(screen.getByRole("radio", { name: /Acme TikTok/ })).toBeChecked()
+  await user.click(screen.getByRole("button", { name: "暂不连接" }))
+
+  expect(screen.queryByRole("heading", { name: "选择要用于发布的账号" })).not.toBeInTheDocument()
+  expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/confirm"))).toBe(false)
+  expect(window.location.search).toBe("")
+})

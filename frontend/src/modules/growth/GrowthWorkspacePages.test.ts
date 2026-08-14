@@ -356,6 +356,95 @@ it("sorts and switches the opportunity queue without sharing follow-up state", a
   expect(await screen.findByText(/Persisted opportunity-page draft\./)).toBeInTheDocument()
 })
 
+it("explains evidence scoring and shows only safe source links with saved follow-up history", async () => {
+  const primaryId = "10000000-0000-4000-8000-000000001001"
+  const observedId = "10000000-0000-4000-8000-000000001002"
+  const workspace = {
+    target_accounts: [
+      {
+        id: primaryId, name: "Evidence Buyer GmbH", country: "Germany",
+        industry: "Packaging machinery", employee_range: "51-200", website: "",
+        is_demo: true, data_label: "Demo / Fake",
+      },
+      {
+        id: observedId, name: "Thin Evidence SpA", country: "Italy",
+        industry: "Food machinery", employee_range: "201-500", website: "",
+        is_demo: true, data_label: "Demo / Fake",
+      },
+    ],
+    contacts: [],
+    intent_signals: [
+      {
+        id: "signal-primary", account_id: primaryId, signal_type: "HIRING",
+        source_label: "Public careers page", source_url: "https://example.invalid/evidence",
+        evidence_text: "Hiring a precision transmission buyer", confidence: 88,
+        observed_at: "2026-08-14T09:20:00Z", data_label: "Demo / Fake",
+        collection_method: "DEMO_FIXTURE", collection_method_label: "本地演示样本",
+        content_hash: "a".repeat(64), scoring_rule_version: "opportunity-v1",
+        score_breakdown: {
+          icp_fit: 20, intent_strength: 24, recency: 14,
+          role_relevance: 12, evidence_coverage: 18, risk_penalty: 0,
+        },
+        uncertainty_notes: ["采购时间仍需人工确认"], priority_label: "优先跟进",
+      },
+      {
+        id: "signal-observed", account_id: observedId, signal_type: "EXPANSION",
+        source_label: "Untrusted import", source_url: "http://unsafe.example/evidence",
+        evidence_text: "Possible expansion", confidence: 90,
+        observed_at: "2026-08-14T08:00:00Z", data_label: "Demo / Fake",
+        collection_method: "MANUAL_URL", collection_method_label: "人工导入网页",
+        content_hash: "b".repeat(64), scoring_rule_version: "opportunity-v1",
+        score_breakdown: {
+          icp_fit: 25, intent_strength: 25, recency: 20,
+          role_relevance: 10, evidence_coverage: 10, risk_penalty: 0,
+        },
+        uncertainty_notes: ["只有单一来源"], priority_label: "继续观察",
+      },
+    ],
+    inbound_leads: [],
+    follow_ups: [{
+      id: "follow-primary", account_id: primaryId, status: "OPEN",
+      created_at: "2026-08-14T10:00:00Z", updated_at: "2026-08-14T10:00:00Z",
+    }],
+    outreach_drafts: [{
+      id: "draft-primary", account_id: primaryId,
+      english_draft: "May I share our inspection summary?",
+      chinese_explanation: "仅询问是否愿意查看资料。", status: "DRAFT", delivery: "NEVER_SENT",
+      created_at: "2026-08-14T10:05:00Z", updated_at: "2026-08-14T10:05:00Z",
+    }],
+    channel_packages: [], publish_batches: [], metric_receipts: [], field_provenance: [], connectors: [],
+  }
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(workspace), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+  render(OpportunitiesPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  expect(await screen.findByRole("heading", { name: "Evidence Buyer GmbH" })).toBeInTheDocument()
+  expect(screen.getAllByText("优先跟进 · 88")).toHaveLength(2)
+  await user.click(screen.getByRole("button", { name: "查看证据" }))
+  expect(screen.getByRole("heading", { name: "评分依据" })).toBeInTheDocument()
+  expect(screen.getByText("证据覆盖 18")).toBeInTheDocument()
+  expect(screen.getByText("风险扣分 0")).toBeInTheDocument()
+  expect(screen.getByText("本地演示样本")).toBeInTheDocument()
+  expect(screen.getByText("采购时间仍需人工确认")).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "打开原始来源" })).toHaveAttribute(
+    "href", "https://example.invalid/evidence",
+  )
+  expect(screen.getByRole("heading", { name: "跟进记录" })).toBeInTheDocument()
+  expect(screen.getByText("从未发送")).toBeInTheDocument()
+  expect(screen.getByText("May I share our inspection summary?")).toBeInTheDocument()
+  expect(screen.getByText("仅询问是否愿意查看资料。")).toBeInTheDocument()
+
+  await user.click(screen.getByRole("button", { name: /Thin Evidence SpA/ }))
+  expect(screen.getAllByText("继续观察 · 90")).toHaveLength(2)
+  await user.click(screen.getByRole("button", { name: "查看证据" }))
+  expect(screen.getByText("证据覆盖 10")).toBeInTheDocument()
+  expect(screen.getByText("只有单一来源")).toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "打开原始来源" })).not.toBeInTheDocument()
+})
+
 it("loads company provenance and persists human verification", async () => {
   document.cookie = "csrftoken=company-page-test-token"
   const factId = "10000000-0000-4000-8000-000000001403"

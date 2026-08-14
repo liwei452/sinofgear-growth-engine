@@ -23,6 +23,22 @@ export type IntentSignal = {
   confidence: number
   observed_at: string
   data_label: string
+  collection_method: "DEMO_FIXTURE" | "MANUAL_URL" | "LICENSED_API" | "INBOUND" | string
+  collection_method_label: string
+  content_hash: string
+  score_breakdown: OpportunityScoreBreakdown
+  scoring_rule_version: string
+  uncertainty_notes: string[]
+  priority_label: "优先跟进" | "继续观察"
+}
+
+export type OpportunityScoreBreakdown = {
+  icp_fit: number
+  intent_strength: number
+  recency: number
+  role_relevance: number
+  evidence_coverage: number
+  risk_penalty: number
 }
 
 export type FollowUp = {

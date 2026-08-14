@@ -66,7 +66,7 @@ session = create_connection_session(
     platform=meta,
     secret_reference="vault://fixture/abc",
     candidates=[facebook_page],
-    granted_capabilities=["PUBLISH_CONTENT"],
+    granted_capabilities=["PUBLISH"],
 )
 assert session.expires_at == session.created_at + timedelta(minutes=10)
 assert "token" not in json.dumps(session.candidates).lower()

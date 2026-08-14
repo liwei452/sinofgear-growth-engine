@@ -19,6 +19,14 @@ from apps.campaigns.models import (
     ContentBriefProduct,
 )
 from apps.catalog.models import Product, ProductConceptLink
+from apps.growth.models import (
+    ChannelPackage,
+    Contact,
+    FieldProvenance,
+    IntentSignal,
+    MetricReceipt,
+    TargetAccount,
+)
 from apps.identity.models import Membership, Organization, Role
 from apps.knowledge.models import KnowledgeConcept
 from apps.platforms.models import ConnectorCredential, Platform, SocialAccount
@@ -119,6 +127,17 @@ def test_seed_phase_a_is_stable_idempotent_and_repairs_owned_drift():
         provider="fake",
         status=PromptVersion.Status.PUBLISHED,
     ).exists()
+    assert TargetAccount.objects.filter(organization=organization, is_demo=True).count() == 3
+    assert Contact.objects.filter(organization=organization).count() == 1
+    assert IntentSignal.objects.filter(organization=organization, is_demo=True).count() == 3
+    tiktok_package = ChannelPackage.objects.get(
+        organization=organization, channel="TIKTOK", is_demo=True,
+    )
+    assert tiktok_package.payload["duration_seconds"] == 30
+    assert tiktok_package.payload["aspect_ratio"] == "9:16"
+    assert tiktok_package.status == "AWAITING_REVIEW"
+    assert MetricReceipt.objects.filter(organization=organization, channel="TIKTOK").count() == 1
+    assert FieldProvenance.objects.filter(organization=organization).count() >= 3
 
     first_counts = {
         "memberships": Membership.objects.filter(organization=organization).count(),
@@ -129,6 +148,10 @@ def test_seed_phase_a_is_stable_idempotent_and_repairs_owned_drift():
         "brief_platforms": ContentBriefPlatform.objects.filter(brief=brief).count(),
         "brief_concepts": ContentBriefConceptLink.objects.filter(brief=brief).count(),
         "accounts": SocialAccount.objects.filter(organization=organization).count(),
+        "growth_accounts": TargetAccount.objects.filter(organization=organization).count(),
+        "growth_signals": IntentSignal.objects.filter(organization=organization).count(),
+        "growth_packages": ChannelPackage.objects.filter(organization=organization).count(),
+        "growth_metrics": MetricReceipt.objects.filter(organization=organization).count(),
     }
     first_versions = (product.version, campaign.version, brief.version)
     call_command("seed_phase_a")
@@ -144,6 +167,10 @@ def test_seed_phase_a_is_stable_idempotent_and_repairs_owned_drift():
         "brief_platforms": ContentBriefPlatform.objects.filter(brief=brief).count(),
         "brief_concepts": ContentBriefConceptLink.objects.filter(brief=brief).count(),
         "accounts": SocialAccount.objects.filter(organization=organization).count(),
+        "growth_accounts": TargetAccount.objects.filter(organization=organization).count(),
+        "growth_signals": IntentSignal.objects.filter(organization=organization).count(),
+        "growth_packages": ChannelPackage.objects.filter(organization=organization).count(),
+        "growth_metrics": MetricReceipt.objects.filter(organization=organization).count(),
     }
     assert (product.version, campaign.version, brief.version) == first_versions
 

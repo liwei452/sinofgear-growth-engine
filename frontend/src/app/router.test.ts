@@ -18,6 +18,10 @@ const Assets = defineComponent({ name: "AssetsStub", template: "<p>真实素材�
 const PublishingCalendar = defineComponent({ name: "PublishingStub", template: "<p>真实发布日历</p>" })
 const PlatformAccounts = defineComponent({ name: "AccountsStub", template: "<p>真实平台账户</p>" })
 const Analytics = defineComponent({ name: "AnalyticsStub", template: "<p>真实数据看板</p>" })
+const LegacyAnalytics = defineComponent({ name: "LegacyAnalyticsStub", template: "<p>高级数据看板</p>" })
+const Promotion = defineComponent({ name: "PromotionStub", template: "<p>工厂推广工作区</p>" })
+const Opportunities = defineComponent({ name: "OpportunitiesStub", template: "<p>证据化客户机会</p>" })
+const Company = defineComponent({ name: "CompanyStub", template: "<p>公司事实资料</p>" })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
 function deferred<T>() {
@@ -35,7 +39,7 @@ function router(client = queryClient(), initialPath?: string) {
   if (initialPath) history.push(initialPath)
   return createAppRouter(client, {
     history,
-    components: { Login, Shell, Dashboard, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, Placeholder },
+    components: { Login, Shell, Dashboard, Promotion, Opportunities, Company, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LegacyAnalytics, Placeholder },
   })
 }
 
@@ -90,6 +94,21 @@ describe("protected routing", () => {
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
     for (const [path, label] of [["/assets", "真实素材库"], ["/publishing-calendar", "真实发布日历"], ["/platform-accounts", "真实平台账户"], ["/analytics", "真实数据看板"]]) {
+      await appRouter.push(path)
+      expect(await screen.findByText(label)).toBeInTheDocument()
+    }
+  })
+
+  it("mounts the five ordinary-user workspaces on task-language paths", async () => {
+    const client = queryClient()
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: [] } })
+    const appRouter = router(client)
+    render(Root, { global: { plugins: [appRouter] } })
+    for (const [path, label] of [
+      ["/promotion", "工厂推广工作区"],
+      ["/opportunities", "证据化客户机会"],
+      ["/company", "公司事实资料"],
+    ]) {
       await appRouter.push(path)
       expect(await screen.findByText(label)).toBeInTheDocument()
     }

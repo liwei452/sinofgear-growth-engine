@@ -66,21 +66,18 @@ afterEach(() => {
   document.cookie = "csrftoken=; Max-Age=0; path=/"
 })
 
-it("shows grouped Chinese navigation, organization, user, and active item", async () => {
-  await renderShell("/products")
+it("shows only the five factory-owner navigation choices", async () => {
+  await renderShell("/promotion")
 
-  for (const label of [
-    "首页", "产品库", "知识库", "素材库", "AI 内容工厂", "审核中心",
-    "发布日历", "平台账号", "数据看板",
-  ]) {
+  for (const label of ["今天", "推广", "客户机会", "效果", "我的公司"]) {
     expect(screen.getByRole("link", { name: label })).toBeInTheDocument()
+  }
+  for (const internalLabel of ["产品库", "知识库", "素材库", "AI 内容工厂", "审核中心", "平台账号"]) {
+    expect(screen.queryByRole("link", { name: internalLabel })).not.toBeInTheDocument()
   }
   expect(screen.getByText("示例组织")).toBeInTheDocument()
   expect(screen.getByText("operator")).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "产品库" })).toHaveAttribute("aria-current", "page")
-  expect(screen.getByRole("heading", { name: "产品库" })).toBeInTheDocument()
-  expect(screen.getByText("这个入口已经准备好，具体业务能力将在后续阶段接入。")).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "返回首页" })).toHaveAttribute("href", "/")
+  expect(screen.getByRole("link", { name: "推广" })).toHaveAttribute("aria-current", "page")
 })
 
 it("opens and closes the narrow-screen navigation with button and Escape", async () => {
@@ -103,7 +100,7 @@ it("opens and closes the narrow-screen navigation with button and Escape", async
   expect(screen.getByRole("link", { name: "SinofGear 首页" })).toHaveFocus()
 
   await user.tab({ shift: true })
-  expect(screen.getByRole("link", { name: "数据看板" })).toHaveFocus()
+  expect(screen.getByRole("link", { name: "我的公司" })).toHaveFocus()
   await user.tab()
   expect(screen.getByRole("link", { name: "SinofGear 首页" })).toHaveFocus()
 
@@ -119,9 +116,9 @@ it("opens and closes the narrow-screen navigation with button and Escape", async
   expect(sidebar).toHaveAttribute("inert")
 
   await user.click(menuButton)
-  await user.click(screen.getByRole("link", { name: "产品库" }))
+  await user.click(screen.getByRole("link", { name: "推广" }))
   expect(sidebar).toHaveAttribute("inert")
-  expect(screen.getByRole("heading", { name: "产品库" })).toBeVisible()
+  expect(screen.getByRole("heading", { name: "功能" })).toBeVisible()
   expect(screen.getByRole("main")).toHaveFocus()
   expect(sidebar).not.toContainElement(document.activeElement)
   expect(menuButton).not.toHaveFocus()
@@ -138,7 +135,7 @@ it("keeps the desktop navigation exposed when the drawer state is closed", async
   const sidebar = screen.getByTestId("app-sidebar")
   expect(sidebar).not.toHaveAttribute("aria-hidden")
   expect(sidebar).not.toHaveAttribute("inert")
-  expect(screen.getByRole("link", { name: "产品库" })).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "推广" })).toBeInTheDocument()
 })
 
 it("closes an open narrow drawer and focuses routed content after programmatic navigation", async () => {
@@ -149,10 +146,10 @@ it("closes an open narrow drawer and focuses routed content after programmatic n
   await user.click(screen.getByRole("button", { name: "打开导航" }))
   expect(sidebar).not.toHaveAttribute("inert")
 
-  await router.push("/products")
+  await router.push("/promotion")
 
   await waitFor(() => expect(sidebar).toHaveAttribute("inert"))
-  expect(screen.getByRole("heading", { name: "产品库" })).toBeVisible()
+  expect(screen.getByRole("heading", { name: "功能" })).toBeVisible()
   expect(screen.getByRole("main")).toHaveFocus()
   expect(sidebar).not.toContainElement(document.activeElement)
   expect(screen.getByRole("button", { name: "打开导航" })).not.toHaveFocus()
@@ -163,10 +160,10 @@ it("does not move focus for desktop or duplicate navigation", async () => {
   const logoutButton = screen.getByRole("button", { name: "退出登录" })
   logoutButton.focus()
 
-  await router.push("/products")
+  await router.push("/promotion")
   expect(logoutButton).toHaveFocus()
 
-  await router.push("/products")
+  await router.push("/promotion")
   expect(logoutButton).toHaveFocus()
 })
 

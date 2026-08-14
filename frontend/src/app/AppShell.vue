@@ -6,32 +6,16 @@ import { RouterLink, RouterView, useRoute, useRouter } from "vue-router"
 import { ApiError } from "../api/client"
 import { currentUserQueryOptions, logout } from "../modules/auth/auth"
 
-const navigation = [
-  { group: "工作台", items: [{ label: "首页", to: "/", icon: "首" }] },
-  {
-    group: "内容准备",
-    items: [
-      { label: "产品库", to: "/products", icon: "产" },
-      { label: "知识库", to: "/knowledge", icon: "知" },
-      { label: "素材库", to: "/assets", icon: "素" },
-    ],
-  },
-  {
-    group: "内容与审核",
-    items: [
-      { label: "AI 内容工厂", to: "/content-factory", icon: "AI" },
-      { label: "审核中心", to: "/reviews", icon: "审" },
-    ],
-  },
-  {
-    group: "发布与增长",
-    items: [
-      { label: "发布日历", to: "/publishing-calendar", icon: "发" },
-      { label: "平台账号", to: "/platform-accounts", icon: "账" },
-      { label: "数据看板", to: "/analytics", icon: "数" },
-    ],
-  },
-]
+const navigation = [{
+  group: "增长工作台",
+  items: [
+    { label: "今天", to: "/", icon: "今" },
+    { label: "推广", to: "/promotion", icon: "推" },
+    { label: "客户机会", to: "/opportunities", icon: "客" },
+    { label: "效果", to: "/analytics", icon: "效" },
+    { label: "我的公司", to: "/company", icon: "企" },
+  ],
+}]
 
 const route = useRoute()
 const router = useRouter()
@@ -157,7 +141,7 @@ onBeforeUnmount(() => {
     >
       <RouterLink class="brand-lockup" to="/" aria-label="SinofGear 首页">
         <span class="brand-mark" aria-hidden="true">SG</span>
-        <span><strong>SinofGear</strong><small>增长引擎</small></span>
+        <span><strong>SinofGear</strong><small>AI 推广获客</small></span>
       </RouterLink>
       <nav aria-label="主导航">
         <section v-for="section in navigation" :key="section.group" class="nav-group">

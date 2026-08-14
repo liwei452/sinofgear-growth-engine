@@ -25,6 +25,15 @@ from apps.campaigns.models import (
 from apps.campaigns.services import mark_content_brief_ready
 from apps.catalog.models import Product, ProductConceptLink
 from apps.identity.models import Membership, Organization, PhaseAE2EOwnership, Role
+from apps.growth.models import (
+    ChannelPackage,
+    Contact,
+    FieldProvenance,
+    InboundLead,
+    IntentSignal,
+    MetricReceipt,
+    TargetAccount,
+)
 from apps.knowledge.management.commands.seed_gear_ontology import ALIASES, CONCEPTS, RELATIONS
 from apps.knowledge.models import (
     KnowledgeAlias, KnowledgeConcept, KnowledgeGraphLock, KnowledgeRelation,
@@ -113,6 +122,7 @@ class Command(BaseCommand):
                 platforms=platforms,
             )
             self._accounts(organization, platforms)
+            self._growth_workspace(organization)
             self._prompt(users[Role.Code.ADMINISTRATOR])
         self.stdout.write(
             self.style.SUCCESS(
@@ -751,6 +761,154 @@ class Command(BaseCommand):
                         "mock_outcome": "fail_once" if code == "TIKTOK" else "success",
                         "fixture": "phase-a-e2e",
                     },
+                },
+            )
+
+    @staticmethod
+    def _growth_workspace(organization):
+        account_specs = (
+            (
+                1001, "PackTech GmbH", "Germany", "Packaging machinery", "51-200",
+                "HIRING", "Public careers page",
+                "正在寻找高精度斜齿轮供应商；公开招聘页出现精密传动采购岗位。", 88,
+            ),
+            (
+                1002, "EuroMach Solutions", "Italy", "Food machinery", "201-500",
+                "EXPANSION", "Company news and trade-show directory",
+                "计划升级灌装线并评估齿轮箱方案；采购时间和预算仍需人工确认。", 74,
+            ),
+            (
+                1003, "NordMotion AB", "Sweden", "Automation equipment", "51-200",
+                "PRODUCT_CHANGE", "Public product page",
+                "公开产品页新增低噪声传动系列，尚未发现明确采购动作。", 52,
+            ),
+        )
+        accounts = {}
+        for number, name, country, industry, employee_range, signal_type, source_label, evidence, confidence in account_specs:
+            account, _ = TargetAccount.objects.update_or_create(
+                id=stable_id(number),
+                defaults={
+                    "organization": organization,
+                    "name": name,
+                    "country": country,
+                    "industry": industry,
+                    "employee_range": employee_range,
+                    "website": f"https://example.invalid/{name.lower().replace(' ', '-')}",
+                    "is_demo": True,
+                },
+            )
+            accounts[number] = account
+            IntentSignal.objects.update_or_create(
+                id=stable_id(number + 100),
+                defaults={
+                    "organization": organization,
+                    "account": account,
+                    "signal_type": signal_type,
+                    "source_label": source_label,
+                    "source_url": f"https://example.invalid/demo-evidence/{number}",
+                    "evidence_text": evidence,
+                    "confidence": confidence,
+                    "is_demo": True,
+                },
+            )
+
+        Contact.objects.update_or_create(
+            id=stable_id(1151),
+            defaults={
+                "organization": organization,
+                "account": accounts[1001],
+                "full_name": "Purchasing team",
+                "role_title": "Public company contact path",
+                "public_contact_path": "https://example.invalid/packtech-contact",
+                "verification_status": "PUBLIC_PATH",
+            },
+        )
+        InboundLead.objects.update_or_create(
+            id=stable_id(1161),
+            defaults={
+                "organization": organization,
+                "account": accounts[1002],
+                "source_label": "Demo website inquiry",
+                "status": "NEW",
+                "is_demo": True,
+            },
+        )
+
+        package_specs = {
+            "LINKEDIN": {
+                "title": "How inspection evidence reduces assembly rework",
+                "format": "English professional post with Chinese review copy",
+                "utm": "linkedin / organic / din6-proof-demo",
+            },
+            "FACEBOOK": {
+                "title": "Packaging-line transmission checklist",
+                "format": "Case post with manual CTA",
+                "utm": "facebook / organic / din6-proof-demo",
+            },
+            "INSTAGRAM": {
+                "title": "Gear inspection proof carousel",
+                "format": "Carousel outline and Reels copy",
+                "utm": "instagram / organic / din6-proof-demo",
+            },
+            "TIKTOK": {
+                "title": "30-second DIN 6 inspection proof",
+                "duration_seconds": 30,
+                "aspect_ratio": "9:16",
+                "script": "Pain point 4s; inspection process 18s; evidence and CTA 8s",
+                "storyboard": ["Tooth flank close-up", "Gauge reading", "Inspection report", "Packaging-line application"],
+                "voiceover": "English voiceover",
+                "subtitles": "Complete Chinese subtitles",
+                "tags": ["gearinspection", "packagingmachinery", "customgears"],
+                "cta": "Review the inspection capability summary",
+                "utm": "tiktok / organic / din6-proof-demo",
+            },
+        }
+        for index, (channel, payload) in enumerate(package_specs.items(), start=1):
+            ChannelPackage.objects.update_or_create(
+                id=stable_id(1200 + index),
+                defaults={
+                    "organization": organization,
+                    "account": None,
+                    "channel": channel,
+                    "payload": payload,
+                    "status": "AWAITING_REVIEW",
+                    "is_demo": True,
+                },
+            )
+
+        metric_specs = {
+            "TIKTOK": {"views": 6820, "clicks": 74, "replies": 0, "inquiries": 1},
+            "LINKEDIN": {"views": 1248, "clicks": 63, "replies": 2, "inquiries": 0},
+            "INSTAGRAM": {"views": 418, "clicks": 21, "replies": 0, "inquiries": 0},
+            "FACEBOOK": {"views": 567, "clicks": 18, "replies": 1, "inquiries": 0},
+        }
+        for index, (channel, payload) in enumerate(metric_specs.items(), start=1):
+            MetricReceipt.objects.update_or_create(
+                id=stable_id(1300 + index),
+                defaults={
+                    "organization": organization,
+                    "channel": channel,
+                    "payload": payload,
+                    "is_demo": True,
+                },
+            )
+
+        fact_specs = (
+            (1401, "company_name", "SinofGear", "Company profile", "VERIFIED", 0),
+            (1402, "quality_system", "ISO 9001", "Certificate upload record", "VERIFIED", 0),
+            (1403, "accuracy_grade", "DIN 6", "Product library", "NEEDS_EVIDENCE", 0),
+            (1404, "lead_time", "4-6 weeks", "Product library", "NEEDS_CONFIRMATION", 0),
+        )
+        for number, field_name, field_value, source_label, verification_status, cost in fact_specs:
+            FieldProvenance.objects.update_or_create(
+                id=stable_id(number),
+                defaults={
+                    "organization": organization,
+                    "field_name": field_name,
+                    "field_value": field_value,
+                    "source_label": source_label,
+                    "verification_status": verification_status,
+                    "source_cost_micros": cost,
                 },
             )
 

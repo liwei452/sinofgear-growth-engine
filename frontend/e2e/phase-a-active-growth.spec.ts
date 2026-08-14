@@ -304,7 +304,7 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   )
   await expect(page.locator(".task").filter({ hasText: "SUCCEEDED" })).toHaveCount(3)
 
-  await page.goto("/analytics")
+  await page.goto("/admin/analytics")
   const origin = new URL(page.url()).origin
   const facebookShortPath = await createTrackingAndShort(
     page, facebookTaskId, "facebook", "phase-a-browser-growth",
@@ -317,7 +317,7 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
     context, origin, linkedinShortPath, "/custom-helical-gear", "linkedin", "phase-a-seeded-growth",
   )
 
-  await page.goto("/analytics")
+  await page.goto("/admin/analytics")
   await expect(page.locator('[aria-label="总点击数"] strong')).toHaveText("2")
   const unfilteredRows = page.getByRole("table", { name: "渠道点击明细" }).getByRole("row")
   await expect(unfilteredRows).toHaveCount(3)

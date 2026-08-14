@@ -11,6 +11,9 @@ export type AppRouteComponents = {
   Login: Component
   Shell: Component
   Dashboard: Component
+  Promotion: Component
+  Opportunities: Component
+  Company: Component
   Products: Component
   Knowledge: Component
   ContentFactory: Component
@@ -19,6 +22,7 @@ export type AppRouteComponents = {
   PublishingCalendar: Component
   PlatformAccounts: Component
   Analytics: Component
+  LegacyAnalytics: Component
   Placeholder: Component
 }
 
@@ -53,8 +57,11 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
       path: "",
       name: "home",
       component: options.components.Dashboard,
-      meta: { title: "首页" },
+      meta: { title: "今天" },
     },
+    { path: "promotion", name: "promotion", component: options.components.Promotion, meta: { title: "推广" } },
+    { path: "opportunities", name: "opportunities", component: options.components.Opportunities, meta: { title: "客户机会" } },
+    { path: "company", name: "company", component: options.components.Company, meta: { title: "我的公司" } },
     {
       path: "products",
       name: "products",
@@ -82,7 +89,8 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
     { path: "assets", name: "assets", component: options.components.Assets, meta: { title: "素材库" } },
     { path: "publishing-calendar", name: "publishing-calendar", component: options.components.PublishingCalendar, meta: { title: "发布日历" } },
     { path: "platform-accounts", name: "platform-accounts", component: options.components.PlatformAccounts, meta: { title: "平台账户" } },
-    { path: "analytics", name: "analytics", component: options.components.Analytics, meta: { title: "数据看板" } },
+    { path: "analytics", name: "analytics", component: options.components.Analytics, meta: { title: "效果" } },
+    { path: "admin/analytics", name: "admin-analytics", component: options.components.LegacyAnalytics, meta: { title: "高级数据看板" } },
   ]
   const router = createRouter({
     history: options.history ?? createWebHistory(),

@@ -8,6 +8,8 @@
 
 **Tech Stack:** Django 5/DRF/PostgreSQL/Celery/Redis/MinIO, Vue 3/Vite/TanStack Query, React 19/Vite/React Router/Tailwind, Cloudflare Pages Functions, Resend, pytest, Vitest, Playwright, OpenAPI.
 
+**Acceptance Checklist:** `docs/superpowers/plans/2026-08-14-ai-growth-loop-development-acceptance-checklist.md`
+
 ## Global Constraints
 
 - Modify only the two existing repositories: `sinofgear-growth-engine` and `../app`; do not install or create Postiz, OpenFang, Mautic, n8n, Activepieces, or another standalone platform.

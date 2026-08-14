@@ -1,5 +1,6 @@
 import uuid
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 
@@ -31,6 +32,33 @@ class ConnectorCredential(OrganizationScopedModel):
     secret_reference = models.CharField(max_length=512)
     granted_scopes = models.JSONField(default=list, validators=[validate_capability_list])
     expires_at = models.DateTimeField(null=True, blank=True)
+
+
+class OAuthConnectionAttempt(OrganizationScopedModel):
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="platform_oauth_attempts",
+    )
+    platform = models.ForeignKey(
+        Platform,
+        on_delete=models.PROTECT,
+        related_name="oauth_attempts",
+    )
+    state_hash = models.CharField(max_length=64, unique=True)
+    return_path = models.CharField(max_length=512)
+    pkce_verifier_reference = models.CharField(max_length=512, blank=True, default="")
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["organization", "platform", "expires_at"],
+                name="platforms_oauth_org_exp_idx",
+            ),
+        ]
 
 
 class SocialAccount(OrganizationScopedModel):

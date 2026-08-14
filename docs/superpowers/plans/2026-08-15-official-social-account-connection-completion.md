@@ -82,7 +82,7 @@ Expected: collection fails because `AccountConnectionSession` and the new interf
 
 - [ ] **Step 3: Implement the model, migration, validation service, and token-store contract**
 
-Add an organization-scoped model with actor/platform foreign keys, `secret_reference`, bounded candidate JSON, validated internal capabilities, `expires_at`, and `consumed_at`. Add an organization/platform/expiry index. Define `TokenStoreContext` using UUID/string identifiers only. Keep default token storage disabled: `store`, `resolve`, and `delete` all raise `ConnectorConfigurationRequired` without inspecting or returning token material.
+Add an organization-scoped model with actor/platform foreign keys, `secret_reference`, bounded candidate JSON, validated internal capabilities, `expires_at`, `consumed_at`, and `confirmed_candidate_id`. Add an organization/platform/expiry index. Define `TokenStoreContext` using UUID/string identifiers only. Keep default token storage disabled: `store`, `resolve`, and `delete` all raise `ConnectorConfigurationRequired` without inspecting or returning token material.
 
 - [ ] **Step 4: Implement atomic confirmation**
 

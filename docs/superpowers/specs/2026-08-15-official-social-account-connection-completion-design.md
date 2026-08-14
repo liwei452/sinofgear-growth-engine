@@ -38,7 +38,7 @@ Add `AccountConnectionSession`, scoped to organization, actor, and platform, wit
 - Opaque token-store reference.
 - Normalized account candidates in a bounded JSON structure containing only account identifier, display name, channel, capability labels, and discovery timestamp.
 - Granted capability identifiers stored as normalized internal names, never raw OAuth scope strings in ordinary-user responses.
-- `expires_at`, `consumed_at`, `created_at`, and `updated_at`.
+- `expires_at`, `consumed_at`, `confirmed_candidate_id`, `created_at`, and `updated_at`.
 - A maximum lifetime of 10 minutes and one-time confirmation.
 
 The session may contain at most 100 candidates. Candidate display names and identifiers have strict length limits. Unknown fields, duplicate provider account identifiers, unsupported channels, and candidates without publishing capability are rejected before persistence.
@@ -90,7 +90,7 @@ Body: `{ "candidate_id": "..." }`
 
 - Strictly validates the candidate belongs to the unconsumed session.
 - Atomically creates or updates one official `SocialAccount` plus credential reference.
-- Marks the session consumed and returns a safe connection summary.
+- Records the confirmed candidate, marks the session consumed, and returns a safe connection summary.
 - Idempotent replay returns the same safe summary only for the same candidate; a different candidate is rejected.
 
 ## Factory-Owner Experience

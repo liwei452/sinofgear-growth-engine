@@ -1,6 +1,8 @@
 import uuid
+import re
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from apps.identity.models import Organization
@@ -38,6 +40,11 @@ class Contact(OrganizationOwnedModel):
 
 
 class IntentSignal(OrganizationOwnedModel):
+    SCORE_KEYS = {
+        "icp_fit", "intent_strength", "recency", "role_relevance",
+        "evidence_coverage", "risk_penalty",
+    }
+
     account = models.ForeignKey(TargetAccount, on_delete=models.PROTECT, related_name="intent_signals")
     signal_type = models.CharField(max_length=64)
     source_label = models.CharField(max_length=255)
@@ -46,6 +53,36 @@ class IntentSignal(OrganizationOwnedModel):
     confidence = models.PositiveSmallIntegerField(default=0)
     observed_at = models.DateTimeField(auto_now_add=True)
     is_demo = models.BooleanField(default=False)
+    collection_method = models.CharField(max_length=32, default="DEMO_FIXTURE")
+    content_hash = models.CharField(max_length=64, blank=True)
+    score_breakdown = models.JSONField(default=dict)
+    scoring_rule_version = models.CharField(max_length=64, default="opportunity-v1")
+    uncertainty_notes = models.JSONField(default=list)
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.content_hash and re.fullmatch(r"[0-9a-f]{64}", self.content_hash) is None:
+            errors["content_hash"] = "Evidence hash must be a lowercase SHA-256 value."
+
+        breakdown = self.score_breakdown
+        if breakdown:
+            if not isinstance(breakdown, dict) or set(breakdown) != self.SCORE_KEYS:
+                errors["score_breakdown"] = "Score breakdown must contain the six opportunity-v1 keys."
+            elif any(type(value) is not int or not 0 <= value <= 100 for value in breakdown.values()):
+                errors["score_breakdown"] = "Score components must be integers from 0 to 100."
+            else:
+                total = sum(breakdown[key] for key in self.SCORE_KEYS - {"risk_penalty"})
+                total -= breakdown["risk_penalty"]
+                if total != self.confidence:
+                    errors["score_breakdown"] = "Score component total must match confidence."
+
+        if not isinstance(self.uncertainty_notes, list) or any(
+            not isinstance(note, str) or not note.strip() for note in self.uncertainty_notes
+        ):
+            errors["uncertainty_notes"] = "Uncertainty notes must be a list of non-empty strings."
+        if errors:
+            raise ValidationError(errors)
 
 
 class InboundLead(OrganizationOwnedModel):

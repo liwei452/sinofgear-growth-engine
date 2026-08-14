@@ -771,20 +771,38 @@ class Command(BaseCommand):
                 1001, "PackTech GmbH", "Germany", "Packaging machinery", "51-200",
                 "HIRING", "Public careers page",
                 "正在寻找高精度斜齿轮供应商；公开招聘页出现精密传动采购岗位。", 88,
+                {
+                    "icp_fit": 20, "intent_strength": 24, "recency": 14,
+                    "role_relevance": 12, "evidence_coverage": 18, "risk_penalty": 0,
+                },
+                ["采购范围与时间仍需人工确认", "公开页面未确认预算"],
             ),
             (
                 1002, "EuroMach Solutions", "Italy", "Food machinery", "201-500",
                 "EXPANSION", "Company news and trade-show directory",
                 "计划升级灌装线并评估齿轮箱方案；采购时间和预算仍需人工确认。", 74,
+                {
+                    "icp_fit": 18, "intent_strength": 19, "recency": 13,
+                    "role_relevance": 9, "evidence_coverage": 19, "risk_penalty": 4,
+                },
+                ["采购时间仍需人工确认", "尚未确认负责采购的具体角色"],
             ),
             (
                 1003, "NordMotion AB", "Sweden", "Automation equipment", "51-200",
                 "PRODUCT_CHANGE", "Public product page",
                 "公开产品页新增低噪声传动系列，尚未发现明确采购动作。", 52,
+                {
+                    "icp_fit": 17, "intent_strength": 12, "recency": 12,
+                    "role_relevance": 5, "evidence_coverage": 12, "risk_penalty": 6,
+                },
+                ["尚未发现明确采购动作", "需要补充可验证的采购角色"],
             ),
         )
         accounts = {}
-        for number, name, country, industry, employee_range, signal_type, source_label, evidence, confidence in account_specs:
+        for (
+            number, name, country, industry, employee_range, signal_type,
+            source_label, evidence, confidence, score_breakdown, uncertainty_notes,
+        ) in account_specs:
             account, _ = TargetAccount.objects.update_or_create(
                 id=stable_id(number),
                 defaults={
@@ -809,6 +827,11 @@ class Command(BaseCommand):
                     "evidence_text": evidence,
                     "confidence": confidence,
                     "is_demo": True,
+                    "collection_method": "DEMO_FIXTURE",
+                    "content_hash": hashlib.sha256(evidence.encode("utf-8")).hexdigest(),
+                    "score_breakdown": score_breakdown,
+                    "scoring_rule_version": "opportunity-v1",
+                    "uncertainty_notes": uncertainty_notes,
                 },
             )
 

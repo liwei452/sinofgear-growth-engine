@@ -11,6 +11,7 @@ from integrations.sources.base import SourceAdapterError
 
 from .candidate_imports import CandidateImportInvalid, import_candidate_list
 from .discovery import DiscoveryAlreadyRunning, run_discovery
+from .enrichment import CandidateReviewRequired, enrichment_payload, prepare_fake_enrichment
 from .models import (
     ChannelPackage,
     Contact,
@@ -34,9 +35,11 @@ from .serializers import (
     ChannelPackageSerializer,
     CandidateListImportResultSerializer,
     CandidateListImportSerializer,
+    CandidateEnrichmentResultSerializer,
     DiscoveryCandidateReviewResultSerializer,
     DiscoveryCandidateReviewSerializer,
     DiscoveryCandidateSerializer,
+    EnrichmentCandidateSerializer,
     ContactSerializer,
     DiscoveryProfileUpdateSerializer,
     DiscoveryRunResultSerializer,
@@ -123,6 +126,9 @@ def discovery_summary(profile):
     candidates = profile.organization.discoverycandidate_set.filter(
         status=DiscoveryCandidate.Status.PENDING_REVIEW,
     )[:20]
+    enrichment_candidates = profile.organization.discoverycandidate_set.filter(
+        status=DiscoveryCandidate.Status.ACCEPTED,
+    ).select_related("enrichment_snapshot")[:20]
     return {
         "enabled": profile.enabled,
         "source_label": "欧盟与英国官方采购数据",
@@ -134,6 +140,9 @@ def discovery_summary(profile):
             status=DiscoveryCandidate.Status.PENDING_REVIEW,
         ).count(),
         "candidates": DiscoveryCandidateSerializer(candidates, many=True).data,
+        "enrichment_candidates": EnrichmentCandidateSerializer(
+            enrichment_candidates, many=True,
+        ).data,
         "available_sources": [
             {"code": "TED", "label": "TED 欧盟采购公告", "status": "ACTIVE"},
             {
@@ -297,6 +306,34 @@ class DiscoveryCandidateReviewView(APIView):
                 if accepted else "已忽略这家公司，不会进入后续处理。"
             ),
         })
+
+
+class CandidateEnrichmentPrepareView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=None,
+        responses={200: CandidateEnrichmentResultSerializer, 201: CandidateEnrichmentResultSerializer},
+    )
+    def post(self, request, candidate_id):
+        candidate = get_object_or_404(
+            DiscoveryCandidate,
+            id=candidate_id,
+            organization=request.organization,
+        )
+        try:
+            snapshot, created = prepare_fake_enrichment(candidate=candidate)
+        except CandidateReviewRequired:
+            return Response({
+                "code": "CANDIDATE_REVIEW_REQUIRED",
+                "message": "请先核实这家公司，再准备资料补全。",
+                "recovery_action": "回到待核实公司并选择加入资料补全。",
+            }, status=409)
+        return Response(
+            enrichment_payload(snapshot, created=created),
+            status=201 if created else 200,
+        )
 
 
 class DiscoveryProfileView(APIView):

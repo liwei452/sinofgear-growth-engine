@@ -368,6 +368,25 @@ class DiscoveryCandidate(OrganizationOwnedModel):
         raise ValueError("Discovery candidate history cannot be deleted.")
 
 
+class CandidateEnrichmentSnapshot(OrganizationOwnedModel):
+    candidate = models.OneToOneField(
+        DiscoveryCandidate,
+        on_delete=models.PROTECT,
+        related_name="enrichment_snapshot",
+    )
+    mode = models.CharField(max_length=24, default="FAKE_PREVIEW")
+    facts = models.JSONField(default=list)
+    public_contact_paths = models.JSONField(default=list)
+    uncertainties = models.JSONField(default=list)
+    evidence_envelope = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Candidate enrichment history cannot be deleted.")
+
+
 class DiscoveryProfile(OrganizationOwnedModel):
     organization = models.OneToOneField(
         Organization, on_delete=models.PROTECT, related_name="growth_discovery_profile",

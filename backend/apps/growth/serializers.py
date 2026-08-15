@@ -4,6 +4,7 @@ from rest_framework import serializers
 
 from .models import (
     CRMHandoff,
+    CandidateEnrichmentSnapshot,
     ChannelPackage,
     Contact,
     DiscoveryCandidate,
@@ -19,6 +20,7 @@ from .models import (
     TargetAccount,
 )
 from .manual_imports import validate_manual_source_url
+from .enrichment import enrichment_payload
 
 
 class PublishBatchCreateSerializer(serializers.Serializer):
@@ -108,6 +110,31 @@ class DiscoveryCandidateReviewResultSerializer(serializers.Serializer):
     message = serializers.CharField()
 
 
+class CandidateEnrichmentResultSerializer(serializers.Serializer):
+    candidate_id = serializers.UUIDField()
+    mode = serializers.CharField()
+    data_label = serializers.CharField()
+    facts = serializers.ListField(child=serializers.DictField())
+    public_contact_paths = serializers.ListField(child=serializers.DictField())
+    uncertainties = serializers.ListField(child=serializers.CharField())
+    message = serializers.CharField()
+    created = serializers.BooleanField()
+
+
+class EnrichmentCandidateSerializer(DiscoveryCandidateSerializer):
+    latest_preview = serializers.SerializerMethodField()
+
+    class Meta(DiscoveryCandidateSerializer.Meta):
+        fields = [*DiscoveryCandidateSerializer.Meta.fields, "latest_preview"]
+
+    def get_latest_preview(self, obj):
+        try:
+            snapshot = obj.enrichment_snapshot
+        except CandidateEnrichmentSnapshot.DoesNotExist:
+            return None
+        return enrichment_payload(snapshot, created=False)
+
+
 class DiscoverySummarySerializer(serializers.Serializer):
     enabled = serializers.BooleanField()
     source_label = serializers.CharField()
@@ -117,6 +144,7 @@ class DiscoverySummarySerializer(serializers.Serializer):
     last_run = DiscoveryRunResultSerializer(allow_null=True)
     candidate_count = serializers.IntegerField()
     candidates = DiscoveryCandidateSerializer(many=True)
+    enrichment_candidates = EnrichmentCandidateSerializer(many=True)
     available_sources = serializers.ListField(child=serializers.DictField())
 
 

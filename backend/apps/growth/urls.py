@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     ChannelPackageApproveView,
     CandidateListImportView,
+    CandidateEnrichmentPrepareView,
     DiscoveryCandidateReviewView,
     ChannelPackageManualExportView,
     CompanyFactVerifyView,
@@ -28,6 +29,11 @@ urlpatterns = [
         "growth/discovery/candidates/<uuid:candidate_id>/review",
         DiscoveryCandidateReviewView.as_view(),
         name="growth-candidate-review",
+    ),
+    path(
+        "growth/enrichment/candidates/<uuid:candidate_id>/prepare",
+        CandidateEnrichmentPrepareView.as_view(),
+        name="growth-candidate-enrichment-prepare",
     ),
     path(
         "growth/discovery/profile",

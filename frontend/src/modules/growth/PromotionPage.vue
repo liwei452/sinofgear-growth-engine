@@ -101,10 +101,34 @@ const approved = computed(() => activePackage.value
 const connectionsByChannel = computed(() => new Map(
   (workspaceQuery.data.value?.connectors ?? []).map(item => [item.channel, item]),
 ))
-const eligiblePackages = computed(() => ["LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"]
-  .map(packageFor)
-  .filter((channelPackage): channelPackage is ChannelPackage => Boolean(channelPackage))
-  .filter(channelPackage => isApproved(channelPackage) && connectionFor(channelPackage.channel)?.status === "CONNECTED"))
+const publishChannelCodes = ["LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"] as const
+type ChannelReadiness = {
+  channel: typeof publishChannelCodes[number]
+  label: string
+  package: ChannelPackage | undefined
+  ready: boolean
+}
+function channelPackageFormatReady(channelPackage: ChannelPackage): boolean {
+  if (channelPackage.channel !== "TIKTOK") return true
+  const duration = channelPackage.payload.duration_seconds
+  return typeof duration === "number" && Number.isInteger(duration)
+    && duration >= 15 && duration <= 60 && channelPackage.payload.aspect_ratio === "9:16"
+}
+const channelReadiness = computed<ChannelReadiness[]>(() => publishChannelCodes.map(channel => {
+  const channelPackage = packageFor(channel)
+  let label = "缺少内容包"
+  if (channelPackage && !isApproved(channelPackage)) label = "等待内容审核"
+  else if (channelPackage && !channelPackageFormatReady(channelPackage)) label = "发布格式待补全"
+  else if (channelPackage && connectionFor(channel)?.status !== "CONNECTED") label = "账号未连接"
+  else if (channelPackage) label = "已就绪"
+  return { channel, label, package: channelPackage, ready: label === "已就绪" }
+}))
+const pendingReadinessCount = computed(() => channelReadiness.value.filter(item => !item.ready).length)
+const allChannelsReady = computed(() => pendingReadinessCount.value === 0)
+const hasPublishingPackages = computed(() => channelReadiness.value.some(item => item.package))
+const eligiblePackages = computed(() => channelReadiness.value
+  .filter((item): item is ChannelReadiness & { package: ChannelPackage } => item.ready && Boolean(item.package))
+  .map(item => item.package))
 const failedPublishItems = computed(() => publishBatch.value?.items
   .filter(item => item.status === "FAILED") ?? [])
 const succeededPublishCount = computed(() => publishBatch.value?.items
@@ -278,6 +302,7 @@ function currentPublishKey(): string {
 
 async function publishAll(): Promise<void> {
   publishError.value = ""
+  if (!allChannelsReady.value) return
   const packageIds = eligiblePackages.value.map(item => item.id)
   if (!packageIds.length) return
   await publishMutation.mutateAsync({ packageIds, key: currentPublishKey() }).catch(() => undefined)
@@ -453,18 +478,19 @@ const channels: Array<{
           </div>
         </article>
       </div>
-      <section v-if="eligiblePackages.length" class="publish-panel" aria-label="一键发布">
+      <section v-if="hasPublishingPackages" class="publish-panel" aria-label="四渠道发布就绪检查">
         <div>
-          <p class="eyebrow">已批准 {{ eligiblePackages.length }} 个渠道</p>
-          <h3>一次发布，分别记录结果</h3>
-          <p>本地仅演示完整发布流程，不会请求真实社媒平台。</p>
+          <p class="eyebrow">四渠道发布就绪检查</p>
+          <h3>{{ allChannelsReady ? '四个渠道均可提交' : `还有 ${pendingReadinessCount} 个渠道需要处理` }}</h3>
+          <ul class="readiness-list"><li v-for="item in channelReadiness" :key="item.channel">{{ channelLabel(item.channel) }} · {{ item.label }}</li></ul>
+          <p>全部内容须人工批准且账号就绪；本地演示不会请求真实社媒平台。</p>
         </div>
         <button
           class="button button-primary" type="button"
-          :disabled="publishMutation.isPending.value || Boolean(publishBatch)"
+          :disabled="!allChannelsReady || publishMutation.isPending.value || Boolean(publishBatch)"
           @click="publishAll"
         >
-          {{ publishMutation.isPending.value ? "正在提交…" : `一键发布到 ${eligiblePackages.length} 个渠道` }}
+          {{ publishMutation.isPending.value ? "正在提交…" : allChannelsReady ? "一键发布到 4 个渠道" : `还有 ${pendingReadinessCount} 个渠道未就绪` }}
         </button>
       </section>
       <section v-if="publishBatch" class="publish-results" aria-label="发布结果">

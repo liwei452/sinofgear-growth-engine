@@ -216,7 +216,9 @@ it("publishes all approved channels once and retries only failed channels", asyn
       id: `10000000-0000-4000-8000-00000000120${index + 1}`,
       account_id: null,
       channel,
-      payload: { title: `${channel} inspection proof` },
+      payload: channel === "TIKTOK"
+        ? { title: `${channel} inspection proof`, duration_seconds: 30, aspect_ratio: "9:16" }
+        : { title: `${channel} inspection proof` },
       status: "APPROVED",
       is_demo: true,
       data_label: "Demo / Fake",
@@ -269,6 +271,11 @@ it("publishes all approved channels once and retries only failed channels", asyn
   const user = userEvent.setup()
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
+  const readiness = await screen.findByRole("region", { name: "四渠道发布就绪检查" })
+  expect(within(readiness).getByText("LinkedIn · 已就绪")).toBeInTheDocument()
+  expect(within(readiness).getByText("Facebook · 已就绪")).toBeInTheDocument()
+  expect(within(readiness).getByText("Instagram · 已就绪")).toBeInTheDocument()
+  expect(within(readiness).getByText("TikTok · 已就绪")).toBeInTheDocument()
   await user.click(await screen.findByRole("button", { name: "一键发布到 4 个渠道" }))
 
   expect(await screen.findByText("Demo / Fake 发布结果")).toBeInTheDocument()
@@ -277,6 +284,55 @@ it("publishes all approved channels once and retries only failed channels", asyn
   await user.click(screen.getByRole("button", { name: "重试失败渠道" }))
   expect(await screen.findByText("4 个渠道均已发布成功。")).toBeInTheDocument()
   expect(fetchMock.mock.calls.filter(([path]) => String(path) === "/api/v1/growth/publish-batches")).toHaveLength(1)
+})
+
+it("explains every blocked channel and never silently publishes a partial batch", async () => {
+  document.cookie = "csrftoken=readiness-gate-test-token"
+  const channels = ["LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"]
+  const workspace = {
+    target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
+    outreach_drafts: [], field_provenance: [], metric_receipts: [], publish_batches: [],
+    connectors: channels.map(channel => ({
+      channel,
+      status: channel === "INSTAGRAM" ? "NOT_CONNECTED" : "CONNECTED",
+      connection_label: channel === "INSTAGRAM" ? "未连接" : "已连接",
+      recovery_action: channel === "INSTAGRAM" ? "连接账号" : "",
+      mode: "DEMO_FAKE",
+    })),
+    channel_packages: channels.map((channel, index) => ({
+      id: `20000000-0000-4000-8000-00000000120${index + 1}`,
+      account_id: null, source_platform_content_id: `30000000-0000-4000-8000-00000000120${index + 1}`,
+      channel,
+      payload: channel === "TIKTOK"
+        ? { title: "Incomplete TikTok", duration_seconds: 10, aspect_ratio: "16:9" }
+        : { title: `${channel} reviewed content` },
+      status: channel === "FACEBOOK" ? "AWAITING_REVIEW" : "APPROVED",
+      is_demo: true, data_label: "Demo / Fake", delivery: "MANUAL_ONLY",
+      created_at: "2026-08-15T10:00:00Z", updated_at: "2026-08-15T10:00:00Z",
+    })),
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === "/api/v1/growth/workspace") {
+      return new Response(JSON.stringify(workspace), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+  render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  await screen.findByText("LINKEDIN reviewed content")
+  const readiness = screen.getByRole("region", { name: "四渠道发布就绪检查" })
+  expect(within(readiness).getByText("LinkedIn · 已就绪")).toBeInTheDocument()
+  expect(within(readiness).getByText("Facebook · 等待内容审核")).toBeInTheDocument()
+  expect(within(readiness).getByText("Instagram · 账号未连接")).toBeInTheDocument()
+  expect(within(readiness).getByText("TikTok · 发布格式待补全")).toBeInTheDocument()
+  const blocked = within(readiness).getByRole("button", { name: "还有 3 个渠道未就绪" })
+  expect(blocked).toBeDisabled()
+  await user.click(blocked)
+  expect(fetchMock.mock.calls.some(([path]) => String(path) === "/api/v1/growth/publish-batches")).toBe(false)
 })
 
 it("restores the latest one-click publish result after a page reload", async () => {

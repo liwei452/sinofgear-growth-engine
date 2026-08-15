@@ -43,16 +43,24 @@ it("keeps accounts, contacts, signals, and inbound leads visibly distinct", () =
   expect(screen.getByRole("button", { name: "查看证据" })).toBeInTheDocument()
 })
 
-it("explains effectiveness denominators and low-sample uncertainty", () => {
+it("shows no channel success metrics until a result has actually been recorded", async () => {
+  const workspace = {
+    target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
+    outreach_drafts: [], opportunity_reviews: [], crm_handoffs: [], reactivations: [],
+    channel_packages: [], publish_batches: [], metric_receipts: [], field_provenance: [], connectors: [],
+  }
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(workspace), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(EffectivenessPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
   expect(screen.getByRole("heading", { name: "推广效果" })).toBeInTheDocument()
-  expect(screen.getByText("点击 186 / 已发布内容包 12")).toBeInTheDocument()
-  expect(screen.getByText("回复 9 / 已人工触达 34")).toBeInTheDocument()
-  expect(screen.getByText("询盘 3 / 落地页访问 186")).toBeInTheDocument()
-  expect(screen.getByText("样本不足，暂不自动调整策略")).toBeInTheDocument()
-  expect(screen.getByText(/2026-08-08 至 2026-08-14/)).toBeInTheDocument()
+  expect(await screen.findByText("尚未回填渠道结果")).toBeInTheDocument()
+  expect(screen.queryByText("26.5%")).not.toBeInTheDocument()
+  expect(screen.queryByText("3 个询盘")).not.toBeInTheDocument()
+  const summary = screen.getByRole("region", { name: "渠道回填摘要" })
+  expect(within(summary).getByText("尚未发生 / 无数据")).toBeInTheDocument()
 })
 
 it("shows persisted account approval in the effectiveness attribution panel", async () => {

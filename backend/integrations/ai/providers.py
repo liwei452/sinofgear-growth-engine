@@ -36,6 +36,30 @@ class ProviderRegistry:
 
 class FakeAIProvider:
     def generate(self, *, prompt: str, schema: dict) -> dict:
+        if "options" in schema.get("properties", {}):
+            _, separator, input_text = prompt.partition("||INPUT:")
+            if not separator:
+                raise RuntimeError("Fake recommendation input is unavailable.")
+            snapshot = json.loads(input_text)
+            product = snapshot["products"][0]
+            fact_ids = [row["id"] for row in snapshot["facts"][:3]]
+            markets = snapshot["markets"]
+            channels = snapshot["channels"][:1]
+            languages = snapshot["languages"]
+            return {"options": [
+                {
+                    "product_id": product["id"],
+                    "market_code": market["code"],
+                    "language": languages[index % len(languages)],
+                    "customer_profile": f"Verified industrial buyer {index + 1}",
+                    "channel_codes": channels,
+                    "theme": f"Verified product direction {index + 1}",
+                    "rationale": "Explicit Fake/offline recommendation using verified fixture facts.",
+                    "fact_ids": fact_ids,
+                    "missing_information": [],
+                }
+                for index, market in enumerate((markets * 3)[:3])
+            ]}
         del schema
         base_prompt, separator, facts_text = prompt.partition("||FACTS:")
         product, country, platform, cta, codes_text = base_prompt.split("|", 4)

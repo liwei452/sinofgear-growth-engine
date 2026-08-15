@@ -11,6 +11,10 @@ from apps.campaigns.generation_schema import generation_input_errors
 from apps.common.security import normalize_persisted_error, scrub_secrets
 from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService
+from apps.content.recommendations import (
+    ContentRecommendationError,
+    validate_recommendation_snapshot,
+)
 from integrations.ai.providers import provider_registry
 
 from .models import AIRun, PromptVersion, ai_audit_writes
@@ -18,7 +22,10 @@ from .models import AIRun, PromptVersion, ai_audit_writes
 
 MAX_PROMPT_CHARS = 50_000
 MAX_OUTPUT_BYTES = 1_000_000
-JOB_PROMPT_PURPOSES = {Job.Type.CONTENT_GENERATE: "CONTENT_GENERATE"}
+JOB_PROMPT_PURPOSES = {
+    Job.Type.CONTENT_GENERATE: "CONTENT_GENERATE",
+    Job.Type.CONTENT_RECOMMEND: "CONTENT_RECOMMEND",
+}
 
 
 class GenerationError(ValueError):
@@ -106,6 +113,31 @@ def _render_prompt(template: str, snapshot: dict) -> str:
         if len(rendered) > MAX_PROMPT_CHARS:
             raise GenerationError("prompt_too_large", "Rendered prompt exceeds the size limit.")
     return rendered
+
+
+def _validate_job_input(snapshot: dict, *, organization_id, job_type: str) -> None:
+    if job_type == Job.Type.CONTENT_RECOMMEND:
+        try:
+            validate_recommendation_snapshot(snapshot, organization_id=organization_id)
+        except ContentRecommendationError as exc:
+            raise GenerationPreflightError(
+                "invalid_recommendation_input", str(exc)
+            ) from exc
+        return
+    _validate_generation_input(snapshot, organization_id=organization_id)
+
+
+def _render_job_prompt(template: str, snapshot: dict, *, job_type: str) -> str:
+    if job_type == Job.Type.CONTENT_RECOMMEND:
+        rendered = template.strip() + "||INPUT:" + json.dumps(
+            snapshot, ensure_ascii=False, separators=(",", ":")
+        )
+        if len(rendered) > MAX_PROMPT_CHARS:
+            raise GenerationError(
+                "prompt_too_large", "Rendered prompt exceeds the size limit."
+            )
+        return rendered
+    return _render_prompt(template, snapshot)
 
 
 @transaction.atomic
@@ -245,9 +277,11 @@ def execute_generation_job(
             "provider_not_available", "AI provider is not available."
         )
     snapshot = scrub_secrets(job.input_snapshot)
-    _validate_generation_input(snapshot, organization_id=job.organization_id)
+    _validate_job_input(
+        snapshot, organization_id=job.organization_id, job_type=job.type
+    )
     try:
-        rendered = _render_prompt(prompt.template, snapshot)
+        rendered = _render_job_prompt(prompt.template, snapshot, job_type=job.type)
     except GenerationError as exc:
         raise GenerationPreflightError(exc.code, str(exc)) from exc
     try:

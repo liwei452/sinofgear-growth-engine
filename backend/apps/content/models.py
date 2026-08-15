@@ -139,11 +139,11 @@ class ContentRecommendationOption(OrganizationScopedModel):
     market_code = models.CharField(max_length=8)
     language = models.CharField(max_length=16)
     customer_profile = models.CharField(max_length=255)
-    channel_codes = models.JSONField(default=list)
+    channel_codes = models.JSONField(default=list, blank=True)
     theme = models.CharField(max_length=500)
     rationale = models.TextField(max_length=2000)
-    evidence = models.JSONField(default=list)
-    missing_information = models.JSONField(default=list)
+    evidence = models.JSONField(default=list, blank=True)
+    missing_information = models.JSONField(default=list, blank=True)
     selected_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:

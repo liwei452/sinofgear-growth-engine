@@ -6,6 +6,7 @@ from apps.growth.models import (
     CandidateEnrichmentSnapshot,
     Contact,
     DiscoveryCandidate,
+    FollowUp,
     IntentSignal,
     TargetAccount,
 )
@@ -69,6 +70,7 @@ def test_accepted_candidate_gets_an_idempotent_fake_enrichment_preview_without_l
         "uncertainties": ["尚未联网核实公司官网", "尚未发现可验证的公开联系页面", "没有采购意向证据"],
         "message": "已生成资料补全预演；没有联网抓取，也不会联系客户。",
         "created": True,
+        "account_id": None,
     }
     assert repeated.status_code == 200
     assert repeated.data["created"] is False
@@ -85,6 +87,7 @@ def test_accepted_candidate_gets_an_idempotent_fake_enrichment_preview_without_l
         "uncertainties": first.data["uncertainties"],
         "message": "已生成资料补全预演；没有联网抓取，也不会联系客户。",
         "created": False,
+        "account_id": None,
     }
     assert CandidateEnrichmentSnapshot.objects.filter(organization=organization).count() == 1
     assert TargetAccount.objects.filter(organization=organization).count() == 0
@@ -108,3 +111,35 @@ def test_enrichment_requires_accepted_tenant_candidate_and_manage_permission(org
     assert blocked.data["code"] == "CANDIDATE_REVIEW_REQUIRED"
     assert forbidden.status_code == 403
     assert hidden.status_code == 404
+
+
+def test_prepared_candidate_can_be_added_to_follow_up_without_inventing_intent(organization):
+    candidate = _candidate(organization)
+    client = _client(organization, suffix="promote")
+    prepared = client.post(
+        f"/api/v1/growth/enrichment/candidates/{candidate.id}/prepare", {}, format="json",
+    )
+    assert prepared.status_code == 201
+
+    url = f"/api/v1/growth/enrichment/candidates/{candidate.id}/follow-up"
+    first = client.post(url, {}, format="json")
+    repeated = client.post(url, {}, format="json")
+
+    assert first.status_code == 201
+    assert first.data["status"] == "OPEN"
+    assert first.data["created"] is True
+    assert first.data["message"] == "已加入人工跟进；没有生成采购意向，也没有联系客户。"
+    assert repeated.status_code == 200
+    assert repeated.data["account_id"] == first.data["account_id"]
+    assert repeated.data["created"] is False
+    account = TargetAccount.objects.get(id=first.data["account_id"])
+    assert account.name == "Jakarta Drives"
+    assert account.source_identity == f"candidate:{candidate.id}"
+    assert FollowUp.objects.filter(organization=organization, account=account).count() == 1
+    assert Contact.objects.filter(organization=organization, account=account).count() == 0
+    assert IntentSignal.objects.filter(organization=organization, account=account).count() == 0
+
+    draft = client.post(f"/api/v1/growth/opportunities/{account.id}/draft", {}, format="json")
+    assert draft.status_code == 201
+    assert draft.data["delivery"] == "NEVER_SENT"
+    assert "Jakarta Drives" in draft.data["English draft"]

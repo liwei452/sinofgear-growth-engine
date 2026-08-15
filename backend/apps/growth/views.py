@@ -11,7 +11,13 @@ from integrations.sources.base import SourceAdapterError
 
 from .candidate_imports import CandidateImportInvalid, import_candidate_list
 from .discovery import DiscoveryAlreadyRunning, run_discovery
-from .enrichment import CandidateReviewRequired, enrichment_payload, prepare_fake_enrichment
+from .enrichment import (
+    CandidateEnrichmentRequired,
+    CandidateReviewRequired,
+    add_candidate_to_follow_up,
+    enrichment_payload,
+    prepare_fake_enrichment,
+)
 from .models import (
     ChannelPackage,
     Contact,
@@ -334,6 +340,33 @@ class CandidateEnrichmentPrepareView(APIView):
             enrichment_payload(snapshot, created=created),
             status=201 if created else 200,
         )
+
+
+class CandidateEnrichmentFollowUpView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(tags=["Growth workspace"], request=None)
+    def post(self, request, candidate_id):
+        candidate = get_object_or_404(
+            DiscoveryCandidate,
+            id=candidate_id,
+            organization=request.organization,
+        )
+        try:
+            account, follow_up, created = add_candidate_to_follow_up(candidate=candidate)
+        except CandidateEnrichmentRequired:
+            return Response({
+                "code": "CANDIDATE_ENRICHMENT_REQUIRED",
+                "message": "请先准备公司资料，再加入跟进。",
+                "recovery_action": "点击准备公司资料并人工检查已有事实与缺口。",
+            }, status=409)
+        return Response({
+            "account_id": str(account.id),
+            "follow_up_id": str(follow_up.id),
+            "status": follow_up.status,
+            "created": created,
+            "message": "已加入人工跟进；没有生成采购意向，也没有联系客户。",
+        }, status=201 if created else 200)
 
 
 class DiscoveryProfileView(APIView):

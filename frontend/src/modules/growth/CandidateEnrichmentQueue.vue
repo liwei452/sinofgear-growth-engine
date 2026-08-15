@@ -3,6 +3,8 @@ import { useMutation, useQueryClient } from "@tanstack/vue-query"
 import { ref } from "vue"
 
 import {
+  addCandidateToFollowUp,
+  createOpportunityDraft,
   growthQueryKeys,
   prepareCandidateEnrichment,
   type CandidateEnrichmentPreview,
@@ -14,8 +16,11 @@ const queryClient = useQueryClient()
 const previews = ref<Record<string, CandidateEnrichmentPreview>>({})
 const activeCandidateId = ref("")
 const actionError = ref("")
+const accountIds = ref<Record<string, string>>({})
+const followUpMessages = ref<Record<string, string>>({})
+const drafts = ref<Record<string, { english: string; chinese: string }>>({})
 
-const mutation = useMutation({
+const prepareMutation = useMutation({
   mutationFn: prepareCandidateEnrichment,
   onSuccess: async (preview) => {
     previews.value = { ...previews.value, [preview.candidate_id]: preview }
@@ -27,6 +32,30 @@ const mutation = useMutation({
   },
 })
 
+const followUpMutation = useMutation({
+  mutationFn: addCandidateToFollowUp,
+  onSuccess: async (result) => {
+    accountIds.value = { ...accountIds.value, [activeCandidateId.value]: result.account_id }
+    followUpMessages.value = { ...followUpMessages.value, [activeCandidateId.value]: result.message }
+    await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+  },
+  onError: () => { actionError.value = "暂时无法加入跟进，请稍后重试。" },
+})
+
+const draftMutation = useMutation({
+  mutationFn: createOpportunityDraft,
+  onSuccess: (result) => {
+    drafts.value = {
+      ...drafts.value,
+      [activeCandidateId.value]: {
+        english: result["English draft"],
+        chinese: result["Chinese explanation"],
+      },
+    }
+  },
+  onError: () => { actionError.value = "暂时无法生成草稿，请稍后重试。" },
+})
+
 function previewFor(candidate: EnrichmentCandidate): CandidateEnrichmentPreview | null {
   return previews.value[candidate.id] ?? candidate.latest_preview
 }
@@ -34,7 +63,21 @@ function previewFor(candidate: EnrichmentCandidate): CandidateEnrichmentPreview 
 function prepare(candidateId: string): void {
   activeCandidateId.value = candidateId
   actionError.value = ""
-  mutation.mutate(candidateId)
+  prepareMutation.mutate(candidateId)
+}
+
+function addToFollowUp(candidateId: string): void {
+  activeCandidateId.value = candidateId
+  actionError.value = ""
+  followUpMutation.mutate(candidateId)
+}
+
+function generateDraft(candidateId: string): void {
+  const accountId = accountIds.value[candidateId] ?? previewFor(props.candidates.find(item => item.id === candidateId)!)?.account_id
+  if (!accountId) return
+  activeCandidateId.value = candidateId
+  actionError.value = ""
+  draftMutation.mutate(accountId)
 }
 
 const factLabels: Record<string, string> = {
@@ -83,11 +126,29 @@ const factLabels: Record<string, string> = {
           </section>
         </div>
         <p class="candidate-intent-warning">{{ previewFor(candidate)?.message }}</p>
+        <div class="enrichment-actions">
+          <button
+            v-if="!(accountIds[candidate.id] ?? previewFor(candidate)?.account_id)"
+            class="button button-primary" type="button" :disabled="followUpMutation.isPending.value"
+            @click="addToFollowUp(candidate.id)"
+          >
+            加入跟进
+          </button>
+          <template v-else>
+            <span class="follow-up-confirmation">{{ followUpMessages[candidate.id] || "已加入人工跟进" }}</span>
+            <button class="button button-secondary" type="button" :disabled="draftMutation.isPending.value" @click="generateDraft(candidate.id)">生成联系草稿</button>
+          </template>
+        </div>
+        <section v-if="drafts[candidate.id]" class="candidate-draft">
+          <strong>待人工审核 · 绝不自动发送</strong>
+          <p>{{ drafts[candidate.id].english }}</p>
+          <small>{{ drafts[candidate.id].chinese }}</small>
+        </section>
       </template>
       <div v-else class="enrichment-empty">
         <p><strong>尚未准备资料</strong> · 只会整理许可名单中的事实，不会编造联系人、邮箱或采购意向。</p>
-        <button class="button button-primary" type="button" :disabled="mutation.isPending.value" @click="prepare(candidate.id)">
-          {{ mutation.isPending.value && activeCandidateId === candidate.id ? "正在准备…" : "准备公司资料" }}
+        <button class="button button-primary" type="button" :disabled="prepareMutation.isPending.value" @click="prepare(candidate.id)">
+          {{ prepareMutation.isPending.value && activeCandidateId === candidate.id ? "正在准备…" : "准备公司资料" }}
         </button>
       </div>
     </article>
@@ -111,6 +172,7 @@ const factLabels: Record<string, string> = {
 .enrichment-facts small { grid-column: 2; color: var(--sg-muted); font-size: .68rem; }
 .enrichment-empty { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 12px; border-radius: 10px; background: #f4f8fb; padding: 12px; }
 .enrichment-empty p { margin: 0; color: #526579; font-size: .78rem; }
+.enrichment-actions { display: flex; align-items: center; gap: 10px; }.follow-up-confirmation { color: #24704a; font-size: .78rem; font-weight: 800; }.candidate-draft { margin-top: 12px; border-left: 3px solid #17699d; background: #f4f8fb; padding: 12px; }.candidate-draft strong { color: #174b70; }.candidate-draft p { white-space: pre-wrap; color: #304a61; }.candidate-draft small { color: var(--sg-muted); }
 @media (max-width: 900px) { .enrichment-columns { grid-template-columns: 1fr; } }
 @media (max-width: 560px) { .enrichment-empty { align-items: flex-start; flex-direction: column; } }
 </style>

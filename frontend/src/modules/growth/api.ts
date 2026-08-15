@@ -80,6 +80,15 @@ export type ManualOpportunityImportResult = {
   account: TargetAccount
   signal: IntentSignal
   created: boolean
+  account_id: string | null
+}
+
+export type CandidateFollowUpResult = {
+  account_id: string
+  follow_up_id: string
+  status: "OPEN"
+  created: boolean
+  message: string
 }
 
 export type FollowUp = {
@@ -444,6 +453,17 @@ export async function prepareCandidateEnrichment(
     { method: "POST", body: {} },
   )
   if (!result) throw new Error("公司资料补全响应为空。")
+  return result
+}
+
+export async function addCandidateToFollowUp(
+  candidateId: string,
+): Promise<CandidateFollowUpResult> {
+  const result = await apiRequest<CandidateFollowUpResult>(
+    `/api/v1/growth/enrichment/candidates/${candidateId}/follow-up`,
+    { method: "POST", body: {} },
+  )
+  if (!result) throw new Error("加入跟进响应为空。")
   return result
 }
 

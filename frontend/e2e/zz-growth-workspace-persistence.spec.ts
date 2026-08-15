@@ -176,6 +176,24 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await expect(enrichmentCard).toContainText("尚未发现可验证的公开联系路径")
   await expect(enrichmentCard).toContainText("没有采购意向证据")
   await expect(page.getByText("3 家目标公司")).toBeVisible()
+  const candidateFollowUpResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.includes("/api/v1/growth/enrichment/candidates/")
+      && new URL(response.url()).pathname.endsWith("/follow-up")
+      && response.request().method() === "POST",
+  )
+  await enrichmentCard.getByRole("button", { name: "加入跟进" }).click()
+  expect((await candidateFollowUpResponse).status()).toBe(201)
+  await expect(enrichmentCard).toContainText("已加入人工跟进")
+  await expect(page.getByText("4 家目标公司")).toBeVisible()
+  const candidateDraftResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.includes("/api/v1/growth/opportunities/")
+      && new URL(response.url()).pathname.endsWith("/draft")
+      && response.request().method() === "POST",
+  )
+  await enrichmentCard.getByRole("button", { name: "生成联系草稿" }).click()
+  expect((await candidateDraftResponse).status()).toBe(201)
+  await expect(enrichmentCard).toContainText("待人工审核 · 绝不自动发送")
+  await expect(enrichmentCard).toContainText("Hello E2E Jakarta Drives team")
   const discoveryResponse = page.waitForResponse(response =>
     new URL(response.url()).pathname === "/api/v1/growth/discovery/run"
       && response.request().method() === "POST",
@@ -183,7 +201,7 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await page.getByRole("button", { name: "立即查找" }).click()
   expect((await discoveryResponse).status()).toBe(200)
   await expect(page.getByRole("status").filter({ hasText: "发现 1 条新采购信号" })).toBeVisible()
-  await expect(page.getByText("4 家目标公司")).toBeVisible()
+  await expect(page.getByText("5 家目标公司")).toBeVisible()
   await page.getByRole("button", { name: /E2E Gear Procurement Authority/ }).click()
   await expect(page.getByRole("heading", { name: "E2E Gear Procurement Authority" })).toBeVisible()
   await expect(page.getByText("Demo / Fake").first()).toBeVisible()
@@ -196,7 +214,7 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await page.getByRole("button", { name: "立即查找" }).click()
   expect((await duplicateDiscoveryResponse).status()).toBe(200)
   await expect(page.getByRole("status").filter({ hasText: "发现 0 条新采购信号" })).toBeVisible()
-  await expect(page.getByText("4 家目标公司")).toBeVisible()
+  await expect(page.getByText("5 家目标公司")).toBeVisible()
   await page.getByLabel("公司名称").fill("Browser Import Drives Ltd")
   await page.getByLabel("国家或地区").fill("United Kingdom")
   await page.getByLabel("行业（选填）").fill("Packaging machinery")
@@ -244,7 +262,7 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   expect((await duplicateResponse.json()).created).toBe(false)
 
   await page.reload()
-  await expect(page.getByText("5 家目标公司")).toBeVisible()
+  await expect(page.getByText("6 家目标公司")).toBeVisible()
   await page.getByRole("button", { name: /Browser Import Drives Ltd/ }).click()
   await expect(page.getByRole("heading", { name: "Browser Import Drives Ltd" })).toBeVisible()
   await page.getByRole("button", { name: /PackTech GmbH/ }).click()
@@ -275,7 +293,7 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   const opportunityDraftResponse = page.waitForResponse(response =>
     new URL(response.url()).pathname.endsWith("/draft") && response.request().method() === "POST",
   )
-  await page.getByRole("button", { name: "生成联系草稿" }).click()
+  await page.locator(".opportunity-detail").getByRole("button", { name: "生成联系草稿" }).click()
   expect((await opportunityDraftResponse).status()).toBe(201)
   await expect(page.getByText(/Hello PackTech GmbH team/)).toBeVisible()
   const handoffResponse = page.waitForResponse(response =>

@@ -119,6 +119,7 @@ class CandidateEnrichmentResultSerializer(serializers.Serializer):
     uncertainties = serializers.ListField(child=serializers.CharField())
     message = serializers.CharField()
     created = serializers.BooleanField()
+    account_id = serializers.UUIDField(allow_null=True)
 
 
 class EnrichmentCandidateSerializer(DiscoveryCandidateSerializer):

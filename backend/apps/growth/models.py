@@ -374,6 +374,13 @@ class CandidateEnrichmentSnapshot(OrganizationOwnedModel):
         on_delete=models.PROTECT,
         related_name="enrichment_snapshot",
     )
+    target_account = models.OneToOneField(
+        TargetAccount,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="candidate_enrichment_snapshot",
+    )
     mode = models.CharField(max_length=24, default="FAKE_PREVIEW")
     facts = models.JSONField(default=list)
     public_contact_paths = models.JSONField(default=list)

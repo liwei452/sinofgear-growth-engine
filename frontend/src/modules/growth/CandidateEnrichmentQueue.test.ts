@@ -20,11 +20,14 @@ it("prepares a clearly fake company profile without inventing contacts or intent
     uncertainties: ["尚未联网核实公司官网", "尚未发现可验证的公开联系页面", "没有采购意向证据"],
     message: "未联网抓取，不会生成联系人、邮箱或采购意向，也不会联系客户。",
     created: true,
+    account_id: null,
   }
-  const fetchMock = vi.fn(async () => new Response(JSON.stringify(preview), {
-    status: 201,
-    headers: { "Content-Type": "application/json" },
-  }))
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith("/prepare")) return new Response(JSON.stringify(preview), { status: 201, headers: { "Content-Type": "application/json" } })
+    if (url.endsWith("/follow-up")) return new Response(JSON.stringify({ account_id: "account-1", follow_up_id: "follow-1", status: "OPEN", created: true, message: "已加入人工跟进；没有生成采购意向，也没有联系客户。" }), { status: 201, headers: { "Content-Type": "application/json" } })
+    return new Response(JSON.stringify({ id: "draft-1", status: "DRAFT", "English draft": "Hello Jakarta Drives team, may I share a capability summary?", "Chinese explanation": "仅询问是否愿意查看，不声称已有采购意向。", delivery: "NEVER_SENT" }), { status: 201, headers: { "Content-Type": "application/json" } })
+  })
   vi.stubGlobal("fetch", fetchMock)
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const user = userEvent.setup()
@@ -61,4 +64,11 @@ it("prepares a clearly fake company profile without inventing contacts or intent
   expect(screen.getByText("尚未发现可验证的公开联系路径")).toBeInTheDocument()
   expect(screen.getByText("没有采购意向证据")).toBeInTheDocument()
   expect(screen.getByText("未联网抓取，不会生成联系人、邮箱或采购意向，也不会联系客户。")).toBeInTheDocument()
+
+  await user.click(screen.getByRole("button", { name: "加入跟进" }))
+  expect(await screen.findByText("已加入人工跟进；没有生成采购意向，也没有联系客户。")).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "生成联系草稿" }))
+  expect(await screen.findByText(/Hello Jakarta Drives team/)).toBeInTheDocument()
+  expect(screen.getByText("待人工审核 · 绝不自动发送")).toBeInTheDocument()
+  expect(fetchMock).toHaveBeenCalledTimes(3)
 })

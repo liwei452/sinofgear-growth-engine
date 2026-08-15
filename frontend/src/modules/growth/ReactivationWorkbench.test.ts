@@ -7,8 +7,8 @@ import ReactivationWorkbench from "./ReactivationWorkbench.vue"
 
 
 const accounts = [
-  { id: "account-1", name: "PackTech GmbH", country: "Germany", industry: "Packaging machinery", employee_range: "51-200", website: "", is_demo: true, data_label: "Demo / Fake" },
-  { id: "account-2", name: "NordMotion AB", country: "Sweden", industry: "Automation equipment", employee_range: "51-200", website: "", is_demo: true, data_label: "Demo / Fake" },
+  { id: "account-1", name: "PackTech GmbH", country: "Germany", industry: "Packaging machinery", employee_range: "51-200", website: "", is_demo: false, data_label: "Owned CRM record" },
+  { id: "account-2", name: "NordMotion AB", country: "Sweden", industry: "Automation equipment", employee_range: "51-200", website: "", is_demo: false, data_label: "Owned CRM record" },
 ]
 
 function renderWorkbench(reactivations: Array<Record<string, unknown>> = []) {
@@ -27,7 +27,7 @@ it("selects a lawful dormant account, prepares a draft, and records approval wit
     industry: "Packaging machinery", relationship_source: "PAST_INQUIRY",
     last_interacted_at: "2026-04-15T08:00:00Z",
     interaction_summary: "Discussed gear samples at the 2025 trade fair.",
-    tier: "STRATEGIC", status: "SELECTED", is_demo: true,
+    tier: "STRATEGIC", status: "SELECTED", is_demo: false,
     why_reactivate: "Existing lawful relationship plus saved account context",
     recommended_action: "Prepare a human-reviewed reactivation draft",
     evidence: "Verified public company update", risk: "Verify stale context before contact",
@@ -56,7 +56,7 @@ it("selects a lawful dormant account, prepares a draft, and records approval wit
   await user.click(screen.getByRole("button", { name: "加入重新激活" }))
 
   const card = await screen.findByRole("article", { name: "PackTech GmbH 重新激活" })
-  expect(within(card).getByText("Demo / Fake")).toBeInTheDocument()
+  expect(within(card).queryByText("Demo / Fake")).not.toBeInTheDocument()
   expect(within(card).getByText(/战略账户/)).toBeInTheDocument()
   expect(within(card).getByText(/绝不自动发送/)).toBeInTheDocument()
   await user.click(within(card).getByRole("button", { name: "生成待审草稿" }))
@@ -72,7 +72,7 @@ it("keeps observation accounts in evidence completion and does not offer a draft
     industry: "Automation equipment", relationship_source: "OWNED_CRM",
     last_interacted_at: "2026-01-15T08:00:00Z",
     interaction_summary: "Historical CRM conversation.", tier: "OBSERVATION", status: "SELECTED",
-    is_demo: true, why_reactivate: "Existing lawful relationship plus saved account context",
+    is_demo: false, why_reactivate: "Existing lawful relationship plus saved account context",
     recommended_action: "Complete account evidence before outreach",
     evidence: "No verified recent signal saved", risk: "Evidence is insufficient",
     draft: null, events: [], delivery: "NEVER_SENT",

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useMutation, useQueryClient } from "@tanstack/vue-query"
-import { ref, watch } from "vue"
+import { computed, ref, watch } from "vue"
 
 import {
   approveReactivationDraft,
@@ -13,7 +13,8 @@ import {
 
 const props = defineProps<{ accounts: TargetAccount[]; reactivations: Reactivation[] }>()
 const queryClient = useQueryClient()
-const records = ref<Reactivation[]>([...props.reactivations])
+const formalAccounts = computed(() => props.accounts.filter(account => !account.is_demo))
+const records = ref<Reactivation[]>(props.reactivations.filter(record => !record.is_demo))
 const accountId = ref("")
 const relationshipSource = ref<Reactivation["relationship_source"]>("PAST_INQUIRY")
 const lastInteractedAt = ref("")
@@ -21,7 +22,7 @@ const interactionSummary = ref("")
 const relationshipConfirmed = ref(false)
 const errorMessage = ref("")
 
-watch(() => props.reactivations, value => { records.value = [...value] })
+watch(() => props.reactivations, value => { records.value = value.filter(record => !record.is_demo) })
 
 function replaceRecord(record: Reactivation): void {
   records.value = [record, ...records.value.filter(item => item.id !== record.id)]
@@ -90,7 +91,7 @@ function tierLabel(tier: Reactivation["tier"]): string {
       <span>绝不自动发送</span>
     </div>
     <form class="reactivation-form" @submit.prevent="submit">
-      <label>已有关系账户<select v-model="accountId" required><option value="">选择已有账户</option><option v-for="account in accounts" :key="account.id" :value="account.id">{{ account.name }}</option></select></label>
+      <label>已有关系账户<select v-model="accountId" required><option value="">选择已有账户</option><option v-for="account in formalAccounts" :key="account.id" :value="account.id">{{ account.name }}</option></select></label>
       <label>关系来源<select v-model="relationshipSource"><option value="EXISTING_CUSTOMER">已有客户</option><option value="PAST_INQUIRY">历史询盘</option><option value="TRADE_SHOW">展会接触</option><option value="OWNED_CRM">合法自有 CRM 名单</option></select></label>
       <label>最后互动时间<input v-model="lastInteractedAt" type="datetime-local" required></label>
       <label class="summary-field">历史互动摘要<textarea v-model="interactionSummary" rows="2" required placeholder="只写已发生并可核实的互动"></textarea></label>
@@ -101,7 +102,7 @@ function tierLabel(tier: Reactivation["tier"]): string {
 
     <div v-if="records.length" class="reactivation-list">
       <article v-for="record in records" :key="record.id" class="reactivation-card" :aria-label="`${record.account_name} 重新激活`">
-        <header><div><span v-if="record.is_demo" class="fake-label">Demo / Fake</span><h3>{{ record.account_name }}</h3><p>{{ record.industry }} · {{ tierLabel(record.tier) }}</p></div><b>{{ record.status === "APPROVED" ? "已批准，未发送" : "人工待审" }}</b></header>
+        <header><div><h3>{{ record.account_name }}</h3><p>{{ record.industry }} · {{ tierLabel(record.tier) }}</p></div><b>{{ record.status === "APPROVED" ? "已批准，未发送" : "人工待审" }}</b></header>
         <dl>
           <div><dt>为何值得重新联系</dt><dd>{{ record.why_reactivate }}</dd></div>
           <div><dt>建议动作</dt><dd>{{ record.recommended_action }}</dd></div>

@@ -11,7 +11,7 @@ import {
   type EnrichmentCandidate,
 } from "./api"
 
-const props = defineProps<{ candidates: EnrichmentCandidate[] }>()
+const props = withDefaults(defineProps<{ candidates: EnrichmentCandidate[]; allowDemo?: boolean }>(), { allowDemo: false })
 const queryClient = useQueryClient()
 const previews = ref<Record<string, CandidateEnrichmentPreview>>({})
 const activeCandidateId = ref("")
@@ -57,7 +57,8 @@ const draftMutation = useMutation({
 })
 
 function previewFor(candidate: EnrichmentCandidate): CandidateEnrichmentPreview | null {
-  return previews.value[candidate.id] ?? candidate.latest_preview
+  const preview = previews.value[candidate.id] ?? candidate.latest_preview
+  return preview?.mode === "FAKE_PREVIEW" && !props.allowDemo ? null : preview
 }
 
 function prepare(candidateId: string): void {
@@ -146,10 +147,14 @@ const factLabels: Record<string, string> = {
         </section>
       </template>
       <div v-else class="enrichment-empty">
-        <p><strong>尚未准备资料</strong> · 只会整理许可名单中的事实，不会编造联系人、邮箱或采购意向。</p>
-        <button class="button button-primary" type="button" :disabled="prepareMutation.isPending.value" @click="prepare(candidate.id)">
+        <p><strong>{{ allowDemo ? "尚未准备资料" : "资料理解服务尚未配置" }}</strong> · {{ allowDemo ? "只会整理许可名单中的事实，不会编造联系人、邮箱或采购意向。" : "当前不会生成模拟公司事实；请上传真实资料或手工补充已核实信息。" }}</p>
+        <button v-if="allowDemo" class="button button-primary" type="button" :disabled="prepareMutation.isPending.value" @click="prepare(candidate.id)">
           {{ prepareMutation.isPending.value && activeCandidateId === candidate.id ? "正在准备…" : "准备公司资料" }}
         </button>
+        <div v-if="!allowDemo" class="enrichment-actions">
+          <a class="button button-primary" href="/assets">上传真实资料</a>
+          <a class="button button-secondary" href="/company">补充公司信息</a>
+        </div>
       </div>
     </article>
   </section>

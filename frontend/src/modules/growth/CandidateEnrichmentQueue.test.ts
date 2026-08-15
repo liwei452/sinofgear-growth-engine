@@ -5,6 +5,30 @@ import { expect, it, vi } from "vitest"
 
 import CandidateEnrichmentQueue from "./CandidateEnrichmentQueue.vue"
 
+it("does not expose fake enrichment in the formal interface", () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(CandidateEnrichmentQueue, {
+    props: { candidates: [{
+      id: "candidate-formal", company_name: "Licensed Drives", country: "Chile", website: "",
+      industry: "Machinery", status: "ACCEPTED", status_label: "待补全公司资料",
+      source_owner: "Licensed list", license_contract: "Internal prospecting licence", import_format: "CSV",
+      is_demo: false, created_at: "2026-08-15T06:00:00Z",
+      latest_preview: {
+        candidate_id: "candidate-formal", mode: "FAKE_PREVIEW", data_label: "Demo / Fake 资料补全预演",
+        facts: [{ field: "industry", value: "Imagined industry", source: "Demo" }], public_contact_paths: [],
+        uncertainties: [], message: "Fake preview", created: true,
+      },
+    }] },
+    global: { plugins: [[VueQueryPlugin, { queryClient }]] },
+  })
+
+  expect(screen.getByText("资料理解服务尚未配置", { exact: false })).toBeInTheDocument()
+  expect(screen.queryByText("Demo / Fake 资料补全预演")).not.toBeInTheDocument()
+  expect(screen.queryByText("Imagined industry")).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "准备公司资料" })).not.toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "上传真实资料" })).toHaveAttribute("href", "/assets")
+})
+
 
 it("prepares a clearly fake company profile without inventing contacts or intent", async () => {
   document.cookie = "csrftoken=enrichment-token"
@@ -34,6 +58,7 @@ it("prepares a clearly fake company profile without inventing contacts or intent
 
   render(CandidateEnrichmentQueue, {
     props: {
+      allowDemo: true,
       candidates: [{
         id: "candidate-1",
         company_name: "Jakarta Drives",

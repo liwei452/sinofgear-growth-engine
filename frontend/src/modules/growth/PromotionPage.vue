@@ -122,7 +122,6 @@ type PackageFactEvidence = {
   sourceFilename: string
   sourcePage: number | null
   sourceExcerpt: string
-  isDemo: boolean
 }
 function safePackageText(value: unknown, maxLength: number): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : ""
@@ -142,7 +141,7 @@ function packageFactEvidence(channelPackage: ChannelPackage | undefined): Packag
       && fact.source_page > 0 ? fact.source_page : null
     if (!id || !fieldName || !value || !sourceFilename || !sourceExcerpt) return []
     if (fact.is_demo === true) return []
-    return [{ id, fieldName, value, sourceFilename, sourcePage, sourceExcerpt, isDemo: false }]
+    return [{ id, fieldName, value, sourceFilename, sourcePage, sourceExcerpt }]
   })
 }
 function isApproved(channelPackage: ChannelPackage | undefined): boolean {
@@ -686,7 +685,9 @@ const preparedStandardChannels = computed(() => channels.filter(channel => Boole
           v-if="!allPackagesApproved" class="button button-primary" type="button"
           :disabled="!batchReviewConfirmed || approveAllMutation.isPending.value"
           aria-label="批准 4 个渠道内容" @click="approveAllPackages"
-        >{{ approveAllMutation.isPending.value ? "正在批准…" : "批准 4 个渠道内容" }}</button>
+        >
+          {{ approveAllMutation.isPending.value ? "正在批准…" : "批准 4 个渠道内容" }}
+        </button>
       </section>
       <section v-if="hasPublishingPackages" class="batch-review-panel manual-export-panel" aria-label="四渠道手工发布包">
         <div>
@@ -702,7 +703,9 @@ const preparedStandardChannels = computed(() => channels.filter(channel => Boole
           :disabled="!allPackagesApproved || exportAllMutation.isPending.value"
           aria-label="下载四渠道手工发布包"
           @click="downloadAllPackages"
-        >{{ exportAllMutation.isPending.value ? "正在准备…" : "下载四渠道手工发布包" }}</button>
+        >
+          {{ exportAllMutation.isPending.value ? "正在准备…" : "下载四渠道手工发布包" }}
+        </button>
       </section>
       <section v-if="hasPublishingPackages" class="publish-panel" aria-label="四渠道发布就绪检查">
         <div>
@@ -722,7 +725,9 @@ const preparedStandardChannels = computed(() => channels.filter(channel => Boole
                 class="readiness-action" type="button"
                 :aria-label="item.issue === 'REVIEW' ? `审核 ${channelLabel(item.channel)} 内容` : `处理 ${channelLabel(item.channel)} 账号`"
                 @click="focusChannelPackage(item.channel)"
-              >{{ item.issue === 'REVIEW' ? '去审核' : '去连接' }}</button>
+              >
+                {{ item.issue === 'REVIEW' ? '去审核' : '去连接' }}
+              </button>
             </li>
           </ul>
           <p>全部内容须人工批准且账号就绪；未连接官方账号时请下载手工发布包。</p>

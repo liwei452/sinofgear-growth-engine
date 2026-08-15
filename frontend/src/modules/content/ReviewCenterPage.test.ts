@@ -76,6 +76,18 @@ function renderPage(permissions: string[]) {
 
 afterEach(() => { vi.unstubAllGlobals(); document.cookie = "csrftoken=; Max-Age=0; path=/" })
 
+it("shows real creation paths instead of sample content for an empty review queue", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(common(path)), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
+  renderPage(["content.read"])
+
+  expect(await screen.findByRole("heading", { name: "当前没有符合条件的内容" })).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "创建内容" })).toHaveAttribute("href", "/content-factory")
+  expect(screen.getByRole("link", { name: "补充公司信息" })).toHaveAttribute("href", "/company")
+  expect(screen.queryByText("精密齿轮解决方案")).not.toBeInTheDocument()
+})
+
 it("shows plain content fields and a safe, collapsed AI audit summary", async () => {
   vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
     path.startsWith("/api/v1/master-contents") ? page([master()]) : common(path),

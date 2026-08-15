@@ -85,13 +85,13 @@ it("shows no channel success metrics until a result has actually been recorded",
 
 it("shows persisted account approval in the effectiveness attribution panel", async () => {
   const workspace = {
-    target_accounts: [{ id: "account-pack", name: "PackTech GmbH", country: "Germany", industry: "Packaging machinery", employee_range: "51-200", website: "", is_demo: true, data_label: "Demo / Fake" }],
+    target_accounts: [{ id: "account-pack", name: "PackTech GmbH", country: "Germany", industry: "Packaging machinery", employee_range: "51-200", website: "", is_demo: false, data_label: "Owned CRM record" }],
     contacts: [], inbound_leads: [], follow_ups: [], outreach_drafts: [], opportunity_reviews: [], crm_handoffs: [],
     intent_signals: [], channel_packages: [], publish_batches: [], metric_receipts: [], field_provenance: [], connectors: [],
     reactivations: [{
       id: "react-pack", account_id: "account-pack", account_name: "PackTech GmbH", industry: "Packaging machinery",
       relationship_source: "PAST_INQUIRY", last_interacted_at: "2026-04-15T08:00:00Z",
-      interaction_summary: "2025 trade fair discussion.", tier: "STRATEGIC", status: "APPROVED", is_demo: true,
+      interaction_summary: "2025 trade fair discussion.", tier: "STRATEGIC", status: "APPROVED", is_demo: false,
       why_reactivate: "已有合法关系", recommended_action: "人工复核", evidence: "已有关系记录",
       risk: "发送前复核", draft: { id: "draft-pack", english_draft: "Hello", chinese_explanation: "已有事实", status: "APPROVED" },
       events: [{ event_type: "REACTIVATION_APPROVED", created_at: "2026-08-15T08:30:00Z", delivery: "NEVER_SENT" }],
@@ -131,7 +131,9 @@ it("requires provenance before saving a verified manual channel result", async (
   render(EffectivenessPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
   await screen.findByText("尚未回填渠道结果")
-  await user.selectOptions(screen.getByLabelText("数据性质"), "VERIFIED_MANUAL")
+  expect(screen.queryByLabelText("数据性质")).not.toBeInTheDocument()
+  expect(screen.getByLabelText("播放或访问")).toHaveValue(0)
+  expect(screen.queryByText("Demo / Fake")).not.toBeInTheDocument()
   await user.type(screen.getByLabelText("数据来源说明"), "LinkedIn Page analytics checked by owner")
   await user.type(screen.getByLabelText("观察时间"), "2026-08-15T09:30")
   await user.click(screen.getByRole("button", { name: "保存回填" }))
@@ -219,6 +221,8 @@ it("persists content-package approval and manual metric backfill", async () => {
   await user.type(screen.getByLabelText("播放或访问"), "7000")
   await user.clear(screen.getByLabelText("点击"))
   await user.type(screen.getByLabelText("点击"), "200")
+  await user.type(screen.getByLabelText("数据来源说明"), "TikTok analytics checked by owner")
+  await user.type(screen.getByLabelText("观察时间"), "2026-08-14T09:00")
   await user.click(screen.getByRole("button", { name: "保存回填" }))
 
   await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("指标已保存"))
@@ -604,12 +608,12 @@ it("sorts and switches the opportunity queue without sharing follow-up state", a
       {
         id: "10000000-0000-4000-8000-000000001003", name: "NordMotion AB", country: "Sweden",
         industry: "Automation equipment", employee_range: "51-200", website: "",
-        is_demo: true, data_label: "Demo / Fake",
+        is_demo: false, data_label: "Licensed / permitted source",
       },
       {
         id: accountId, name: "API Opportunity GmbH", country: "Germany",
         industry: "Packaging machinery", employee_range: "51-200", website: "",
-        is_demo: true, data_label: "Demo / Fake",
+        is_demo: false, data_label: "Licensed / permitted source",
       },
     ],
     contacts: [{
@@ -622,13 +626,13 @@ it("sorts and switches the opportunity queue without sharing follow-up state", a
         id: "signal-low", account_id: "10000000-0000-4000-8000-000000001003",
         signal_type: "PRODUCT_CHANGE", source_label: "Public product page",
         source_url: "https://example.invalid/products", evidence_text: "Added a low-noise drive range",
-        confidence: 52, observed_at: "2026-08-14T08:00:00Z", data_label: "Demo / Fake",
+        confidence: 52, observed_at: "2026-08-14T08:00:00Z", data_label: "Licensed / permitted source",
       },
       {
         id: "signal-1", account_id: accountId, signal_type: "HIRING",
         source_label: "Public careers page", source_url: "https://example.invalid/careers",
         evidence_text: "Hiring a transmission buyer", confidence: 88,
-        observed_at: "2026-08-14T09:20:00Z", data_label: "Demo / Fake",
+        observed_at: "2026-08-14T09:20:00Z", data_label: "Licensed / permitted source",
       },
     ],
     inbound_leads: [], follow_ups: [], outreach_drafts: [], channel_packages: [],
@@ -676,12 +680,12 @@ it("explains evidence scoring and shows only safe source links with saved follow
       {
         id: primaryId, name: "Evidence Buyer GmbH", country: "Germany",
         industry: "Packaging machinery", employee_range: "51-200", website: "",
-        is_demo: true, data_label: "Demo / Fake",
+        is_demo: false, data_label: "Licensed / permitted source",
       },
       {
         id: observedId, name: "Thin Evidence SpA", country: "Italy",
         industry: "Food machinery", employee_range: "201-500", website: "",
-        is_demo: true, data_label: "Demo / Fake",
+        is_demo: false, data_label: "Licensed / permitted source",
       },
     ],
     contacts: [],
@@ -690,8 +694,8 @@ it("explains evidence scoring and shows only safe source links with saved follow
         id: "signal-primary", account_id: primaryId, signal_type: "HIRING",
         source_label: "Public careers page", source_url: "https://example.invalid/evidence",
         evidence_text: "Hiring a precision transmission buyer", confidence: 88,
-        observed_at: "2026-08-14T09:20:00Z", data_label: "Demo / Fake",
-        collection_method: "DEMO_FIXTURE", collection_method_label: "本地演示样本",
+        observed_at: "2026-08-14T09:20:00Z", data_label: "Licensed / permitted source",
+        collection_method: "LICENSED_API", collection_method_label: "许可来源",
         content_hash: "a".repeat(64), scoring_rule_version: "opportunity-v1",
         score_breakdown: {
           icp_fit: 20, intent_strength: 24, recency: 14,
@@ -755,7 +759,7 @@ it("explains evidence scoring and shows only safe source links with saved follow
   expect(screen.getByRole("heading", { name: "评分依据" })).toBeInTheDocument()
   expect(screen.getByText("证据覆盖 18")).toBeInTheDocument()
   expect(screen.getByText("风险扣分 0")).toBeInTheDocument()
-  expect(screen.getByText("本地演示样本")).toBeInTheDocument()
+  expect(screen.getByText("许可来源")).toBeInTheDocument()
   expect(screen.getByText("TED 官方公开数据")).toBeInTheDocument()
   expect(screen.getByText("待人工审查")).toBeInTheDocument()
   expect(screen.getByText("免费公开来源")).toBeInTheDocument()
@@ -787,13 +791,13 @@ it("keeps legacy opportunity evidence usable when score details are missing", as
     target_accounts: [{
       id: accountId, name: "Legacy Evidence Ltd", country: "United Kingdom",
       industry: "Machinery", employee_range: "11-50", website: "",
-      is_demo: true, data_label: "Demo / Fake",
+      is_demo: false, data_label: "Licensed / permitted source",
     }],
     contacts: [],
     intent_signals: [{
       id: "legacy-signal", account_id: accountId, signal_type: "MANUAL",
       source_label: "Legacy import", source_url: "", evidence_text: "Imported before score details existed",
-      confidence: 61, observed_at: "2026-08-14T07:00:00Z", data_label: "Demo / Fake",
+      confidence: 61, observed_at: "2026-08-14T07:00:00Z", data_label: "Licensed / permitted source",
     }],
     inbound_leads: [], follow_ups: [], outreach_drafts: [], channel_packages: [],
     publish_batches: [], metric_receipts: [], field_provenance: [], connectors: [],

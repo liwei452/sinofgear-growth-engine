@@ -15,10 +15,11 @@ const sortBy = ref("RECOMMENDED")
 const watchedCodes = ref(new Set<string>())
 const watchingCode = ref("")
 
-const activeMarkets = computed(() => props.summary.markets.filter(market => market.status === "ACTIVE_MARKET"))
+const formalMarkets = computed(() => props.summary.markets.filter(market => !market.is_demo))
+const activeMarkets = computed(() => formalMarkets.value.filter(market => market.status === "ACTIVE_MARKET"))
 const candidateMarkets = computed(() => {
   const query = search.value.trim().toLocaleLowerCase()
-  const filtered = props.summary.markets.filter(market => (
+  const filtered = formalMarkets.value.filter(market => (
     market.status !== "ACTIVE_MARKET"
     && (!query || `${market.country_label} ${market.country_code}`.toLocaleLowerCase().includes(query))
     && (region.value === "ALL" || market.region === region.value)
@@ -28,11 +29,11 @@ const candidateMarkets = computed(() => {
   return [...filtered].sort((left, right) => {
     if (sortBy.value === "NAME") return left.country_label.localeCompare(right.country_label, "zh-CN")
     if (sortBy.value === "WATCHED") return Number(isWatched(right)) - Number(isWatched(left))
-    return props.summary.markets.indexOf(left) - props.summary.markets.indexOf(right)
+    return formalMarkets.value.indexOf(left) - formalMarkets.value.indexOf(right)
   })
 })
 
-const regions = computed(() => [...new Set(props.summary.markets.map(market => market.region).filter(Boolean))])
+const regions = computed(() => [...new Set(formalMarkets.value.map(market => market.region).filter(Boolean))])
 
 const mutation = useMutation({
   mutationFn: watchMarket,
@@ -88,6 +89,7 @@ function regionLabel(value?: string): string {
         </div>
       </article>
     </div>
+    <p v-if="!activeMarkets.length" class="market-empty">当前没有已验证的活跃市场。请先导入有许可的市场名单或公开线索，再用真实样本评估。</p>
 
     <div class="market-radar-head">
       <h3>市场雷达</h3>
@@ -104,7 +106,7 @@ function regionLabel(value?: string): string {
 
     <div class="market-workbench-grid">
       <article v-for="market in candidateMarkets" :key="market.country_code" class="market-workbench-card" :aria-label="`${market.country_label} ${market.route_label}`">
-        <header><div><span v-if="market.is_demo" class="demo-market-label">Demo / 研究配置</span><h4>{{ market.country_label }} · {{ market.recommended_wave }}</h4></div><b>{{ routeFamilyLabel(market.path_family) }}</b></header>
+        <header><div><h4>{{ market.country_label }} · {{ market.recommended_wave }}</h4></div><b>{{ routeFamilyLabel(market.path_family) }}</b></header>
         <p class="market-worth"><strong>为什么值得看</strong> {{ market.recommendation_reasons.join("；") }}</p>
         <dl>
           <div><dt>适合行业</dt><dd>{{ market.suitable_industries?.join("、") || "工业设备" }}</dd></div>
@@ -120,7 +122,7 @@ function regionLabel(value?: string): string {
         </div>
       </article>
     </div>
-    <p v-if="!candidateMarkets.length" class="market-empty">没有符合当前条件的市场，请调整筛选。</p>
+    <p v-if="!candidateMarkets.length" class="market-empty">当前没有已保存的候选市场。请从上方入口导入合法名单或公开线索。</p>
   </section>
 </template>
 

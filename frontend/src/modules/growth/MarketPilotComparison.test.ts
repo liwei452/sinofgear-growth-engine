@@ -72,7 +72,7 @@ describe("MarketPilotComparison", () => {
         evidence_note: "研究配置；来源方向为许可交易数据、企业官网与公开采购",
         recommended_action: "查看该市场候选公司并选择许可名单或公开线索路径",
         recommendation_reasons: ["制造业规模大，值得验证"], hold_reasons: ["付费数据尚未接入"],
-        is_demo: true, is_watched: false,
+        is_demo: false, is_watched: false,
       }],
     }
     const onSelectMarket = vi.fn()
@@ -84,7 +84,7 @@ describe("MarketPilotComparison", () => {
 
     await user.type(screen.getByRole("searchbox", { name: "搜索国家" }), "美国")
     const usa = screen.getByRole("article", { name: "美国 海关强数据路线" })
-    expect(within(usa).getByText("Demo / 研究配置")).toBeInTheDocument()
+    expect(within(usa).queryByText("Demo / 研究配置")).not.toBeInTheDocument()
     expect(within(usa).getByText(/工业设备/)).toBeInTheDocument()
     expect(within(usa).getByText(/许可企业级交易数据/)).toBeInTheDocument()
     expect(within(usa).getByText(/来源方向为许可交易数据/)).toBeInTheDocument()

@@ -8,19 +8,19 @@ import AccountAttributionPanel from "./AccountAttributionPanel.vue"
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
 const channel = ref("TIKTOK")
-const dataKind = ref<"DEMO" | "VERIFIED_MANUAL">("DEMO")
 const sourceNote = ref("")
 const observedAt = ref("")
-const views = ref(6820)
-const clicks = ref(186)
+const views = ref(0)
+const clicks = ref(0)
 const replies = ref(0)
-const inquiries = ref(1)
+const inquiries = ref(0)
 const savedMessage = ref("")
 const saveError = ref("")
 
 const latestReceipts = computed(() => {
   const seen = new Set<string>()
   return (workspaceQuery.data.value?.metric_receipts ?? []).filter((receipt) => {
+    if (receipt.is_demo) return false
     if (seen.has(receipt.channel)) return false
     seen.add(receipt.channel)
     return true
@@ -57,23 +57,21 @@ async function saveMetrics(): Promise<void> {
     views: Number(views.value), clicks: Number(clicks.value), replies: Number(replies.value),
     inquiries: Number(inquiries.value),
   }
-  if (dataKind.value === "VERIFIED_MANUAL") {
-    payload.source_note = sourceNote.value.trim()
-    payload.observed_at = observedAt.value
-  }
+  payload.source_note = sourceNote.value.trim()
+  payload.observed_at = observedAt.value
   await metricMutation.mutateAsync({
     channel: channel.value,
     payload,
-    is_demo: dataKind.value === "DEMO",
+    is_demo: false,
   }).catch(() => undefined)
 }
 </script>
 
 <template>
   <div class="growth-page">
-    <header class="growth-hero"><div><p class="eyebrow">效果</p><h1>推广效果</h1><p>每个结论都保留时间范围、分子、分母和数据来源。</p></div><span class="fake-label">Demo / Fake</span></header>
+    <header class="growth-hero"><div><p class="eyebrow">效果</p><h1>推广效果</h1><p>每个结论都保留时间范围、分子、分母和数据来源。</p></div><span class="fake-label">仅显示已记录结果</span></header>
     <AccountAttributionPanel v-if="workspaceQuery.data.value" :workspace="workspaceQuery.data.value" />
-    <div class="attribution-auxiliary-label"><strong>以下只显示已保存的渠道回填</strong><span>Demo / Fake 与人工记录逐条标识，不计入上方账户漏斗。</span></div>
+    <div class="attribution-auxiliary-label"><strong>以下只显示已保存的人工渠道回填</strong><span>未保存的发送、回复和询盘不会推算或补零。</span></div>
     <section class="metric-grid" aria-label="渠道回填摘要">
       <article><span>已回填渠道</span><strong>{{ latestReceipts.length }}</strong><p>仅统计每个渠道最新一条记录</p></article>
       <article><span>已记录点击</span><strong>{{ latestReceipts.length ? recordedClicks.toLocaleString() : "无数据" }}</strong><p>来自已保存渠道记录</p></article>
@@ -84,29 +82,26 @@ async function saveMetrics(): Promise<void> {
       <p v-if="!latestReceipts.length" class="attribution-empty">尚未回填渠道结果</p>
       <div v-else class="performance-list">
         <article v-for="receipt in latestReceipts" :key="receipt.id">
-          <strong>{{ receipt.channel }} · {{ receipt.is_demo ? "Demo / Fake" : "人工记录" }}</strong>
+          <strong>{{ receipt.channel }} · 人工记录</strong>
           <span>{{ metricText(receipt.payload, "views", "播放或访问") }}</span>
           <span>{{ metricText(receipt.payload, "clicks", "点击") }}</span>
           <span>{{ metricText(receipt.payload, "replies", "回复") }} · {{ metricText(receipt.payload, "inquiries", "询盘") }}</span>
-          <small v-if="!receipt.is_demo" class="metric-provenance">
+          <small class="metric-provenance">
             <span>{{ String(receipt.payload.source_note ?? "") }}</span>
             <span>观察时间：{{ String(receipt.payload.observed_at ?? "") }}</span>
           </small>
         </article>
       </div>
       <form class="metric-backfill" aria-labelledby="metric-backfill-title" @submit.prevent="saveMetrics">
-        <div class="growth-heading"><div><h2 id="metric-backfill-title">手工回填渠道结果</h2><p>只保存人工确认的结果，不连接或操作真实平台。</p></div><span class="fake-label">{{ dataKind === "DEMO" ? "Demo / Fake" : "人工核实结果" }}</span></div>
+        <div class="growth-heading"><div><h2 id="metric-backfill-title">手工回填渠道结果</h2><p>只保存人工确认的结果，不连接或操作真实平台。</p></div><span class="fake-label">人工核实结果</span></div>
         <div class="metric-fields">
-          <label>数据性质<select v-model="dataKind"><option value="DEMO">演示数据</option><option value="VERIFIED_MANUAL">人工核实结果</option></select></label>
           <label>渠道<select v-model="channel"><option value="TIKTOK">TikTok</option><option value="LINKEDIN">LinkedIn</option><option value="INSTAGRAM">Instagram</option><option value="FACEBOOK">Facebook</option></select></label>
           <label>播放或访问<input v-model.number="views" type="number" min="0" required /></label>
           <label>点击<input v-model.number="clicks" type="number" min="0" required /></label>
           <label>回复<input v-model.number="replies" type="number" min="0" required /></label>
           <label>询盘<input v-model.number="inquiries" type="number" min="0" required /></label>
-          <template v-if="dataKind === 'VERIFIED_MANUAL'">
-            <label class="manual-import-wide">数据来源说明<input v-model="sourceNote" maxlength="500" required placeholder="例如：平台后台截图，由负责人于当日核对" /></label>
-            <label>观察时间<input v-model="observedAt" type="datetime-local" required /></label>
-          </template>
+          <label class="manual-import-wide">数据来源说明<input v-model="sourceNote" maxlength="500" required placeholder="例如：平台后台截图，由负责人于当日核对" /></label>
+          <label>观察时间<input v-model="observedAt" type="datetime-local" required /></label>
         </div>
         <button class="button button-primary" type="submit" :disabled="metricMutation.isPending.value">{{ metricMutation.isPending.value ? "正在保存…" : "保存回填" }}</button>
         <p v-if="savedMessage" role="status" class="approval-status">{{ savedMessage }}</p>

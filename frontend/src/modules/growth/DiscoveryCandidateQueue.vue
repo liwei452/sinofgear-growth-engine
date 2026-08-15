@@ -15,7 +15,7 @@ const actionStatus = ref("")
 const actionError = ref("")
 
 const visibleCandidates = computed(() => (
-  props.candidates.filter((candidate) => !reviewedIds.value.has(candidate.id))
+  props.candidates.filter((candidate) => !candidate.is_demo && !reviewedIds.value.has(candidate.id))
 ))
 
 const mutation = useMutation({
@@ -60,7 +60,6 @@ function formatDate(value: string): string {
     <article v-for="candidate in visibleCandidates" :key="candidate.id" class="candidate-review-card">
       <div class="candidate-review-title">
         <div>
-          <span v-if="candidate.is_demo" class="demo-badge">Demo</span>
           <h3>{{ candidate.company_name }}</h3>
           <p>{{ candidate.country }}<template v-if="candidate.industry"> · {{ candidate.industry }}</template></p>
         </div>

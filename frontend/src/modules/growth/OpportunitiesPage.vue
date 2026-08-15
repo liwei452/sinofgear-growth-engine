@@ -52,7 +52,7 @@ const scoreLabels = {
 
 function latestSignalFor(accountId: string) {
   return workspaceQuery.data.value?.intent_signals
-    .filter((signal) => signal.account_id === accountId)
+    .filter((signal) => signal.account_id === accountId && signal.collection_method !== "DEMO_FIXTURE")
     .sort((left, right) => Date.parse(right.observed_at) - Date.parse(left.observed_at))[0]
 }
 
@@ -104,7 +104,6 @@ function licenseLabel(value: string | undefined): string {
     TED_SEARCH_API_PUBLIC_DATA: "TED 官方公开数据",
     OPEN_GOVERNMENT_LICENCE_3_0: "英国开放政府许可 3.0",
     USER_ASSERTED_PERMISSION: "用户确认有权使用",
-    DEMO_FIXTURE: "演示数据",
   }
   return value ? labels[value] ?? "许可信息待核实" : "许可信息未记录"
 }
@@ -136,7 +135,7 @@ function sourceTypeLabel(value: string | undefined): string {
 const sortedAccounts = computed(() => {
   const workspace = workspaceQuery.data.value
   if (!workspace?.target_accounts.length) return []
-  return [...workspace.target_accounts].sort((left, right) => {
+  return workspace.target_accounts.filter(account => !account.is_demo).sort((left, right) => {
     const priorityDifference = Number(priorityFor(right.id) === "优先跟进")
       - Number(priorityFor(left.id) === "优先跟进")
     return priorityDifference || confidenceFor(right.id) - confidenceFor(left.id)
@@ -190,6 +189,12 @@ const followed = computed(() => Boolean(activeAccount.value && (
   workspaceQuery.data.value?.follow_ups.some((item) => item.account_id === activeAccount.value?.id)
 )))
 const canGenerateDraft = computed(() => Boolean(activeSignal.value))
+const formalReactivations = computed(() => (workspaceQuery.data.value?.reactivations ?? [])
+  .filter(record => !record.is_demo))
+const formalCandidates = computed(() => (workspaceQuery.data.value?.discovery?.candidates ?? [])
+  .filter(candidate => !candidate.is_demo))
+const formalEnrichmentCandidates = computed(() => (workspaceQuery.data.value?.discovery?.enrichment_candidates ?? [])
+  .filter(candidate => !candidate.is_demo))
 
 const detail = computed(() => ({
   id: activeAccount.value?.id ?? "",
@@ -197,9 +202,7 @@ const detail = computed(() => ({
   country: activeAccount.value?.country === "Germany" ? "德国" : activeAccount.value?.country ?? "国家未记录",
   industry: activeAccount.value?.industry ?? "行业未记录",
   size: activeAccount.value?.employee_range ?? "规模未记录",
-  label: activeAccount.value?.is_demo === false
-    ? "许可 / 用户提供来源"
-    : activeAccount.value?.data_label ?? "Demo / Fake",
+  label: "许可 / 用户提供来源",
   confidence: activeSignal.value?.confidence ?? "未评分",
   priority: activeSignal.value?.priority_label ?? "继续观察",
   signal: activeSignal.value?.evidence_text ?? "尚未记录需求信号",
@@ -316,20 +319,20 @@ async function handleImported(accountId: string): Promise<void> {
     />
     <ReactivationWorkbench
       v-if="workspaceQuery.data.value"
-      :accounts="workspaceQuery.data.value.target_accounts"
-      :reactivations="workspaceQuery.data.value.reactivations ?? []"
+      :accounts="sortedAccounts"
+      :reactivations="formalReactivations"
     />
     <section id="candidate-discovery-entry" class="market-candidate-entry">
       <p v-if="selectedMarketName" class="market-selection-note"><strong>{{ selectedMarketName }}</strong> · 先导入许可名单或公开线索，再进入人工核实。</p>
       <CandidateListImportForm :open="marketImportOpen" :market-name="selectedMarketName" />
     </section>
     <DiscoveryCandidateQueue
-      v-if="workspaceQuery.data.value?.discovery?.candidates?.length"
-      :candidates="workspaceQuery.data.value.discovery.candidates"
+      v-if="formalCandidates.length"
+      :candidates="formalCandidates"
     />
     <CandidateEnrichmentQueue
-      v-if="workspaceQuery.data.value?.discovery?.enrichment_candidates?.length"
-      :candidates="workspaceQuery.data.value.discovery.enrichment_candidates"
+      v-if="formalEnrichmentCandidates.length"
+      :candidates="formalEnrichmentCandidates"
     />
     <MarketPilotComparison
       v-if="workspaceQuery.data.value?.market_pilots"
@@ -449,6 +452,9 @@ async function handleImported(accountId: string): Promise<void> {
     <section v-else class="growth-card opportunity-empty" aria-labelledby="opportunity-empty-title">
       <h2 id="opportunity-empty-title">还没有可审核的客户机会</h2>
       <p>请先从市场推荐选择数据路径，或导入有许可的客户名单与公开线索。候选公司经过人工核实后才会出现在这里。</p>
+      <div class="page-actions">
+        <button class="button button-primary" type="button" @click="marketImportOpen = true">导入合法名单</button>
+      </div>
     </section>
   </div>
 </template>

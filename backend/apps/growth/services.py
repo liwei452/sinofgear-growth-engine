@@ -140,7 +140,10 @@ def add_to_follow_up(*, account: TargetAccount) -> tuple[FollowUp, bool]:
 
 
 @transaction.atomic
-def create_outreach_draft(*, account: TargetAccount) -> OutreachDraft:
+def create_outreach_draft(*, account: TargetAccount) -> tuple[OutreachDraft, bool]:
+    existing = account.outreach_drafts.order_by("-created_at", "-id").first()
+    if existing is not None:
+        return existing, False
     return OutreachDraft.objects.create(
         organization=account.organization,
         account=account,
@@ -149,7 +152,7 @@ def create_outreach_draft(*, account: TargetAccount) -> OutreachDraft:
             "for your review?"
         ),
         chinese_explanation="仅建议询问对方是否愿意查看能力摘要；没有声称对方已经采购，也不会自动发送。",
-    )
+    ), True
 
 
 @transaction.atomic

@@ -305,6 +305,7 @@ async function handleImported(accountId: string): Promise<void> {
     <CandidateEnrichmentQueue
       v-if="formalEnrichmentCandidates.length"
       :candidates="formalEnrichmentCandidates"
+      :outreach-drafts="workspaceQuery.data.value?.outreach_drafts ?? []"
     />
     <MarketPilotComparison
       v-if="workspaceQuery.data.value?.market_pilots"

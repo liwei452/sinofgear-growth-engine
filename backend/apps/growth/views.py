@@ -625,14 +625,14 @@ class OutreachDraftView(APIView):
     @extend_schema(tags=["Growth workspace"])
     def post(self, request, account_id):
         account = get_object_or_404(TargetAccount, id=account_id, organization=request.organization)
-        draft = create_outreach_draft(account=account)
+        draft, created = create_outreach_draft(account=account)
         return Response({
             "id": draft.id,
             "status": draft.status,
             "English draft": draft.english_draft,
             "Chinese explanation": draft.chinese_explanation,
             "delivery": "NEVER_SENT",
-        }, status=201)
+        }, status=201 if created else 200)
 
 
 class OpportunityReviewView(APIView):

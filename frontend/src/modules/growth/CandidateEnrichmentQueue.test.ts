@@ -73,6 +73,37 @@ it("lets a formal candidate review imported facts before joining follow-up", asy
   expect(fetchMock).toHaveBeenCalledTimes(2)
 })
 
+it("restores the saved review draft after a refresh without asking to generate it again", () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(CandidateEnrichmentQueue, {
+    props: {
+      candidates: [{
+        id: "candidate-saved", company_name: "Saved Drives", country: "Chile", website: "",
+        industry: "Machinery", status: "ACCEPTED", status_label: "待补全公司资料",
+        source_owner: "Licensed list", license_contract: "Internal prospecting licence", import_format: "CSV",
+        is_demo: false, created_at: "2026-08-15T06:00:00Z",
+        latest_preview: {
+          candidate_id: "candidate-saved", mode: "IMPORTED_FACTS_REVIEW", data_label: "许可名单事实 · 待人工确认",
+          facts: [{ field: "company_name", value: "Saved Drives", source: "许可名单导入" }],
+          public_contact_paths: [], uncertainties: ["没有采购意向证据"],
+          message: "仅整理已导入事实；没有采购意向，也不会联系客户。", created: false,
+          account_id: "account-saved",
+        },
+      }],
+      outreachDrafts: [{
+        id: "draft-saved", account_id: "account-saved", english_draft: "Hello Saved Drives team.",
+        chinese_explanation: "仅引用已保存事实。", status: "DRAFT", delivery: "NEVER_SENT",
+        created_at: "2026-08-15T07:00:00Z", updated_at: "2026-08-15T07:00:00Z",
+      }],
+    },
+    global: { plugins: [[VueQueryPlugin, { queryClient }]] },
+  })
+
+  expect(screen.getByText("Hello Saved Drives team.")).toBeInTheDocument()
+  expect(screen.getByText("待人工审核 · 绝不自动发送")).toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "生成联系草稿" })).not.toBeInTheDocument()
+})
+
 
 it("prepares a clearly fake company profile without inventing contacts or intent", async () => {
   document.cookie = "csrftoken=enrichment-token"

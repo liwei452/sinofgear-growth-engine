@@ -8,6 +8,7 @@ from apps.growth.models import (
     DiscoveryCandidate,
     FollowUp,
     IntentSignal,
+    OutreachDraft,
     TargetAccount,
 )
 from apps.identity.models import Membership, Organization, Role
@@ -188,6 +189,12 @@ def test_prepared_candidate_can_be_added_to_follow_up_without_inventing_intent(o
     assert IntentSignal.objects.filter(organization=organization, account=account).count() == 0
 
     draft = client.post(f"/api/v1/growth/opportunities/{account.id}/draft", {}, format="json")
+    repeated_draft = client.post(
+        f"/api/v1/growth/opportunities/{account.id}/draft", {}, format="json",
+    )
     assert draft.status_code == 201
+    assert repeated_draft.status_code == 200
+    assert repeated_draft.data["id"] == draft.data["id"]
+    assert OutreachDraft.objects.filter(organization=organization, account=account).count() == 1
     assert draft.data["delivery"] == "NEVER_SENT"
     assert "Jakarta Drives" in draft.data["English draft"]

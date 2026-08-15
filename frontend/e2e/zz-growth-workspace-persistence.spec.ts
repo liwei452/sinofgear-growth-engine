@@ -98,7 +98,19 @@ test("formal workspace stays clean and persists only explicitly recorded data", 
   await enrichment.getByRole("button", { name: "加入跟进" }).click()
   await expect(enrichment.getByText("已加入人工跟进；没有生成采购意向，也没有联系客户。")).toBeVisible()
   await page.reload()
-  await expect(page.locator("article.candidate-enrichment-card").filter({ hasText: "Licensed Browser Drives" }).getByText("已加入人工跟进")).toBeVisible()
+  const persistedEnrichment = page.locator("article.candidate-enrichment-card").filter({ hasText: "Licensed Browser Drives" })
+  await expect(persistedEnrichment.getByText("已加入人工跟进")).toBeVisible()
+  const draftResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith("/draft") && response.request().method() === "POST",
+  )
+  await persistedEnrichment.getByRole("button", { name: "生成联系草稿" }).click()
+  expect((await draftResponse).status()).toBe(201)
+  await expect(persistedEnrichment.getByText(/Hello Licensed Browser Drives team/)).toBeVisible()
+  await expect(persistedEnrichment.getByText("待人工审核 · 绝不自动发送")).toBeVisible()
+  await page.reload()
+  const restoredEnrichment = page.locator("article.candidate-enrichment-card").filter({ hasText: "Licensed Browser Drives" })
+  await expect(restoredEnrichment.getByText(/Hello Licensed Browser Drives team/)).toBeVisible()
+  await expect(restoredEnrichment.getByRole("button", { name: "生成联系草稿" })).toHaveCount(0)
   await expectNoSeededDemo(page)
 
   await page.getByRole("button", { name: "导入公开线索" }).click()

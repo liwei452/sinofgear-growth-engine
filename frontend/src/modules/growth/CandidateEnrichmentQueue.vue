@@ -9,9 +9,14 @@ import {
   prepareCandidateEnrichment,
   type CandidateEnrichmentPreview,
   type EnrichmentCandidate,
+  type OutreachDraft,
 } from "./api"
 
-const props = withDefaults(defineProps<{ candidates: EnrichmentCandidate[]; allowDemo?: boolean }>(), { allowDemo: false })
+const props = withDefaults(defineProps<{
+  candidates: EnrichmentCandidate[]
+  outreachDrafts?: OutreachDraft[]
+  allowDemo?: boolean
+}>(), { allowDemo: false, outreachDrafts: () => [] })
 const queryClient = useQueryClient()
 const previews = ref<Record<string, CandidateEnrichmentPreview>>({})
 const activeCandidateId = ref("")
@@ -44,7 +49,7 @@ const followUpMutation = useMutation({
 
 const draftMutation = useMutation({
   mutationFn: createOpportunityDraft,
-  onSuccess: (result) => {
+  onSuccess: async (result) => {
     drafts.value = {
       ...drafts.value,
       [activeCandidateId.value]: {
@@ -52,6 +57,7 @@ const draftMutation = useMutation({
         chinese: result["Chinese explanation"],
       },
     }
+    await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
   },
   onError: () => { actionError.value = "暂时无法生成草稿，请稍后重试。" },
 })
@@ -59,6 +65,16 @@ const draftMutation = useMutation({
 function previewFor(candidate: EnrichmentCandidate): CandidateEnrichmentPreview | null {
   const preview = previews.value[candidate.id] ?? candidate.latest_preview
   return preview?.mode === "FAKE_PREVIEW" && !props.allowDemo ? null : preview
+}
+
+function draftFor(candidate: EnrichmentCandidate): { english: string; chinese: string } | null {
+  if (drafts.value[candidate.id]) return drafts.value[candidate.id]
+  const accountId = accountIds.value[candidate.id] ?? previewFor(candidate)?.account_id
+  if (!accountId) return null
+  const saved = props.outreachDrafts
+    .filter(draft => draft.account_id === accountId)
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0]
+  return saved ? { english: saved.english_draft, chinese: saved.chinese_explanation } : null
 }
 
 function prepare(candidateId: string): void {
@@ -137,13 +153,13 @@ const factLabels: Record<string, string> = {
           </button>
           <template v-else>
             <span class="follow-up-confirmation">{{ followUpMessages[candidate.id] || "已加入人工跟进" }}</span>
-            <button class="button button-secondary" type="button" :disabled="draftMutation.isPending.value" @click="generateDraft(candidate.id)">生成联系草稿</button>
+            <button v-if="!draftFor(candidate)" class="button button-secondary" type="button" :disabled="draftMutation.isPending.value" @click="generateDraft(candidate.id)">生成联系草稿</button>
           </template>
         </div>
-        <section v-if="drafts[candidate.id]" class="candidate-draft">
+        <section v-if="draftFor(candidate)" class="candidate-draft">
           <strong>待人工审核 · 绝不自动发送</strong>
-          <p>{{ drafts[candidate.id].english }}</p>
-          <small>{{ drafts[candidate.id].chinese }}</small>
+          <p>{{ draftFor(candidate)?.english }}</p>
+          <small>{{ draftFor(candidate)?.chinese }}</small>
         </section>
       </template>
       <div v-else class="enrichment-empty">

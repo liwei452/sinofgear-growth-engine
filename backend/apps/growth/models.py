@@ -241,7 +241,7 @@ class DiscoveryProfile(OrganizationOwnedModel):
         Organization, on_delete=models.PROTECT, related_name="growth_discovery_profile",
     )
     enabled = models.BooleanField(default=True)
-    source_code = models.CharField(max_length=32, default="TED")
+    source_code = models.CharField(max_length=32, default="OFFICIAL_PROCUREMENT")
     cpv_codes = models.JSONField(default=default_gear_cpv_codes)
     result_limit = models.PositiveSmallIntegerField(default=20)
     next_run_at = models.DateTimeField(null=True, blank=True)

@@ -8,12 +8,14 @@ from django.utils.module_loading import import_string
 from django.utils import timezone
 
 from integrations.sources.base import DiscoveryQuery, SourceAdapterError
+from integrations.sources.composite import CompositeDiscoverySource
+from integrations.sources.contracts_finder import ContractsFinderSource
 from integrations.sources.ted import TedSource
 
 from .models import DiscoveryProfile, DiscoveryRun, IntentSignal, TargetAccount
 
 
-TED_SCORE = {
+PUBLIC_PROCUREMENT_SCORE = {
     "icp_fit": 20,
     "intent_strength": 24,
     "recency": 18,
@@ -21,7 +23,19 @@ TED_SCORE = {
     "evidence_coverage": 18,
     "risk_penalty": 5,
 }
-TED_SCORE_TOTAL = sum(TED_SCORE.values()) - (2 * TED_SCORE["risk_penalty"])
+PUBLIC_PROCUREMENT_SCORE_TOTAL = (
+    sum(PUBLIC_PROCUREMENT_SCORE.values())
+    - (2 * PUBLIC_PROCUREMENT_SCORE["risk_penalty"])
+)
+
+SOURCE_LABELS = {
+    "TED": "TED 欧盟官方采购公告",
+    "UK_CONTRACTS_FINDER": "英国 Contracts Finder 官方采购公告",
+}
+DEMO_SOURCE_LABELS = {
+    "TED": "Demo / Fake TED 采购样本",
+    "UK_CONTRACTS_FINDER": "Demo / Fake 英国采购样本",
+}
 
 
 class DiscoveryAlreadyRunning(RuntimeError):
@@ -94,9 +108,9 @@ def _ingest_batch(*, profile_id, run_id, batch) -> DiscoveryRun:
             duplicates += 1
             continue
         source_identity = (
-            f"TED:{item.buyer_country}:{item.buyer_identifier}"
+            f"{item.source_code}:{item.buyer_country}:{item.buyer_identifier}"
             if item.buyer_identifier
-            else f"TED-NOTICE:{item.external_id}"
+            else f"{item.source_code}-NOTICE:{item.external_id}"
         )
         account, account_created = TargetAccount.objects.get_or_create(
             organization=profile.organization,
@@ -117,24 +131,20 @@ def _ingest_batch(*, profile_id, run_id, batch) -> DiscoveryRun:
             organization=profile.organization,
             account=account,
             signal_type="PUBLIC_PROCUREMENT_NOTICE",
-            source_label=(
-                "Demo / Fake TED 采购样本"
-                if batch.is_demo
-                else "TED 欧盟官方采购公告"
-            ),
+            source_label=_source_label(item.source_code, is_demo=batch.is_demo),
             source_url=item.source_url,
             evidence_text=(
                 f"TED notice {item.external_id}: {item.title}. "
                 f"CPV {cpv_text}. Tender deadline: {deadline_text}."
             ),
-            confidence=TED_SCORE_TOTAL,
+            confidence=PUBLIC_PROCUREMENT_SCORE_TOTAL,
             is_demo=batch.is_demo,
             collection_method=(
                 "DEMO_FIXTURE" if batch.is_demo else "OFFICIAL_PUBLIC_API"
             ),
             content_hash=content_hash,
-            score_breakdown=TED_SCORE,
-            scoring_rule_version="ted-procurement-v1",
+            score_breakdown=PUBLIC_PROCUREMENT_SCORE,
+            scoring_rule_version="public-procurement-v1",
             uncertainty_notes=[
                 "采购方来自公开采购公告，但仍需人工核实供应商资格与采购范围",
                 "尚未核实个人联系人，也不会自动联系客户",
@@ -213,12 +223,28 @@ def build_discovery_source():
     factory_path = settings.GROWTH_DISCOVERY_SOURCE_FACTORY
     if factory_path:
         return import_string(factory_path)()
-    return TedSource(
-        timeout_seconds=settings.TED_DISCOVERY_TIMEOUT_SECONDS,
-        max_response_bytes=settings.TED_DISCOVERY_MAX_RESPONSE_BYTES,
-    )
+    return CompositeDiscoverySource((
+        TedSource(
+            timeout_seconds=settings.TED_DISCOVERY_TIMEOUT_SECONDS,
+            max_response_bytes=settings.TED_DISCOVERY_MAX_RESPONSE_BYTES,
+        ),
+        ContractsFinderSource(
+            timeout_seconds=settings.CONTRACTS_FINDER_DISCOVERY_TIMEOUT_SECONDS,
+            max_response_bytes=settings.CONTRACTS_FINDER_DISCOVERY_MAX_RESPONSE_BYTES,
+        ),
+    ))
 
 
 def _item_hash(item) -> str:
-    canonical = "\n".join(("TED", item.external_id, item.source_url, item.title.strip()))
+    canonical = "\n".join((
+        item.source_code, item.external_id, item.source_url, item.title.strip(),
+    ))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _source_label(source_code: str, *, is_demo: bool) -> str:
+    labels = DEMO_SOURCE_LABELS if is_demo else SOURCE_LABELS
+    return labels.get(
+        source_code,
+        "Demo / Fake 采购样本" if is_demo else "官方公开采购公告",
+    )

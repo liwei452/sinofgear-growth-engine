@@ -96,6 +96,8 @@ class UrllibJsonTransport:
 
 
 class TedSource:
+    source_code = "TED"
+
     def __init__(
         self,
         *,

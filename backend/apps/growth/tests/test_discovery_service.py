@@ -68,7 +68,7 @@ def test_official_notice_creates_a_target_account_and_intent_signal(profile, sou
     assert signal.source_url.endswith("534032-2026")
     assert signal.is_demo is False
     assert signal.confidence == 80
-    assert signal.scoring_rule_version == "ted-procurement-v1"
+    assert signal.scoring_rule_version == "public-procurement-v1"
     assert signal.score_breakdown == {
         "icp_fit": 20,
         "intent_strength": 24,
@@ -142,6 +142,59 @@ def test_official_buyer_identifier_allows_safe_account_merging(profile, source_b
     account = TargetAccount.objects.get(organization=profile.organization)
     assert account.source_identity == "TED:DEU:DE-12345"
     assert IntentSignal.objects.filter(account=account).count() == 2
+
+
+def test_source_code_prevents_cross_source_evidence_collisions(profile, source_batch):
+    ted_item = source_batch.items[0]
+    uk_item = replace(ted_item, source_code="UK_CONTRACTS_FINDER")
+    batch = replace(source_batch, items=(ted_item, uk_item), total_count=2)
+
+    run_discovery(profile.id, trigger="MANUAL", source=FakeSource(batch))
+
+    signals = list(IntentSignal.objects.filter(
+        organization=profile.organization,
+    ).order_by("content_hash"))
+    assert len(signals) == 2
+    assert signals[0].content_hash != signals[1].content_hash
+    assert TargetAccount.objects.filter(organization=profile.organization).count() == 2
+
+
+def test_uk_buyer_identifier_merges_notices_and_keeps_uk_provenance(
+    profile, source_batch,
+):
+    first = replace(
+        source_batch.items[0],
+        source_code="UK_CONTRACTS_FINDER",
+        external_id="33764cb5-6f94-41a8-a78e-36f006b8e339",
+        buyer_country="GBR",
+        buyer_identifier="GB-CFS-326245",
+        source_url=(
+            "https://www.contractsfinder.service.gov.uk/Notice/"
+            "33764cb5-6f94-41a8-a78e-36f006b8e339"
+        ),
+    )
+    second = replace(
+        first,
+        external_id="8dad0e31-4a7a-4a24-a1c3-c55bc66fffd0",
+        source_url=(
+            "https://www.contractsfinder.service.gov.uk/Notice/"
+            "8dad0e31-4a7a-4a24-a1c3-c55bc66fffd0"
+        ),
+    )
+
+    run_discovery(
+        profile.id,
+        trigger="MANUAL",
+        source=FakeSource(replace(source_batch, items=(first, second), total_count=2)),
+    )
+
+    account = TargetAccount.objects.get(organization=profile.organization)
+    signals = IntentSignal.objects.filter(account=account)
+    assert account.source_identity == "UK_CONTRACTS_FINDER:GBR:GB-CFS-326245"
+    assert signals.count() == 2
+    assert set(signals.values_list("source_label", flat=True)) == {
+        "英国 Contracts Finder 官方采购公告",
+    }
 
 
 def test_source_failure_is_recorded_safely_and_backed_off(profile):

@@ -8,6 +8,7 @@ from apps.growth.discovery import build_discovery_source, run_due_discovery_prof
 from apps.growth.models import DiscoveryProfile
 from apps.identity.models import Organization
 from integrations.sources.base import SourceBatch
+from integrations.sources.composite import CompositeDiscoverySource
 
 
 class EmptySource:
@@ -58,3 +59,23 @@ def test_configured_fixture_source_is_explicitly_demo_labeled():
 
     assert batch.is_demo is True
     assert batch.capability_snapshot["source"] == "TED_E2E_FIXTURE"
+
+
+@override_settings(
+    GROWTH_DISCOVERY_SOURCE_FACTORY="",
+    TED_DISCOVERY_TIMEOUT_SECONDS=7,
+    TED_DISCOVERY_MAX_RESPONSE_BYTES=500_000,
+    CONTRACTS_FINDER_DISCOVERY_TIMEOUT_SECONDS=8,
+    CONTRACTS_FINDER_DISCOVERY_MAX_RESPONSE_BYTES=600_000,
+)
+def test_default_discovery_source_combines_bounded_official_sources():
+    source = build_discovery_source()
+
+    assert isinstance(source, CompositeDiscoverySource)
+    assert [item.source_code for item in source.sources] == [
+        "TED", "UK_CONTRACTS_FINDER",
+    ]
+    assert source.sources[0].timeout_seconds == 7
+    assert source.sources[0].max_response_bytes == 500_000
+    assert source.sources[1].timeout_seconds == 8
+    assert source.sources[1].max_response_bytes == 600_000

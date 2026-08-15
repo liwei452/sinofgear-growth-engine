@@ -18,6 +18,8 @@ CONTRACTS_FINDER_MAX_RESPONSE_BYTES = 2_000_000
 
 
 class ContractsFinderSource:
+    source_code = "UK_CONTRACTS_FINDER"
+
     def __init__(
         self,
         *,

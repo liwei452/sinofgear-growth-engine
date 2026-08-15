@@ -14,7 +14,7 @@ def test_profile_is_unique_per_organization_and_has_safe_defaults(organization):
     profile = DiscoveryProfile.objects.create(organization=organization)
 
     assert profile.enabled is True
-    assert profile.source_code == "TED"
+    assert profile.source_code == "OFFICIAL_PROCUREMENT"
     assert profile.result_limit == 20
     assert profile.cpv_codes == [
         "42140000", "42141000", "42141100", "42141200", "42141300",

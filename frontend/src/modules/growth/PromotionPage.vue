@@ -357,6 +357,22 @@ function channelLabel(channel: string): string {
   } as Record<string, string>)[channel] ?? channel
 }
 
+const resultTimeFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+})
+
+function formatResultTime(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "时间不可用"
+  return resultTimeFormatter.format(date).replace(",", "")
+}
+
 const channels: Array<{
   code: PlatformConnection["channel"]
   actionName: string
@@ -578,12 +594,18 @@ const channels: Array<{
         <ul class="publish-result-list">
           <li v-for="item in publishBatch.items" :key="item.id">
             <span>{{ channelLabel(item.channel) }}</span>
-            <a
-              v-if="item.status === 'SUCCEEDED'" :href="item.external_post_url"
-              target="_blank" rel="noreferrer"
-              :aria-label="`查看 ${channelLabel(item.channel)} ${item.mode === 'OFFICIAL' ? '平台帖子' : 'Demo 帖子'}`"
-            >发布成功 · 查看 {{ item.mode === "OFFICIAL" ? "平台帖子" : "Demo 帖子" }}</a>
-            <span v-else>{{ item.recovery_action || "等待发布" }}</span>
+            <div class="publish-result-detail">
+              <a
+                v-if="item.status === 'SUCCEEDED'" :href="item.external_post_url"
+                target="_blank" rel="noreferrer"
+                :aria-label="`查看 ${channelLabel(item.channel)} ${item.mode === 'OFFICIAL' ? '平台帖子' : 'Demo 帖子'}`"
+              >发布成功 · 查看 {{ item.mode === "OFFICIAL" ? "平台帖子" : "Demo 帖子" }}</a>
+              <span v-else>{{ item.recovery_action || "等待发布" }}</span>
+              <small>
+                <span>结果记录时间：</span>
+                <time :datetime="item.updated_at">{{ formatResultTime(item.updated_at) }}</time>
+              </small>
+            </div>
           </li>
         </ul>
         <button

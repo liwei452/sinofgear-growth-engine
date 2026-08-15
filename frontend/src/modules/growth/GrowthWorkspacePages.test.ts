@@ -492,6 +492,10 @@ it("labels official publish links truthfully and uses the recorded success count
     "href", "https://www.linkedin.com/feed/update/urn:li:activity:123",
   )
   expect(screen.getByText("1 个渠道已发布成功。")).toBeInTheDocument()
+  expect(screen.getByText("结果记录时间：")).toBeInTheDocument()
+  expect(screen.getByText("2026-08-15 16:01")).toHaveAttribute(
+    "datetime", "2026-08-15T08:01:00Z",
+  )
   expect(screen.queryByText(/Demo 帖子/)).not.toBeInTheDocument()
 })
 

@@ -222,8 +222,8 @@ async function generateDraft(): Promise<void> {
         <p v-else>评分明细暂缺，不能仅凭总分判断。</p>
         <div class="uncertainty-list">
           <h4>仍需确认</h4>
-          <ul v-if="activeSignal?.uncertainty_notes.length">
-            <li v-for="note in activeSignal.uncertainty_notes" :key="note">{{ note }}</li>
+          <ul v-if="activeSignal?.uncertainty_notes?.length">
+            <li v-for="note in activeSignal?.uncertainty_notes ?? []" :key="note">{{ note }}</li>
           </ul>
           <p v-else>暂未记录不确定项，仍需人工复核原始来源。</p>
         </div>

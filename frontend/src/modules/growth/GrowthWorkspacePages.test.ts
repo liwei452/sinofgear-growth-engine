@@ -445,6 +445,36 @@ it("explains evidence scoring and shows only safe source links with saved follow
   expect(screen.queryByRole("link", { name: "打开原始来源" })).not.toBeInTheDocument()
 })
 
+it("keeps legacy opportunity evidence usable when score details are missing", async () => {
+  const accountId = "10000000-0000-4000-8000-000000001099"
+  const workspace = {
+    target_accounts: [{
+      id: accountId, name: "Legacy Evidence Ltd", country: "United Kingdom",
+      industry: "Machinery", employee_range: "11-50", website: "",
+      is_demo: true, data_label: "Demo / Fake",
+    }],
+    contacts: [],
+    intent_signals: [{
+      id: "legacy-signal", account_id: accountId, signal_type: "MANUAL",
+      source_label: "Legacy import", source_url: "", evidence_text: "Imported before score details existed",
+      confidence: 61, observed_at: "2026-08-14T07:00:00Z", data_label: "Demo / Fake",
+    }],
+    inbound_leads: [], follow_ups: [], outreach_drafts: [], channel_packages: [],
+    publish_batches: [], metric_receipts: [], field_provenance: [], connectors: [],
+  }
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(workspace), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+  render(OpportunitiesPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  expect(await screen.findByRole("heading", { name: "Legacy Evidence Ltd" })).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "查看证据" }))
+  expect(screen.getByText("评分明细暂缺，不能仅凭总分判断。")).toBeInTheDocument()
+  expect(screen.getByText("暂未记录不确定项，仍需人工复核原始来源。")).toBeInTheDocument()
+})
+
 it("loads company provenance and persists human verification", async () => {
   document.cookie = "csrftoken=company-page-test-token"
   const factId = "10000000-0000-4000-8000-000000001403"

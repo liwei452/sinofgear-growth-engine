@@ -105,6 +105,9 @@ const connectionsByChannel = computed(() => new Map(
   (workspaceQuery.data.value?.connectors ?? []).map(item => [item.channel, item]),
 ))
 const publishChannelCodes = ["LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"] as const
+const calendarPackages = computed(() => publishChannelCodes
+  .map(channel => packageFor(channel))
+  .filter((channelPackage): channelPackage is ChannelPackage => Boolean(channelPackage)))
 type ChannelReadiness = {
   channel: typeof publishChannelCodes[number]
   label: string
@@ -302,6 +305,10 @@ function publishingRouteLabel(channel: string): string {
     return "发布方式：Demo / Fake · 不会真实发布"
   }
   return "发布方式：手工发布包 · 不会调用平台"
+}
+
+function calendarReviewLabel(channelPackage: ChannelPackage): string {
+  return isApproved(channelPackage) ? "已审核" : "待审核"
 }
 
 function connectionActionLabel(channel: string, channelName: string): string {
@@ -513,13 +520,16 @@ const channels: Array<{
       <div><span>审核边界</span><strong>所有内容人工批准后导出</strong></div>
     </section>
 
-    <section class="growth-card">
-      <div class="growth-heading"><div><h2>内容日历</h2><p>先审计划，再逐条审内容；日期可在手工发布前调整。</p></div><span>6 个待审内容包</span></div>
-      <div class="calendar-strip">
-        <article><time>8 月 17 日</time><strong>精密检测如何降低装机返工</strong><span>LinkedIn · Instagram</span></article>
-        <article><time>8 月 19 日</time><strong>30 秒看懂斜齿轮检测流程</strong><span>TikTok · Reels</span></article>
-        <article><time>8 月 21 日</time><strong>包装线传动件选型核对表</strong><span>Facebook · LinkedIn</span></article>
+    <section class="growth-card" aria-label="内容日历">
+      <div class="growth-heading"><div><h2>内容日历</h2><p>显示当前真实内容包；没有正式排期时不会编造发布日期。</p></div><span>{{ calendarPackages.length }} 个内容包</span></div>
+      <div v-if="calendarPackages.length" class="calendar-strip">
+        <article v-for="channelPackage in calendarPackages" :key="channelPackage.id">
+          <span>待安排</span>
+          <strong>内容：{{ String(channelPackage.payload.title ?? "待补充标题") }}</strong>
+          <span>{{ channelLabel(channelPackage.channel) }} · {{ calendarReviewLabel(channelPackage) }}</span>
+        </article>
       </div>
+      <p v-else>还没有可安排的内容包；先从审核中心准备渠道版本。</p>
     </section>
 
     <section class="growth-card">

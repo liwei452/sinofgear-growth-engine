@@ -957,6 +957,11 @@ it("shows safe channel connection states and starts authorization without publis
   expect(screen.getByText("混合发布方式 · 以各渠道状态为准")).toBeInTheDocument()
   expect(screen.queryByText("Fake Connector · 一键发布演示")).not.toBeInTheDocument()
   expect(screen.getByText("当前路径：官方连接 1 个 · Demo 演示 1 个 · 手工发布包 2 个")).toBeInTheDocument()
+  const calendar = screen.getByRole("region", { name: "内容日历" })
+  expect(calendar).toHaveTextContent("4 个内容包")
+  expect(calendar).toHaveTextContent("LINKEDIN package")
+  expect(calendar).toHaveTextContent("待安排")
+  expect(calendar).not.toHaveTextContent("精密检测如何降低装机返工")
   expect(within(instagram).getByRole("button", { name: "连接 Instagram 账号" })).toBeEnabled()
   await user.click(within(tiktok).getByRole("button", { name: "重新连接 TikTok 账号" }))
 

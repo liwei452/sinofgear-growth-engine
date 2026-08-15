@@ -22,11 +22,11 @@ const draft = {
   created_at: "2026-08-09T00:00:00Z", updated_at: "2026-08-09T00:00:00Z",
 } as const
 
-function renderWizard() {
+function renderWizard(verifiedFactCount?: number) {
   return render(ContentBriefWizard, {
     props: {
       campaigns: [{ id: "campaign-1", name: "德国获客", description: "", status: "DRAFT", version: 1, product_ids: [], created_at: "", updated_at: "" }],
-      products: [{ id: "product-1", name_zh: "精密齿轮", name_en: "Precision Gear", status: "ACTIVE" }],
+      products: [{ id: "product-1", name_zh: "精密齿轮", name_en: "Precision Gear", status: "ACTIVE", verified_fact_count: verifiedFactCount }],
       platforms: [{ id: "platform-1", code: "LINKEDIN", name: "LinkedIn", capabilities: ["PUBLISH"] }],
       assets: [], brief: draft,
       more: { campaigns: false, products: false, platforms: false, assets: false },
@@ -43,6 +43,13 @@ async function submitDraft(user: ReturnType<typeof userEvent.setup>) {
 }
 
 beforeEach(() => patchBriefMock.mockReset())
+
+it("shows how many human-verified facts are available before generation", async () => {
+  const user = userEvent.setup()
+  renderWizard(2)
+  await user.click(screen.getByRole("button", { name: "下一步" }))
+  expect(screen.getByText("· 2 条已验证事实可用")).toBeInTheDocument()
+})
 
 it("normalizes relationship aliases, returns to step two, and focuses a real product checkbox", async () => {
   patchBriefMock.mockRejectedValueOnce(new ApiError(400, "请求未能完成", undefined, {

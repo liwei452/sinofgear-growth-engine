@@ -73,6 +73,7 @@ PRODUCT_FIELDS = [
 
 class ProductSerializer(serializers.ModelSerializer):
     concept_links = serializers.SerializerMethodField()
+    verified_fact_count = serializers.IntegerField(read_only=True, default=0)
 
     @extend_schema_field(ProductConceptLinkSerializer(many=True))
     def get_concept_links(self, product: Product) -> list[dict[str, object]]:
@@ -116,6 +117,7 @@ class ProductSerializer(serializers.ModelSerializer):
             *PRODUCT_FIELDS,
             "version",
             "concept_links",
+            "verified_fact_count",
             "created_at",
             "updated_at",
         ]

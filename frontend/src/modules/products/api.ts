@@ -41,6 +41,7 @@ export type Product = {
   version: number
   internal_notes: string
   concept_links: ProductConceptLink[]
+  verified_fact_count?: number
   created_at: string
   updated_at: string
 }

@@ -3,7 +3,7 @@ import uuid
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Prefetch, Q, QuerySet
+from django.db.models import Count, Prefetch, Q, QuerySet
 from django.http import Http404
 from drf_spectacular.utils import (
     OpenApiParameter,
@@ -122,7 +122,16 @@ def _product_queryset(organization) -> QuerySet[Product]:
         .select_related("concept")
         .order_by("role", "concept__code", "id")
     )
-    return Product.objects.filter(organization=organization).prefetch_related(
+    return Product.objects.filter(organization=organization).annotate(
+        verified_fact_count=Count(
+            "evidence_facts",
+            filter=Q(
+                evidence_facts__organization=organization,
+                evidence_facts__review_status="VERIFIED",
+            ),
+            distinct=True,
+        )
+    ).prefetch_related(
         Prefetch(
             "concept_links",
             queryset=safe_links,

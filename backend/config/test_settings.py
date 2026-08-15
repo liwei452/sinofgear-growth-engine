@@ -4,6 +4,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql://sinofgear:sinofgear@localhos
 
 from .settings import *  # noqa: F403
 
+SECRET_KEY = "test-only-secret-key-material-with-more-than-32-bytes"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",

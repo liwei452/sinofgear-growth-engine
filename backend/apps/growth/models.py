@@ -118,8 +118,26 @@ class InboundLead(OrganizationOwnedModel):
 
 
 class FollowUp(OrganizationOwnedModel):
+    class Stage(models.TextChoices):
+        DISCOVERED = "DISCOVERED", "Discovered"
+        QUALIFIED = "QUALIFIED", "Qualified"
+        ENRICHED = "ENRICHED", "Enriched"
+        CONTACT_FOUND = "CONTACT_FOUND", "Contact found"
+        EMAIL_VERIFIED = "EMAIL_VERIFIED", "Email verified"
+        OUTREACH_READY = "OUTREACH_READY", "Outreach ready"
+        EMAIL_1_SENT = "EMAIL_1_SENT", "Email 1 sent"
+        OPENED = "OPENED", "Opened"
+        SITE_VISITED = "SITE_VISITED", "Site visited"
+        FOLLOW_UP_1 = "FOLLOW_UP_1", "Follow up 1"
+        REPLIED = "REPLIED", "Replied"
+        RFQ = "RFQ", "RFQ"
+        QUOTED = "QUOTED", "Quoted"
+        WON = "WON", "Won"
+        LOST = "LOST", "Lost"
+
     account = models.ForeignKey(TargetAccount, on_delete=models.PROTECT, related_name="follow_ups")
     status = models.CharField(max_length=32, default="OPEN")
+    stage = models.CharField(max_length=24, choices=Stage.choices, default=Stage.QUALIFIED)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["organization", "account"], name="growth_one_follow_up_per_account")]

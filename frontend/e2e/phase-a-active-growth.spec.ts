@@ -147,6 +147,12 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   const seededJobCard = page.locator(".workflow-card").filter({ hasText: seededGenerationJobId })
   await expect(seededJobCard).toContainText("SUCCEEDED")
   await expect(seededJobCard).toContainText("生成完成")
+  await expect(page.locator(".generated-result")).toBeVisible()
+  const seededSubmitPromise = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith("/submit-review") && response.request().method() === "POST",
+  )
+  await page.locator(".generated-result").getByRole("button", { name: "提交审核" }).click()
+  expect((await seededSubmitPromise).status()).toBe(200)
 
   await page.getByRole("button", { name: "创建内容任务" }).click()
   await page.getByLabel("快速新建活动").check()
@@ -219,6 +225,13 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   const jobCard = page.locator(".workflow-card").filter({ hasText: generationJobId })
   await expect(jobCard).toContainText("SUCCEEDED")
   await expect(jobCard).toContainText("生成完成")
+  await expect(page.locator(".generated-result")).toBeVisible()
+  const submitReviewPromise = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith("/submit-review") && response.request().method() === "POST",
+  )
+  await page.locator(".generated-result").getByRole("button", { name: "提交审核" }).click()
+  const submitReviewResponse = await submitReviewPromise
+  expect(submitReviewResponse.status(), await submitReviewResponse.text()).toBe(200)
 
   await logout(page)
   await login(page, "phasea_e2e_reviewer")

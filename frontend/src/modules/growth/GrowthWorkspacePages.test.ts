@@ -86,7 +86,14 @@ it("persists content-package approval and manual metric backfill", async () => {
     outreach_drafts: [], field_provenance: [], connectors: [], metric_receipts: [],
     channel_packages: [{
       id: "10000000-0000-4000-8000-000000001201", account_id: null, channel: "TIKTOK",
-      payload: { duration_seconds: 30, aspect_ratio: "9:16", title: "API TikTok package" },
+      payload: {
+        duration_seconds: 30, aspect_ratio: "9:16", title: "API TikTok package",
+        verified_fact_evidence: [{
+          fact_id: "11111111-1111-4111-8111-111111111111",
+          field_name: "process", value: "Gear grinding", source_filename: "gear-catalog.pdf",
+          source_page: 2, source_excerpt: "Process: Gear grinding", is_demo: true,
+        }],
+      },
       status: "AWAITING_REVIEW", is_demo: true, data_label: "Demo / Fake",
       delivery: "MANUAL_ONLY", created_at: "2026-08-14T08:00:00Z", updated_at: "2026-08-14T08:00:00Z",
     }],
@@ -125,6 +132,9 @@ it("persists content-package approval and manual metric backfill", async () => {
   })
 
   expect(await screen.findByText("API TikTok package")).toBeInTheDocument()
+  const tiktokPackage = screen.getByRole("article", { name: "TikTok 内容包" })
+  expect(within(tiktokPackage).getByText("process：Gear grinding")).toBeInTheDocument()
+  expect(within(tiktokPackage).getByText("gear-catalog.pdf · 第 2 页 · Demo/Fake")).toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "批准内容包" }))
   expect(await screen.findByRole("status")).toHaveTextContent("已批准")
   await user.click(screen.getByRole("button", { name: "下载发布包" }))

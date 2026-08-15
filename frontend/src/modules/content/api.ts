@@ -50,7 +50,8 @@ export type PlatformContent = {
   id: string; master_content_id: string; master_version: number; platform_id: string
   lineage_id: string; previous_version_id: string | null; version: number
   payload: PlatformPayload; provenance: Record<string, unknown>; status: ContentStatus
-  is_current_head: boolean; created_by_id: number | null; created_at: string; updated_at: string
+  is_current_head: boolean; publish_package_id?: string | null
+  created_by_id: number | null; created_at: string; updated_at: string
 }
 export type AIRun = {
   id: string; job_id: string; job_attempt: number; status: string

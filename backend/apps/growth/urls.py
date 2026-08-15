@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     ChannelPackageApproveView,
+    ChannelPackageFromPlatformContentView,
     CandidateListImportView,
     CandidateEnrichmentPrepareView,
     CandidateEnrichmentFollowUpView,
@@ -71,6 +72,11 @@ urlpatterns = [
     path("growth/opportunities/<uuid:account_id>/draft", OutreachDraftView.as_view(), name="growth-draft"),
     path("growth/opportunities/<uuid:account_id>/review", OpportunityReviewView.as_view(), name="growth-opportunity-review"),
     path("growth/opportunities/<uuid:account_id>/crm-handoff", CRMHandoffView.as_view(), name="growth-crm-handoff"),
+    path(
+        "growth/channel-packages/from-platform-content/<uuid:content_id>",
+        ChannelPackageFromPlatformContentView.as_view(),
+        name="growth-channel-package-from-platform-content",
+    ),
     path(
         "growth/channel-packages/<uuid:package_id>/approve",
         ChannelPackageApproveView.as_view(),

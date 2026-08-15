@@ -176,6 +176,7 @@ export type CRMHandoff = {
 export type ChannelPackage = {
   id: string
   account_id: string | null
+  source_platform_content_id?: string | null
   channel: string
   payload: Record<string, unknown>
   status: string
@@ -184,6 +185,15 @@ export type ChannelPackage = {
   delivery: "MANUAL_ONLY"
   created_at: string
   updated_at: string
+}
+
+export async function prepareChannelPackage(platformContentId: string): Promise<ChannelPackage> {
+  const result = await apiRequest<ChannelPackage>(
+    `/api/v1/growth/channel-packages/from-platform-content/${platformContentId}`,
+    { method: "POST", body: {} },
+  )
+  if (!result) throw new Error("发布准备响应为空。")
+  return result
 }
 
 export type MetricReceipt = {

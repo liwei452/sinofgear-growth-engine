@@ -56,7 +56,7 @@ def _object(model, organization, pk):
             else (
                 "master_content__brief", "master_content__generation_job",
                 "master_content__ai_run", "master_content__previous_version",
-                "platform", "previous_version",
+                "platform", "previous_version", "growth_channel_package",
             )
         )
         if model is PlatformContent:
@@ -106,7 +106,7 @@ class ContentListView(APIView):
             queryset = queryset.select_related(
                 "master_content__brief", "master_content__generation_job",
                 "master_content__ai_run", "master_content__previous_version",
-                "platform", "previous_version",
+                "platform", "previous_version", "growth_channel_package",
             ).annotate(
                 _selected_platform=Exists(
                     ContentBriefPlatform.objects.filter(

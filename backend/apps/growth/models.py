@@ -277,6 +277,13 @@ class CRMHandoff(OrganizationOwnedModel):
 
 class ChannelPackage(OrganizationOwnedModel):
     account = models.ForeignKey(TargetAccount, null=True, blank=True, on_delete=models.PROTECT)
+    source_platform_content = models.OneToOneField(
+        "content.PlatformContent",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="growth_channel_package",
+    )
     channel = models.CharField(max_length=32)
     payload = models.JSONField(default=dict)
     status = models.CharField(max_length=32, default="AWAITING_REVIEW")

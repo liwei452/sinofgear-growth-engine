@@ -412,6 +412,27 @@ def test_only_approved_channel_package_can_be_exported_through_fake_connector(gr
 
 
 @pytest.mark.django_db
+def test_invalid_tiktok_manual_package_returns_recoverable_conflict(growth_client):
+    client, organization = growth_client
+    from apps.growth.models import ChannelPackage
+
+    package = ChannelPackage.objects.create(
+        organization=organization,
+        channel="TIKTOK",
+        payload={"title": "Incomplete reviewed video"},
+        status="APPROVED",
+        is_demo=True,
+    )
+
+    response = client.post(
+        f"/api/v1/growth/channel-packages/{package.id}/manual-export", {}, format="json",
+    )
+
+    assert response.status_code == 409
+    assert response.data["code"] == "PACKAGE_FORMAT_INVALID"
+
+
+@pytest.mark.django_db
 def test_company_fact_can_be_human_verified_and_foreign_fact_is_hidden(growth_client):
     client, organization = growth_client
     from apps.growth.models import FieldProvenance

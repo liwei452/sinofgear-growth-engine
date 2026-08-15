@@ -5,7 +5,8 @@ from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.identity.permissions import CanManageCampaigns, CanReadCampaigns
+from apps.content.models import PlatformContent
+from apps.identity.permissions import CanManageCampaigns, CanManagePublishing, CanReadCampaigns
 from apps.platforms.connection_status import connection_summary
 from integrations.sources.base import SourceAdapterError
 
@@ -87,7 +88,9 @@ from .publishing import (
     retry_failed_items,
 )
 from .services import (
+    ChannelPackagePreparationBlocked,
     PackageReviewRequired,
+    prepare_channel_package_from_platform_content,
     OpportunityHandoffBlocked,
     add_to_follow_up,
     approve_channel_package,
@@ -631,6 +634,30 @@ class ChannelPackageApproveView(APIView):
         })
 
 
+class ChannelPackageFromPlatformContentView(APIView):
+    permission_classes = [CanManagePublishing]
+
+    @extend_schema(tags=["Growth workspace"], responses={201: ChannelPackageSerializer})
+    def post(self, request, content_id):
+        content = get_object_or_404(
+            PlatformContent,
+            id=content_id,
+            organization=request.organization,
+        )
+        try:
+            package, created = prepare_channel_package_from_platform_content(content=content)
+        except ChannelPackagePreparationBlocked as error:
+            return Response({
+                "code": "CHANNEL_PACKAGE_PREPARATION_BLOCKED",
+                "message": str(error),
+                "recovery_action": "返回内容审核中心，确认使用已批准的最新版本。",
+            }, status=409)
+        return Response(
+            ChannelPackageSerializer(package).data,
+            status=201 if created else 200,
+        )
+
+
 class ChannelPackageManualExportView(APIView):
     permission_classes = [CanManageCampaigns]
 
@@ -646,6 +673,12 @@ class ChannelPackageManualExportView(APIView):
                 "code": "PACKAGE_REVIEW_REQUIRED",
                 "message": "请先人工批准内容包，再下载手工发布包。",
                 "recovery_action": "返回推广页审核内容包。",
+            }, status=409)
+        except ValueError as error:
+            return Response({
+                "code": "PACKAGE_FORMAT_INVALID",
+                "message": str(error),
+                "recovery_action": "返回推广页补全渠道必填信息后重新审核。",
             }, status=409)
         return Response({
             "package_id": str(package.id),

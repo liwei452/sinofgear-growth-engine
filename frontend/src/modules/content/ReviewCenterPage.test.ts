@@ -132,6 +132,38 @@ it("creates a platform revision with the exact schema and immutable platform cod
   expect(await screen.findByText("已创建第 2 版。")).toBeInTheDocument()
 })
 
+it("moves an approved platform version into one-click publishing preparation", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  let handoffRequest: RequestInit | undefined
+  const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === "/api/v1/growth/channel-packages/from-platform-content/platform-content-1") {
+      handoffRequest = options
+      return new Response(JSON.stringify({
+        id: "package-1", source_platform_content_id: "platform-content-1",
+        account_id: null, channel: "LINKEDIN", payload: {}, status: "AWAITING_REVIEW",
+        is_demo: true, data_label: "Demo / Fake", delivery: "MANUAL_ONLY",
+        created_at: "", updated_at: "",
+      }), { status: 201, headers: { "Content-Type": "application/json" } })
+    }
+    const body = path.startsWith("/api/v1/platform-contents") ? page([platformContent("APPROVED")])
+      : path.startsWith("/api/v1/master-contents") ? page([]) : common(path)
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const user = userEvent.setup()
+  renderPage(["content.read", "publishing.manage"])
+
+  await user.click(await screen.findByRole("tab", { name: "平台版本" }))
+  await user.selectOptions(screen.getByLabelText("内容状态"), "APPROVED")
+  await user.click(await screen.findByRole("button", { name: "查看详情" }))
+  await user.click(screen.getByRole("button", { name: "加入一键发布" }))
+
+  await waitFor(() => expect(handoffRequest).toMatchObject({ method: "POST" }))
+  expect(await screen.findByText("已加入推广页的一键发布准备，仍需逐渠道审核。"))
+    .toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "前往推广页" })).toHaveAttribute("href", "/promotion")
+})
+
 it("requires a rejection reason and sends the guarded review action", async () => {
   document.cookie = "csrftoken=csrf-value; path=/"
   let rejectionBody: unknown

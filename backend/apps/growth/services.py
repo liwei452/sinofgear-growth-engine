@@ -1,5 +1,7 @@
 from django.db import transaction
 
+from apps.content.models import PlatformContent
+from apps.content.services import content_is_consistent
 from integrations.platforms.manual_fake import ManualPackageFakeConnector, ManualPackageReceipt
 
 from .models import (
@@ -15,6 +17,96 @@ from .models import (
 
 class PackageReviewRequired(RuntimeError):
     pass
+
+
+class ChannelPackagePreparationBlocked(RuntimeError):
+    pass
+
+
+SUPPORTED_PUBLISH_CHANNELS = {"LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"}
+
+
+def _verified_fact_evidence(content: PlatformContent) -> list[dict[str, object]]:
+    raw_facts = content.master_content.ai_run.input_snapshot.get("verified_product_facts")
+    if not isinstance(raw_facts, list):
+        return []
+    evidence = []
+    for raw in raw_facts[:50]:
+        if not isinstance(raw, dict):
+            continue
+        required = (
+            "fact_id", "field_name", "value", "source_filename", "source_excerpt",
+        )
+        if not all(isinstance(raw.get(key), str) and raw[key].strip() for key in required):
+            continue
+        page = raw.get("source_page")
+        evidence.append({
+            "fact_id": raw["fact_id"][:36],
+            "field_name": raw["field_name"][:100],
+            "value": raw["value"][:500],
+            "source_filename": raw["source_filename"][:255],
+            "source_page": page if isinstance(page, int) and page > 0 else None,
+            "source_excerpt": raw["source_excerpt"][:500],
+            "is_demo": raw.get("is_demo") is True,
+        })
+    return evidence
+
+
+@transaction.atomic
+def prepare_channel_package_from_platform_content(
+    *, content: PlatformContent,
+) -> tuple[ChannelPackage, bool]:
+    content = (
+        PlatformContent.objects.select_for_update()
+        .select_related(
+            "organization", "platform", "master_content__brief",
+            "master_content__generation_job", "master_content__ai_run",
+            "master_content__ai_run__prompt_version", "master_content__previous_version",
+            "previous_version",
+        )
+        .get(pk=content.pk)
+    )
+    if content.status != PlatformContent.Status.APPROVED:
+        raise ChannelPackagePreparationBlocked("只有人工批准的平台内容可以加入发布准备。")
+    if PlatformContent.objects.filter(previous_version=content).exists():
+        raise ChannelPackagePreparationBlocked("请使用当前最新版平台内容。")
+    if not content_is_consistent(content):
+        raise ChannelPackagePreparationBlocked("内容来源校验失败，请返回审核中心检查。")
+    channel = content.platform.code.upper()
+    if channel not in SUPPORTED_PUBLISH_CHANNELS:
+        raise ChannelPackagePreparationBlocked("该平台暂未进入一键发布范围。")
+    facts = _verified_fact_evidence(content)
+    payload = {
+        "title": content.payload["title"],
+        "body": content.payload["body"],
+        "cta": content.payload["cta"],
+        "platform_code": channel,
+        "source_platform_content_id": str(content.id),
+        "source_platform_content_version": content.version,
+        "verified_fact_evidence": facts,
+    }
+    if channel == "TIKTOK":
+        payload.update({
+            "duration_seconds": 30,
+            "aspect_ratio": "9:16",
+            "script": content.payload["body"],
+            "shot_list": [],
+            "english_voiceover": content.payload["body"],
+            "chinese_subtitles": "待人工补充中文字幕，批准前不得发布。",
+            "hashtags": [],
+            "utm": "utm_source=tiktok&utm_medium=organic&utm_campaign=manual-review",
+        })
+    return ChannelPackage.objects.get_or_create(
+        organization=content.organization,
+        source_platform_content=content,
+        defaults={
+            "channel": channel,
+            "payload": payload,
+            "status": "AWAITING_REVIEW",
+            "is_demo": content.master_content.ai_run.provider.lower() == "fake"
+            or any(item["is_demo"] for item in facts),
+        },
+    )
 
 
 class OpportunityHandoffBlocked(RuntimeError):

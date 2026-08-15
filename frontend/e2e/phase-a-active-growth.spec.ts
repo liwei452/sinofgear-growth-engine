@@ -295,6 +295,62 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
 
   await logout(page)
   await login(page, "phasea_e2e_operator")
+  await page.goto("/reviews")
+  await page.getByRole("tab", { name: "平台版本" }).click()
+  await page.getByLabel("内容状态").selectOption("APPROVED")
+  await selectCampaign(page, campaignId)
+  const approvedPlatformCards = page.locator(".review-card")
+  await expect(approvedPlatformCards).toHaveCount(5)
+  let preparedPackages = 0
+  for (let index = 0; index < 5; index += 1) {
+    await approvedPlatformCards.nth(index).getByRole("button", { name: "查看详情" }).click()
+    const prepareButton = page.getByRole("button", { name: "加入一键发布" })
+    if (await prepareButton.count()) {
+      const prepareResponse = page.waitForResponse(response =>
+        new URL(response.url()).pathname.includes("/growth/channel-packages/from-platform-content/")
+          && response.request().method() === "POST",
+      )
+      await prepareButton.click()
+      expect((await prepareResponse).status()).toBe(201)
+      await expect(page.getByText("已加入推广页的一键发布准备，仍需逐渠道审核。", { exact: true }))
+        .toBeVisible()
+      preparedPackages += 1
+    }
+    await page.getByRole("button", { name: "关闭" }).click()
+  }
+  expect(preparedPackages).toBe(4)
+
+  await page.reload()
+  await page.getByRole("tab", { name: "平台版本" }).click()
+  await page.getByLabel("内容状态").selectOption("APPROVED")
+  await selectCampaign(page, campaignId)
+  let persistedPrepared = 0
+  for (let index = 0; index < 5; index += 1) {
+    await page.locator(".review-card").nth(index).getByRole("button", { name: "查看详情" }).click()
+    if (await page.getByRole("button", { name: "已加入发布准备" }).count()) persistedPrepared += 1
+    await page.getByRole("button", { name: "关闭" }).click()
+  }
+  expect(persistedPrepared).toBe(4)
+
+  const workspaceResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname === "/api/v1/growth/workspace"
+      && response.request().method() === "GET",
+  )
+  await page.goto("/promotion")
+  const preparedWorkspace = await (await workspaceResponse).json() as {
+    channel_packages: Array<{
+      source_platform_content_id: string | null
+      channel: string
+      status: string
+      payload: { verified_fact_evidence: unknown[] }
+    }>
+  }
+  const prepared = preparedWorkspace.channel_packages.filter(item => item.source_platform_content_id)
+  expect(prepared).toHaveLength(4)
+  expect(prepared.map(item => item.channel).sort()).toEqual(["FACEBOOK", "INSTAGRAM", "LINKEDIN", "TIKTOK"])
+  expect(prepared.every(item => item.status === "AWAITING_REVIEW")).toBe(true)
+  expect(prepared.every(item => Array.isArray(item.payload.verified_fact_evidence))).toBe(true)
+
   await page.goto("/publishing-calendar")
   const facebookTaskId = await scheduleAndRun(page, "FACEBOOK", "Phase A Facebook Mock")
   await expect(page.locator(".task").filter({ hasText: "SUCCEEDED" })).toHaveCount(1)

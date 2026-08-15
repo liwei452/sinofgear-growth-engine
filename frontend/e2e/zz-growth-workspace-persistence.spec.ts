@@ -35,10 +35,10 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
     .getByRole("button", { name: "已加入跟进" })).toBeDisabled()
 
   await page.goto("/promotion")
-  await expect(page.getByText("30-second DIN 6 inspection proof")).toBeVisible()
+  await expect(page.getByRole("heading", { name: "推广计划与内容包" })).toBeVisible()
 
   const linkedInPackage = page.getByRole("article", { name: "LinkedIn Company Page 内容包" })
-  await expect(linkedInPackage).toContainText("How inspection evidence reduces assembly rework")
+  await expect(linkedInPackage).toContainText("手工发布包")
   const linkedInApprovalResponse = page.waitForResponse(response =>
     new URL(response.url()).pathname.endsWith("/approve") && response.request().method() === "POST",
   )

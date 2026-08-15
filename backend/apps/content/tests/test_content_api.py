@@ -9,6 +9,7 @@ from apps.content.services import (
     approve_content, create_generated_master, create_platform_content,
     create_master_revision, create_platform_revision,
 )
+from apps.growth.models import ChannelPackage
 from apps.identity.models import Membership, Organization, Role
 
 
@@ -79,6 +80,127 @@ def test_content_openapi_documents_generation_and_review_actions(content_provena
     assert "post" in schema["paths"]["/api/v1/master-contents/{content_id}/approve"]
     assert "post" in schema["paths"]["/api/v1/master-contents/{content_id}/generate-platform-content"]
     assert "get" in schema["paths"]["/api/v1/platform-contents"]
+
+
+@pytest.mark.parametrize("channel", ["LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"])
+def test_approved_platform_content_can_prepare_one_reviewable_publish_package(
+    content_provenance, channel,
+):
+    organization, actor, brief, _job, _run = content_provenance
+    master = approve_content(
+        create_generated_master(brief=brief, job=_job, ai_run=_run, actor=actor),
+        actor=actor,
+    )
+    platform = brief.platform_links.get().platform
+    platform.code = channel
+    platform.name = channel.title()
+    platform.save(update_fields=["code", "name"])
+    content = create_platform_content(master, platform=platform, actor=actor)
+    content = approve_content(content, actor=actor)
+    client = _client(organization, Role.Code.ADMINISTRATOR)
+
+    first = client.post(
+        f"/api/v1/growth/channel-packages/from-platform-content/{content.id}",
+        {}, format="json",
+    )
+    second = client.post(
+        f"/api/v1/growth/channel-packages/from-platform-content/{content.id}",
+        {}, format="json",
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 200
+    assert ChannelPackage.objects.filter(organization=organization).count() == 1
+    package = ChannelPackage.objects.get(organization=organization)
+    assert package.source_platform_content_id == content.id
+    assert package.channel == channel
+    assert package.status == "AWAITING_REVIEW"
+    assert package.is_demo is True
+    expected_payload = {
+        "title": content.payload["title"],
+        "body": content.payload["body"],
+        "cta": content.payload["cta"],
+        "platform_code": channel,
+        "source_platform_content_id": str(content.id),
+        "source_platform_content_version": content.version,
+        "verified_fact_evidence": [{
+            "fact_id": "11111111-1111-4111-8111-111111111111",
+            "field_name": "process",
+            "value": "Gear grinding",
+            "source_filename": "gear-catalog.pdf",
+            "source_page": 2,
+            "source_excerpt": "Process: Gear grinding",
+            "is_demo": True,
+        }],
+    }
+    if channel == "TIKTOK":
+        expected_payload.update({
+            "duration_seconds": 30,
+            "aspect_ratio": "9:16",
+            "script": content.payload["body"],
+            "shot_list": [],
+            "english_voiceover": content.payload["body"],
+            "chinese_subtitles": "待人工补充中文字幕，批准前不得发布。",
+            "hashtags": [],
+            "utm": "utm_source=tiktok&utm_medium=organic&utm_campaign=manual-review",
+        })
+    assert package.payload == expected_payload
+    refreshed = client.get(f"/api/v1/platform-contents/{content.id}")
+    assert refreshed.status_code == 200
+    assert refreshed.json()["publish_package_id"] == str(package.id)
+
+
+def test_channel_package_preparation_requires_approval_and_publish_permission(
+    content_provenance,
+):
+    organization, actor, brief, job, run = content_provenance
+    master = approve_content(
+        create_generated_master(brief=brief, job=job, ai_run=run, actor=actor),
+        actor=actor,
+    )
+    platform = brief.platform_links.get().platform
+    platform.code = "TIKTOK"
+    platform.save(update_fields=["code"])
+    content = create_platform_content(master, platform=platform, actor=actor)
+    endpoint = f"/api/v1/growth/channel-packages/from-platform-content/{content.id}"
+
+    pending = _client(organization, Role.Code.ADMINISTRATOR).post(endpoint, {}, format="json")
+    assert pending.status_code == 409
+    assert pending.json()["code"] == "CHANNEL_PACKAGE_PREPARATION_BLOCKED"
+    assert not ChannelPackage.objects.filter(organization=organization).exists()
+
+    approved = approve_content(content, actor=actor)
+    forbidden = _client(organization, Role.Code.REVIEWER).post(
+        f"/api/v1/growth/channel-packages/from-platform-content/{approved.id}",
+        {}, format="json",
+    )
+    assert forbidden.status_code == 403
+    assert not ChannelPackage.objects.filter(organization=organization).exists()
+
+
+def test_channel_package_preparation_hides_cross_organization_content(
+    content_provenance,
+):
+    organization, actor, brief, job, run = content_provenance
+    master = approve_content(
+        create_generated_master(brief=brief, job=job, ai_run=run, actor=actor),
+        actor=actor,
+    )
+    platform = brief.platform_links.get().platform
+    platform.code = "INSTAGRAM"
+    platform.save(update_fields=["code"])
+    content = approve_content(
+        create_platform_content(master, platform=platform, actor=actor), actor=actor,
+    )
+    other = Organization.objects.create(name="Other Publisher", slug="other-publisher")
+
+    response = _client(other, Role.Code.ADMINISTRATOR).post(
+        f"/api/v1/growth/channel-packages/from-platform-content/{content.id}",
+        {}, format="json",
+    )
+
+    assert response.status_code == 404
+    assert not ChannelPackage.objects.exists()
 
 
 def test_corrupt_provenance_is_omitted_and_detail_is_404(content_provenance):

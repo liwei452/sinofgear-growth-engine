@@ -50,11 +50,45 @@ const connectionSessionQuery = useQuery({
   enabled: computed(() => Boolean(connectionSessionId.value)),
   retry: false,
 })
-const activePackage = computed(() => workspaceQuery.data.value?.channel_packages
-  .find((item) => item.channel === "TIKTOK"))
+const activePackage = computed(() => packageFor("TIKTOK"))
 const packageTitle = computed(() => String(activePackage.value?.payload.title ?? ""))
 function packageFor(channel: string): ChannelPackage | undefined {
-  return workspaceQuery.data.value?.channel_packages.find((item) => item.channel === channel)
+  return [...(workspaceQuery.data.value?.channel_packages ?? [])]
+    .filter(item => item.channel === channel)
+    .sort((left, right) => {
+      const sourcePriority = Number(Boolean(right.source_platform_content_id))
+        - Number(Boolean(left.source_platform_content_id))
+      return sourcePriority || right.created_at.localeCompare(left.created_at)
+    })[0]
+}
+type PackageFactEvidence = {
+  id: string
+  fieldName: string
+  value: string
+  sourceFilename: string
+  sourcePage: number | null
+  sourceExcerpt: string
+  isDemo: boolean
+}
+function safePackageText(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.trim().slice(0, maxLength) : ""
+}
+function packageFactEvidence(channelPackage: ChannelPackage | undefined): PackageFactEvidence[] {
+  const raw = channelPackage?.payload.verified_fact_evidence
+  if (!Array.isArray(raw)) return []
+  return raw.slice(0, 50).flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return []
+    const fact = entry as Record<string, unknown>
+    const id = safePackageText(fact.fact_id, 36)
+    const fieldName = safePackageText(fact.field_name, 100)
+    const value = safePackageText(fact.value, 500)
+    const sourceFilename = safePackageText(fact.source_filename, 255)
+    const sourceExcerpt = safePackageText(fact.source_excerpt, 500)
+    const sourcePage = typeof fact.source_page === "number" && Number.isSafeInteger(fact.source_page)
+      && fact.source_page > 0 ? fact.source_page : null
+    if (!id || !fieldName || !value || !sourceFilename || !sourceExcerpt) return []
+    return [{ id, fieldName, value, sourceFilename, sourcePage, sourceExcerpt, isDemo: fact.is_demo === true }]
+  })
 }
 function isApproved(channelPackage: ChannelPackage | undefined): boolean {
   return Boolean(channelPackage && (
@@ -67,7 +101,9 @@ const approved = computed(() => activePackage.value
 const connectionsByChannel = computed(() => new Map(
   (workspaceQuery.data.value?.connectors ?? []).map(item => [item.channel, item]),
 ))
-const eligiblePackages = computed(() => (workspaceQuery.data.value?.channel_packages ?? [])
+const eligiblePackages = computed(() => ["LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"]
+  .map(packageFor)
+  .filter((channelPackage): channelPackage is ChannelPackage => Boolean(channelPackage))
   .filter(channelPackage => isApproved(channelPackage) && connectionFor(channelPackage.channel)?.status === "CONNECTED"))
 const failedPublishItems = computed(() => publishBatch.value?.items
   .filter(item => item.status === "FAILED") ?? [])
@@ -355,6 +391,7 @@ const channels: Array<{
           </div>
           <p class="package-source">{{ String(packageFor(channel.code)?.payload.title ?? channel.format) }}</p>
           <p>{{ channel.format }}</p><strong>手工发布包</strong>
+          <details v-if="packageFactEvidence(packageFor(channel.code)).length" class="package-evidence"><summary>查看已验证事实依据</summary><article v-for="fact in packageFactEvidence(packageFor(channel.code))" :key="fact.id"><strong>{{ fact.fieldName }}：{{ fact.value }}</strong><p>{{ fact.sourceFilename }}<template v-if="fact.sourcePage"> · 第 {{ fact.sourcePage }} 页</template><template v-if="fact.isDemo"> · Demo/Fake</template></p><blockquote>{{ fact.sourceExcerpt }}</blockquote></article></details>
           <div v-if="packageFor(channel.code)" class="package-actions">
             <button
               class="button button-secondary" type="button"
@@ -397,6 +434,7 @@ const channels: Array<{
             <div><dt>归因</dt><dd>UTM：tiktok / organic / din6-proof-demo</dd></div>
             <div><dt>回填</dt><dd>发布结果、播放、完播、点击、回复、询盘可手工录入</dd></div>
           </dl>
+          <details v-if="packageFactEvidence(activePackage).length" class="package-evidence"><summary>查看已验证事实依据</summary><article v-for="fact in packageFactEvidence(activePackage)" :key="fact.id"><strong>{{ fact.fieldName }}：{{ fact.value }}</strong><p>{{ fact.sourceFilename }}<template v-if="fact.sourcePage"> · 第 {{ fact.sourcePage }} 页</template><template v-if="fact.isDemo"> · Demo/Fake</template></p><blockquote>{{ fact.sourceExcerpt }}</blockquote></article></details>
           <div v-if="activePackage" class="package-actions">
             <button
               class="button button-secondary" type="button"

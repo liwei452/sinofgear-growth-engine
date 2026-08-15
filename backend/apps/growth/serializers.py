@@ -397,7 +397,7 @@ class ChannelPackageSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChannelPackage
         fields = [
-            "id", "account_id", "channel", "payload", "status", "is_demo",
+            "id", "account_id", "source_platform_content_id", "channel", "payload", "status", "is_demo",
             "data_label", "delivery", "created_at", "updated_at",
         ]
 

@@ -44,7 +44,22 @@ def content_provenance(db):
     job = JobService.create(
         organization=organization,
         job_type=Job.Type.CONTENT_GENERATE,
-        input_snapshot={"brief_id": str(brief.id), "brief_version": brief.version},
+        input_snapshot={
+            "brief_id": str(brief.id),
+            "brief_version": brief.version,
+            "verified_product_facts": [{
+                "fact_id": "11111111-1111-4111-8111-111111111111",
+                "product_id": "22222222-2222-4222-8222-222222222222",
+                "field_name": "process",
+                "value": "Gear grinding",
+                "category": "PROCESS",
+                "source_asset_id": "33333333-3333-4333-8333-333333333333",
+                "source_filename": "gear-catalog.pdf",
+                "source_page": 2,
+                "source_excerpt": "Process: Gear grinding",
+                "is_demo": True,
+            }],
+        },
         created_by=actor,
     )
     claimed = JobService.claim(worker_id="content-test", job_id=job.id)

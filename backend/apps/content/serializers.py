@@ -40,6 +40,7 @@ class MasterContentSerializer(serializers.ModelSerializer):
 
 class PlatformContentSerializer(serializers.ModelSerializer):
     is_current_head = serializers.SerializerMethodField()
+    publish_package_id = serializers.SerializerMethodField()
 
     @extend_schema_field(OpenApiTypes.BOOL)
     def get_is_current_head(self, content):
@@ -52,12 +53,17 @@ class PlatformContentSerializer(serializers.ModelSerializer):
             previous_version_id=content.id,
         ).exists()
 
+    @extend_schema_field({"type": "string", "format": "uuid", "nullable": True})
+    def get_publish_package_id(self, content):
+        package = getattr(content, "growth_channel_package", None)
+        return package.id if package is not None else None
+
     class Meta:
         model = PlatformContent
         fields = [
             "id", "master_content_id", "master_version", "platform_id", "lineage_id",
             "previous_version_id", "version", "payload", "provenance", "status",
-            "is_current_head",
+            "is_current_head", "publish_package_id",
             "created_by_id", "created_at", "updated_at",
         ]
 

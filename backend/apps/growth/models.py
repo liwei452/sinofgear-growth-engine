@@ -67,6 +67,15 @@ class IntentSignal(OrganizationOwnedModel):
     scoring_rule_version = models.CharField(max_length=64, default="opportunity-v1")
     uncertainty_notes = models.JSONField(default=list)
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "content_hash"],
+                condition=~models.Q(content_hash=""),
+                name="growth_unique_signal_evidence_hash",
+            ),
+        ]
+
     def clean(self):
         super().clean()
         errors = {}

@@ -1,6 +1,7 @@
 import pytest
+from django.db import IntegrityError
 
-from apps.growth.models import DiscoveryProfile, DiscoveryRun
+from apps.growth.models import DiscoveryProfile, DiscoveryRun, IntentSignal, TargetAccount
 from apps.identity.models import Organization
 
 
@@ -37,3 +38,22 @@ def test_discovery_run_history_cannot_be_deleted(organization):
 
     with pytest.raises(ValueError, match="cannot be deleted"):
         run.delete()
+
+
+def test_non_empty_evidence_hash_is_unique_inside_one_organization(organization):
+    account = TargetAccount.objects.create(
+        organization=organization, name="Unique buyer", country="DEU",
+    )
+    values = {
+        "organization": organization,
+        "account": account,
+        "signal_type": "PUBLIC_PROCUREMENT_NOTICE",
+        "source_label": "TED",
+        "source_url": "https://ted.europa.eu/en/notice/1",
+        "evidence_text": "Public procurement evidence",
+        "content_hash": "a" * 64,
+    }
+    IntentSignal.objects.create(**values)
+
+    with pytest.raises(IntegrityError):
+        IntentSignal.objects.create(**values)

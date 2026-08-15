@@ -155,6 +155,12 @@ SPECTACULAR_SETTINGS = {
 
 CELERY_BROKER_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_BEAT_SCHEDULE = {
+    "growth-discovery-hourly": {
+        "task": "apps.growth.tasks.scan_due_discovery_profiles",
+        "schedule": 3600.0,
+    },
+}
 
 OBJECT_STORAGE_BACKEND = os.environ.get("OBJECT_STORAGE_BACKEND", "minio")
 OBJECT_STORAGE_FILESYSTEM_ROOT = os.environ.get("OBJECT_STORAGE_FILESYSTEM_ROOT", "")

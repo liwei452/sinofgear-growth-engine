@@ -104,8 +104,8 @@ a {
   z-index: 30;
   width: var(--sg-sidebar-width);
   overflow-y: auto;
-  border-right: 1px solid var(--sg-line);
-  background: #fff;
+  border-right: 1px solid rgb(255 255 255 / 8%);
+  background: linear-gradient(180deg, var(--sg-navy) 0%, var(--sg-navy-2) 100%);
   padding: 22px 12px;
 }
 
@@ -122,9 +122,13 @@ a {
   display: block;
 }
 
+.brand-lockup strong {
+  color: #fff;
+}
+
 .brand-lockup small {
   margin-top: 2px;
-  color: var(--sg-muted);
+  color: var(--sg-navy-muted);
   font-size: 0.75rem;
 }
 
@@ -149,7 +153,7 @@ a {
 
 .nav-group h2 {
   margin: 0 10px 7px;
-  color: #7b8693;
+  color: var(--sg-navy-muted);
   font-size: 0.7rem;
   letter-spacing: 0.11em;
 }
@@ -161,15 +165,15 @@ a {
   min-height: 44px;
   border-radius: 10px;
   padding: 8px 10px;
-  color: #3a4654;
+  color: #c2d4e4;
   font-weight: 650;
   text-decoration: none;
 }
 
 .nav-link:hover,
 .nav-link-active {
-  background: var(--sg-brand-soft);
-  color: var(--sg-brand);
+  background: rgb(255 255 255 / 10%);
+  color: #fff;
 }
 
 .nav-icon {
@@ -178,13 +182,14 @@ a {
   height: 28px;
   place-items: center;
   border-radius: 8px;
-  background: #edf1f5;
+  background: rgb(255 255 255 / 12%);
   font-size: 0.72rem;
   font-weight: 900;
 }
 
 .nav-link-active .nav-icon {
-  background: white;
+  background: var(--sg-brand);
+  color: #fff;
 }
 
 .app-main {

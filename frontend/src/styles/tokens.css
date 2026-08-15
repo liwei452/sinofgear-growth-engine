@@ -11,9 +11,22 @@
   --sg-danger: #a62626;
   --sg-danger-soft: #fff0f0;
   --sg-focus: #ffbf47;
+  --sg-navy: #0a2540;
+  --sg-navy-2: #0e3156;
+  --sg-navy-ink: #dbe6f2;
+  --sg-navy-muted: #8aa7c4;
+  --sg-gold: #a16207;
+  --sg-gold-soft: #fbf3e2;
+  --sg-success: #18875d;
+  --sg-success-soft: #eaf8f1;
+  --sg-warning: #b86b00;
+  --sg-warning-soft: #fff6e7;
   --sg-radius-sm: 8px;
   --sg-radius-md: 14px;
   --sg-radius-lg: 22px;
   --sg-shadow: 0 14px 42px rgb(23 34 49 / 10%);
+  --sg-shadow-sm: 0 1px 2px rgb(23 34 49 / 6%);
+  --sg-motion-fast: 150ms;
+  --sg-motion-normal: 220ms;
   --sg-sidebar-width: 224px;
 }

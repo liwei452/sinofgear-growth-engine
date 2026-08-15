@@ -82,7 +82,10 @@ const groups: SettingsGroup[] = [
   {
     title: "获客与市场",
     description: "选择市场并导入有许可的名单或公开线索。",
-    destinations: [{ label: "市场与客户来源", to: "/opportunities" }],
+    destinations: [
+      { label: "谷歌地图自动获客", to: "/maps-discovery" },
+      { label: "市场与客户来源", to: "/opportunities" },
+    ],
   },
   {
     title: "渠道与发布",

@@ -23,6 +23,7 @@ const Promotion = defineComponent({ name: "PromotionStub", template: "<p>工厂�
 const Opportunities = defineComponent({ name: "OpportunitiesStub", template: "<p>证据化客户机会</p>" })
 const Company = defineComponent({ name: "CompanyStub", template: "<p>公司事实资料</p>" })
 const Settings = defineComponent({ name: "SettingsStub", template: "<p>统一设置中心</p>" })
+const MapsDiscovery = defineComponent({ name: "MapsDiscoveryStub", template: "<p>谷歌地图获客</p>" })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
 function deferred<T>() {
@@ -40,7 +41,7 @@ function router(client = queryClient(), initialPath?: string) {
   if (initialPath) history.push(initialPath)
   return createAppRouter(client, {
     history,
-    components: { Login, Shell, Dashboard, Promotion, Opportunities, Company, Settings, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LegacyAnalytics, Placeholder },
+    components: { Login, Shell, Dashboard, Promotion, Opportunities, Company, Settings, MapsDiscovery, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LegacyAnalytics, Placeholder },
   })
 }
 

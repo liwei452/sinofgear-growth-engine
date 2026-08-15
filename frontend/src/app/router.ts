@@ -15,6 +15,7 @@ export type AppRouteComponents = {
   Opportunities: Component
   Company: Component
   Settings: Component
+  MapsDiscovery: Component
   Products: Component
   Knowledge: Component
   ContentFactory: Component
@@ -64,6 +65,7 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
     { path: "opportunities", name: "opportunities", component: options.components.Opportunities, meta: { title: "客户机会" } },
     { path: "company", name: "company", component: options.components.Company, meta: { title: "我的公司" } },
     { path: "settings", name: "settings", component: options.components.Settings, meta: { title: "设置中心" } },
+    { path: "maps-discovery", name: "maps-discovery", component: options.components.MapsDiscovery, meta: { title: "谷歌地图获客" } },
     {
       path: "products",
       name: "products",

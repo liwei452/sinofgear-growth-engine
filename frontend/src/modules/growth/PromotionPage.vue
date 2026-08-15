@@ -23,6 +23,7 @@ import {
 } from "./api"
 
 import PromotionPlanSummary from "./PromotionPlanSummary.vue"
+import PublishResultsPanel from "./PublishResultsPanel.vue"
 import SocialReadinessPanel, { type SocialChannelStatus } from "./SocialReadinessPanel.vue"
 import { packageFactEvidence, payloadList, payloadShots, payloadText } from "./packagePayload"
 
@@ -183,10 +184,6 @@ const manualExportIssues = computed(() => publishChannelCodes.flatMap(channel =>
 const eligiblePackages = computed(() => channelReadiness.value
   .filter((item): item is ChannelReadiness & { package: ChannelPackage } => item.ready && Boolean(item.package))
   .map(item => item.package))
-const failedPublishItems = computed(() => publishBatch.value?.items
-  .filter(item => item.status === "FAILED") ?? [])
-const succeededPublishCount = computed(() => publishBatch.value?.items
-  .filter(item => item.status === "SUCCEEDED").length ?? 0)
 watchEffect(() => {
   const latest = workspaceQuery.data.value?.publish_batches?.find(batch => !batch.is_demo)
   if (!publishBatch.value && latest) publishBatch.value = latest
@@ -463,22 +460,6 @@ function channelLabel(channel: string): string {
     TIKTOK: "TikTok",
     YOUTUBE: "YouTube",
   } as Record<string, string>)[channel] ?? channel
-}
-
-const resultTimeFormatter = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "Asia/Shanghai",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-})
-
-function formatResultTime(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return "时间不可用"
-  return resultTimeFormatter.format(date).replace(",", "")
 }
 
 const channels: Array<{
@@ -779,41 +760,13 @@ const socialChannelStatuses = computed<SocialChannelStatus[]>(() => socialChanne
           {{ publishMutation.isPending.value ? "正在提交…" : allChannelsReady ? "一键发布到 4 个渠道" : `还有 ${pendingReadinessCount} 个渠道未就绪` }}
         </button>
       </section>
-      <section v-if="publishBatch" class="publish-results" aria-label="发布结果">
-        <div class="growth-heading">
-          <div><p class="eyebrow">{{ publishBatch.data_label }}</p><h3>渠道发布结果</h3></div>
-          <strong v-if="publishBatch.status === 'SUCCEEDED'">
-            {{ succeededPublishCount }} 个渠道{{ succeededPublishCount > 1 ? "均" : "" }}已发布成功。
-          </strong>
-          <strong v-else-if="failedPublishItems.length">
-            {{ succeededPublishCount }} 个渠道发布成功，{{ failedPublishItems.length }} 个渠道需要重试。
-          </strong>
-          <strong v-else>发布请求已受理。</strong>
-        </div>
-        <ul class="publish-result-list">
-          <li v-for="item in publishBatch.items" :key="item.id">
-            <span>{{ channelLabel(item.channel) }}</span>
-            <div class="publish-result-detail">
-              <a
-                v-if="item.status === 'SUCCEEDED'" :href="item.external_post_url"
-                target="_blank" rel="noreferrer"
-                :aria-label="`查看 ${channelLabel(item.channel)} 平台帖子`"
-              >发布成功 · 查看平台帖子</a>
-              <span v-else>{{ item.recovery_action || (item.status === "FAILED" ? "发布失败，请重试。" : "等待发布") }}</span>
-              <small>
-                <span>结果记录时间：</span>
-                <time :datetime="item.updated_at">{{ formatResultTime(item.updated_at) }}</time>
-              </small>
-            </div>
-          </li>
-        </ul>
-        <button
-          v-if="failedPublishItems.length" class="button button-primary" type="button"
-          :disabled="retryPublishMutation.isPending.value" @click="retryFailed"
-        >
-          {{ retryPublishMutation.isPending.value ? "正在重试…" : "重试失败渠道" }}
-        </button>
-      </section>
+      <PublishResultsPanel
+        v-if="publishBatch"
+        :batch="publishBatch"
+        :retrying="retryPublishMutation.isPending.value"
+        :channel-label="channelLabel"
+        @retry="retryFailed"
+      />
       <p v-if="publishError" role="alert" class="approval-status">{{ publishError }}</p>
       <p v-if="connectionError" role="alert" class="approval-status connection-error">{{ connectionError }}</p>
       <div v-if="activePackage" class="approval-row">

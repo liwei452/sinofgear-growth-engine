@@ -33,10 +33,17 @@ class TargetAccount(OrganizationOwnedModel):
     employee_range = models.CharField(max_length=64, blank=True)
     website = models.URLField(blank=True)
     is_demo = models.BooleanField(default=False)
+    source_identity = models.CharField(max_length=320, blank=True)
 
     class Meta:
         ordering = ["name", "id"]
-        constraints = [models.UniqueConstraint(fields=["organization", "name"], name="growth_unique_account_name")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "source_identity"],
+                condition=~models.Q(source_identity=""),
+                name="growth_unique_account_source_identity",
+            ),
+        ]
 
 
 class Contact(OrganizationOwnedModel):

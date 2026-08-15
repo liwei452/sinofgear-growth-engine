@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone as dt_timezone
 
 import pytest
@@ -83,6 +84,21 @@ def test_official_notice_creates_a_target_account_and_intent_signal(profile, sou
     assert profile.next_run_at > timezone.now()
 
 
+def test_fixture_discovery_is_never_presented_as_real_official_data(profile, source_batch):
+    run_discovery(
+        profile.id,
+        trigger="MANUAL",
+        source=FakeSource(replace(source_batch, is_demo=True)),
+    )
+
+    account = TargetAccount.objects.get(organization=profile.organization)
+    signal = IntentSignal.objects.get(organization=profile.organization)
+    assert account.is_demo is True
+    assert signal.is_demo is True
+    assert signal.source_label == "Demo / Fake TED 采购样本"
+    assert signal.collection_method == "DEMO_FIXTURE"
+
+
 def test_repeat_notice_is_idempotent(profile, source_batch):
     first = run_discovery(profile.id, trigger="MANUAL", source=FakeSource(source_batch))
     second = run_discovery(profile.id, trigger="MANUAL", source=FakeSource(source_batch))
@@ -92,6 +108,39 @@ def test_repeat_notice_is_idempotent(profile, source_batch):
     assert second.duplicate_count == 1
     assert TargetAccount.objects.filter(organization=profile.organization).count() == 1
     assert IntentSignal.objects.filter(organization=profile.organization).count() == 1
+
+
+def test_name_only_buyers_are_not_merged_without_an_official_identifier(profile, source_batch):
+    first = source_batch.items[0]
+    second = replace(
+        first,
+        external_id="534033-2026",
+        source_url="https://ted.europa.eu/en/notice/-/detail/534033-2026",
+    )
+    batch = replace(source_batch, items=(first, second), total_count=2)
+
+    run_discovery(profile.id, trigger="MANUAL", source=FakeSource(batch))
+
+    assert TargetAccount.objects.filter(
+        organization=profile.organization,
+        name="Example Contracting Authority",
+    ).count() == 2
+
+
+def test_official_buyer_identifier_allows_safe_account_merging(profile, source_batch):
+    first = replace(source_batch.items[0], buyer_identifier="DE-12345")
+    second = replace(
+        first,
+        external_id="534033-2026",
+        source_url="https://ted.europa.eu/en/notice/-/detail/534033-2026",
+    )
+    batch = replace(source_batch, items=(first, second), total_count=2)
+
+    run_discovery(profile.id, trigger="MANUAL", source=FakeSource(batch))
+
+    account = TargetAccount.objects.get(organization=profile.organization)
+    assert account.source_identity == "TED:DEU:DE-12345"
+    assert IntentSignal.objects.filter(account=account).count() == 2
 
 
 def test_source_failure_is_recorded_safely_and_backed_off(profile):
@@ -125,4 +174,3 @@ def test_active_run_prevents_overlapping_discovery(profile, source_batch):
 
     with pytest.raises(DiscoveryAlreadyRunning):
         run_discovery(profile.id, trigger="MANUAL", source=FakeSource(source_batch))
-

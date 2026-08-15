@@ -1,9 +1,10 @@
 from datetime import timedelta
 
 import pytest
+from django.test import override_settings
 from django.utils import timezone
 
-from apps.growth.discovery import run_due_discovery_profiles
+from apps.growth.discovery import build_discovery_source, run_due_discovery_profiles
 from apps.growth.models import DiscoveryProfile
 from apps.identity.models import Organization
 from integrations.sources.base import SourceBatch
@@ -46,3 +47,14 @@ def test_due_runner_only_executes_enabled_profiles_that_are_due():
     assert due.runs.count() == 1
     assert future.runs.count() == 0
     assert disabled.runs.count() == 0
+
+
+@override_settings(
+    GROWTH_DISCOVERY_SOURCE_FACTORY="apps.growth.e2e_sources.E2EDiscoverySource",
+)
+def test_configured_fixture_source_is_explicitly_demo_labeled():
+    source = build_discovery_source()
+    batch = source.fetch(type("Query", (), {"limit": 20})())
+
+    assert batch.is_demo is True
+    assert batch.capability_snapshot["source"] == "TED_E2E_FIXTURE"

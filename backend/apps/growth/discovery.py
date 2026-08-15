@@ -1,8 +1,10 @@
 import hashlib
 from datetime import timedelta
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
+from django.utils.module_loading import import_string
 from django.utils import timezone
 
 from integrations.sources.base import DiscoveryQuery, SourceAdapterError
@@ -40,7 +42,8 @@ def run_discovery(profile_id, *, trigger, source=None) -> DiscoveryRun:
     }
     run.save(update_fields=["query_snapshot", "updated_at"])
     try:
-        batch = (source or TedSource()).fetch(query)
+        live_source = source or build_discovery_source()
+        batch = live_source.fetch(query)
     except SourceAdapterError as error:
         _record_failure(profile_id=profile.id, run_id=run.id, error_code=error.code)
         raise
@@ -90,13 +93,19 @@ def _ingest_batch(*, profile_id, run_id, batch) -> DiscoveryRun:
         ).exists():
             duplicates += 1
             continue
+        source_identity = (
+            f"TED:{item.buyer_country}:{item.buyer_identifier}"
+            if item.buyer_identifier
+            else f"TED-NOTICE:{item.external_id}"
+        )
         account, account_created = TargetAccount.objects.get_or_create(
             organization=profile.organization,
-            name=item.buyer_name,
+            source_identity=source_identity,
             defaults={
+                "name": item.buyer_name,
                 "country": item.buyer_country or "Unknown",
                 "industry": "Public procurement buyer",
-                "is_demo": False,
+                "is_demo": batch.is_demo,
             },
         )
         created_accounts += int(account_created)
@@ -108,15 +117,21 @@ def _ingest_batch(*, profile_id, run_id, batch) -> DiscoveryRun:
             organization=profile.organization,
             account=account,
             signal_type="PUBLIC_PROCUREMENT_NOTICE",
-            source_label="TED 欧盟官方采购公告",
+            source_label=(
+                "Demo / Fake TED 采购样本"
+                if batch.is_demo
+                else "TED 欧盟官方采购公告"
+            ),
             source_url=item.source_url,
             evidence_text=(
                 f"TED notice {item.external_id}: {item.title}. "
                 f"CPV {cpv_text}. Tender deadline: {deadline_text}."
             ),
             confidence=TED_SCORE_TOTAL,
-            is_demo=False,
-            collection_method="OFFICIAL_PUBLIC_API",
+            is_demo=batch.is_demo,
+            collection_method=(
+                "DEMO_FIXTURE" if batch.is_demo else "OFFICIAL_PUBLIC_API"
+            ),
             content_hash=content_hash,
             score_breakdown=TED_SCORE,
             scoring_rule_version="ted-procurement-v1",
@@ -194,7 +209,16 @@ def run_due_discovery_profiles(*, limit=25, source_factory=None):
     return result
 
 
+def build_discovery_source():
+    factory_path = settings.GROWTH_DISCOVERY_SOURCE_FACTORY
+    if factory_path:
+        return import_string(factory_path)()
+    return TedSource(
+        timeout_seconds=settings.TED_DISCOVERY_TIMEOUT_SECONDS,
+        max_response_bytes=settings.TED_DISCOVERY_MAX_RESPONSE_BYTES,
+    )
+
+
 def _item_hash(item) -> str:
     canonical = "\n".join(("TED", item.external_id, item.source_url, item.title.strip()))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-

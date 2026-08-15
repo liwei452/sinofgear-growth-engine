@@ -90,8 +90,22 @@ def test_ted_source_skips_records_without_a_buyer_or_safe_original_link():
     assert batch.skipped_count == 2
 
 
+def test_ted_source_accepts_bounded_operator_timeout_and_response_limits():
+    transport = RecordingTransport({"notices": [], "totalNoticeCount": 0, "timedOut": False})
+
+    TedSource(
+        transport=transport,
+        timeout_seconds=7,
+        max_response_bytes=500_000,
+    ).fetch(DiscoveryQuery(
+        cpv_codes=("42141300",), published_from=date(2026, 8, 1), limit=5,
+    ))
+
+    assert transport.calls[0]["timeout_seconds"] == 7
+    assert transport.calls[0]["max_response_bytes"] == 500_000
+
+
 @pytest.mark.parametrize("limit", [0, 21])
 def test_discovery_query_rejects_unbounded_result_limits(limit):
     with pytest.raises(ValueError, match="between 1 and 20"):
         DiscoveryQuery(cpv_codes=("42141300",), published_from=date(2026, 8, 1), limit=limit)
-

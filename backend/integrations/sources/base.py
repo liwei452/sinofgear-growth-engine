@@ -27,6 +27,7 @@ class SourceItem:
     deadline_at: datetime | None
     source_url: str
     cpv_codes: tuple[str, ...]
+    buyer_identifier: str = ""
 
 
 @dataclass(frozen=True)
@@ -35,10 +36,10 @@ class SourceBatch:
     capability_snapshot: dict[str, object]
     skipped_count: int = 0
     total_count: int = 0
+    is_demo: bool = False
 
 
 class SourceAdapterError(RuntimeError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
-

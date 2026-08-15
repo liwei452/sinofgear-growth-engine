@@ -70,7 +70,7 @@ def test_workspace_exposes_an_owner_friendly_discovery_summary(organization):
 
 
 def test_manager_runs_official_discovery_while_reader_is_forbidden(organization, monkeypatch):
-    monkeypatch.setattr("apps.growth.discovery.TedSource", FakeSource)
+    monkeypatch.setattr("apps.growth.discovery.build_discovery_source", FakeSource)
 
     response = _client(organization).post(RUN_URL, {}, format="json")
     reader_response = _client(organization, reader=True, suffix="reader").post(

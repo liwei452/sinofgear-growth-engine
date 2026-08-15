@@ -44,3 +44,8 @@ ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
 E2E_WEB_ORIGIN = os.environ.get("SINO_PHASE_A_E2E_WEB_ORIGIN", "http://127.0.0.1")
 CORS_ALLOWED_ORIGINS = [E2E_WEB_ORIGIN]
 CSRF_TRUSTED_ORIGINS = [E2E_WEB_ORIGIN]
+_discovery_source = os.environ.get("GROWTH_DISCOVERY_SOURCE_FACTORY", "")
+GROWTH_DISCOVERY_SOURCE_FACTORY = (
+    "" if _discovery_source == "LIVE_TED"
+    else _discovery_source or "apps.growth.e2e_sources.E2EDiscoverySource"
+)

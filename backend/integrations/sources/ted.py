@@ -15,6 +15,7 @@ TED_MAX_RESPONSE_BYTES = 2_000_000
 TED_FIELDS = (
     "publication-number",
     "buyer-name",
+    "buyer-identifier",
     "buyer-country",
     "notice-title",
     "publication-date",
@@ -73,8 +74,20 @@ class UrllibJsonTransport:
 
 
 class TedSource:
-    def __init__(self, *, transport: JsonTransport | None = None):
+    def __init__(
+        self,
+        *,
+        transport: JsonTransport | None = None,
+        timeout_seconds: int = TED_TIMEOUT_SECONDS,
+        max_response_bytes: int = TED_MAX_RESPONSE_BYTES,
+    ):
+        if not 1 <= timeout_seconds <= 30:
+            raise ValueError("TED timeout must be between 1 and 30 seconds.")
+        if not 100_000 <= max_response_bytes <= TED_MAX_RESPONSE_BYTES:
+            raise ValueError("TED response limit must be between 100000 and 2000000 bytes.")
         self.transport = transport or UrllibJsonTransport()
+        self.timeout_seconds = timeout_seconds
+        self.max_response_bytes = max_response_bytes
 
     def fetch(self, query: DiscoveryQuery) -> SourceBatch:
         cpv_query = " ".join(query.cpv_codes)
@@ -93,8 +106,8 @@ class TedSource:
         decoded = self.transport.post_json(
             url=TED_SEARCH_URL,
             payload=payload,
-            timeout_seconds=TED_TIMEOUT_SECONDS,
-            max_response_bytes=TED_MAX_RESPONSE_BYTES,
+            timeout_seconds=self.timeout_seconds,
+            max_response_bytes=self.max_response_bytes,
         )
         if decoded.get("timedOut") is True:
             raise SourceAdapterError("SOURCE_TIMED_OUT")
@@ -134,6 +147,12 @@ class TedSource:
             return None
         countries = notice.get("buyer-country") or []
         country = str(countries[0]).strip() if isinstance(countries, list) and countries else ""
+        identifiers = notice.get("buyer-identifier") or []
+        buyer_identifier = (
+            str(identifiers[0]).strip()
+            if isinstance(identifiers, list) and identifiers
+            else ""
+        )
         deadlines = notice.get("deadline-receipt-tender-date-lot") or []
         deadline_at = _date_at_utc(deadlines[0]) if isinstance(deadlines, list) and deadlines else None
         cpv_values = notice.get("classification-cpv") or []
@@ -150,6 +169,7 @@ class TedSource:
             deadline_at=deadline_at,
             source_url=source_url,
             cpv_codes=cpv_codes,
+            buyer_identifier=buyer_identifier,
         )
 
 
@@ -191,4 +211,3 @@ def _date_at_utc(value) -> datetime | None:
     except ValueError:
         return None
     return datetime.combine(parsed, time.min, tzinfo=timezone.utc)
-

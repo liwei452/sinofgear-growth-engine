@@ -27,6 +27,11 @@ TRACKING_TRUSTED_PROXY_CIDRS = [
     value.strip() for value in os.environ.get("TRACKING_TRUSTED_PROXY_CIDRS", "").split(",")
     if value.strip()
 ]
+TED_DISCOVERY_TIMEOUT_SECONDS = int(os.environ.get("TED_DISCOVERY_TIMEOUT_SECONDS", "15"))
+TED_DISCOVERY_MAX_RESPONSE_BYTES = int(
+    os.environ.get("TED_DISCOVERY_MAX_RESPONSE_BYTES", "2000000")
+)
+GROWTH_DISCOVERY_SOURCE_FACTORY = os.environ.get("GROWTH_DISCOVERY_SOURCE_FACTORY", "")
 
 INSTALLED_APPS = [
     "django.contrib.auth",

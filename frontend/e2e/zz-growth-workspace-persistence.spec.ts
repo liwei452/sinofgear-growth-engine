@@ -123,6 +123,29 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await expect(page.getByRole("heading", { name: "证据化客户机会" })).toBeVisible()
   await expect(page.getByText("3 家目标公司")).toBeVisible()
   await expect(page.getByRole("heading", { name: "PackTech GmbH" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "自动发现客户" })).toBeVisible()
+  await expect(page.getByText("欧盟官方采购数据", { exact: true }).first()).toBeVisible()
+  await expect(page.getByText("Google Maps 官方企业发现")).toBeVisible()
+  await expect(page.getByText("接入密钥后可用")).toBeVisible()
+  const discoveryResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname === "/api/v1/growth/discovery/run"
+      && response.request().method() === "POST",
+  )
+  await page.getByRole("button", { name: "立即查找" }).click()
+  expect((await discoveryResponse).status()).toBe(200)
+  await expect(page.getByRole("status")).toContainText("发现 1 条新采购信号")
+  await expect(page.getByText("4 家目标公司")).toBeVisible()
+  await page.getByRole("button", { name: /E2E Gear Procurement Authority/ }).click()
+  await expect(page.getByRole("heading", { name: "E2E Gear Procurement Authority" })).toBeVisible()
+  await expect(page.getByText("Demo / Fake").first()).toBeVisible()
+  const duplicateDiscoveryResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname === "/api/v1/growth/discovery/run"
+      && response.request().method() === "POST",
+  )
+  await page.getByRole("button", { name: "立即查找" }).click()
+  expect((await duplicateDiscoveryResponse).status()).toBe(200)
+  await expect(page.getByRole("status")).toContainText("发现 0 条新采购信号")
+  await expect(page.getByText("4 家目标公司")).toBeVisible()
   await page.getByRole("button", { name: "导入公开线索" }).click()
   await page.getByLabel("公司名称").fill("Browser Import Drives Ltd")
   await page.getByLabel("国家或地区").fill("United Kingdom")
@@ -167,7 +190,7 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   expect((await duplicateResponse.json()).created).toBe(false)
 
   await page.reload()
-  await expect(page.getByText("4 家目标公司")).toBeVisible()
+  await expect(page.getByText("5 家目标公司")).toBeVisible()
   await page.getByRole("button", { name: /Browser Import Drives Ltd/ }).click()
   await expect(page.getByRole("heading", { name: "Browser Import Drives Ltd" })).toBeVisible()
   await page.getByRole("button", { name: /PackTech GmbH/ }).click()

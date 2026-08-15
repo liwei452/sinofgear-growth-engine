@@ -24,6 +24,11 @@
 .publish-panel { margin-top: 22px; padding: 20px; border: 1px solid #bfdbfe; border-radius: 12px; background: #eff6ff; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
 .publish-panel h3, .publish-results h3 { margin: 4px 0 6px; }
 .publish-panel p { margin: 0; }
+.readiness-list { display: grid; gap: 6px; margin: 12px 0; padding: 0; list-style: none; }
+.readiness-list li { display: flex; align-items: center; justify-content: space-between; gap: 14px; color: #31536e; font-size: .8rem; font-weight: 750; }
+.readiness-action { border: 0; background: transparent; padding: 3px 0; color: #1d4ed8; font: inherit; font-weight: 850; text-decoration: none; cursor: pointer; white-space: nowrap; }
+.readiness-action:hover, .readiness-action:focus-visible { text-decoration: underline; }
+.package-grid article:focus { outline: 3px solid rgba(37, 99, 235, .25); outline-offset: 3px; }
 .publish-results { margin-top: 16px; padding: 20px; border: 1px solid var(--color-border); border-radius: 12px; background: #fff; }
 .publish-result-list { display: grid; gap: 10px; margin: 16px 0; padding: 0; list-style: none; }
 .publish-result-list li { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--color-border); }

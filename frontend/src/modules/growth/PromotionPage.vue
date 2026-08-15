@@ -107,6 +107,7 @@ type ChannelReadiness = {
   label: string
   package: ChannelPackage | undefined
   ready: boolean
+  issue: "MISSING_PACKAGE" | "REVIEW" | "FORMAT" | "CONNECTION" | null
 }
 function channelPackageFormatReady(channelPackage: ChannelPackage): boolean {
   if (channelPackage.channel !== "TIKTOK") return true
@@ -117,11 +118,12 @@ function channelPackageFormatReady(channelPackage: ChannelPackage): boolean {
 const channelReadiness = computed<ChannelReadiness[]>(() => publishChannelCodes.map(channel => {
   const channelPackage = packageFor(channel)
   let label = "缺少内容包"
-  if (channelPackage && !isApproved(channelPackage)) label = "等待内容审核"
-  else if (channelPackage && !channelPackageFormatReady(channelPackage)) label = "发布格式待补全"
-  else if (channelPackage && connectionFor(channel)?.status !== "CONNECTED") label = "账号未连接"
-  else if (channelPackage) label = "已就绪"
-  return { channel, label, package: channelPackage, ready: label === "已就绪" }
+  let issue: ChannelReadiness["issue"] = "MISSING_PACKAGE"
+  if (channelPackage && !isApproved(channelPackage)) { label = "等待内容审核"; issue = "REVIEW" }
+  else if (channelPackage && !channelPackageFormatReady(channelPackage)) { label = "发布格式待补全"; issue = "FORMAT" }
+  else if (channelPackage && connectionFor(channel)?.status !== "CONNECTED") { label = "账号未连接"; issue = "CONNECTION" }
+  else if (channelPackage) { label = "已就绪"; issue = null }
+  return { channel, label, package: channelPackage, ready: issue === null, issue }
 }))
 const pendingReadinessCount = computed(() => channelReadiness.value.filter(item => !item.ready).length)
 const allChannelsReady = computed(() => pendingReadinessCount.value === 0)
@@ -308,6 +310,11 @@ async function publishAll(): Promise<void> {
   await publishMutation.mutateAsync({ packageIds, key: currentPublishKey() }).catch(() => undefined)
 }
 
+async function focusChannelPackage(channel: ChannelReadiness["channel"]): Promise<void> {
+  await nextTick()
+  document.getElementById(`channel-package-${channel}`)?.focus()
+}
+
 async function retryFailed(): Promise<void> {
   publishError.value = ""
   if (!publishBatch.value) return
@@ -400,7 +407,7 @@ const channels: Array<{
     <section class="growth-card">
       <div class="growth-heading"><div><h2>各渠道内容包</h2><p>先审核内容，再一次提交到所有可用渠道。</p></div><span class="connector-state">Fake Connector · 一键发布演示</span></div>
       <div class="package-grid">
-        <article v-for="channel in channels" :key="channel.name" :aria-label="`${channel.name} 内容包`">
+        <article v-for="channel in channels" :id="`channel-package-${channel.code}`" :key="channel.name" tabindex="-1" :aria-label="`${channel.name} 内容包`">
           <span class="fake-label">{{ modeLabel(channel.code) }}</span><h3>{{ channel.name }}</h3>
           <div class="channel-connection">
             <span>{{ connectionDisplay(channel.code) }}</span>
@@ -435,7 +442,7 @@ const channels: Array<{
             </button>
           </div>
         </article>
-        <article class="tiktok-package" aria-label="TikTok 内容包">
+        <article id="channel-package-TIKTOK" class="tiktok-package" tabindex="-1" aria-label="TikTok 内容包">
           <span class="fake-label">{{ modeLabel('TIKTOK') }}</span><h3>TikTok</h3>
           <div class="channel-connection">
             <span>{{ connectionDisplay('TIKTOK') }}</span>
@@ -482,7 +489,22 @@ const channels: Array<{
         <div>
           <p class="eyebrow">四渠道发布就绪检查</p>
           <h3>{{ allChannelsReady ? '四个渠道均可提交' : `还有 ${pendingReadinessCount} 个渠道需要处理` }}</h3>
-          <ul class="readiness-list"><li v-for="item in channelReadiness" :key="item.channel">{{ channelLabel(item.channel) }} · {{ item.label }}</li></ul>
+          <ul class="readiness-list">
+            <li v-for="item in channelReadiness" :key="item.channel">
+              <span>{{ channelLabel(item.channel) }} · {{ item.label }}</span>
+              <a
+                v-if="item.issue === 'MISSING_PACKAGE' || item.issue === 'FORMAT'"
+                class="readiness-action" href="/reviews"
+                :aria-label="item.issue === 'FORMAT' ? `补全 ${channelLabel(item.channel)} 发布格式` : `准备 ${channelLabel(item.channel)} 内容包`"
+              >{{ item.issue === 'FORMAT' ? '去补全' : '准备内容' }}</a>
+              <button
+                v-else-if="item.issue === 'REVIEW' || item.issue === 'CONNECTION'"
+                class="readiness-action" type="button"
+                :aria-label="item.issue === 'REVIEW' ? `审核 ${channelLabel(item.channel)} 内容` : `处理 ${channelLabel(item.channel)} 账号`"
+                @click="focusChannelPackage(item.channel)"
+              >{{ item.issue === 'REVIEW' ? '去审核' : '去连接' }}</button>
+            </li>
+          </ul>
           <p>全部内容须人工批准且账号就绪；本地演示不会请求真实社媒平台。</p>
         </div>
         <button

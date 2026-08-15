@@ -14,6 +14,8 @@ async function renderDashboard() {
       { path: "/products", component: { template: "<p>产品页</p>" } },
       { path: "/promotion", component: { template: "<p>推广页</p>" } },
       { path: "/opportunities", component: { template: "<p>机会页</p>" } },
+      { path: "/company", component: { template: "<p>公司资料页</p>" } },
+      { path: "/analytics", component: { template: "<p>效果页</p>" } },
     ],
   })
   await router.push("/")
@@ -24,56 +26,31 @@ async function renderDashboard() {
   })
 }
 
-it("shows clearly labeled demo opportunities with decision-ready evidence", async () => {
-  await renderDashboard()
+it("shows real next steps without fabricated dashboard content in an empty workspace", async () => {
+  const { container } = await renderDashboard()
 
   expect(screen.getByRole("heading", { name: "今天发现的采购机会" })).toBeInTheDocument()
-  expect(screen.getAllByText("Demo / Fake").length).toBeGreaterThan(0)
-  const opportunity = screen.getByRole("article", { name: "PackTech GmbH 采购机会" })
-  expect(opportunity).toHaveTextContent("德国")
-  expect(opportunity).toHaveTextContent("包装机械 · 51–200 人")
-  expect(opportunity).toHaveTextContent("正在寻找高精度斜齿轮供应商")
-  expect(opportunity).toHaveTextContent("公司官网 / 公开招聘页")
-  expect(opportunity).toHaveTextContent("2 小时前发现")
-  expect(opportunity).toHaveTextContent("高意向")
+  expect(screen.getByText("今天还没有已验证的采购机会")).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "选择市场或导入合法名单" })).toHaveAttribute("href", "/opportunities")
+  expect(screen.getByText("还没有真实 AI 可见度监测记录")).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "补充公司事实" })).toHaveAttribute("href", "/company")
+  expect(screen.getByText("还没有人工回填的渠道结果")).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "回填渠道结果" })).toHaveAttribute("href", "/analytics")
+  expect(screen.queryByText(/PackTech|ISO 9001|72 \/ 100|6,820/)).not.toBeInTheDocument()
+  expect(container.querySelector(".sparkline")).not.toBeInTheDocument()
 })
 
-it("supports follow-up, bilingual draft, and evidence review without sending anything", async () => {
-  const user = userEvent.setup()
+it("does not render Demo API records in the formal dashboard", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    target_accounts: [{ id: "demo-account", name: "Demo Buyer Ltd", country: "Germany", industry: "Machinery", employee_range: "11-50", website: "", is_demo: true, data_label: "Demo / Fake" }],
+    intent_signals: [{ id: "demo-signal", account_id: "demo-account", signal_type: "HIRING", source_label: "Demo", source_url: "", evidence_text: "Demo purchase signal", confidence: 99, observed_at: "2026-08-15T08:00:00Z", data_label: "Demo / Fake" }],
+    contacts: [], inbound_leads: [], follow_ups: [], outreach_drafts: [], channel_packages: [],
+    metric_receipts: [{ id: "demo-metric", channel: "TIKTOK", payload: { views: 99999 }, is_demo: true }],
+    field_provenance: [], connectors: [],
+  }), { status: 200, headers: { "Content-Type": "application/json" } })))
   await renderDashboard()
-  const opportunity = screen.getByRole("article", { name: "PackTech GmbH 采购机会" })
-
-  await user.click(within(opportunity).getByRole("button", { name: "加入跟进" }))
-  expect(within(opportunity).getByRole("button", { name: "已加入跟进" })).toBeDisabled()
-
-  await user.click(within(opportunity).getByRole("button", { name: "生成联系草稿" }))
-  const draft = screen.getByRole("dialog", { name: "联系草稿" })
-  expect(draft).toHaveTextContent("English draft")
-  expect(draft).toHaveTextContent("中文说明")
-  expect(draft).toHaveTextContent("草稿不会自动发送")
-  await user.click(within(draft).getByRole("button", { name: "关闭" }))
-
-  await user.click(within(opportunity).getByRole("button", { name: "查看证据" }))
-  expect(screen.getByRole("region", { name: "PackTech GmbH 原始证据" })).toHaveTextContent(
-    "公开招聘页提到新增精密传动采购岗位",
-  )
-})
-
-it("explains AI visibility and includes the approved channel set", async () => {
-  await renderDashboard()
-
-  const visibility = screen.getByRole("region", { name: "AI 品牌与搜索曝光" })
-  expect(visibility).toHaveTextContent("72 / 100")
-  expect(visibility).toHaveTextContent("评分依据")
-  expect(visibility).toHaveTextContent("可验证品牌事实")
-  expect(visibility).toHaveTextContent("缺少 DIN 6 精度证据")
-  expect(screen.getByRole("heading", { name: "AI 已知道" })).toBeInTheDocument()
-  expect(screen.getByRole("heading", { name: "还不清楚" })).toBeInTheDocument()
-  expect(screen.getByRole("heading", { name: "建议补充" })).toBeInTheDocument()
-
-  for (const channel of ["LinkedIn", "Facebook", "Instagram", "TikTok", "YouTube"]) {
-    expect(screen.getByRole("article", { name: `${channel} 渠道表现` })).toBeInTheDocument()
-  }
+  expect(await screen.findByText("今天还没有已验证的采购机会")).toBeInTheDocument()
+  expect(screen.queryByText(/Demo Buyer|Demo purchase signal|99,999/)).not.toBeInTheDocument()
 })
 
 it("loads opportunities and persists follow-up and draft actions through the growth API", async () => {
@@ -82,7 +59,7 @@ it("loads opportunities and persists follow-up and draft actions through the gro
     target_accounts: [{
       id: "10000000-0000-4000-8000-000000001001", name: "API PackTech GmbH",
       country: "Germany", industry: "Packaging machinery", employee_range: "51-200",
-      website: "", is_demo: true, data_label: "Demo / Fake",
+      website: "", is_demo: false, data_label: "Licensed / permitted source",
     }],
     contacts: [], inbound_leads: [], follow_ups: [], outreach_drafts: [],
     channel_packages: [], metric_receipts: [], field_provenance: [], connectors: [],
@@ -91,7 +68,7 @@ it("loads opportunities and persists follow-up and draft actions through the gro
       account_id: "10000000-0000-4000-8000-000000001001", signal_type: "HIRING",
       source_label: "Public careers page", source_url: "https://example.invalid/careers",
       evidence_text: "Hiring a precision transmission buyer", confidence: 88,
-      observed_at: "2026-08-14T08:00:00Z", data_label: "Demo / Fake",
+      observed_at: "2026-08-14T08:00:00Z", data_label: "Licensed / permitted source",
     }],
   }
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

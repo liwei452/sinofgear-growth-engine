@@ -257,7 +257,7 @@ export type DiscoverySummary = {
 
 export type CandidateEnrichmentPreview = {
   candidate_id: string
-  mode: "FAKE_PREVIEW" | "OFFICIAL" | "VERIFIED_MANUAL"
+  mode: "FAKE_PREVIEW" | "IMPORTED_FACTS_REVIEW" | "OFFICIAL" | "VERIFIED_MANUAL"
   data_label: string
   facts: Array<{ field: string; value: string; source: string }>
   public_contact_paths: Array<{ label?: string; url?: string }>

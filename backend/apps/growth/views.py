@@ -19,7 +19,7 @@ from .enrichment import (
     CandidateReviewRequired,
     add_candidate_to_follow_up,
     enrichment_payload,
-    prepare_fake_enrichment,
+    prepare_candidate_enrichment,
 )
 from .models import (
     ChannelPackage,
@@ -358,7 +358,7 @@ class CandidateEnrichmentPrepareView(APIView):
             organization=request.organization,
         )
         try:
-            snapshot, created = prepare_fake_enrichment(candidate=candidate)
+            snapshot, created = prepare_candidate_enrichment(candidate=candidate)
         except CandidateReviewRequired:
             return Response({
                 "code": "CANDIDATE_REVIEW_REQUIRED",

@@ -147,8 +147,8 @@ const factLabels: Record<string, string> = {
         </section>
       </template>
       <div v-else class="enrichment-empty">
-        <p><strong>{{ allowDemo ? "尚未准备资料" : "资料理解服务尚未配置" }}</strong> · {{ allowDemo ? "只会整理许可名单中的事实，不会编造联系人、邮箱或采购意向。" : "当前不会生成模拟公司事实；请上传真实资料或手工补充已核实信息。" }}</p>
-        <button v-if="allowDemo" class="button button-primary" type="button" :disabled="prepareMutation.isPending.value" @click="prepare(candidate.id)">
+        <p><strong>{{ allowDemo ? "尚未准备资料" : candidate.is_demo ? "资料理解服务尚未配置" : "待确认已导入事实" }}</strong> · {{ allowDemo ? "只会整理许可名单中的事实，不会编造联系人、邮箱或采购意向。" : candidate.is_demo ? "当前不会生成模拟公司事实；请上传真实资料或手工补充已核实信息。" : "系统只整理许可名单中已有字段，不联网核实，也不生成联系人或采购意向。" }}</p>
+        <button v-if="allowDemo || !candidate.is_demo" class="button button-primary" type="button" :disabled="prepareMutation.isPending.value" @click="prepare(candidate.id)">
           {{ prepareMutation.isPending.value && activeCandidateId === candidate.id ? "正在准备…" : "准备公司资料" }}
         </button>
         <div v-if="!allowDemo" class="enrichment-actions">

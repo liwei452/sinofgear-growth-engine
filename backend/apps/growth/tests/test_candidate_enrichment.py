@@ -29,7 +29,7 @@ def organization(db):
     return Organization.objects.create(name="Candidate enrichment", slug="candidate-enrichment")
 
 
-def _candidate(organization, *, status=DiscoveryCandidate.Status.ACCEPTED):
+def _candidate(organization, *, status=DiscoveryCandidate.Status.ACCEPTED, is_demo=False):
     return DiscoveryCandidate.objects.create(
         organization=organization,
         company_name="Jakarta Drives",
@@ -37,6 +37,7 @@ def _candidate(organization, *, status=DiscoveryCandidate.Status.ACCEPTED):
         website="https://jakarta.example.invalid/",
         industry="Industrial equipment",
         status=status,
+        is_demo=is_demo,
         import_format="CSV",
         source_governance={
             "source_owner": "Licensed supplier",
@@ -48,7 +49,7 @@ def _candidate(organization, *, status=DiscoveryCandidate.Status.ACCEPTED):
 
 
 def test_accepted_candidate_gets_an_idempotent_fake_enrichment_preview_without_lead_creation(organization):
-    candidate = _candidate(organization)
+    candidate = _candidate(organization, is_demo=True)
     client = _client(organization)
     url = f"/api/v1/growth/enrichment/candidates/{candidate.id}/prepare"
 
@@ -93,6 +94,53 @@ def test_accepted_candidate_gets_an_idempotent_fake_enrichment_preview_without_l
     assert TargetAccount.objects.filter(organization=organization).count() == 0
     assert Contact.objects.filter(organization=organization).count() == 0
     assert IntentSignal.objects.filter(organization=organization).count() == 0
+
+
+def test_formal_candidate_prepares_only_imported_facts_for_human_confirmation(organization):
+    candidate = _candidate(organization)
+    client = _client(organization, suffix="formal")
+
+    response = client.post(
+        f"/api/v1/growth/enrichment/candidates/{candidate.id}/prepare", {}, format="json",
+    )
+
+    assert response.status_code == 201
+    assert response.data["mode"] == "IMPORTED_FACTS_REVIEW"
+    assert response.data["data_label"] == "许可名单事实 · 待人工确认"
+    assert response.data["facts"] == [
+        {"field": "company_name", "value": "Jakarta Drives", "source": "许可名单导入"},
+        {"field": "country", "value": "Indonesia", "source": "许可名单导入"},
+        {"field": "industry", "value": "Industrial equipment", "source": "许可名单导入"},
+        {"field": "website", "value": "https://jakarta.example.invalid/", "source": "许可名单导入"},
+    ]
+    assert response.data["public_contact_paths"] == []
+    assert "采购意向" in response.data["message"]
+    snapshot = CandidateEnrichmentSnapshot.objects.get(candidate=candidate)
+    assert snapshot.evidence_envelope["connector"] == "USER_IMPORTED_FACTS"
+    assert snapshot.evidence_envelope["network_access"] is False
+
+
+def test_formal_candidate_replaces_a_stale_fake_preview_without_reupload(organization):
+    candidate = _candidate(organization)
+    CandidateEnrichmentSnapshot.objects.create(
+        organization=organization,
+        candidate=candidate,
+        mode="FAKE_PREVIEW",
+        facts=[{"field": "industry", "value": "Imagined", "source": "Demo"}],
+        evidence_envelope={"connector": "FAKE_WEBSITE_ENRICHMENT"},
+    )
+    client = _client(organization, suffix="stale")
+
+    response = client.post(
+        f"/api/v1/growth/enrichment/candidates/{candidate.id}/prepare", {}, format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["mode"] == "IMPORTED_FACTS_REVIEW"
+    assert response.data["facts"][0]["value"] == "Jakarta Drives"
+    snapshot = CandidateEnrichmentSnapshot.objects.get(candidate=candidate)
+    assert snapshot.mode == "IMPORTED_FACTS_REVIEW"
+    assert snapshot.evidence_envelope["connector"] == "USER_IMPORTED_FACTS"
 
 
 def test_enrichment_requires_accepted_tenant_candidate_and_manage_permission(organization):

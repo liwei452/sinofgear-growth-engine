@@ -22,11 +22,55 @@ it("does not expose fake enrichment in the formal interface", () => {
     global: { plugins: [[VueQueryPlugin, { queryClient }]] },
   })
 
-  expect(screen.getByText("资料理解服务尚未配置", { exact: false })).toBeInTheDocument()
+  expect(screen.getByText("待确认已导入事实", { exact: false })).toBeInTheDocument()
   expect(screen.queryByText("Demo / Fake 资料补全预演")).not.toBeInTheDocument()
   expect(screen.queryByText("Imagined industry")).not.toBeInTheDocument()
-  expect(screen.queryByRole("button", { name: "准备公司资料" })).not.toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "准备公司资料" })).toBeInTheDocument()
   expect(screen.getByRole("link", { name: "上传真实资料" })).toHaveAttribute("href", "/assets")
+})
+
+it("lets a formal candidate review imported facts before joining follow-up", async () => {
+  document.cookie = "csrftoken=formal-enrichment-token"
+  const preview = {
+    candidate_id: "candidate-formal",
+    mode: "IMPORTED_FACTS_REVIEW",
+    data_label: "许可名单事实 · 待人工确认",
+    facts: [
+      { field: "company_name", value: "Licensed Drives", source: "许可名单导入" },
+      { field: "country", value: "Chile", source: "许可名单导入" },
+    ],
+    public_contact_paths: [],
+    uncertainties: ["尚未联网核实公司官网", "没有采购意向证据"],
+    message: "仅整理已导入事实；没有联网核实、没有采购意向，也不会联系客户。",
+    created: true,
+    account_id: null,
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith("/prepare")) return new Response(JSON.stringify(preview), { status: 201, headers: { "Content-Type": "application/json" } })
+    return new Response(JSON.stringify({ account_id: "account-formal", follow_up_id: "follow-formal", status: "OPEN", created: true, message: "已加入人工跟进；没有生成采购意向，也没有联系客户。" }), { status: 201, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+
+  render(CandidateEnrichmentQueue, {
+    props: { candidates: [{
+      id: "candidate-formal", company_name: "Licensed Drives", country: "Chile", website: "",
+      industry: "Machinery", status: "ACCEPTED", status_label: "待补全公司资料",
+      source_owner: "Licensed list", license_contract: "Internal prospecting licence", import_format: "CSV",
+      is_demo: false, created_at: "2026-08-15T06:00:00Z", latest_preview: null,
+    }] },
+    global: { plugins: [[VueQueryPlugin, { queryClient }]] },
+  })
+
+  await user.click(screen.getByRole("button", { name: "准备公司资料" }))
+  expect(await screen.findByText("许可名单事实 · 待人工确认")).toBeInTheDocument()
+  expect(screen.getByText("Licensed Drives", { selector: "dd" })).toBeInTheDocument()
+  expect(screen.getByText("没有采购意向证据")).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "加入跟进" }))
+  expect(await screen.findByText("已加入人工跟进；没有生成采购意向，也没有联系客户。")).toBeInTheDocument()
+  expect(fetchMock).toHaveBeenCalledTimes(2)
 })
 
 

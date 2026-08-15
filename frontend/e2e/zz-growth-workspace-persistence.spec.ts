@@ -63,6 +63,44 @@ test("formal workspace stays clean and persists only explicitly recorded data", 
   await expect(page.getByText(/需求强度 25%/)).toHaveCount(0)
   await expectNoSeededDemo(page)
 
+  const licensedImport = page.locator("details.candidate-list-import")
+  if ((await licensedImport.getAttribute("open")) === null) {
+    await licensedImport.getByText("导入许可客户名单").click()
+  }
+  await licensedImport.getByLabel("CSV 或 JSON 文件").setInputFiles({
+    name: "licensed-drives.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from(
+      "company_name,country,website,industry\nLicensed Browser Drives,Chile,https://example.invalid/licensed-drives,Industrial equipment\n",
+    ),
+  })
+  await licensedImport.getByLabel("数据来源方").fill("User licensed customer list")
+  await licensedImport.getByLabel("许可或合同名称").fill("Internal prospecting licence")
+  const candidateImportResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname === "/api/v1/growth/discovery/candidate-imports"
+      && response.request().method() === "POST",
+  )
+  await licensedImport.getByRole("button", { name: "导入为待核实候选" }).click()
+  expect((await candidateImportResponse).status()).toBe(201)
+  const candidate = page.locator("article.candidate-review-card").filter({ hasText: "Licensed Browser Drives" })
+  await expect(candidate).toBeVisible()
+  await candidate.getByRole("button", { name: "加入资料补全" }).click()
+  const enrichment = page.locator("article.candidate-enrichment-card").filter({ hasText: "Licensed Browser Drives" })
+  await expect(enrichment).toBeVisible()
+  const prepareResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith("/prepare") && response.request().method() === "POST",
+  )
+  await enrichment.getByRole("button", { name: "准备公司资料" }).click()
+  expect((await prepareResponse).status()).toBe(201)
+  await expect(enrichment.getByText("许可名单事实 · 待人工确认")).toBeVisible()
+  await expect(enrichment.getByText("没有采购意向证据")).toBeVisible()
+  await expectNoSeededDemo(page)
+  await enrichment.getByRole("button", { name: "加入跟进" }).click()
+  await expect(enrichment.getByText("已加入人工跟进；没有生成采购意向，也没有联系客户。")).toBeVisible()
+  await page.reload()
+  await expect(page.locator("article.candidate-enrichment-card").filter({ hasText: "Licensed Browser Drives" }).getByText("已加入人工跟进")).toBeVisible()
+  await expectNoSeededDemo(page)
+
   await page.getByRole("button", { name: "导入公开线索" }).click()
   await page.getByLabel("公司名称").fill("Browser Import Drives Ltd")
   await page.getByLabel("国家或地区").fill("United Kingdom")

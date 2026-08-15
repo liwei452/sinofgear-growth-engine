@@ -13,7 +13,7 @@ class CandidateEnrichmentRequired(Exception):
 
 
 @transaction.atomic
-def prepare_fake_enrichment(*, candidate: DiscoveryCandidate):
+def prepare_candidate_enrichment(*, candidate: DiscoveryCandidate):
     locked = DiscoveryCandidate.objects.select_for_update().get(pk=candidate.pk)
     if locked.status != DiscoveryCandidate.Status.ACCEPTED:
         raise CandidateReviewRequired
@@ -26,42 +26,57 @@ def prepare_fake_enrichment(*, candidate: DiscoveryCandidate):
         if value:
             facts.append({"field": field, "value": value, "source": "许可名单导入"})
 
+    mode = "FAKE_PREVIEW" if locked.is_demo else "IMPORTED_FACTS_REVIEW"
+    defaults = {
+        "mode": mode,
+        "facts": facts,
+        "public_contact_paths": [],
+        "uncertainties": [
+            "尚未联网核实公司官网",
+            "尚未发现可验证的公开联系页面",
+            "没有采购意向证据",
+        ],
+        "evidence_envelope": {
+            "source_owner": locked.source_governance.get("source_owner", ""),
+            "license_contract": locked.source_governance.get("license_contract", ""),
+            "access_method": "USER_UPLOAD",
+            "connector": (
+                "FAKE_WEBSITE_ENRICHMENT" if locked.is_demo else "USER_IMPORTED_FACTS"
+            ),
+            "network_access": False,
+            "source_cost_micros": 0,
+            "review_status": "PENDING_REVIEW",
+            "observed_at": timezone.now().isoformat(),
+        },
+    }
     snapshot, created = CandidateEnrichmentSnapshot.objects.get_or_create(
         organization=locked.organization,
         candidate=locked,
-        defaults={
-            "mode": "FAKE_PREVIEW",
-            "facts": facts,
-            "public_contact_paths": [],
-            "uncertainties": [
-                "尚未联网核实公司官网",
-                "尚未发现可验证的公开联系页面",
-                "没有采购意向证据",
-            ],
-            "evidence_envelope": {
-                "source_owner": locked.source_governance.get("source_owner", ""),
-                "license_contract": locked.source_governance.get("license_contract", ""),
-                "access_method": "USER_UPLOAD",
-                "connector": "FAKE_WEBSITE_ENRICHMENT",
-                "network_access": False,
-                "source_cost_micros": 0,
-                "review_status": "PENDING_REVIEW",
-                "observed_at": timezone.now().isoformat(),
-            },
-        },
+        defaults=defaults,
     )
+    if not created and snapshot.mode != mode:
+        for field, value in defaults.items():
+            setattr(snapshot, field, value)
+        snapshot.save(update_fields=[*defaults.keys(), "updated_at"])
     return snapshot, created
 
 
 def enrichment_payload(snapshot, *, created):
+    is_demo = snapshot.mode == "FAKE_PREVIEW"
     return {
         "candidate_id": str(snapshot.candidate_id),
         "mode": snapshot.mode,
-        "data_label": "Demo / Fake 资料补全预演",
+        "data_label": (
+            "Demo / Fake 资料补全预演" if is_demo else "许可名单事实 · 待人工确认"
+        ),
         "facts": snapshot.facts,
         "public_contact_paths": snapshot.public_contact_paths,
         "uncertainties": snapshot.uncertainties,
-        "message": "已生成资料补全预演；没有联网抓取，也不会联系客户。",
+        "message": (
+            "已生成资料补全预演；没有联网抓取，也不会联系客户。"
+            if is_demo else
+            "仅整理已导入事实；没有联网核实、没有采购意向，也不会联系客户。"
+        ),
         "created": created,
         "account_id": str(snapshot.target_account_id) if snapshot.target_account_id else None,
     }

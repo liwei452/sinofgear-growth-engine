@@ -600,6 +600,27 @@ it("shows a truthful empty company fact state and links to material understandin
   expect(screen.getByRole("link", { name: "上传资料并提取事实" })).toHaveAttribute("href", "/assets")
 })
 
+it("does not render demo company qualifications in the formal fact table", async () => {
+  const workspace = {
+    target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
+    outreach_drafts: [], opportunity_reviews: [], crm_handoffs: [], reactivations: [],
+    channel_packages: [], publish_batches: [], metric_receipts: [], connectors: [],
+    field_provenance: [{
+      id: "demo-fact", field_name: "quality_system", field_value: "ISO 9001",
+      source_label: "Demo certificate", verification_status: "VERIFIED", source_cost_micros: 0,
+      is_demo: true, created_at: "2026-08-15T00:00:00Z", updated_at: "2026-08-15T00:00:00Z",
+    }],
+  }
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(workspace), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(CompanyPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  expect(await screen.findByText("还没有已保存的公司事实")).toBeInTheDocument()
+  expect(screen.queryByText("ISO 9001")).not.toBeInTheDocument()
+})
+
 it("sorts and switches the opportunity queue without sharing follow-up state", async () => {
   document.cookie = "csrftoken=opportunity-page-test-token"
   const accountId = "10000000-0000-4000-8000-000000001001"

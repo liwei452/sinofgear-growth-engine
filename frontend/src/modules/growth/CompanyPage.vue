@@ -44,7 +44,8 @@ function apiFactRow(fact: FieldProvenance): FactRow {
   }
 }
 
-const facts = computed(() => workspaceQuery.data.value?.field_provenance.map(apiFactRow) ?? [])
+const facts = computed(() => workspaceQuery.data.value?.field_provenance
+  .filter(fact => !fact.is_demo).map(apiFactRow) ?? [])
 
 const verifyMutation = useMutation({
   mutationFn: verifyCompanyFact,

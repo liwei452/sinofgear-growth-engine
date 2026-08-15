@@ -16,6 +16,7 @@ const formalReactivations = computed(() => (props.workspace.reactivations ?? [])
   .filter(item => !item.is_demo && formalAccountIds.value.has(item.account_id)))
 const formalSignals = computed(() => props.workspace.intent_signals
   .filter(item => item.collection_method !== "DEMO_FIXTURE" && formalAccountIds.value.has(item.account_id)))
+const formalProvenance = computed(() => props.workspace.field_provenance.filter(item => !item.is_demo))
 
 const candidateMap = computed(() => {
   const result = new Map<string, DiscoveryCandidate | EnrichmentCandidate>()
@@ -84,7 +85,7 @@ const stageItems = computed(() => [
   { key: "CANDIDATE" as const, label: "候选", value: candidateCount.value }, { key: "VERIFIED" as const, label: "人工核实", value: verifiedCount.value }, { key: "ENRICHED" as const, label: "资料补全", value: enrichedCount.value }, { key: "FOLLOW_UP" as const, label: "加入跟进", value: followUpIds.value.size }, { key: "DRAFTED" as const, label: "草稿生成", value: draftIds.value.size }, { key: "APPROVED" as const, label: "人工批准", value: approvedCount.value }, { key: "SENT" as const, label: "人工发送", value: null }, { key: "REPLIED" as const, label: "回复", value: null }, { key: "DEMAND" as const, label: "有效需求", value: null },
 ])
 function percentage(numerator: number, denominator: number) { return denominator ? `${Math.round(numerator / denominator * 100)}%` : "无数据" }
-const dataCostMicros = computed(() => props.workspace.field_provenance.reduce((sum, item) => sum + item.source_cost_micros, 0) + formalSignals.value.reduce((sum, item) => sum + (item.evidence_envelope?.source_cost_micros ?? 0), 0))
+const dataCostMicros = computed(() => formalProvenance.value.reduce((sum, item) => sum + item.source_cost_micros, 0) + formalSignals.value.reduce((sum, item) => sum + (item.evidence_envelope?.source_cost_micros ?? 0), 0))
 const dataCost = computed(() => `$${(dataCostMicros.value / 1_000_000).toFixed(3)}`)
 function formatTime(value: string) { return value ? new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value)) : "未记录时间" }
 </script>
@@ -100,7 +101,7 @@ function formatTime(value: string) { return value ? new Intl.DateTimeFormat("zh-
       <article><span>有效账户率 {{ percentage(evidenceIds.size, totalAccounts) }}</span><small>有已记录意向证据的账户 {{ evidenceIds.size }} / 目标账户 {{ totalAccounts }}</small></article>
       <article><span>草稿批准率 {{ percentage(approvedCount, draftIds.size) }}</span><small>已批准账户 {{ approvedCount }} / 已生成草稿账户 {{ draftIds.size }}</small></article>
       <article><span>证据覆盖率 {{ percentage(evidenceIds.size, totalAccounts) }}</span><small>有来源证据账户 {{ evidenceIds.size }} / 目标账户 {{ totalAccounts }}</small></article>
-      <article><span>数据成本 {{ dataCost }}</span><small>仅汇总 {{ workspace.field_provenance.length + formalSignals.filter(item => item.evidence_envelope).length }} 条已有成本记录</small></article>
+      <article><span>数据成本 {{ dataCost }}</span><small>仅汇总 {{ formalProvenance.length + formalSignals.filter(item => item.evidence_envelope).length }} 条已有成本记录</small></article>
       <article><span>积极回复率 无数据</span><small>没有账户级人工发送与回复事件，暂不计算分母</small></article>
       <article><span>需求率 无数据</span><small>没有账户级有效需求事件，暂不计算分母</small></article>
     </div>

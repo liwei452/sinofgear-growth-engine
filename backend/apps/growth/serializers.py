@@ -458,6 +458,6 @@ class FieldProvenanceSerializer(serializers.ModelSerializer):
         model = FieldProvenance
         fields = [
             "id", "field_name", "field_value", "source_label", "verification_status",
-            "source_cost_micros", "created_at", "updated_at",
+            "source_cost_micros", "is_demo", "created_at", "updated_at",
         ]
     OpportunityReview,

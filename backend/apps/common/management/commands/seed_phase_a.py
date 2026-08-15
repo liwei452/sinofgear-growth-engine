@@ -932,6 +932,7 @@ class Command(BaseCommand):
                     "source_label": source_label,
                     "verification_status": verification_status,
                     "source_cost_micros": cost,
+                    "is_demo": True,
                 },
             )
 

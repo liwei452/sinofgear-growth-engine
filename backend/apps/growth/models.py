@@ -378,6 +378,7 @@ class FieldProvenance(OrganizationOwnedModel):
     source_label = models.CharField(max_length=255)
     verification_status = models.CharField(max_length=32)
     source_cost_micros = models.PositiveBigIntegerField(default=0)
+    is_demo = models.BooleanField(default=False)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["organization", "field_name"], name="growth_unique_fact_field")]

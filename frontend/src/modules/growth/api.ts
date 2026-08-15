@@ -212,6 +212,7 @@ export type FieldProvenance = {
   source_label: string
   verification_status: string
   source_cost_micros: number
+  is_demo?: boolean
   created_at: string
   updated_at: string
 }

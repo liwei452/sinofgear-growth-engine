@@ -64,6 +64,7 @@ class ProtectedJobModel(models.Model):
 class Job(ProtectedJobModel):
     class Type(models.TextChoices):
         CONTENT_GENERATE = "CONTENT_GENERATE", "Content generate"
+        CONTENT_RECOMMEND = "CONTENT_RECOMMEND", "Content recommend"
         ASSET_UNDERSTAND = "ASSET_UNDERSTAND", "Asset understand"
 
     class Status(models.TextChoices):

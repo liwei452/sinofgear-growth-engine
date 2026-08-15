@@ -327,6 +327,38 @@ class MarketCountryProfile(OrganizationOwnedModel):
         ]
 
 
+class DiscoveryCandidate(OrganizationOwnedModel):
+    class Status(models.TextChoices):
+        PENDING_REVIEW = "PENDING_REVIEW", "Pending review"
+        ACCEPTED = "ACCEPTED", "Accepted"
+        DISMISSED = "DISMISSED", "Dismissed"
+
+    company_name = models.CharField(max_length=255)
+    country = models.CharField(max_length=96)
+    website = models.URLField(blank=True)
+    industry = models.CharField(max_length=160, blank=True)
+    status = models.CharField(
+        max_length=24, choices=Status.choices, default=Status.PENDING_REVIEW,
+    )
+    import_format = models.CharField(max_length=16)
+    source_governance = models.JSONField(default=dict)
+    raw_record = models.JSONField(default=dict)
+    record_hash = models.CharField(max_length=64)
+    is_demo = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "record_hash"],
+                name="growth_unique_discovery_candidate_hash",
+            ),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Discovery candidate history cannot be deleted.")
+
+
 class DiscoveryProfile(OrganizationOwnedModel):
     organization = models.OneToOneField(
         Organization, on_delete=models.PROTECT, related_name="growth_discovery_profile",

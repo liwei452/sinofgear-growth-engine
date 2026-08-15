@@ -182,7 +182,25 @@ export type DiscoverySummary = {
   product_scope_label: string
   next_run_at: string | null
   last_run: DiscoveryRunResult | null
+  candidate_count?: number
   available_sources: DiscoverySourceSummary[]
+}
+
+export type CandidateListImportInput = {
+  format: "CSV" | "JSON"
+  content: string
+  source_owner: string
+  license_contract: string
+  retention_days: number
+  redistribution_allowed: boolean
+}
+
+export type CandidateListImportResult = {
+  created_count: number
+  duplicate_count: number
+  invalid_count: number
+  errors: Array<{ row: number; message: string }>
+  queue_label: "待核实候选公司"
 }
 
 export type MarketPilotSummary = {
@@ -337,6 +355,17 @@ export async function runAutomaticDiscovery(): Promise<DiscoveryRunResult> {
     { method: "POST", body: {} },
   )
   if (!result) throw new Error("自动查找响应为空。")
+  return result
+}
+
+export async function importCandidateList(
+  input: CandidateListImportInput,
+): Promise<CandidateListImportResult> {
+  const result = await apiRequest<CandidateListImportResult>(
+    "/api/v1/growth/discovery/candidate-imports",
+    { method: "POST", body: input },
+  )
+  if (!result) throw new Error("候选名单导入响应为空。")
   return result
 }
 

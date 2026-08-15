@@ -7,6 +7,7 @@ from apps.identity.permissions import CanManageCampaigns, CanReadCampaigns
 from apps.platforms.connection_status import connection_summary
 from integrations.sources.base import SourceAdapterError
 
+from .candidate_imports import CandidateImportInvalid, import_candidate_list
 from .discovery import DiscoveryAlreadyRunning, run_discovery
 from .models import (
     ChannelPackage,
@@ -28,6 +29,8 @@ from .manual_imports import import_manual_opportunity
 from .market_pilots import market_pilot_summary, market_profiles_for
 from .serializers import (
     ChannelPackageSerializer,
+    CandidateListImportResultSerializer,
+    CandidateListImportSerializer,
     ContactSerializer,
     DiscoveryProfileUpdateSerializer,
     DiscoveryRunResultSerializer,
@@ -118,6 +121,9 @@ def discovery_summary(profile):
         "product_scope_label": "齿轮、传动与驱动部件",
         "next_run_at": profile.next_run_at,
         "last_run": discovery_run_payload(last_run) if last_run else None,
+        "candidate_count": profile.organization.discoverycandidate_set.filter(
+            status="PENDING_REVIEW",
+        ).count(),
         "available_sources": [
             {"code": "TED", "label": "TED 欧盟采购公告", "status": "ACTIVE"},
             {
@@ -210,6 +216,32 @@ class DiscoveryRunView(APIView):
                 "recovery_action": "请稍后再次点击立即查找。",
             }, status=503)
         return Response(discovery_run_payload(run))
+
+
+class CandidateListImportView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=CandidateListImportSerializer,
+        responses={200: CandidateListImportResultSerializer, 201: CandidateListImportResultSerializer},
+    )
+    def post(self, request):
+        serializer = CandidateListImportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            result = import_candidate_list(
+                organization=request.organization,
+                import_format=serializer.validated_data["format"],
+                content=serializer.validated_data["content"],
+                source_owner=serializer.validated_data["source_owner"],
+                license_contract=serializer.validated_data["license_contract"],
+                retention_days=serializer.validated_data["retention_days"],
+                redistribution_allowed=serializer.validated_data["redistribution_allowed"],
+            )
+        except CandidateImportInvalid as error:
+            return Response({"message": str(error)}, status=400)
+        return Response(result, status=201 if result["created_count"] else 200)
 
 
 class DiscoveryProfileView(APIView):

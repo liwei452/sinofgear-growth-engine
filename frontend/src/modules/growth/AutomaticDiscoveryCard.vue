@@ -99,7 +99,7 @@ function changeSchedule(event: Event): void {
     <p v-if="actionStatus" class="approval-status" role="status">{{ actionStatus }}</p>
     <p v-if="actionError" class="manual-import-error" role="alert">{{ actionError }}</p>
     <p class="discovery-safety">
-      地图只用于发现目标公司，不代表采购意向；系统不会自动联系客户，所有机会都要先查看证据。
+      待核实候选：{{ summary.candidate_count ?? 0 }} 家。地图只用于发现目标公司，不代表采购意向；系统不会自动联系客户，所有机会都要先查看证据。
     </p>
   </section>
 </template>

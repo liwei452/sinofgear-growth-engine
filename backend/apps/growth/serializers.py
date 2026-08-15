@@ -50,6 +50,23 @@ class DiscoveryRunResultSerializer(serializers.Serializer):
     message = serializers.CharField()
 
 
+class CandidateListImportSerializer(serializers.Serializer):
+    format = serializers.ChoiceField(choices=["CSV", "JSON"])
+    content = serializers.CharField(min_length=2, max_length=1_000_000, trim_whitespace=False)
+    source_owner = serializers.CharField(min_length=2, max_length=255)
+    license_contract = serializers.CharField(min_length=2, max_length=255)
+    retention_days = serializers.IntegerField(min_value=1, max_value=3650)
+    redistribution_allowed = serializers.BooleanField()
+
+
+class CandidateListImportResultSerializer(serializers.Serializer):
+    created_count = serializers.IntegerField()
+    duplicate_count = serializers.IntegerField()
+    invalid_count = serializers.IntegerField()
+    errors = serializers.ListField(child=serializers.DictField())
+    queue_label = serializers.CharField()
+
+
 class DiscoverySummarySerializer(serializers.Serializer):
     enabled = serializers.BooleanField()
     source_label = serializers.CharField()

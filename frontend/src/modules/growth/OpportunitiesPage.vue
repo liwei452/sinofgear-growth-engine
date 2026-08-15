@@ -12,6 +12,7 @@ import {
 } from "./api"
 import ManualOpportunityImportForm from "./ManualOpportunityImportForm.vue"
 import AutomaticDiscoveryCard from "./AutomaticDiscoveryCard.vue"
+import CandidateListImportForm from "./CandidateListImportForm.vue"
 import MarketPilotComparison from "./MarketPilotComparison.vue"
 
 const queryClient = useQueryClient()
@@ -286,6 +287,7 @@ async function handleImported(accountId: string): Promise<void> {
       v-if="workspaceQuery.data.value?.discovery"
       :discovery="workspaceQuery.data.value.discovery"
     />
+    <CandidateListImportForm />
     <MarketPilotComparison
       v-if="workspaceQuery.data.value?.market_pilots"
       :summary="workspaceQuery.data.value.market_pilots"

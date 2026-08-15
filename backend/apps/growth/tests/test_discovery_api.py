@@ -62,6 +62,7 @@ def test_workspace_exposes_an_owner_friendly_discovery_summary(organization):
         "product_scope_label": "齿轮、传动与驱动部件",
         "next_run_at": None,
         "last_run": None,
+        "candidate_count": 0,
         "available_sources": [
             {"code": "TED", "label": "TED 欧盟采购公告", "status": "ACTIVE"},
             {

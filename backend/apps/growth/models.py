@@ -457,6 +457,16 @@ class DiscoveryCandidate(OrganizationOwnedModel):
 
     class Meta:
         ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["organization", "status", "-created_at"],
+                name="growth_cand_org_status_idx",
+            ),
+            models.Index(
+                fields=["organization", "-created_at"],
+                name="growth_cand_org_created_idx",
+            ),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "record_hash"],

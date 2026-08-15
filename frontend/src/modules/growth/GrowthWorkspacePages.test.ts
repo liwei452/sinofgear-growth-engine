@@ -14,7 +14,8 @@ it("reviews an ICP and a complete TikTok manual publishing package", async () =>
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
   expect(screen.getByRole("heading", { name: "推广计划与内容包" })).toBeInTheDocument()
-  expect(screen.getByText("德国包装机械制造商 · 51–500 人")).toBeInTheDocument()
+  expect(screen.getByText("尚未形成客户画像")).toBeInTheDocument()
+  expect(screen.queryByText("德国包装机械制造商 · 51–500 人")).not.toBeInTheDocument()
   const tiktok = screen.getByRole("article", { name: "TikTok 内容包" })
   expect(tiktok).toHaveTextContent("15–60 秒")
   expect(tiktok).toHaveTextContent("9:16")
@@ -910,6 +911,13 @@ it("shows safe channel connection states and starts authorization without publis
   const workspace = {
     target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
     outreach_drafts: [], field_provenance: [], metric_receipts: [], publish_batches: [],
+    market_pilots: {
+      markets: [
+        { country_label: "印度尼西亚", status: "ACTIVE_MARKET", suitable_industries: ["工业传动", "矿业设备"], is_demo: true },
+        { country_label: "南非", status: "ACTIVE_MARKET", suitable_industries: ["矿业设备", "工业维护"], is_demo: true },
+      ],
+      validation_goals: { weeks: 8 },
+    },
     connectors: [
       { channel: "LINKEDIN", status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "OFFICIAL" },
       { channel: "FACEBOOK", status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "DEMO_FAKE" },
@@ -942,6 +950,10 @@ it("shows safe channel connection states and starts authorization without publis
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
   expect(await screen.findAllByText("LINKEDIN package")).not.toHaveLength(0)
+  expect(screen.getByText("印度尼西亚 + 南非 · 当前试点")).toBeInTheDocument()
+  expect(screen.getByText("工业传动、矿业设备、工业维护相关企业")).toBeInTheDocument()
+  expect(screen.getByText("8 周市场验证")).toBeInTheDocument()
+  expect(screen.queryByText("德国 · 包装机械")).not.toBeInTheDocument()
   const linkedIn = screen.getByRole("article", { name: "LinkedIn Company Page 内容包" })
   const facebook = screen.getByRole("article", { name: "Facebook Page 内容包" })
   const instagram = screen.getByRole("article", { name: "Instagram Business 内容包" })

@@ -23,6 +23,19 @@ import {
 
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
+const activeMarkets = computed(() => (workspaceQuery.data.value?.market_pilots?.markets ?? [])
+  .filter(market => market.status === "ACTIVE_MARKET"))
+const activeMarketLabel = computed(() => activeMarkets.value.length
+  ? `${activeMarkets.value.map(market => market.country_label).join(" + ")} · 当前试点`
+  : "尚未选择市场")
+const activeMarketIndustries = computed(() => {
+  const industries = [...new Set(activeMarkets.value.flatMap(market => market.suitable_industries ?? []))]
+  return industries.length ? `${industries.slice(0, 3).join("、")}相关企业` : "尚未形成客户画像"
+})
+const validationPeriodLabel = computed(() => {
+  const weeks = workspaceQuery.data.value?.market_pilots?.validation_goals.weeks
+  return typeof weeks === "number" && weeks > 0 ? `${weeks} 周市场验证` : "尚未设置验证周期"
+})
 const locallyApprovedIds = ref(new Set<string>())
 const fallbackApproved = ref(false)
 const approvalError = ref("")
@@ -514,9 +527,9 @@ const channels: Array<{
     <p v-if="connectionMessage" role="status" class="approval-status connection-success">{{ connectionMessage }}</p>
 
     <section class="growth-card plan-summary">
-      <div><span>目标市场</span><strong>德国 · 包装机械</strong></div>
-      <div><span>理想客户</span><strong>德国包装机械制造商 · 51–500 人</strong></div>
-      <div><span>推广周期</span><strong>14 天 · 每周 3 个内容包</strong></div>
+      <div><span>目标市场</span><strong>{{ activeMarketLabel }}</strong></div>
+      <div><span>理想客户</span><strong>{{ activeMarketIndustries }}</strong></div>
+      <div><span>验证周期</span><strong>{{ validationPeriodLabel }}</strong></div>
       <div><span>审核边界</span><strong>所有内容人工批准后导出</strong></div>
     </section>
 

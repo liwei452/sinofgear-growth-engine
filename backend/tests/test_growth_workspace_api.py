@@ -368,6 +368,55 @@ def test_channel_package_approval_and_metric_backfill_are_persisted_without_publ
 
 
 @pytest.mark.django_db
+def test_four_channel_content_review_is_atomic_idempotent_and_organization_scoped(growth_client):
+    client, organization = growth_client
+    from apps.growth.models import ChannelPackage
+
+    packages = [
+        ChannelPackage.objects.create(
+            organization=organization,
+            channel=channel,
+            payload={"title": f"{channel} reviewed content"},
+            is_demo=True,
+        )
+        for channel in ("LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK")
+    ]
+    payload = {"package_ids": [str(package.id) for package in packages]}
+
+    first = client.post("/api/v1/growth/channel-packages/approve-all", payload, format="json")
+    replay = client.post("/api/v1/growth/channel-packages/approve-all", payload, format="json")
+
+    assert first.status_code == 200
+    assert replay.data == first.data
+    assert first.data["status"] == "APPROVED"
+    assert first.data["delivery"] == "MANUAL_ONLY"
+    assert {item["channel"] for item in first.data["packages"]} == {
+        "LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK",
+    }
+    assert ChannelPackage.objects.filter(organization=organization, status="APPROVED").count() == 4
+
+    foreign = Organization.objects.create(name="Foreign approval", slug="foreign-approval")
+    secret = ChannelPackage.objects.create(
+        organization=foreign, channel="TIKTOK", payload={"title": "foreign secret"}, is_demo=True,
+    )
+    packages[3].status = "AWAITING_REVIEW"
+    packages[3].save(update_fields=["status", "updated_at"])
+    blocked_ids = [str(package.id) for package in packages[:3]] + [str(secret.id)]
+
+    blocked = client.post(
+        "/api/v1/growth/channel-packages/approve-all", {"package_ids": blocked_ids}, format="json",
+    )
+
+    assert blocked.status_code == 409
+    assert blocked.data["code"] == "CHANNEL_PACKAGE_SELECTION_INVALID"
+    packages[3].refresh_from_db()
+    secret.refresh_from_db()
+    assert packages[3].status == "AWAITING_REVIEW"
+    assert secret.status == "AWAITING_REVIEW"
+    assert b"foreign secret" not in blocked.content
+
+
+@pytest.mark.django_db
 def test_only_approved_channel_package_can_be_exported_through_fake_connector(growth_client):
     client, organization = growth_client
     from apps.growth.models import ChannelPackage

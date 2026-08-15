@@ -30,6 +30,12 @@ class PublishBatchCreateSerializer(serializers.Serializer):
     )
 
 
+class ChannelPackageBatchApproveSerializer(serializers.Serializer):
+    package_ids = serializers.ListField(
+        child=serializers.UUIDField(), allow_empty=False, min_length=4, max_length=4,
+    )
+
+
 class GrowthErrorSerializer(serializers.Serializer):
     code = serializers.CharField()
     message = serializers.CharField()

@@ -41,6 +41,7 @@ from .models import (
 from .manual_imports import import_manual_opportunity
 from .market_pilots import market_pilot_summary, market_profiles_for
 from .serializers import (
+    ChannelPackageBatchApproveSerializer,
     ChannelPackageSerializer,
     CandidateListImportResultSerializer,
     CandidateListImportSerializer,
@@ -88,12 +89,14 @@ from .publishing import (
     retry_failed_items,
 )
 from .services import (
+    ChannelPackageBatchInvalid,
     ChannelPackagePreparationBlocked,
     PackageReviewRequired,
     prepare_channel_package_from_platform_content,
     OpportunityHandoffBlocked,
     add_to_follow_up,
     approve_channel_package,
+    approve_channel_package_batch,
     create_outreach_draft,
     create_mock_crm_handoff,
     export_manual_channel_package,
@@ -631,6 +634,34 @@ class ChannelPackageApproveView(APIView):
         approve_channel_package(package=package)
         return Response({
             "id": str(package.id), "status": package.status, "delivery": "MANUAL_ONLY",
+        })
+
+
+class ChannelPackageBatchApproveView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(tags=["Growth workspace"])
+    def post(self, request):
+        serializer = ChannelPackageBatchApproveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            packages = approve_channel_package_batch(
+                organization=request.organization,
+                package_ids=serializer.validated_data["package_ids"],
+            )
+        except ChannelPackageBatchInvalid as error:
+            return Response({
+                "code": "CHANNEL_PACKAGE_SELECTION_INVALID",
+                "message": str(error),
+                "recovery_action": "返回推广页，确认四个渠道均使用当前组织的内容包。",
+            }, status=409)
+        return Response({
+            "status": "APPROVED",
+            "delivery": "MANUAL_ONLY",
+            "packages": [
+                {"id": str(package.id), "channel": package.channel, "status": package.status}
+                for package in packages
+            ],
         })
 
 

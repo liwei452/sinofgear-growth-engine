@@ -203,6 +203,57 @@ it("keeps channel package review state independent", async () => {
   expect(within(tiktok).getByRole("button", { name: "批准 TikTok 内容包" })).toBeEnabled()
 })
 
+it("requires one explicit confirmation before approving all four channel packages", async () => {
+  document.cookie = "csrftoken=batch-review-test-token"
+  const channels = ["LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"]
+  const workspace = {
+    target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
+    outreach_drafts: [], field_provenance: [], metric_receipts: [], publish_batches: [],
+    connectors: channels.map(channel => ({
+      channel, status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "DEMO_FAKE",
+    })),
+    channel_packages: channels.map((channel, index) => ({
+      id: `40000000-0000-4000-8000-00000000120${index + 1}`,
+      account_id: null, source_platform_content_id: `50000000-0000-4000-8000-00000000120${index + 1}`,
+      channel,
+      payload: channel === "TIKTOK"
+        ? { title: "TikTok evidence version", duration_seconds: 30, aspect_ratio: "9:16" }
+        : { title: `${channel} evidence version` },
+      status: "AWAITING_REVIEW", is_demo: true, data_label: "Demo / Fake", delivery: "MANUAL_ONLY",
+      created_at: "2026-08-15T10:00:00Z", updated_at: "2026-08-15T10:00:00Z",
+    })),
+  }
+  let capturedIds: string[] = []
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === "/api/v1/growth/workspace") {
+      return new Response(JSON.stringify(workspace), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/growth/channel-packages/approve-all") {
+      capturedIds = JSON.parse(String(init?.body)).package_ids
+      workspace.channel_packages.forEach(item => { item.status = "APPROVED" })
+      return new Response(JSON.stringify({ status: "APPROVED", delivery: "MANUAL_ONLY", packages: [] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })
+    }
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+  render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  const review = await screen.findByRole("region", { name: "四渠道内容总审核" })
+  const approveAll = within(review).getByRole("button", { name: "批准 4 个渠道内容" })
+  expect(approveAll).toBeDisabled()
+  await user.click(within(review).getByRole("checkbox", { name: "我已核对四个平台内容与事实证据" }))
+  await user.click(approveAll)
+
+  expect(capturedIds).toEqual(workspace.channel_packages.map(item => item.id))
+  expect(await within(review).findByText("四个平台内容均已人工批准")).toBeInTheDocument()
+  expect(fetchMock.mock.calls.some(([path]) => String(path) === "/api/v1/growth/publish-batches")).toBe(false)
+})
+
 it("publishes all approved channels once and retries only failed channels", async () => {
   document.cookie = "csrftoken=one-click-publish-test-token"
   const channels = ["LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"]
@@ -323,7 +374,7 @@ it("explains every blocked channel and never silently publishes a partial batch"
   const user = userEvent.setup()
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
-  await screen.findByText("LINKEDIN reviewed content")
+  expect(await screen.findAllByText("LINKEDIN reviewed content")).not.toHaveLength(0)
   const readiness = screen.getByRole("region", { name: "四渠道发布就绪检查" })
   expect(within(readiness).getByText("LinkedIn · 已就绪")).toBeInTheDocument()
   expect(within(readiness).getByText("Facebook · 等待内容审核")).toBeInTheDocument()
@@ -747,7 +798,7 @@ it("shows safe channel connection states and starts authorization without publis
   const user = userEvent.setup()
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
-  await screen.findByText("LINKEDIN package")
+  expect(await screen.findAllByText("LINKEDIN package")).not.toHaveLength(0)
   const linkedIn = screen.getByRole("article", { name: "LinkedIn Company Page 内容包" })
   const facebook = screen.getByRole("article", { name: "Facebook Page 内容包" })
   const instagram = screen.getByRole("article", { name: "Instagram Business 内容包" })

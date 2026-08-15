@@ -23,6 +23,10 @@ class ChannelPackagePreparationBlocked(RuntimeError):
     pass
 
 
+class ChannelPackageBatchInvalid(RuntimeError):
+    pass
+
+
 SUPPORTED_PUBLISH_CHANNELS = {"LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"}
 
 
@@ -218,6 +222,23 @@ def approve_channel_package(*, package: ChannelPackage) -> ChannelPackage:
         package.status = "APPROVED"
         package.save(update_fields=["status", "updated_at"])
     return package
+
+
+@transaction.atomic
+def approve_channel_package_batch(*, organization, package_ids) -> list[ChannelPackage]:
+    unique_ids = list(dict.fromkeys(package_ids))
+    if len(unique_ids) != 4:
+        raise ChannelPackageBatchInvalid("请选择四个不同渠道的内容包。")
+    packages = list(
+        ChannelPackage.objects.select_for_update()
+        .filter(organization=organization, id__in=unique_ids)
+        .order_by("channel", "id")
+    )
+    if len(packages) != 4 or {package.channel for package in packages} != SUPPORTED_PUBLISH_CHANNELS:
+        raise ChannelPackageBatchInvalid("内容包必须来自当前组织并覆盖四个支持渠道。")
+    for package in packages:
+        approve_channel_package(package=package)
+    return packages
 
 
 def export_manual_channel_package(*, package: ChannelPackage) -> ManualPackageReceipt:

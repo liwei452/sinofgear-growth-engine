@@ -4,6 +4,7 @@ import { computed, nextTick, ref, watchEffect } from "vue"
 
 import {
   approveChannelPackage,
+  approveAllChannelPackages,
   authorizePlatformConnection,
   confirmPlatformConnection,
   createPublishBatch,
@@ -24,6 +25,7 @@ const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
 const locallyApprovedIds = ref(new Set<string>())
 const fallbackApproved = ref(false)
 const approvalError = ref("")
+const batchReviewConfirmed = ref(false)
 const downloadMessage = ref("")
 const downloadError = ref("")
 const publishBatch = ref<PublishBatch | null>(null)
@@ -128,6 +130,12 @@ const channelReadiness = computed<ChannelReadiness[]>(() => publishChannelCodes.
 const pendingReadinessCount = computed(() => channelReadiness.value.filter(item => !item.ready).length)
 const allChannelsReady = computed(() => pendingReadinessCount.value === 0)
 const hasPublishingPackages = computed(() => channelReadiness.value.some(item => item.package))
+const reviewPackages = computed(() => publishChannelCodes
+  .map(packageFor)
+  .filter((channelPackage): channelPackage is ChannelPackage => Boolean(channelPackage)))
+const hasFourReviewPackages = computed(() => reviewPackages.value.length === 4)
+const allPackagesApproved = computed(() => hasFourReviewPackages.value
+  && reviewPackages.value.every(channelPackage => isApproved(channelPackage)))
 const eligiblePackages = computed(() => channelReadiness.value
   .filter((item): item is ChannelReadiness & { package: ChannelPackage } => item.ready && Boolean(item.package))
   .map(item => item.package))
@@ -146,6 +154,18 @@ const approveMutation = useMutation({
     await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
   },
   onError: () => { approvalError.value = "内容包暂时无法批准，请稍后重试。" },
+})
+const approveAllMutation = useMutation({
+  mutationFn: (packageIds: string[]) => approveAllChannelPackages(packageIds),
+  onSuccess: async () => {
+    locallyApprovedIds.value = new Set([
+      ...locallyApprovedIds.value,
+      ...reviewPackages.value.map(channelPackage => channelPackage.id),
+    ])
+    batchReviewConfirmed.value = false
+    await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+  },
+  onError: () => { approvalError.value = "四渠道内容暂时无法一起批准，请检查内容包后重试。" },
 })
 const exportMutation = useMutation({ mutationFn: exportChannelPackage })
 const publishMutation = useMutation({
@@ -259,6 +279,13 @@ async function approvePackage(channelPackage: ChannelPackage | undefined): Promi
     return
   }
   await approveMutation.mutateAsync(channelPackage.id).catch(() => undefined)
+}
+
+async function approveAllPackages(): Promise<void> {
+  approvalError.value = ""
+  if (!hasFourReviewPackages.value || !batchReviewConfirmed.value || allPackagesApproved.value) return
+  await approveAllMutation.mutateAsync(reviewPackages.value.map(channelPackage => channelPackage.id))
+    .catch(() => undefined)
 }
 
 function saveExport(exported: ManualPackageExport): void {
@@ -485,6 +512,28 @@ const channels: Array<{
           </div>
         </article>
       </div>
+      <section v-if="hasFourReviewPackages" class="batch-review-panel" aria-label="四渠道内容总审核">
+        <div>
+          <p class="eyebrow">一次人工总审核</p>
+          <h3>{{ allPackagesApproved ? "四个平台内容均已人工批准" : "核对四个平台版本后统一批准" }}</h3>
+          <ul>
+            <li v-for="channelPackage in reviewPackages" :key="channelPackage.id">
+              <strong>{{ channelLabel(channelPackage.channel) }}</strong>
+              <span>{{ String(channelPackage.payload.title ?? "待核对内容") }}</span>
+            </li>
+          </ul>
+          <label v-if="!allPackagesApproved" class="batch-review-confirmation">
+            <input v-model="batchReviewConfirmed" type="checkbox">
+            <span>我已核对四个平台内容与事实证据</span>
+          </label>
+          <p v-else>批准只记录人工审核，不会发送或请求任何真实平台。</p>
+        </div>
+        <button
+          v-if="!allPackagesApproved" class="button button-primary" type="button"
+          :disabled="!batchReviewConfirmed || approveAllMutation.isPending.value"
+          aria-label="批准 4 个渠道内容" @click="approveAllPackages"
+        >{{ approveAllMutation.isPending.value ? "正在批准…" : "批准 4 个渠道内容" }}</button>
+      </section>
       <section v-if="hasPublishingPackages" class="publish-panel" aria-label="四渠道发布就绪检查">
         <div>
           <p class="eyebrow">四渠道发布就绪检查</p>

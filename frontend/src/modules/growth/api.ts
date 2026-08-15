@@ -595,6 +595,22 @@ export async function approveChannelPackage(packageId: string): Promise<{
   return result
 }
 
+export async function approveAllChannelPackages(packageIds: string[]): Promise<{
+  status: "APPROVED"
+  delivery: "MANUAL_ONLY"
+  packages: Array<{ id: string, channel: string, status: "APPROVED" }>
+}> {
+  const result = await apiRequest<{
+    status: "APPROVED"
+    delivery: "MANUAL_ONLY"
+    packages: Array<{ id: string, channel: string, status: "APPROVED" }>
+  }>("/api/v1/growth/channel-packages/approve-all", {
+    method: "POST", body: { package_ids: packageIds },
+  })
+  if (!result) throw new Error("四渠道内容审批响应为空。")
+  return result
+}
+
 export type ManualPackageExport = {
   package_id: string
   channel: string

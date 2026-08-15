@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue"
+import { computed, ref, watch } from "vue"
 
 import { loadTradeIndicators, syncPublicTradeData, type TradeIndicatorResponse } from "./api"
 
@@ -8,7 +8,7 @@ const props = defineProps<{
 }>()
 
 const supportedCountries = new Set([
-  "USA", "GBR", "CAN", "VNM", "IDN", "PHL", "ZAF", "EGY", "KEN", "NGA",
+  "USA", "GBR", "CAN", "DEU", "VNM", "IDN", "PHL", "ZAF", "EGY", "KEN", "NGA",
   "MAR", "CHL", "PER", "COL", "MEX", "BRA", "IND", "TUR", "PAK", "SAU", "GHA",
 ])
 const availableMarkets = computed(() => props.markets.filter(
@@ -23,6 +23,13 @@ const loading = ref(false)
 const syncing = ref(false)
 const error = ref("")
 const loaded = ref(false)
+
+watch(availableMarkets, (markets) => {
+  if (markets.some(market => market.country_code === selectedCountry.value)) return
+  selectedCountry.value = markets[0]?.country_code ?? ""
+  loaded.value = false
+  result.value = null
+})
 
 const hsCodes = computed(() => hsInput.value.split(",").map(value => value.trim()).filter(Boolean))
 const hsValid = computed(() => (

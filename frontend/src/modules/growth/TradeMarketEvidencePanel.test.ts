@@ -55,6 +55,21 @@ const ready = {
 
 
 describe("TradeMarketEvidencePanel", () => {
+  it("selects the first supported market when an empty workspace gains one", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(empty), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }))
+    vi.stubGlobal("fetch", fetchMock)
+    const user = userEvent.setup()
+    const view = render(TradeMarketEvidencePanel, { props: { markets: [] } })
+
+    await view.rerender({ markets })
+    await user.click(screen.getByRole("button", { name: "查看市场贸易证据" }))
+
+    expect(await screen.findByText("当前没有官方贸易快照")).toBeInTheDocument()
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("country_code=IDN")
+  })
+
   it("shows an honest empty state with default HS codes and no buyer implication", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(empty), {
       status: 200, headers: { "Content-Type": "application/json" },

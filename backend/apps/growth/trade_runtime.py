@@ -15,6 +15,7 @@ COUNTRY_REPORTER_CODES = {
     "USA": "842",
     "GBR": "826",
     "CAN": "124",
+    "DEU": "276",
     "VNM": "704",
     "IDN": "360",
     "PHL": "608",
@@ -53,11 +54,6 @@ class FixtureComtradeSource:
     source_code = "UN_COMTRADE"
 
     def fetch(self, query):
-        if query.reporter_code != "360":
-            return TradeBatch(
-                rows=(), capability_snapshot=_capability(), skipped_count=0,
-                total_count=0, is_demo=True,
-            )
         values = {
             ("848340", "2023", "0"): "100000",
             ("848390", "2023", "0"): "80000",
@@ -91,7 +87,7 @@ class FixtureComtradeSource:
 def _fixture_row(*, reporter_code, partner_code, hs_code, period, value):
     base = TradeRow(
         reporter_code=reporter_code,
-        reporter_name="Demo Indonesia",
+        reporter_name=f"Demo Reporter {reporter_code}",
         partner_code=partner_code,
         partner_name="World" if partner_code == "0" else "China",
         flow="M",

@@ -229,9 +229,12 @@ class AssetDetailView(APIView):
         return Response(MaterialAssetSerializer(_get_asset(request.organization, asset_id)).data)
 
 
+@extend_schema(tags=["Assets"])
 class AssetArchiveView(APIView):
     permission_classes = [CanManageAssets]
+    serializer_class = MaterialAssetSerializer
 
+    @extend_schema(request=None, responses={200: MaterialAssetSerializer, **ERROR_RESPONSES})
     def post(self, request: Request, asset_id) -> Response:
         if request.data:
             return _validation_response({name: ["Unknown field."] for name in request.data})
@@ -241,9 +244,12 @@ class AssetArchiveView(APIView):
         return Response(MaterialAssetSerializer(_get_asset(request.organization, asset.id)).data)
 
 
+@extend_schema(tags=["Assets"])
 class AssetRestoreView(APIView):
     permission_classes = [CanManageAssets]
+    serializer_class = MaterialAssetSerializer
 
+    @extend_schema(request=None, responses={200: MaterialAssetSerializer, **ERROR_RESPONSES})
     def post(self, request: Request, asset_id) -> Response:
         if request.data:
             return _validation_response({name: ["Unknown field."] for name in request.data})

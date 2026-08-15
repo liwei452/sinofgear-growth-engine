@@ -343,9 +343,12 @@ class ContentBriefRevisionView(APIView):
         return Response(ContentBriefSerializer(_get_brief(request.organization, revision.id)).data, status=201)
 
 
+@extend_schema(tags=["ContentBriefs"])
 class ContentBriefArchiveView(APIView):
     permission_classes = [CanManageCampaigns]
+    serializer_class = ContentBriefSerializer
 
+    @extend_schema(request=None, responses={200: ContentBriefSerializer, **ERRORS})
     def post(self, request, brief_id):
         invalid_body = _unknown_action_body(request)
         if invalid_body:
@@ -356,9 +359,12 @@ class ContentBriefArchiveView(APIView):
         return Response(ContentBriefSerializer(_get_brief(request.organization, brief.id)).data)
 
 
+@extend_schema(tags=["ContentBriefs"])
 class ContentBriefRestoreView(APIView):
     permission_classes = [CanManageCampaigns]
+    serializer_class = ContentBriefSerializer
 
+    @extend_schema(request=None, responses={200: ContentBriefSerializer, **ERRORS})
     def post(self, request, brief_id):
         invalid_body = _unknown_action_body(request)
         if invalid_body:

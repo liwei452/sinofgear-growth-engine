@@ -12,6 +12,10 @@ ALLOWED_TRADE_FIELDS = (
     "quantity", "quantity_unit", "source_url", "source_dataset",
     "dataset_version",
 )
+ALLOWED_MAPS_FIELDS = (
+    "place_id", "name", "address", "website", "phone", "primary_type",
+    "types", "country_code", "source_url",
+)
 SOURCE_GOVERNANCE = {
     "TED": {
         "source_owner": "Publications Office of the European Union",
@@ -27,6 +31,11 @@ SOURCE_GOVERNANCE = {
         "source_owner": "United Nations Statistics Division",
         "access_method": "OFFICIAL_PUBLIC_API",
         "license_contract": "UN_COMTRADE_PUBLIC_API_TERMS_REVIEW_REQUIRED",
+    },
+    "GOOGLE_MAPS": {
+        "source_owner": "Google LLC",
+        "access_method": "OFFICIAL_PUBLIC_API",
+        "license_contract": "GOOGLE_MAPS_PLATFORM_TERMS",
     },
 }
 
@@ -56,6 +65,21 @@ def trade_governance_for(source_code: str) -> dict[str, object]:
         "retention_period": "365_DAYS_THEN_REVIEW",
         "redistribution_restriction": "AGGREGATES_WITH_SOURCE_ATTRIBUTION_ONLY",
         "queue": "MARKET_RESEARCH",
+    }
+
+
+def maps_governance_for(source_code: str) -> dict[str, object]:
+    if source_code != "GOOGLE_MAPS":
+        raise KeyError(source_code)
+    source = SOURCE_GOVERNANCE[source_code]
+    return {
+        **source,
+        "robots_policy": "API_NOT_WEB_SCRAPING",
+        "rate_limit": "PLACES_API_QUOTA_AND_DAILY_SCHEDULE",
+        "allowed_fields": list(ALLOWED_MAPS_FIELDS),
+        "retention_period": "PLACE_ID_INDEFINITE_OTHER_FIELDS_30_DAYS",
+        "redistribution_restriction": "NO_REDISTRIBUTION_OF_GOOGLE_CONTENT",
+        "queue": "MONITORING",
     }
 
 

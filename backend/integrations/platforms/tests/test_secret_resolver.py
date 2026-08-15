@@ -3,6 +3,7 @@ import pytest
 from integrations.platforms.base import ConnectorConfigurationRequired
 from integrations.platforms.secret_resolver import (
     DisabledSecretResolver,
+    EnvironmentSecretResolver,
     FixtureSecretResolver,
 )
 
@@ -35,3 +36,15 @@ def test_fixture_resolver_rejects_non_fixture_references_and_unknown_values() ->
     with pytest.raises(ConnectorConfigurationRequired) as error:
         resolver.resolve("fixture://missing")
     assert "fixture://missing" not in str(error.value)
+
+
+def test_environment_resolver_accepts_only_bounded_references_and_redacts(monkeypatch) -> None:
+    monkeypatch.setenv("FIXTURE_SOCIAL_SECRET", "fixture-environment-value")
+    resolver = EnvironmentSecretResolver()
+
+    secret = resolver.resolve("env://FIXTURE_SOCIAL_SECRET")
+
+    assert secret.reveal() == "fixture-environment-value"
+    assert "fixture-environment-value" not in repr(secret)
+    with pytest.raises(ConnectorConfigurationRequired):
+        resolver.resolve("env://../INVALID")

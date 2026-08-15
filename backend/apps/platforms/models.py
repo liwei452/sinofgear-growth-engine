@@ -90,6 +90,34 @@ class AccountConnectionSession(OrganizationScopedModel):
         ]
 
 
+class EncryptedOAuthCredential(OrganizationScopedModel):
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        ROTATED = "ROTATED", "Rotated"
+        DISCONNECTED = "DISCONNECTED", "Disconnected"
+
+    reference = models.CharField(max_length=96, unique=True)
+    actor_identifier = models.CharField(max_length=64)
+    platform_code = models.CharField(max_length=64)
+    connection_attempt_id = models.UUIDField()
+    account_binding = models.CharField(max_length=255, blank=True, default="")
+    ciphertext = models.BinaryField(blank=True, default=bytes)
+    nonce = models.BinaryField(blank=True, default=bytes)
+    key_version = models.CharField(max_length=64)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    disconnected_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["organization", "platform_code", "status"],
+                name="platforms_oauth_vault_idx",
+            ),
+        ]
+
+
 class SocialAccount(OrganizationScopedModel):
     class Status(models.TextChoices):
         ACTIVE = "ACTIVE", "Active"

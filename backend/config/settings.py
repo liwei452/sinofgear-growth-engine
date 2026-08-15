@@ -248,3 +248,9 @@ SOCIAL_OAUTH_ALLOWED_ORIGINS = tuple(
     for value in os.environ.get("SOCIAL_OAUTH_ALLOWED_ORIGINS", "").split(",")
     if value.strip()
 )
+SOCIAL_OAUTH_TOKEN_KEY_REFERENCE = os.environ.get(
+    "SOCIAL_OAUTH_TOKEN_KEY_REFERENCE", ""
+).strip()
+SOCIAL_OAUTH_TOKEN_KEY_VERSION = os.environ.get(
+    "SOCIAL_OAUTH_TOKEN_KEY_VERSION", "v1"
+).strip()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
+import re
 from typing import Mapping, Protocol
 
 from .base import ConnectorConfigurationRequired
@@ -50,3 +52,19 @@ class FixtureSecretResolver:
 
     def __repr__(self) -> str:
         return f"FixtureSecretResolver(count={len(self._values)})"
+
+
+class EnvironmentSecretResolver:
+    _reference = re.compile(r"env://([A-Z][A-Z0-9_]{0,127})\Z")
+
+    def resolve(self, reference: str) -> SecretValue:
+        match = self._reference.fullmatch(reference)
+        value = os.environ.get(match.group(1), "") if match else ""
+        if not value:
+            raise ConnectorConfigurationRequired(
+                "Environment-backed social provider secret is unavailable."
+            )
+        return SecretValue(value)
+
+    def __repr__(self) -> str:
+        return "EnvironmentSecretResolver()"

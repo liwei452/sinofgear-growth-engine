@@ -11,6 +11,15 @@ class OAuthTokenSet:
     access_token: str = field(repr=False)
     refresh_token: str = field(default="", repr=False)
     expires_at: datetime | None = None
+    token_type: str = "Bearer"
+    provider_scopes: tuple[str, ...] = field(default=(), repr=False)
+
+    def __repr__(self) -> str:
+        return (
+            "OAuthTokenSet(access_token=[REDACTED], refresh_token=[REDACTED], "
+            f"expires_at={self.expires_at!r}, token_type={self.token_type!r}, "
+            f"scope_count={len(self.provider_scopes)})"
+        )
 
 
 @dataclass(frozen=True)

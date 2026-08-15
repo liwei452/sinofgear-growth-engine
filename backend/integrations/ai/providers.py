@@ -60,11 +60,69 @@ class FakeAIProvider:
                 }
                 for index, market in enumerate((markets * 3)[:3])
             ]}
-        del schema
-        base_prompt, separator, facts_text = prompt.partition("||FACTS:")
-        product, country, platform, cta, codes_text = base_prompt.split("|", 4)
-        codes = [item.strip() for item in codes_text.split(",") if item.strip()]
-        facts = json.loads(facts_text) if separator else []
+        base_prompt, input_separator, input_text = prompt.partition("||INPUT:")
+        if input_separator:
+            snapshot = json.loads(input_text)
+            products = snapshot.get("products") or []
+            product = (products[0].get("name_en") or products[0].get("name_zh")) if products else "Product"
+            country = snapshot.get("target_country", "")
+            cta = snapshot.get("cta", "")
+            codes = sorted({
+                item.get("code")
+                for item in snapshot.get("ontology_snapshot", {}).get("concept_versions", [])
+                if item.get("status") == "APPROVED" and item.get("code")
+            })
+            facts = snapshot.get("verified_product_facts") or []
+            if schema.get("properties", {}).get("schema_version", {}).get("const") == 2:
+                fact_ids = [str(item["fact_id"]) for item in facts]
+                language = snapshot["language"]
+                variants = []
+                for index, platform in enumerate(snapshot["target_platforms"], start=1):
+                    code = platform["code"]
+                    variant = {
+                        "platform_code": code,
+                        "language": language,
+                        "title": f"[{language}] {product} · {code}",
+                        "body": f"[{language}] Fake offline {code} adaptation {index} for {country}.",
+                        "cta": f"[{language}] {cta}",
+                        "landing_page_url": snapshot["landing_page_url"],
+                        "hashtags": [f"#{code.title()}", "#IndustrialGears"],
+                        "evidence_fact_ids": fact_ids,
+                    }
+                    if code == "TIKTOK":
+                        variant.update({
+                            "duration_seconds": 30,
+                            "aspect_ratio": "9:16",
+                            "script": f"[{language}] Fake offline TikTok script.",
+                            "shot_list": [{
+                                "scene": "1",
+                                "visual": "Verified product inspection close-up",
+                                "on_screen_text": f"[{language}] Verified process",
+                            }],
+                            "voiceover": f"[{language}] Fake offline voiceover.",
+                            "voiceover_language": language,
+                            "subtitles": f"[{language}] Fake offline subtitles.",
+                            "subtitle_language": language,
+                        })
+                    variants.append(variant)
+                return {
+                    "schema_version": 2,
+                    "language": language,
+                    "title": f"[{language}] {product} for {country}",
+                    "body": f"[{language}] Fake offline master content for {country}.",
+                    "cta": f"[{language}] {cta}",
+                    "landing_page_url": snapshot["landing_page_url"],
+                    "concept_codes": codes,
+                    "evidence_fact_ids": fact_ids,
+                    "internal_translation_zh": "Fake 离线内部中文释义，不得发布。",
+                    "platform_variants": variants,
+                }
+            platform = snapshot.get("target_platforms", [{}])[0].get("code", "")
+        else:
+            base_prompt, separator, facts_text = prompt.partition("||FACTS:")
+            product, country, platform, cta, codes_text = base_prompt.split("|", 4)
+            codes = [item.strip() for item in codes_text.split(",") if item.strip()]
+            facts = json.loads(facts_text) if separator else []
         verified = "" if not facts else " Verified facts: " + "; ".join(
             f"{item['field_name']}={item['value']}" for item in facts
         ) + "."

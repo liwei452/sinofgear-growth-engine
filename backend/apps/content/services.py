@@ -8,7 +8,7 @@ from apps.campaigns.models import ContentBrief
 from apps.jobs.models import Job
 
 from .models import MasterContent, PlatformContent, content_writes
-from .payloads import validate_content_payload
+from .payloads import validate_content_payload, validate_generated_content_output
 
 
 class ContentStateError(ValueError):
@@ -201,7 +201,8 @@ def create_generated_master(
 
 
 def finalize_master_result(run, output):
-    del output
+    if isinstance(output, dict) and output.get("schema_version") == 2:
+        validate_generated_content_output(output, run.input_snapshot)
     brief = ContentBrief.objects.get(
         pk=run.input_snapshot.get("brief_id"), organization=run.organization
     )

@@ -9,6 +9,7 @@ from apps.ai.models import AIRun, PromptVersion
 from apps.ai.orchestration import execute_generation_job
 from apps.ai.services import PromptVersionService
 from apps.content.models import MasterContent
+from apps.content.payloads import CONTENT_OUTPUT_SCHEMA_V2
 from apps.content.services import finalize_master_result
 from apps.campaigns.models import Campaign, ContentBriefConceptLink
 from apps.campaigns.services import (
@@ -29,6 +30,7 @@ from apps.knowledge.guards import _test_fixture_writes
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
 from apps.platforms.models import Platform
+from integrations.ai.providers import provider_registry
 
 from .conftest import (
     make_asset,
@@ -68,6 +70,69 @@ def make_ready_brief(organization, user):
         platform,
         concept,
     )
+
+
+class WrongLanguageContentProvider:
+    def generate(self, *, prompt, schema):
+        del prompt, schema
+        return {
+            "schema_version": 2,
+            "language": "de",
+            "title": "Wrong language",
+            "body": "Wrong language master body",
+            "cta": "Kontakt",
+            "landing_page_url": "https://example.com/gears",
+            "concept_codes": ["PRECISION_ENGINEERING"],
+            "evidence_fact_ids": [],
+            "platform_variants": [{
+                "platform_code": "LINKEDIN",
+                "language": "de",
+                "title": "LinkedIn wrong language",
+                "body": "LinkedIn wrong language body",
+                "cta": "Kontakt",
+                "landing_page_url": "https://example.com/gears",
+                "hashtags": ["#PrecisionGears"],
+                "evidence_fact_ids": [],
+            }],
+        }
+
+
+@pytest.mark.django_db
+def test_generation_rejects_schema_valid_output_in_the_wrong_publication_language(
+    campaign_organizations, campaign_user
+):
+    own, _ = campaign_organizations
+    ready, *_ = make_ready_brief(own, campaign_user)
+    snapshot = build_content_generation_input(ready.id).to_dict()
+    prompt = PromptVersionService.create(
+        purpose="CONTENT_GENERATE",
+        code="target-language-v2",
+        provider="wrong-language-content",
+        model="test-v1",
+        template="Generate reviewed multichannel content.",
+        output_schema=CONTENT_OUTPUT_SCHEMA_V2,
+        status=PromptVersion.Status.PUBLISHED,
+    )
+    provider_registry.register(
+        "wrong-language-content", WrongLanguageContentProvider(), replace=True
+    )
+    job = JobService.create(
+        organization=own,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=snapshot,
+    )
+
+    run = execute_generation_job(
+        job.id,
+        prompt_version_id=prompt.id,
+        provider_code="wrong-language-content",
+        result_writer=finalize_master_result,
+    )
+
+    job.refresh_from_db()
+    assert run.status == AIRun.Status.FAILED
+    assert job.status == Job.Status.FAILED
+    assert not MasterContent.objects.filter(generation_job=job).exists()
 
 
 @pytest.mark.django_db

@@ -8,6 +8,7 @@ from django.db import models
 from django.test import override_settings
 
 from apps.ai.models import PromptVersion
+from apps.content.payloads import CONTENT_OUTPUT_SCHEMA_V2
 from apps.assets.models import AssetProductLink, MaterialAsset
 from apps.assets.storage import reset_object_storage
 from apps.campaigns.models import (
@@ -127,6 +128,12 @@ def test_seed_phase_a_is_stable_idempotent_and_repairs_owned_drift():
         provider="fake",
         status=PromptVersion.Status.PUBLISHED,
     ).exists()
+    current_content_prompt = PromptVersion.objects.get(
+        purpose="CONTENT_GENERATE", version=2,
+    )
+    assert current_content_prompt.code == "evidence-multichannel-v2"
+    assert current_content_prompt.status == PromptVersion.Status.PUBLISHED
+    assert current_content_prompt.output_schema == CONTENT_OUTPUT_SCHEMA_V2
     assert PromptVersion.objects.filter(
         purpose="CONTENT_RECOMMEND",
         code="phase-a-e2e-recommend-v1",

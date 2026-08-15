@@ -132,6 +132,53 @@ def test_fake_generation_quotes_only_verified_fact_snapshot(
     assert "Verified facts: process=Gear grinding." in run.output_json["body"]
 
 
+class CapturingContentProvider:
+    def __init__(self):
+        self.prompt = ""
+
+    def generate(self, *, prompt, schema):
+        self.prompt = prompt
+        return {
+            "title": "Captured",
+            "body": "Captured body",
+            "cta": "Request a quote",
+            "concept_codes": ["ALPHA", "ZETA"],
+        }
+
+
+@pytest.mark.django_db
+def test_generation_prompt_sends_the_complete_frozen_business_context(
+    organization, frozen_input, prompt
+):
+    provider = CapturingContentProvider()
+    provider_registry.register("capture-content", provider, replace=True)
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+
+    run = execute_generation_job(
+        job.id,
+        prompt_version_id=prompt.id,
+        provider_code="capture-content",
+    )
+
+    assert run.status == AIRun.Status.SUCCEEDED
+    instruction, separator, raw_input = provider.prompt.partition("||INPUT:")
+    assert separator == "||INPUT:"
+    assert "single publication language" in instruction
+    sent = __import__("json").loads(raw_input)
+    assert sent["language"] == "en"
+    assert sent["customer_type"] == "Industrial buyer"
+    assert sent["content_objective"] == "Generate leads"
+    assert sent["landing_page_url"] == "https://example.com/landing"
+    assert sent["prohibited_claims"] == ["zero wear"]
+    assert sent["selling_points"] == ["Ground teeth"]
+    assert sent["advantages"] == ["Short lead time"]
+    assert sent["target_platforms"][0]["code"] == "LINKEDIN"
+
+
 def test_scrub_secrets_recursively_without_mutating_source():
     source = {
         "api_key": "one",

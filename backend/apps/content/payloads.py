@@ -4,7 +4,23 @@ import json
 MAX_CONTENT_JSON_BYTES = 65_536
 MAX_CONCEPT_CODES = 100
 MAX_CONCEPT_CODE_CHARS = 256
+MAX_HASHTAGS = 30
+MAX_EVIDENCE_FACT_IDS = 100
+MAX_PLATFORM_VARIANTS = 12
+MAX_SHOTS = 24
 TEXT_LIMITS = {"title": 500, "body": 50_000, "cta": 2_000}
+COMMON_V2_TEXT_LIMITS = {
+    **TEXT_LIMITS,
+    "language": 16,
+    "landing_page_url": 2_000,
+}
+TIKTOK_TEXT_LIMITS = {
+    "script": 50_000,
+    "voiceover": 50_000,
+    "subtitles": 50_000,
+    "voiceover_language": 16,
+    "subtitle_language": 16,
+}
 
 MASTER_PAYLOAD_SCHEMA = {
     "type": "object",
@@ -35,33 +51,125 @@ PLATFORM_PAYLOAD_SCHEMA = {
     },
 }
 
+STRING_LIST_SCHEMA = {
+    "type": "array",
+    "uniqueItems": True,
+    "items": {"type": "string", "minLength": 1, "maxLength": 256},
+}
+PLATFORM_VARIANT_V2_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "platform_code", "language", "title", "body", "cta",
+        "landing_page_url", "hashtags", "evidence_fact_ids",
+    ],
+    "properties": {
+        "platform_code": {"type": "string", "minLength": 1, "maxLength": 64},
+        **{
+            name: {"type": "string", "minLength": 1, "maxLength": limit}
+            for name, limit in COMMON_V2_TEXT_LIMITS.items()
+        },
+        "hashtags": {**STRING_LIST_SCHEMA, "maxItems": MAX_HASHTAGS},
+        "evidence_fact_ids": {
+            **STRING_LIST_SCHEMA, "maxItems": MAX_EVIDENCE_FACT_IDS,
+        },
+    },
+}
+TIKTOK_VARIANT_V2_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        *PLATFORM_VARIANT_V2_SCHEMA["required"],
+        "duration_seconds", "aspect_ratio", "script", "shot_list",
+        "voiceover", "voiceover_language", "subtitles", "subtitle_language",
+    ],
+    "properties": {
+        **PLATFORM_VARIANT_V2_SCHEMA["properties"],
+        "duration_seconds": {"type": "integer", "minimum": 15, "maximum": 60},
+        "aspect_ratio": {"const": "9:16"},
+        **{
+            name: {"type": "string", "minLength": 1, "maxLength": limit}
+            for name, limit in TIKTOK_TEXT_LIMITS.items()
+        },
+        "shot_list": {
+            "type": "array", "minItems": 1, "maxItems": MAX_SHOTS,
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["scene", "visual", "on_screen_text"],
+                "properties": {
+                    "scene": {"type": "string", "minLength": 1, "maxLength": 64},
+                    "visual": {"type": "string", "minLength": 1, "maxLength": 2_000},
+                    "on_screen_text": {
+                        "type": "string", "minLength": 1, "maxLength": 1_000,
+                    },
+                },
+            },
+        },
+    },
+}
+CONTENT_OUTPUT_SCHEMA_V2 = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "schema_version", "language", "title", "body", "cta",
+        "landing_page_url", "concept_codes", "evidence_fact_ids",
+        "platform_variants",
+    ],
+    "properties": {
+        "schema_version": {"const": 2},
+        **{
+            name: {"type": "string", "minLength": 1, "maxLength": limit}
+            for name, limit in COMMON_V2_TEXT_LIMITS.items()
+        },
+        "concept_codes": {
+            **STRING_LIST_SCHEMA, "maxItems": MAX_CONCEPT_CODES,
+        },
+        "evidence_fact_ids": {
+            **STRING_LIST_SCHEMA, "maxItems": MAX_EVIDENCE_FACT_IDS,
+        },
+        "internal_translation_zh": {"type": "string", "minLength": 1, "maxLength": 50_000},
+        "platform_variants": {
+            "type": "array", "minItems": 1, "maxItems": MAX_PLATFORM_VARIANTS,
+            "items": {
+                "oneOf": [PLATFORM_VARIANT_V2_SCHEMA, TIKTOK_VARIANT_V2_SCHEMA],
+            },
+        },
+    },
+}
 
-def validate_content_payload(payload, *, platform_code=None):
+
+def _bounded_text(value, *, limit, label="Content text"):
+    if not isinstance(value, str) or not (value := value.strip()) or len(value) > limit:
+        raise ValueError(f"{label} fields must be nonempty and bounded.")
+    return value
+
+
+def _unique_text_list(value, *, limit, item_limit=256, label):
+    if not isinstance(value, list) or len(value) > limit:
+        raise ValueError(f"{label} must be a bounded list.")
+    cleaned = []
+    for item in value:
+        item = _bounded_text(item, limit=item_limit, label=label)
+        if item in cleaned:
+            raise ValueError(f"{label} must contain unique values.")
+        cleaned.append(item)
+    return cleaned
+
+
+def _validate_legacy_payload(payload, *, platform_code=None):
     expected = set(MASTER_PAYLOAD_SCHEMA["required"])
     if platform_code is not None:
         expected.add("platform_code")
     if not isinstance(payload, dict) or set(payload) != expected:
         raise ValueError("Content payload does not match the exact schema.")
-    cleaned = {}
-    for name, limit in TEXT_LIMITS.items():
-        value = payload[name]
-        if not isinstance(value, str) or not (value := value.strip()) or len(value) > limit:
-            raise ValueError("Content text fields must be nonempty and bounded.")
-        cleaned[name] = value
-    codes = payload["concept_codes"]
-    if not isinstance(codes, list) or len(codes) > MAX_CONCEPT_CODES:
-        raise ValueError("Concept codes must be a bounded list.")
-    normalized_codes = []
-    for code in codes:
-        if (
-            not isinstance(code, str)
-            or not (code := code.strip())
-            or len(code) > MAX_CONCEPT_CODE_CHARS
-            or code in normalized_codes
-        ):
-            raise ValueError("Concept codes must be unique, nonempty, and bounded.")
-        normalized_codes.append(code)
-    cleaned["concept_codes"] = normalized_codes
+    cleaned = {
+        name: _bounded_text(payload[name], limit=limit)
+        for name, limit in TEXT_LIMITS.items()
+    }
+    cleaned["concept_codes"] = _unique_text_list(
+        payload["concept_codes"], limit=MAX_CONCEPT_CODES,
+        item_limit=MAX_CONCEPT_CODE_CHARS, label="Concept codes",
+    )
     if platform_code is not None:
         if (
             not isinstance(platform_code, str)
@@ -71,6 +179,174 @@ def validate_content_payload(payload, *, platform_code=None):
         ):
             raise ValueError("Platform identity cannot change in content payload.")
         cleaned["platform_code"] = platform_code
+    return cleaned
+
+
+def _validate_shot_list(value):
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_SHOTS:
+        raise ValueError("TikTok payload shot list must be nonempty and bounded.")
+    cleaned = []
+    for shot in value:
+        if not isinstance(shot, dict) or set(shot) != {"scene", "visual", "on_screen_text"}:
+            raise ValueError("TikTok payload shot does not match the exact schema.")
+        cleaned.append({
+            "scene": _bounded_text(shot["scene"], limit=64, label="TikTok payload"),
+            "visual": _bounded_text(shot["visual"], limit=2_000, label="TikTok payload"),
+            "on_screen_text": _bounded_text(
+                shot["on_screen_text"], limit=1_000, label="TikTok payload"
+            ),
+        })
+    return cleaned
+
+
+def _validate_platform_v2(payload, *, platform_code=None):
+    if not isinstance(payload, dict):
+        raise ValueError("Platform payload does not match the exact schema.")
+    actual_code = payload.get("platform_code")
+    expected_keys = {
+        "schema_version", "platform_code", "language", "title", "body", "cta",
+        "landing_page_url", "hashtags", "evidence_fact_ids",
+    }
+    if actual_code == "TIKTOK":
+        expected_keys |= {
+            "duration_seconds", "aspect_ratio", "script", "shot_list",
+            "voiceover", "voiceover_language", "subtitles", "subtitle_language",
+        }
+    if set(payload) != expected_keys or payload.get("schema_version") != 2:
+        raise ValueError("Platform payload does not match the exact schema.")
+    if platform_code is not None and actual_code != platform_code:
+        raise ValueError("Platform identity cannot change in content payload.")
+    cleaned = {
+        "schema_version": 2,
+        "platform_code": _bounded_text(actual_code, limit=64, label="Platform payload"),
+    }
+    for name, limit in COMMON_V2_TEXT_LIMITS.items():
+        cleaned[name] = _bounded_text(payload[name], limit=limit, label="Platform payload")
+    cleaned["hashtags"] = _unique_text_list(
+        payload["hashtags"], limit=MAX_HASHTAGS, label="Hashtags",
+    )
+    cleaned["evidence_fact_ids"] = _unique_text_list(
+        payload["evidence_fact_ids"], limit=MAX_EVIDENCE_FACT_IDS,
+        label="Evidence fact identifiers",
+    )
+    if actual_code == "TIKTOK":
+        duration = payload["duration_seconds"]
+        if isinstance(duration, bool) or not isinstance(duration, int) or not 15 <= duration <= 60:
+            raise ValueError("TikTok payload duration must be between 15 and 60 seconds.")
+        if payload["aspect_ratio"] != "9:16":
+            raise ValueError("TikTok payload aspect ratio must be 9:16.")
+        cleaned.update({"duration_seconds": duration, "aspect_ratio": "9:16"})
+        for name, limit in TIKTOK_TEXT_LIMITS.items():
+            cleaned[name] = _bounded_text(payload[name], limit=limit, label="TikTok payload")
+        cleaned["shot_list"] = _validate_shot_list(payload["shot_list"])
+    return cleaned
+
+
+def _validate_master_v2(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("Content payload does not match the exact schema.")
+    required = {
+        "schema_version", "language", "title", "body", "cta", "landing_page_url",
+        "concept_codes", "evidence_fact_ids", "platform_variants",
+    }
+    allowed = required | {"internal_translation_zh"}
+    if set(payload) < required or not set(payload) <= allowed or payload.get("schema_version") != 2:
+        raise ValueError("Content payload does not match the exact schema.")
+    cleaned = {"schema_version": 2}
+    for name, limit in COMMON_V2_TEXT_LIMITS.items():
+        cleaned[name] = _bounded_text(payload[name], limit=limit)
+    cleaned["concept_codes"] = _unique_text_list(
+        payload["concept_codes"], limit=MAX_CONCEPT_CODES,
+        item_limit=MAX_CONCEPT_CODE_CHARS, label="Concept codes",
+    )
+    cleaned["evidence_fact_ids"] = _unique_text_list(
+        payload["evidence_fact_ids"], limit=MAX_EVIDENCE_FACT_IDS,
+        label="Evidence fact identifiers",
+    )
+    if "internal_translation_zh" in payload:
+        cleaned["internal_translation_zh"] = _bounded_text(
+            payload["internal_translation_zh"], limit=50_000,
+            label="Internal Chinese translation",
+        )
+    variants = payload["platform_variants"]
+    if not isinstance(variants, list) or not 1 <= len(variants) <= MAX_PLATFORM_VARIANTS:
+        raise ValueError("Content platform variants must be a nonempty bounded list.")
+    cleaned["platform_variants"] = []
+    for variant in variants:
+        if not isinstance(variant, dict) or "schema_version" in variant:
+            raise ValueError("Generated platform variant does not match the exact schema.")
+        normalized = _validate_platform_v2({"schema_version": 2, **variant})
+        normalized.pop("schema_version")
+        cleaned["platform_variants"].append(normalized)
+    return cleaned
+
+
+def validate_generated_content_output(payload, snapshot):
+    cleaned = _validate_master_v2(payload)
+    target_language = snapshot.get("language")
+    if cleaned["language"] != target_language:
+        raise ValueError("Generated publication language does not match the brief language.")
+    expected_platforms = [row.get("code") for row in snapshot.get("target_platforms", [])]
+    actual_platforms = [row["platform_code"] for row in cleaned["platform_variants"]]
+    if actual_platforms != expected_platforms or len(actual_platforms) != len(set(actual_platforms)):
+        raise ValueError("Generated platform variants do not match the selected platforms.")
+    allowed_facts = {
+        str(row.get("fact_id")) for row in snapshot.get("verified_product_facts", [])
+        if row.get("fact_id")
+    }
+    if not set(cleaned["evidence_fact_ids"]) <= allowed_facts:
+        raise ValueError("Generated evidence references contain an unknown fact.")
+    allowed_concepts = {
+        str(row.get("code"))
+        for row in snapshot.get("ontology_snapshot", {}).get("concept_versions", [])
+        if row.get("status") == "APPROVED" and row.get("code")
+    }
+    if not set(cleaned["concept_codes"]) <= allowed_concepts:
+        raise ValueError("Generated concept references contain unapproved knowledge.")
+    bodies = []
+    for variant in cleaned["platform_variants"]:
+        if variant["language"] != target_language:
+            raise ValueError("Generated platform language does not match the brief language.")
+        if variant["evidence_fact_ids"] != cleaned["evidence_fact_ids"]:
+            raise ValueError("Generated platform evidence must inherit the master evidence.")
+        normalized_body = variant["body"].casefold()
+        if normalized_body in bodies:
+            raise ValueError("Generated platform variants must contain adapted platform copy.")
+        bodies.append(normalized_body)
+        if variant["platform_code"] == "TIKTOK" and (
+            variant["voiceover_language"] != target_language
+            or variant["subtitle_language"] != target_language
+        ):
+            raise ValueError("TikTok language metadata must match the publication language.")
+    _ensure_json_limit(cleaned)
+    return cleaned
+
+
+def platform_variant_payload(master_payload, platform_code):
+    master = _validate_master_v2(master_payload)
+    matches = [
+        row for row in master["platform_variants"]
+        if row["platform_code"] == platform_code
+    ]
+    if len(matches) != 1:
+        raise ValueError("Generated platform variant is missing or duplicated.")
+    variant = _validate_platform_v2({"schema_version": 2, **matches[0]}, platform_code=platform_code)
+    _ensure_json_limit(variant)
+    return variant
+
+
+def _ensure_json_limit(cleaned):
     if len(json.dumps(cleaned, ensure_ascii=False, separators=(",", ":")).encode()) > MAX_CONTENT_JSON_BYTES:
         raise ValueError("Content payload exceeds the total JSON byte limit.")
+
+
+def validate_content_payload(payload, *, platform_code=None):
+    if isinstance(payload, dict) and payload.get("schema_version") == 2:
+        cleaned = (
+            _validate_platform_v2(payload, platform_code=platform_code)
+            if platform_code is not None else _validate_master_v2(payload)
+        )
+    else:
+        cleaned = _validate_legacy_payload(payload, platform_code=platform_code)
+    _ensure_json_limit(cleaned)
     return cleaned

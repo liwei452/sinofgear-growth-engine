@@ -836,7 +836,7 @@ it("keeps legacy opportunity evidence usable when score details are missing", as
   expect(screen.getByText("暂未记录不确定项，仍需人工复核原始来源。")).toBeInTheDocument()
 })
 
-it("records plain-language human review before an optional Mock CRM handoff", async () => {
+it("keeps an approved outreach draft in the real follow-up flow without exposing Mock CRM", async () => {
   document.cookie = "csrftoken=opportunity-review-test-token"
   const accountId = "10000000-0000-4000-8000-000000009001"
   const workspace = {
@@ -915,8 +915,9 @@ it("records plain-language human review before an optional Mock CRM handoff", as
   expect(await screen.findByText("人工判断：优先跟进")).toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "生成联系草稿" }))
   expect(await screen.findByText("May I confirm your gear component requirements?")).toBeInTheDocument()
-  await user.click(screen.getByRole("button", { name: "确认草稿并交给 Mock CRM" }))
-  expect(await screen.findByText("已保存到 Mock CRM，未发送任何消息。")).toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: /Mock CRM/ })).not.toBeInTheDocument()
+  expect(screen.queryByText(/Mock CRM/)).not.toBeInTheDocument()
+  expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/crm-handoff"))).toBe(false)
 })
 
 it("loads company provenance and persists human verification", async () => {

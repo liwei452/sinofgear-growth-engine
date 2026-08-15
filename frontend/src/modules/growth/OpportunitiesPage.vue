@@ -7,7 +7,6 @@ import {
   createOpportunityDraft,
   growthQueryKeys,
   growthWorkspaceQueryOptions,
-  handoffOpportunityToMockCRM,
   reviewOpportunity,
 } from "./api"
 import ManualOpportunityImportForm from "./ManualOpportunityImportForm.vue"
@@ -28,7 +27,6 @@ const generatedDraftEnglish = ref("")
 const generatedDraftChinese = ref("")
 const generatedDraftId = ref("")
 const actionError = ref("")
-const handoffStatus = ref("")
 const importOpen = ref(false)
 const importStatus = ref("")
 const selectedMarketName = ref("")
@@ -156,8 +154,6 @@ const activeSavedDraft = computed(() => workspaceQuery.data.value?.outreach_draf
 const activeReview = computed(() => workspaceQuery.data.value?.opportunity_reviews
   ?.filter((item) => item.account_id === activeAccount.value?.id)
   .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0])
-const activeHandoff = computed(() => workspaceQuery.data.value?.crm_handoffs
-  ?.find((item) => item.account_id === activeAccount.value?.id))
 const scoreItems = computed(() => {
   const breakdown = activeSignal.value?.score_breakdown
   if (!breakdown) return []
@@ -228,14 +224,6 @@ const reviewMutation = useMutation({
     await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
   },
 })
-const handoffMutation = useMutation({
-  mutationFn: handoffOpportunityToMockCRM,
-  onSuccess: async () => {
-    handoffStatus.value = "已保存到 Mock CRM，未发送任何消息。"
-    await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
-  },
-})
-
 async function addFollowUp(): Promise<void> {
   actionError.value = ""
   if (!activeAccount.value) {
@@ -249,7 +237,6 @@ function selectAccount(accountId: string): void {
   evidenceOpen.value = false
   draftOpen.value = false
   generatedDraftId.value = ""
-  handoffStatus.value = ""
   actionError.value = ""
 }
 
@@ -269,7 +256,6 @@ async function generateDraft(): Promise<void> {
 
 async function saveReview(decision: "PRIORITIZE" | "OBSERVE" | "PROCESSED"): Promise<void> {
   actionError.value = ""
-  handoffStatus.value = ""
   if (!activeAccount.value) return
   try {
     await reviewMutation.mutateAsync({ accountId: activeAccount.value.id, decision })
@@ -278,25 +264,11 @@ async function saveReview(decision: "PRIORITIZE" | "OBSERVE" | "PROCESSED"): Pro
   }
 }
 
-async function handoffToCRM(): Promise<void> {
-  actionError.value = ""
-  if (!activeAccount.value || !displayedDraft.value?.id) return
-  try {
-    await handoffMutation.mutateAsync({
-      accountId: activeAccount.value.id,
-      draftId: displayedDraft.value.id,
-    })
-  } catch {
-    actionError.value = "交接条件尚未满足，请先确认机会与证据。"
-  }
-}
-
 async function handleImported(accountId: string): Promise<void> {
   selectedAccountId.value = accountId
   evidenceOpen.value = false
   draftOpen.value = false
   generatedDraftId.value = ""
-  handoffStatus.value = ""
   importOpen.value = false
   importStatus.value = ""
   await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
@@ -435,19 +407,8 @@ async function handleImported(accountId: string): Promise<void> {
           <div><span class="fake-label">从未发送</span><small>{{ displayedDraft.createdAt ? formatDate(displayedDraft.createdAt) : "刚刚生成" }}</small></div>
           <h4>英文建议</h4><p>{{ displayedDraft.english }}</p>
           <h4>中文解释</h4><p>{{ displayedDraft.chinese }}</p>
-          <button
-            v-if="activeReview?.decision === 'PRIORITIZE' && !activeHandoff"
-            class="button button-secondary"
-            type="button"
-            :disabled="handoffMutation.isPending.value"
-            @click="handoffToCRM"
-          >
-            {{ handoffMutation.isPending.value ? "正在保存…" : "确认草稿并交给 Mock CRM" }}
-          </button>
         </div>
       </section>
-      <p v-if="handoffStatus || activeHandoff" class="approval-status" role="status">{{ handoffStatus || "已保存到 Mock CRM，未发送任何消息。" }}</p>
-      <p class="crm-note">CRM 是人工确认后的可选出口，不是本页主操作。</p>
     </article>
     <section v-else class="growth-card opportunity-empty" aria-labelledby="opportunity-empty-title">
       <h2 id="opportunity-empty-title">还没有可审核的客户机会</h2>

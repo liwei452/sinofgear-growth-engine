@@ -19,6 +19,7 @@ from .models import (
     OutreachDraft,
     ReactivationRecord,
     TargetAccount,
+    TradeDatasetSnapshot,
 )
 from .manual_imports import validate_manual_source_url
 from .enrichment import enrichment_payload
@@ -63,6 +64,72 @@ class MarketWatchCreateSerializer(serializers.Serializer):
 
     def validate_country_code(self, value):
         return value.upper()
+
+
+class StrictFieldsSerializer(serializers.Serializer):
+    def to_internal_value(self, data):
+        unknown = sorted(set(data) - set(self.fields))
+        if unknown:
+            raise serializers.ValidationError({"unknown_fields": unknown})
+        return super().to_internal_value(data)
+
+
+class TradeSyncRequestSerializer(StrictFieldsSerializer):
+    country_code = serializers.CharField(min_length=3, max_length=3)
+    hs_codes = serializers.ListField(
+        child=serializers.RegexField(r"^(?:\d{4}|\d{6})$"),
+        allow_empty=False,
+        max_length=10,
+        default=["848340", "848390"],
+    )
+    periods = serializers.ListField(
+        child=serializers.RegexField(r"^(?:\d{4}|\d{6})$"),
+        allow_empty=False,
+        max_length=24,
+    )
+
+    def validate_country_code(self, value):
+        from .trade_runtime import COUNTRY_REPORTER_CODES
+
+        normalized = value.upper()
+        if normalized not in COUNTRY_REPORTER_CODES:
+            raise serializers.ValidationError("Unsupported reporter country.")
+        return normalized
+
+
+class TradeDatasetSnapshotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TradeDatasetSnapshot
+        fields = [
+            "id", "reporter_code", "reporter_name", "partner_code",
+            "partner_name", "flow", "flow_name", "hs_code", "period",
+            "frequency", "trade_value_usd", "quantity", "quantity_unit",
+            "source_url", "source_dataset", "dataset_version", "observed_at",
+            "fetched_at", "freshness_days", "provenance", "is_demo",
+        ]
+
+
+class TradeSyncResponseSerializer(serializers.Serializer):
+    mode = serializers.CharField()
+    is_demo = serializers.BooleanField()
+    run_ids = serializers.ListField(child=serializers.UUIDField())
+    snapshot_ids = serializers.ListField(child=serializers.UUIDField())
+    created_snapshot_count = serializers.IntegerField()
+    reused_snapshot_count = serializers.IntegerField()
+    scope_warning = serializers.CharField()
+
+
+class TradeSnapshotListSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    results = TradeDatasetSnapshotSerializer(many=True)
+
+
+class TradeIndicatorResponseSerializer(serializers.Serializer):
+    status = serializers.CharField()
+    is_demo = serializers.BooleanField()
+    scope_warning = serializers.CharField()
+    indicators = serializers.DictField()
+    evidence = serializers.ListField(child=serializers.DictField())
 
 
 class DiscoveryRunResultSerializer(serializers.Serializer):

@@ -599,6 +599,7 @@ class TradeDatasetSnapshot(OrganizationOwnedModel):
     freshness_days = models.PositiveIntegerField()
     record_hash = models.CharField(max_length=64)
     provenance = models.JSONField(default=dict)
+    is_demo = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["-observed_at", "hs_code", "partner_code", "-created_at", "-id"]

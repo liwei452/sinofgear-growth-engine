@@ -28,12 +28,18 @@ from .views import (
     ReactivationApproveView,
     ReactivationCreateView,
     ReactivationDraftView,
+    TradeIndicatorView,
+    TradeSnapshotListView,
+    TradeSyncView,
 )
 
 urlpatterns = [
     path("growth/workspace", GrowthWorkspaceView.as_view(), name="growth-workspace"),
     path("growth/markets/watch", MarketWatchCreateView.as_view(), name="growth-market-watch-create"),
     path("growth/markets/<str:country_code>/watch", MarketWatchView.as_view(), name="growth-market-watch"),
+    path("growth/trade-syncs", TradeSyncView.as_view(), name="growth-trade-syncs"),
+    path("growth/trade-snapshots", TradeSnapshotListView.as_view(), name="growth-trade-snapshots"),
+    path("growth/trade-indicators", TradeIndicatorView.as_view(), name="growth-trade-indicators"),
     path("growth/reactivations", ReactivationCreateView.as_view(), name="growth-reactivation-create"),
     path(
         "growth/reactivations/<uuid:reactivation_id>/draft",

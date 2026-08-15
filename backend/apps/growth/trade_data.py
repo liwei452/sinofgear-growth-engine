@@ -44,7 +44,9 @@ def sync_trade_data(*, organization, actor, query: TradeQuery, source) -> TradeS
         reused_count = 0
         with transaction.atomic():
             for row in batch.rows:
-                record = _snapshot_record(row, fetched_at=fetched_at)
+                record = _snapshot_record(
+                    row, fetched_at=fetched_at, is_demo=batch.is_demo,
+                )
                 snapshot, created = TradeDatasetSnapshot.objects.get_or_create(
                     organization=organization,
                     record_hash=record["record_hash"],
@@ -175,6 +177,7 @@ def trade_indicators(
         "source_dataset": item.source_dataset,
         "dataset_version": item.dataset_version,
         "fetched_at": item.fetched_at.isoformat(),
+        "is_demo": item.is_demo,
     } for item in sorted(selected, key=lambda value: (value.period, value.partner_code, value.hs_code))]
     return {
         "status": "READY",
@@ -184,7 +187,9 @@ def trade_indicators(
     }
 
 
-def _snapshot_record(row: TradeRow, *, fetched_at: datetime) -> dict[str, object]:
+def _snapshot_record(
+    row: TradeRow, *, fetched_at: datetime, is_demo: bool,
+) -> dict[str, object]:
     observed_at = _period_end(row.period)
     canonical = {
         "reporter_code": row.reporter_code,
@@ -201,6 +206,7 @@ def _snapshot_record(row: TradeRow, *, fetched_at: datetime) -> dict[str, object
         "source_url": row.source_url,
         "source_dataset": row.source_dataset,
         "dataset_version": row.dataset_version,
+        "is_demo": is_demo,
     }
     return {
         **canonical,
@@ -215,7 +221,9 @@ def _snapshot_record(row: TradeRow, *, fetched_at: datetime) -> dict[str, object
             "source_url": row.source_url,
             "source_dataset": row.source_dataset,
             "dataset_version": row.dataset_version,
+            "is_demo": is_demo,
         },
+        "is_demo": is_demo,
     }
 
 

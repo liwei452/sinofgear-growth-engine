@@ -77,6 +77,7 @@ class TradeBatch:
     capability_snapshot: dict[str, object]
     skipped_count: int
     total_count: int
+    is_demo: bool = False
 
 
 class ComtradeSource:

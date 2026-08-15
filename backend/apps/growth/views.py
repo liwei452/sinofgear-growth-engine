@@ -40,6 +40,8 @@ from .models import (
     ReactivationRecord,
     CRMHandoff,
     TargetAccount,
+    TradeDatasetSnapshot,
+    TradeSyncRun,
 )
 from .manual_imports import import_manual_opportunity
 from .market_pilots import market_pilot_summary, market_profiles_for
@@ -77,6 +79,11 @@ from .serializers import (
     CRMHandoffSerializer,
     PublishBatchCreateSerializer,
     TargetAccountSerializer,
+    TradeDatasetSnapshotSerializer,
+    TradeIndicatorResponseSerializer,
+    TradeSnapshotListSerializer,
+    TradeSyncRequestSerializer,
+    TradeSyncResponseSerializer,
 )
 from .manual_export import FourChannelExportNotReady, build_four_channel_export
 from .reactivation import (
@@ -109,6 +116,13 @@ from .services import (
     verify_company_fact,
     record_opportunity_review,
 )
+from .trade_data import sync_trade_data, trade_indicators
+from .trade_runtime import (
+    COUNTRY_REPORTER_CODES,
+    TradeProviderConfigurationRequired,
+    trade_source_runtime,
+)
+from integrations.sources.comtrade import TradeQuery
 
 
 def connector_readiness(organization):
@@ -500,6 +514,127 @@ class MarketWatchCreateView(APIView):
                 "hold_reasons": market.hold_reasons,
             },
         }, status=201 if created else 200)
+
+
+class TradeSyncView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=TradeSyncRequestSerializer,
+        responses={200: TradeSyncResponseSerializer, 201: TradeSyncResponseSerializer},
+    )
+    def post(self, request):
+        serializer = TradeSyncRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            source, mode = trade_source_runtime()
+        except TradeProviderConfigurationRequired:
+            return Response({
+                "code": "CONFIGURATION_REQUIRED",
+                "message": "公开贸易数据源尚未启用。",
+                "recovery_action": "由管理员明确启用官方公共数据连接器；当前不会自动加载演示数据。",
+            }, status=503)
+        values = serializer.validated_data
+        reporter_code = COUNTRY_REPORTER_CODES[values["country_code"]]
+        results = []
+        for partner_code in ("0", "156"):
+            try:
+                results.append(sync_trade_data(
+                    organization=request.organization,
+                    actor=request.user,
+                    query=TradeQuery(
+                        reporter_code=reporter_code,
+                        partner_code=partner_code,
+                        flow="M",
+                        hs_codes=tuple(values["hs_codes"]),
+                        periods=tuple(values["periods"]),
+                    ),
+                    source=source,
+                ))
+            except SourceAdapterError as error:
+                return Response({
+                    "code": error.code,
+                    "message": "官方公开贸易数据同步失败。",
+                    "recovery_action": "稍后重试；系统没有创建买家公司或采购意向。",
+                }, status=502)
+        runs = list(TradeSyncRun.objects.filter(
+            organization=request.organization,
+            id__in=[result.run_id for result in results],
+        ))
+        snapshot_ids = tuple(dict.fromkeys(
+            snapshot_id for result in results for snapshot_id in result.snapshot_ids
+        ))
+        created_count = sum(run.created_snapshot_count for run in runs)
+        payload = {
+            "mode": mode,
+            "is_demo": mode == "FIXTURE",
+            "run_ids": [str(result.run_id) for result in results],
+            "snapshot_ids": [str(value) for value in snapshot_ids],
+            "created_snapshot_count": created_count,
+            "reused_snapshot_count": sum(run.reused_snapshot_count for run in runs),
+            "scope_warning": "宏观贸易仅用于市场判断，不是具体买家证据。",
+        }
+        return Response(payload, status=201 if created_count else 200)
+
+
+class TradeSnapshotListView(APIView):
+    permission_classes = [CanReadCampaigns]
+
+    @extend_schema(tags=["Growth workspace"], responses={200: TradeSnapshotListSerializer})
+    def get(self, request):
+        queryset = TradeDatasetSnapshot.objects.filter(organization=request.organization)
+        country_code = str(request.query_params.get("country_code", "")).upper()
+        if country_code:
+            reporter_code = COUNTRY_REPORTER_CODES.get(country_code)
+            if reporter_code is None:
+                return Response({"country_code": ["Unsupported reporter country."]}, status=400)
+            queryset = queryset.filter(reporter_code=reporter_code)
+        hs_codes = request.query_params.getlist("hs_code")
+        if hs_codes:
+            if any(len(value) not in {4, 6} or not value.isdigit() for value in hs_codes):
+                return Response({"hs_code": ["Use four or six digit HS codes."]}, status=400)
+            queryset = queryset.filter(hs_code__in=hs_codes)
+        results = list(queryset[:100])
+        return Response({
+            "count": len(results),
+            "results": TradeDatasetSnapshotSerializer(results, many=True).data,
+        })
+
+
+class TradeIndicatorView(APIView):
+    permission_classes = [CanReadCampaigns]
+
+    @extend_schema(tags=["Growth workspace"], responses={200: TradeIndicatorResponseSerializer})
+    def get(self, request):
+        country_code = str(request.query_params.get("country_code", "")).upper()
+        reporter_code = COUNTRY_REPORTER_CODES.get(country_code)
+        if reporter_code is None:
+            return Response({"country_code": ["Unsupported reporter country."]}, status=400)
+        hs_codes = tuple(request.query_params.getlist("hs_code") or ("848340", "848390"))
+        periods = tuple(request.query_params.getlist("period"))
+        try:
+            query = TradeQuery(
+                reporter_code=reporter_code,
+                partner_code="0",
+                flow="M",
+                hs_codes=hs_codes,
+                periods=periods,
+            )
+        except ValueError as error:
+            return Response({"query": [str(error)]}, status=400)
+        payload = trade_indicators(
+            organization=request.organization,
+            reporter_code=reporter_code,
+            hs_codes=query.hs_codes,
+            periods=query.periods,
+        )
+        payload["is_demo"] = bool(payload["evidence"]) and all(
+            item["is_demo"] for item in payload["evidence"]
+        )
+        if payload["scope_warning"] == "AGGREGATE_TRADE_IS_NOT_COMPANY_BUYER_EVIDENCE":
+            payload["scope_warning"] = "宏观贸易仅用于市场判断，不是具体买家证据。"
+        return Response(payload)
 
 
 class ReactivationCreateView(APIView):

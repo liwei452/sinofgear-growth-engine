@@ -1,4 +1,5 @@
 import pytest
+from django.test import override_settings
 from apps.assets.services import upload_asset
 
 from .conftest import create_member_client, make_product, mp4_bytes
@@ -112,3 +113,33 @@ def test_understanding_api_rejects_video_without_creating_a_job(organizations, r
 
     assert response.status_code == 400
     assert "PDF" in str(response.json())
+
+
+@pytest.mark.django_db
+@override_settings(PRODUCT_AI_PROVIDER="deepseek", PRODUCT_AI_MODEL="deepseek-chat")
+def test_understanding_api_requires_explicit_consent_before_deepseek(
+    organizations, roles, monkeypatch,
+) -> None:
+    own, _ = organizations
+    membership, client = create_member_client(
+        organization=own, role=roles["ADMINISTRATOR"], username="understand-consent-api"
+    )
+    asset = _upload(
+        own,
+        membership.user,
+        labeled_pdf(),
+        mime="application/pdf",
+        kind="DOCUMENT",
+        filename="consent-api.pdf",
+    )
+    product = make_product(own, name="Consent API gear")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-never-persist")
+
+    response = client.post(
+        f"/api/v1/assets/{asset.id}/understanding",
+        {"product_id": str(product.id), "external_text_consent": False},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert "Confirm that bounded PDF text" in str(response.json())

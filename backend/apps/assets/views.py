@@ -28,6 +28,7 @@ from .serializers import (
     AssetValidationErrorSerializer,
     MaterialAssetSerializer,
     AssetUnderstandingResultSerializer,
+    AssetUnderstandingRetrySerializer,
     AssetUnderstandingStartSerializer,
     ProductEvidenceFactReviewSerializer,
     ProductEvidenceFactSerializer,
@@ -344,7 +345,12 @@ class AssetUnderstandingView(APIView):
         except Product.DoesNotExist as error:
             raise Http404 from error
         try:
-            result = start_understanding(asset=asset, product=product, actor=request.user)
+            result = start_understanding(
+                asset=asset,
+                product=product,
+                actor=request.user,
+                external_text_consent=serializer.validated_data["external_text_consent"],
+            )
         except (AssetUnderstandingError, DjangoValidationError) as error:
             return _validation_response({"non_field_errors": [str(error)]})
         return Response(_serialize_understanding(result))
@@ -356,16 +362,25 @@ class AssetUnderstandingRetryView(APIView):
 
     @extend_schema(
         operation_id="assets_understanding_retry",
-        request=None,
+        request=AssetUnderstandingRetrySerializer,
         responses={200: AssetUnderstandingResultSerializer, 409: AssetErrorSerializer, **ERROR_RESPONSES},
     )
     def post(self, request: Request, asset_id) -> Response:
         _get_asset(request.organization, asset_id)
+        serializer = AssetUnderstandingRetrySerializer(data=request.data)
+        if not serializer.is_valid():
+            return _validation_response(serializer.errors)
         job = _latest_understanding_job(request.organization, asset_id)
         if job is None:
             raise Http404
         try:
-            result = retry_understanding(job=job, actor=request.user)
+            result = retry_understanding(
+                job=job,
+                actor=request.user,
+                external_text_consent=serializer.validated_data["external_text_consent"],
+            )
+        except AssetUnderstandingError as error:
+            return _validation_response({"non_field_errors": [str(error)]})
         except JobConflictError as error:
             return Response({"detail": str(error)}, status=status.HTTP_409_CONFLICT)
         return Response(_serialize_understanding(result))

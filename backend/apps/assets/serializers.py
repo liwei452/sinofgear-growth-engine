@@ -132,6 +132,11 @@ class AssetDownloadSerializer(serializers.Serializer):
 
 class AssetUnderstandingStartSerializer(serializers.Serializer):
     product_id = serializers.UUIDField()
+    external_text_consent = serializers.BooleanField(default=False)
+
+
+class AssetUnderstandingRetrySerializer(serializers.Serializer):
+    external_text_consent = serializers.BooleanField(default=False)
 
 
 class AssetUnderstandingJobSerializer(serializers.Serializer):

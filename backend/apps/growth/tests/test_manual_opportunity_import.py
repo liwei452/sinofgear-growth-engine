@@ -77,6 +77,10 @@ def test_operator_imports_permitted_evidence_as_a_conservative_real_opportunity(
     assert envelope["usage_rights"] == "INTERNAL_DISCOVERY_WITH_SOURCE_LINK"
     assert envelope["review_status"] == "PENDING_REVIEW"
     assert envelope["queue"] == "MONITORING"
+    assert envelope["source_type"] == "COMPANY_WEB"
+    assert envelope["matched_keywords"] == []
+    assert envelope["company_match_confidence"] == 50
+    assert envelope["ai_exclusion_reasons"] == []
     assert envelope["observed_at"]
     assert TargetAccount.objects.filter(organization=organization, is_demo=False).count() == 1
     assert IntentSignal.objects.filter(organization=organization, is_demo=False).count() == 1

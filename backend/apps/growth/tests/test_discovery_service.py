@@ -91,6 +91,10 @@ def test_official_notice_creates_a_target_account_and_intent_signal(profile, sou
         "usage_rights": "INTERNAL_DISCOVERY_WITH_SOURCE_LINK",
         "review_status": "PENDING_REVIEW",
         "queue": "MONITORING",
+        "source_type": "TENDER",
+        "matched_keywords": ["gear"],
+        "company_match_confidence": 80,
+        "ai_exclusion_reasons": [],
     }
     assert "email" not in str(signal.evidence_envelope).lower()
     assert "534032-2026" in signal.evidence_text

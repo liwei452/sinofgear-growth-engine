@@ -23,6 +23,7 @@ from .models import (
     TargetAccount,
 )
 from .manual_imports import import_manual_opportunity
+from .market_pilots import market_pilot_summary, market_profiles_for
 from .serializers import (
     ChannelPackageSerializer,
     ContactSerializer,
@@ -130,10 +131,12 @@ class GrowthWorkspaceView(APIView):
     @extend_schema(tags=["Growth workspace"])
     def get(self, request):
         organization = request.organization
+        accounts = list(TargetAccount.objects.filter(organization=organization))
+        signals = list(IntentSignal.objects.filter(organization=organization))
         return Response({
-            "target_accounts": TargetAccountSerializer(TargetAccount.objects.filter(organization=organization), many=True).data,
+            "target_accounts": TargetAccountSerializer(accounts, many=True).data,
             "contacts": ContactSerializer(Contact.objects.filter(organization=organization), many=True).data,
-            "intent_signals": IntentSignalSerializer(IntentSignal.objects.filter(organization=organization), many=True).data,
+            "intent_signals": IntentSignalSerializer(signals, many=True).data,
             "inbound_leads": InboundLeadSerializer(InboundLead.objects.filter(organization=organization), many=True).data,
             "follow_ups": FollowUpSerializer(FollowUp.objects.filter(organization=organization), many=True).data,
             "outreach_drafts": OutreachDraftSerializer(
@@ -155,6 +158,11 @@ class GrowthWorkspaceView(APIView):
             ).data,
             "connectors": connector_readiness(organization),
             "discovery": discovery_summary(discovery_profile_for(organization)),
+            "market_pilots": market_pilot_summary(
+                signals=signals,
+                accounts=accounts,
+                profiles=market_profiles_for(organization),
+            ),
         })
 
 

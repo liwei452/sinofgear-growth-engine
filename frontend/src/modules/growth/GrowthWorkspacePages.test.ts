@@ -396,6 +396,10 @@ it("explains evidence scoring and shows only safe source links with saved follow
           usage_rights: "INTERNAL_DISCOVERY_WITH_SOURCE_LINK",
           review_status: "PENDING_REVIEW",
           queue: "MONITORING",
+          source_type: "TENDER",
+          matched_keywords: ["gear shaft", "helical gear"],
+          company_match_confidence: 80,
+          ai_exclusion_reasons: [],
         },
         uncertainty_notes: ["采购时间仍需人工确认"], priority_label: "优先跟进",
       },
@@ -443,6 +447,10 @@ it("explains evidence scoring and shows only safe source links with saved follow
   expect(screen.getByText("TED 官方公开数据")).toBeInTheDocument()
   expect(screen.getByText("待人工审查")).toBeInTheDocument()
   expect(screen.getByText("免费公开来源")).toBeInTheDocument()
+  expect(screen.getByText("TENDER · 官方招投标")).toBeInTheDocument()
+  expect(screen.getByText("gear shaft、helical gear")).toBeInTheDocument()
+  expect(screen.getByText("80%")).toBeInTheDocument()
+  expect(screen.getByText("无 AI 排除项")).toBeInTheDocument()
   expect(screen.queryByText("MONITORING")).not.toBeInTheDocument()
   expect(screen.getByText("采购时间仍需人工确认")).toBeInTheDocument()
   expect(screen.getByRole("link", { name: "打开原始来源" })).toHaveAttribute(

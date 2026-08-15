@@ -7,6 +7,8 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from .market_pilots import matched_gear_terms, validate_company_evidence_source
+
 from apps.identity.models import Organization
 
 from .models import IntentSignal, TargetAccount
@@ -90,6 +92,7 @@ def import_manual_opportunity(
             account.is_demo = False
             account.save(update_fields=["is_demo", "updated_at"])
 
+        validate_company_evidence_source("COMPANY_WEB")
         signal = IntentSignal(
             organization=locked_organization,
             account=account,
@@ -115,6 +118,10 @@ def import_manual_opportunity(
                 "usage_rights": "INTERNAL_DISCOVERY_WITH_SOURCE_LINK",
                 "review_status": "PENDING_REVIEW",
                 "queue": "MONITORING",
+                "source_type": "COMPANY_WEB",
+                "matched_keywords": matched_gear_terms(evidence_text),
+                "company_match_confidence": 50,
+                "ai_exclusion_reasons": [],
             },
         )
         signal.full_clean()

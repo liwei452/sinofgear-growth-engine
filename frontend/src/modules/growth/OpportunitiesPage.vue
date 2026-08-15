@@ -10,6 +10,7 @@ import {
 } from "./api"
 import ManualOpportunityImportForm from "./ManualOpportunityImportForm.vue"
 import AutomaticDiscoveryCard from "./AutomaticDiscoveryCard.vue"
+import MarketPilotComparison from "./MarketPilotComparison.vue"
 
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
@@ -84,6 +85,18 @@ function sourceCostLabel(value: number | undefined): string {
   if (value === 0) return "免费公开来源"
   if (typeof value === "number") return `来源成本 ${(value / 1_000_000).toFixed(2)}`
   return "来源成本未记录"
+}
+
+function sourceTypeLabel(value: string | undefined): string {
+  const labels: Record<string, string> = {
+    DIRECT_CUSTOMS: "本国直接报关数据",
+    CARRIER_BOL: "承运人或提单数据",
+    MIRROR_TRADE: "贸易伙伴镜像推算",
+    AGGREGATE_TRADE: "宏观贸易背景（非公司采购证据）",
+    TENDER: "官方招投标",
+    COMPANY_WEB: "企业官网或公开目录",
+  }
+  return value ? `${value} · ${labels[value] ?? "来源类型待核实"}` : "来源类型未记录"
 }
 
 const sortedAccounts = computed(() => {
@@ -194,6 +207,8 @@ async function generateDraft(): Promise<void> {
 
 async function handleImported(accountId: string): Promise<void> {
   selectedAccountId.value = accountId
+  evidenceOpen.value = false
+  draftOpen.value = false
   importOpen.value = false
   importStatus.value = ""
   await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
@@ -213,6 +228,10 @@ async function handleImported(accountId: string): Promise<void> {
     <AutomaticDiscoveryCard
       v-if="workspaceQuery.data.value?.discovery"
       :discovery="workspaceQuery.data.value.discovery"
+    />
+    <MarketPilotComparison
+      v-if="workspaceQuery.data.value?.market_pilots"
+      :summary="workspaceQuery.data.value.market_pilots"
     />
     <div class="opportunity-import-bar">
       <div><strong>已有公开采购线索？</strong><span>保存证据后由你决定是否跟进。</span></div>
@@ -261,6 +280,10 @@ async function handleImported(accountId: string): Promise<void> {
           <div v-if="activeSignal?.evidence_envelope"><dt>许可与使用</dt><dd>{{ licenseLabel(activeSignal.evidence_envelope.license_contract) }}</dd></div>
           <div v-if="activeSignal?.evidence_envelope"><dt>审查状态</dt><dd>{{ reviewStatusLabel(activeSignal.evidence_envelope.review_status) }}</dd></div>
           <div v-if="activeSignal?.evidence_envelope"><dt>来源成本</dt><dd>{{ sourceCostLabel(activeSignal.evidence_envelope.source_cost_micros) }}</dd></div>
+          <div v-if="activeSignal?.evidence_envelope?.source_type"><dt>证据来源类型</dt><dd>{{ sourceTypeLabel(activeSignal.evidence_envelope.source_type) }}</dd></div>
+          <div v-if="activeSignal?.evidence_envelope?.matched_keywords"><dt>命中关键词</dt><dd>{{ activeSignal.evidence_envelope.matched_keywords.join("、") || "未命中产品关键词" }}</dd></div>
+          <div v-if="activeSignal?.evidence_envelope?.company_match_confidence !== undefined"><dt>企业匹配置信度</dt><dd>{{ activeSignal.evidence_envelope.company_match_confidence }}%</dd></div>
+          <div v-if="activeSignal?.evidence_envelope?.ai_exclusion_reasons"><dt>AI 排除理由</dt><dd>{{ activeSignal.evidence_envelope.ai_exclusion_reasons.join("；") || "无 AI 排除项" }}</dd></div>
           <div><dt>评分规则</dt><dd>{{ activeSignal?.scoring_rule_version || "规则版本未记录" }}</dd></div>
           <div><dt>证据哈希</dt><dd><code>{{ activeSignal?.content_hash ? `${activeSignal.content_hash.slice(0, 12)}…` : "未记录" }}</code></dd></div>
         </dl>

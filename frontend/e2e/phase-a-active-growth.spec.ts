@@ -194,7 +194,12 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   await login(page, "phasea_e2e_reviewer")
   await page.goto("/content-factory")
   await expect(briefCard).toContainText("需求草稿")
+  const readyResponsePromise = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith("/ready") && response.request().method() === "POST",
+  )
   await briefCard.getByRole("button", { name: "确认需求可生成" }).click()
+  const readyResponse = await readyResponsePromise
+  expect(readyResponse.status(), await readyResponse.text()).toBe(200)
   await expect(briefCard).toContainText("可生成")
 
   await logout(page)

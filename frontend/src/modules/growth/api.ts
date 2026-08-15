@@ -24,6 +24,10 @@ export type EvidenceEnvelope = {
   usage_rights: string
   review_status: string
   queue: string
+  source_type?: "DIRECT_CUSTOMS" | "CARRIER_BOL" | "MIRROR_TRADE" | "AGGREGATE_TRADE" | "TENDER" | "COMPANY_WEB" | string
+  matched_keywords?: string[]
+  company_match_confidence?: number
+  ai_exclusion_reasons?: string[]
 }
 
 export type IntentSignal = {
@@ -157,6 +161,59 @@ export type DiscoverySummary = {
   available_sources: DiscoverySourceSummary[]
 }
 
+export type MarketPilotSummary = {
+  markets: Array<{
+    country_code: string
+    country_label: string
+    status: "OBSERVATION_POOL" | "DATA_VALIDATION" | "SMALL_PILOT" | "ACTIVE_MARKET" | "PAUSED"
+    route: string
+    route_label: string
+    recommended_wave: string
+    source_types: string[]
+    last_updated_at: string
+    scores: Record<string, number | null>
+    sample_quality: {
+      raw_sample_count: number
+      named_buyer_rate: number | null
+      active_entity_match_rate: number | null
+      duplicate_rate: number | null
+      evidence_company_count: number
+      evidence_company_threshold: number
+    }
+    recommendation_reasons: string[]
+    hold_reasons: string[]
+    metrics: {
+      effective_customer_rate: number | null
+      positive_reply_rate: number | null
+      source_cost_micros: number
+      raw_sample_count: number
+    }
+  }>
+  score_weights: {
+    data_availability: number
+    demand_strength: number
+    purchase_intent: number
+    company_reachability: number
+    commercial_execution: number
+  }
+  quality_gate: {
+    minimum_raw_samples: number
+    minimum_named_buyer_rate: number
+    minimum_active_entity_match_rate: number
+    maximum_median_record_age_days: number
+    maximum_duplicate_rate: number
+    license_required: boolean
+  }
+  search_policy: { hs_codes: string[]; include_terms: string[]; exclude_terms: string[] }
+  validation_goals: {
+    reviewed_valid_companies: number
+    sales_conversations: number
+    positive_intent_signals: number
+    progressed_opportunities: number
+    weeks: number
+  }
+}
+
 export type GrowthWorkspace = {
   target_accounts: TargetAccount[]
   contacts: Array<Record<string, unknown>>
@@ -170,6 +227,7 @@ export type GrowthWorkspace = {
   field_provenance: FieldProvenance[]
   connectors: PlatformConnection[]
   discovery?: DiscoverySummary
+  market_pilots?: MarketPilotSummary
 }
 
 export type DraftActionResponse = {

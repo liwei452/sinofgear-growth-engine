@@ -124,6 +124,12 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await expect(page.getByText("3 家目标公司")).toBeVisible()
   await expect(page.getByRole("heading", { name: "PackTech GmbH" })).toBeVisible()
   await expect(page.getByRole("heading", { name: "自动发现客户" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "双市场获客验证" })).toBeVisible()
+  await expect(page.getByRole("article", { name: "印度尼西亚 强海关数据路线" })).toContainText("待采样")
+  await expect(page.getByRole("article", { name: "南非 混合信号路线" })).toContainText("待采样")
+  await expect(page.getByText("市场雷达")).toBeVisible()
+  await expect(page.getByText("智利 · 下一优先")).toBeVisible()
+  await expect(page.getByText("印度 · 条件观察")).toBeVisible()
   await expect(page.getByText("欧盟与英国官方采购数据", { exact: true }).first()).toBeVisible()
   await expect(page.getByText("TED 欧盟采购公告")).toBeVisible()
   await expect(page.getByText("英国 Contracts Finder")).toBeVisible()
@@ -140,6 +146,8 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await page.getByRole("button", { name: /E2E Gear Procurement Authority/ }).click()
   await expect(page.getByRole("heading", { name: "E2E Gear Procurement Authority" })).toBeVisible()
   await expect(page.getByText("Demo / Fake").first()).toBeVisible()
+  await page.getByRole("button", { name: "查看证据" }).click()
+  await expect(page.getByText("TENDER · 官方招投标")).toBeVisible()
   const duplicateDiscoveryResponse = page.waitForResponse(response =>
     new URL(response.url()).pathname === "/api/v1/growth/discovery/run"
       && response.request().method() === "POST",
@@ -167,6 +175,7 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await page.getByRole("button", { name: "查看证据" }).click()
   await expect(page.getByText("人工导入网页")).toBeVisible()
   await expect(page.getByText("manual-opportunity-v1")).toBeVisible()
+  await expect(page.getByText("COMPANY_WEB · 企业官网或公开目录")).toBeVisible()
   await expect(page.getByText("公司身份仍需人工核实")).toBeVisible()
   await expect(page.getByText("采购范围与时间仍需人工确认")).toBeVisible()
   await expect(page.getByRole("link", { name: "打开原始来源" }))

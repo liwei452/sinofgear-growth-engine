@@ -27,11 +27,11 @@
 **Interfaces:**
 - Produces: `market_pilot_summary(signals, accounts) -> dict` with `markets`, `quality_gate`, `search_policy`, and `validation_goals`.
 
-- [ ] Write a failing test asserting two active markets, two gated markets, exact 200/80/70/90/10 thresholds and `null` rates without samples.
-- [ ] Run `python -m pytest apps/growth/tests/test_market_pilots.py -q` and verify the missing summary fails.
-- [ ] Implement immutable policy constants and workspace serialization; compute only rates with verified denominators and sum saved source cost.
-- [ ] Run the focused test and `apps/growth/tests/test_discovery_api.py` until green.
-- [ ] Commit the policy API.
+- [x] Write a failing test asserting two active markets, two gated markets, exact 200/80/70/90/10 thresholds and `null` rates without samples.
+- [x] Run `python -m pytest apps/growth/tests/test_market_pilots.py -q` and verify the missing summary fails.
+- [x] Implement immutable policy constants and workspace serialization; compute only rates with verified denominators and sum saved source cost.
+- [x] Run the focused test and `apps/growth/tests/test_discovery_api.py` until green.
+- [x] Commit the policy API.
 
 ### Task 2: Evidence source taxonomy
 
@@ -44,11 +44,11 @@
 **Interfaces:**
 - Extends: `IntentSignal.evidence_envelope` with `source_type`, `matched_keywords`, `company_match_confidence`, and `ai_exclusion_reasons`.
 
-- [ ] Write failing tests requiring `TENDER` for official procurement and `COMPANY_WEB` for manual URL import.
-- [ ] Run the two focused test modules and verify the new assertions fail.
-- [ ] Add the minimal envelope fields while retaining original text, URL, observation time, license, cost, and review status.
-- [ ] Add a policy validator proving `AGGREGATE_TRADE` is market context only and cannot become a company opportunity.
-- [ ] Run focused source, discovery, and import tests until green.
+- [x] Write failing tests requiring `TENDER` for official procurement and `COMPANY_WEB` for manual URL import.
+- [x] Run the two focused test modules and verify the new assertions fail.
+- [x] Add the minimal envelope fields while retaining original text, URL, observation time, license, cost, and review status.
+- [x] Add a policy validator proving `AGGREGATE_TRADE` is market context only and cannot become a company opportunity.
+- [x] Run focused source, discovery, and import tests until green.
 
 ### Task 3: Owner-facing market comparison
 
@@ -64,11 +64,11 @@
 - Consumes: `GrowthWorkspace.market_pilots` from Task 1.
 - Produces: a compact two-route comparison plus gated-market note.
 
-- [ ] Write failing component tests for active/gated markets, “待采样”, and the three comparison metrics.
-- [ ] Run Vitest and verify the component is missing.
-- [ ] Implement the component and typed API contract; keep internal connector and queue names out of UI copy.
-- [ ] Extend evidence detail labels for source type, keywords, company match confidence, and AI exclusion reasons.
-- [ ] Run focused Vue tests until green.
+- [x] Write failing component tests for active/gated markets, “待采样”, and the three comparison metrics.
+- [x] Run Vitest and verify the component is missing.
+- [x] Implement the component and typed API contract; keep internal connector and queue names out of UI copy.
+- [x] Extend evidence detail labels for source type, keywords, company match confidence, and AI exclusion reasons.
+- [x] Run focused Vue tests until green.
 
 ### Task 4: Acceptance
 
@@ -76,7 +76,25 @@
 - Modify: `frontend/e2e/zz-growth-workspace-persistence.spec.ts`
 - Modify: `docs/superpowers/plans/2026-08-14-ai-growth-loop-development-acceptance-checklist.md`
 
-- [ ] Add browser assertions for the two active routes, two gated markets, honest empty metrics, and evidence source type.
-- [ ] Run migration drift, Ruff, Django check, typecheck, ESLint, production build, full pytest, full Vitest, and Playwright E2E.
-- [ ] Record fresh counts and known external-data limitations in the acceptance checklist.
-- [ ] Commit and keep `feature/phase-a` local without push or merge.
+- [x] Add browser assertions for the two active routes, two gated markets, honest empty metrics, and evidence source type.
+- [x] Run migration drift, Ruff, Django check, typecheck, ESLint, production build, full pytest, full Vitest, and Playwright E2E.
+- [x] Record fresh counts and known external-data limitations in the acceptance checklist.
+- [x] Commit and keep `feature/phase-a` local without push or merge.
+
+### Task 5: Extensible market radar
+
+**Files:**
+- Modify: `backend/apps/growth/market_pilots.py`
+- Modify: `backend/apps/growth/tests/test_market_pilots.py`
+- Modify: `frontend/src/modules/growth/MarketPilotComparison.vue`
+- Modify: `frontend/src/modules/growth/MarketPilotComparison.test.ts`
+- Modify: `frontend/src/modules/growth/api.ts`
+
+**Interfaces:**
+- Extends: `MarketPilotSummary.markets` with five-stage status, weighted score inputs, source types, freshness, sample quality, 20-company evidence threshold, recommended wave, recommendation reasons and hold reasons.
+
+- [x] Write failing backend tests for 15 radar markets, exact score weights, Chile priority and India's `TENDER + COMPANY_WEB` restriction.
+- [x] Replace the four-country policy with the five-stage extensible country radar; keep scores null until evidence exists.
+- [x] Write failing component assertions for radar weights, country detail fields and explainable reasons.
+- [x] Render compact expandable candidate rows without adding a new technical navigation area.
+- [x] Run backend and frontend focused tests, then include the radar in full acceptance.

@@ -12,6 +12,7 @@ from integrations.sources.composite import CompositeDiscoverySource
 from integrations.sources.contracts_finder import ContractsFinderSource
 from integrations.sources.ted import TedSource
 
+from .market_pilots import matched_gear_terms, validate_company_evidence_source
 from .models import DiscoveryProfile, DiscoveryRun, IntentSignal, TargetAccount
 
 
@@ -140,6 +141,7 @@ def _ingest_batch(*, profile_id, run_id, batch) -> DiscoveryRun:
             if batch.is_demo
             else governance_for(item.source_code)["license_contract"]
         )
+        validate_company_evidence_source("TENDER")
         signal = IntentSignal(
             organization=profile.organization,
             account=account,
@@ -170,6 +172,10 @@ def _ingest_batch(*, profile_id, run_id, batch) -> DiscoveryRun:
                 "usage_rights": "INTERNAL_DISCOVERY_WITH_SOURCE_LINK",
                 "review_status": "PENDING_REVIEW",
                 "queue": "MONITORING",
+                "source_type": "TENDER",
+                "matched_keywords": matched_gear_terms(item.title),
+                "company_match_confidence": PUBLIC_PROCUREMENT_SCORE_TOTAL,
+                "ai_exclusion_reasons": [],
             },
         )
         signal.full_clean()

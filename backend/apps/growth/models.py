@@ -237,6 +237,38 @@ class FieldProvenance(OrganizationOwnedModel):
         constraints = [models.UniqueConstraint(fields=["organization", "field_name"], name="growth_unique_fact_field")]
 
 
+class MarketCountryProfile(OrganizationOwnedModel):
+    class Status(models.TextChoices):
+        OBSERVATION_POOL = "OBSERVATION_POOL", "Observation pool"
+        DATA_VALIDATION = "DATA_VALIDATION", "Data validation"
+        SMALL_PILOT = "SMALL_PILOT", "Small pilot"
+        ACTIVE_MARKET = "ACTIVE_MARKET", "Active market"
+        PAUSED = "PAUSED", "Paused"
+
+    country_code = models.CharField(max_length=3)
+    country_label = models.CharField(max_length=96)
+    status = models.CharField(max_length=24, choices=Status.choices)
+    route = models.CharField(max_length=48)
+    route_label = models.CharField(max_length=128)
+    recommended_wave = models.CharField(max_length=64)
+    priority_order = models.PositiveSmallIntegerField()
+    source_types = models.JSONField(default=list)
+    last_researched_at = models.DateField()
+    scores = models.JSONField(default=dict)
+    sample_quality = models.JSONField(default=dict)
+    recommendation_reasons = models.JSONField(default=list)
+    hold_reasons = models.JSONField(default=list)
+
+    class Meta:
+        ordering = ["priority_order", "country_code"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "country_code"],
+                name="growth_unique_market_country",
+            ),
+        ]
+
+
 class DiscoveryProfile(OrganizationOwnedModel):
     organization = models.OneToOneField(
         Organization, on_delete=models.PROTECT, related_name="growth_discovery_profile",

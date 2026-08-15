@@ -52,7 +52,8 @@ def organization(db):
 
 
 def test_workspace_exposes_an_owner_friendly_discovery_summary(organization):
-    summary = _client(organization).get("/api/v1/growth/workspace").data["discovery"]
+    workspace = _client(organization).get("/api/v1/growth/workspace").data
+    summary = workspace["discovery"]
 
     assert summary == {
         "enabled": True,
@@ -72,6 +73,10 @@ def test_workspace_exposes_an_owner_friendly_discovery_summary(organization):
         ],
     }
     assert "cursor" not in summary
+    assert [market["country_code"] for market in workspace["market_pilots"]["markets"][:5]] == [
+        "IDN", "ZAF", "CHL", "VNM", "PHL",
+    ]
+    assert len(workspace["market_pilots"]["markets"]) == 15
     assert DiscoveryProfile.objects.filter(organization=organization).count() == 1
 
 

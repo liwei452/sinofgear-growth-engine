@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ref } from "vue"
 import { ApiError } from "../../api/client"
-import { getAssetUnderstanding, reviewAssetFact, startAssetUnderstanding, type AssetUnderstanding } from "./api"
+import { getAssetUnderstanding, retryAssetUnderstanding, reviewAssetFact, startAssetUnderstanding, type AssetUnderstanding } from "./api"
 
 const props=defineProps<{assetId:string;productId:string;canManage:boolean}>()
 const result=ref<AssetUnderstanding|null>(null),loading=ref(false),message=ref("")
 const errorText=(error:unknown)=>error instanceof ApiError?error.userMessage:"资料暂时无法处理，请稍后重试。"
 async function prepare(){if(!props.productId)return;loading.value=true;message.value="";try{result.value=await startAssetUnderstanding(props.assetId,props.productId)}catch(error){message.value=errorText(error)}finally{loading.value=false}}
 async function load(){loading.value=true;message.value="";try{result.value=await getAssetUnderstanding(props.assetId)}catch(error){message.value=errorText(error)}finally{loading.value=false}}
+async function retry(){loading.value=true;message.value="";try{result.value=await retryAssetUnderstanding(props.assetId)}catch(error){message.value=errorText(error)}finally{loading.value=false}}
 async function review(id:string,decision:"APPROVE"|"REJECT"){loading.value=true;message.value="";try{const fact=await reviewAssetFact(id,decision);if(result.value)result.value={...result.value,facts:result.value.facts.map(item=>item.id===id?fact:item)}}catch(error){message.value=errorText(error)}finally{loading.value=false}}
 const statusText=(status:string)=>({SUGGESTED:"待确认",VERIFIED:"已验证",REJECTED:"已驳回"}[status]??status)
 </script>
@@ -22,6 +23,7 @@ const statusText=(status:string)=>({SUGGESTED:"待确认",VERIFIED:"已验证",R
     <p v-if="message" role="alert">{{ message }}</p>
     <div v-if="result" class="result">
       <div class="result-head"><strong>{{ result.provider_label }}</strong><span class="pill">{{ result.job.status }}</span></div>
+      <button v-if="canManage&&result.job.status==='FAILED'" class="primary-action" :disabled="loading" @click="retry">重试解析</button>
       <p class="warning">这是本地演示提供方；所有事实都必须人工确认，不会自动发布或联系客户。</p>
       <p v-for="warning in result.warnings" :key="warning" class="hint">{{ warning }}</p>
       <p v-if="!result.facts.length" class="empty">没有生成候选事实。系统不会用文件名或产品名伪装成图片识别结果。</p>

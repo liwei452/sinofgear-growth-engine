@@ -74,12 +74,14 @@ def test_workspace_route_exposes_four_separate_collections(growth_client):
     assert response.data["connectors"] == [
         {
             "channel": channel,
-            "status": "NOT_CONNECTED",
-            "connection_label": "未连接",
+            "status": "CONFIGURATION_REQUIRED",
+            "connection_label": "未配置",
             "recovery_action": "连接账号",
             "mode": "",
+            "account_id": "",
+            "publication_mode": "UNAVAILABLE",
         }
-        for channel in ("LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK")
+        for channel in ("LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK", "YOUTUBE")
     ]
 
 

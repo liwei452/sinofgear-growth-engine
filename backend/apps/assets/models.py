@@ -3,6 +3,7 @@ import json
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models.expressions import BaseExpression
@@ -325,3 +326,120 @@ class AssetProductLink(OrganizationScopedModel):
             "Asset product link history cannot be deleted.",
             [self],
         )
+
+
+def validate_source_region(value: object) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list) or len(value) != 4:
+        raise ValidationError("Source region must be [x, y, width, height].")
+    if any(
+        isinstance(item, bool)
+        or not isinstance(item, (int, float))
+        or item < 0
+        or item > 1
+        for item in value
+    ):
+        raise ValidationError("Source region coordinates must be between 0 and 1.")
+    x, y, width, height = value
+    if x + width > 1 or y + height > 1:
+        raise ValidationError("Source region must remain inside the page.")
+
+
+class ProductEvidenceFact(OrganizationScopedModel):
+    class Category(models.TextChoices):
+        PRODUCT = "PRODUCT", "Product"
+        SPECIFICATION = "SPECIFICATION", "Specification"
+        PROCESS = "PROCESS", "Process"
+        APPLICATION = "APPLICATION", "Application"
+        STANDARD = "STANDARD", "Standard"
+        ADVANTAGE = "ADVANTAGE", "Advantage"
+
+    class RiskLevel(models.TextChoices):
+        STANDARD = "STANDARD", "Standard"
+        HIGH = "HIGH", "High"
+
+    class ReviewStatus(models.TextChoices):
+        SUGGESTED = "SUGGESTED", "Suggested"
+        VERIFIED = "VERIFIED", "Verified"
+        REJECTED = "REJECTED", "Rejected"
+
+    product = models.ForeignKey(
+        Product, on_delete=models.PROTECT, related_name="evidence_facts"
+    )
+    asset = models.ForeignKey(
+        MaterialAsset, on_delete=models.PROTECT, related_name="evidence_facts"
+    )
+    job = models.ForeignKey(
+        "jobs.Job", on_delete=models.PROTECT, related_name="asset_evidence_facts"
+    )
+    ai_run = models.ForeignKey(
+        "ai.AIRun",
+        on_delete=models.PROTECT,
+        related_name="product_evidence_facts",
+        null=True,
+        blank=True,
+    )
+    category = models.CharField(max_length=24, choices=Category.choices)
+    field_name = models.CharField(max_length=64)
+    value = models.TextField()
+    confidence = models.DecimalField(
+        max_digits=5,
+        decimal_places=4,
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
+    )
+    source_page = models.PositiveSmallIntegerField(null=True, blank=True)
+    source_region = models.JSONField(
+        null=True, blank=True, validators=[validate_source_region]
+    )
+    source_excerpt = models.TextField(max_length=2000)
+    risk_level = models.CharField(
+        max_length=16, choices=RiskLevel.choices, default=RiskLevel.STANDARD
+    )
+    review_status = models.CharField(
+        max_length=16,
+        choices=ReviewStatus.choices,
+        default=ReviewStatus.SUGGESTED,
+    )
+    provider_label = models.CharField(max_length=128)
+    is_demo = models.BooleanField(default=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="reviewed_product_evidence_facts",
+        null=True,
+        blank=True,
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(max_length=1000, blank=True)
+
+    class Meta:
+        ordering = ["source_page", "created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["job", "field_name", "source_page", "source_excerpt"],
+                name="assets_unique_fact_per_job_source",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["organization", "product", "review_status"],
+                name="assets_fact_org_prod_rev_idx",
+            )
+        ]
+
+    def clean(self) -> None:
+        super().clean()
+        validate_source_region(self.source_region)
+        if not self.organization_id:
+            return
+        for field in ("product", "asset", "job"):
+            related = getattr(self, field, None)
+            if related is not None and related.organization_id != self.organization_id:
+                raise ValidationError({field: "Related record must belong to the fact organization."})
+        if self.ai_run_id and self.ai_run.organization_id != self.organization_id:
+            raise ValidationError({"ai_run": "AI run must belong to the fact organization."})
+
+    def save(self, *args, **kwargs) -> None:
+        self.full_clean()
+        super().save(*args, **kwargs)

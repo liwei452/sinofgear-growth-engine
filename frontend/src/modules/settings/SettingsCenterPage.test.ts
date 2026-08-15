@@ -1,12 +1,18 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
 import { render, screen, within } from "@testing-library/vue"
 import { createMemoryHistory, createRouter } from "vue-router"
-import { expect, it } from "vitest"
+import { afterEach, expect, it, vi } from "vitest"
 
 import { currentUserQueryOptions } from "../auth/auth"
 import SettingsCenterPage from "./SettingsCenterPage.vue"
 
-async function renderSettings(role: string, permissions: string[]) {
+afterEach(() => vi.unstubAllGlobals())
+
+async function renderSettings(role: string, permissions: string[], accounts: unknown[] = []) {
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({ results: accounts }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  }))))
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   queryClient.setQueryData(currentUserQueryOptions().queryKey, {
     user: { id: 1, username: "owner" },
@@ -34,6 +40,7 @@ it("shows only real permission-backed destinations and truthful unconfigured sta
   expect(screen.getByRole("link", { name: "素材与资料理解" })).toHaveAttribute("href", "/assets")
   expect(screen.getByRole("link", { name: "渠道账户" })).toHaveAttribute("href", "/platform-accounts")
   expect(screen.getByRole("link", { name: "发布日历" })).toHaveAttribute("href", "/publishing-calendar")
+  expect(await screen.findByText("尚未添加渠道账户；手工发布包仍可用")).toBeInTheDocument()
   expect(screen.getByText("真实 AI Provider 尚未配置")).toBeInTheDocument()
 
   const crm = screen.getByRole("region", { name: "CRM与通知" })
@@ -42,6 +49,18 @@ it("shows only real permission-backed destinations and truthful unconfigured sta
   expect(within(crm).queryByRole("link")).not.toBeInTheDocument()
   expect(screen.queryByRole("heading", { name: "高级管理" })).not.toBeInTheDocument()
   expect(screen.queryByText(/secret|api[_ -]?key/i)).not.toBeInTheDocument()
+})
+
+it("summarizes saved channel accounts without claiming a real connection", async () => {
+  await renderSettings("OPERATOR", ["publishing.read"], [
+    { id: "manual", platform_id: "linkedin", display_name: "LinkedIn", publish_mode: "MANUAL", status: "ACTIVE", effective_capabilities: ["PUBLISH"], credential_configured: false },
+    { id: "api", platform_id: "tiktok", display_name: "TikTok", publish_mode: "API_AUTO", status: "ACTIVE", effective_capabilities: ["PUBLISH"], credential_configured: true },
+    { id: "old", platform_id: "facebook", display_name: "Facebook", publish_mode: "API_AUTO", status: "INACTIVE", effective_capabilities: ["PUBLISH"], credential_configured: true },
+  ])
+
+  const channels = screen.getByRole("region", { name: "渠道与发布" })
+  expect(await within(channels).findByText("2 个有效渠道账户，其中 1 个已配置接口凭据")).toBeInTheDocument()
+  expect(within(channels).queryByText(/发布成功|已连接/)).not.toBeInTheDocument()
 })
 
 it("shows administrator-only advanced destinations without inventing provider status", async () => {

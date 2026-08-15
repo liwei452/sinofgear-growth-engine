@@ -4,6 +4,7 @@ import { computed } from "vue"
 import { RouterLink, useRoute } from "vue-router"
 
 import { currentUserQueryOptions } from "../auth/auth"
+import { listSocialAccounts, platformAccountKeys } from "../platformAccounts/api"
 
 type Destination = { label: string; to: string; permission?: string }
 type SettingsGroup = {
@@ -18,6 +19,23 @@ const currentUser = useQuery(currentUserQueryOptions())
 const route = useRoute()
 const permissions = computed(() => new Set(currentUser.data.value?.membership.permissions ?? []))
 const isAdministrator = computed(() => currentUser.data.value?.membership.role === "ADMINISTRATOR")
+const organizationId = computed(() => currentUser.data.value?.organization.id ?? "")
+const canReadPublishing = computed(() => permissions.value.has("publishing.read"))
+const socialAccounts = useQuery({
+  queryKey: computed(() => platformAccountKeys.accounts(organizationId.value)),
+  queryFn: listSocialAccounts,
+  enabled: computed(() => Boolean(organizationId.value) && canReadPublishing.value),
+})
+const channelStatus = computed(() => {
+  if (!canReadPublishing.value) return "没有渠道账户查看权限；手工发布包仍可用"
+  if (socialAccounts.isPending.value) return "正在读取渠道账户"
+  if (socialAccounts.isError.value) return "渠道状态暂时无法读取"
+  const active = (socialAccounts.data.value ?? []).filter(account => account.status === "ACTIVE")
+  if (!active.length) return "尚未添加渠道账户；手工发布包仍可用"
+  const configured = active.filter(account => account.publish_mode === "API_AUTO" && account.credential_configured)
+  if (!configured.length) return `${active.length} 个有效渠道账户；官方接口尚未配置`
+  return `${active.length} 个有效渠道账户，其中 ${configured.length} 个已配置接口凭据`
+})
 const returnTarget = computed(() => {
   const candidate = route.query.from
   if (typeof candidate !== "string" || !candidate.startsWith("/") || candidate.startsWith("//")) return "/"
@@ -94,6 +112,7 @@ const visibleGroups = computed(() => groups
   .filter(group => !group.administratorOnly || isAdministrator.value)
   .map(group => ({
     ...group,
+    status: group.title === "渠道与发布" ? channelStatus.value : group.status,
     destinations: group.destinations.filter(destination => (
       !destination.permission || permissions.value.has(destination.permission)
     )),

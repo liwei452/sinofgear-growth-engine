@@ -8,6 +8,14 @@ from django.db import models
 from apps.identity.models import Organization
 
 
+def default_gear_cpv_codes():
+    return [
+        "42140000", "42141000", "42141100", "42141200", "42141300",
+        "42141400", "42141500", "42141600", "42141700", "42141800",
+        "42142000", "42142100", "42142200",
+    ]
+
+
 class OrganizationOwnedModel(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
@@ -210,3 +218,50 @@ class FieldProvenance(OrganizationOwnedModel):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["organization", "field_name"], name="growth_unique_fact_field")]
+
+
+class DiscoveryProfile(OrganizationOwnedModel):
+    organization = models.OneToOneField(
+        Organization, on_delete=models.PROTECT, related_name="growth_discovery_profile",
+    )
+    enabled = models.BooleanField(default=True)
+    source_code = models.CharField(max_length=32, default="TED")
+    cpv_codes = models.JSONField(default=default_gear_cpv_codes)
+    result_limit = models.PositiveSmallIntegerField(default=20)
+    next_run_at = models.DateTimeField(null=True, blank=True)
+    last_succeeded_at = models.DateTimeField(null=True, blank=True)
+    consecutive_failures = models.PositiveSmallIntegerField(default=0)
+    last_error_code = models.CharField(max_length=64, blank=True)
+
+
+class DiscoveryRun(OrganizationOwnedModel):
+    class Trigger(models.TextChoices):
+        MANUAL = "MANUAL", "Manual"
+        SCHEDULED = "SCHEDULED", "Scheduled"
+
+    class Status(models.TextChoices):
+        RUNNING = "RUNNING", "Running"
+        SUCCEEDED = "SUCCEEDED", "Succeeded"
+        FAILED = "FAILED", "Failed"
+
+    profile = models.ForeignKey(
+        DiscoveryProfile, on_delete=models.PROTECT, related_name="runs",
+    )
+    source_code = models.CharField(max_length=32)
+    trigger = models.CharField(max_length=16, choices=Trigger.choices)
+    status = models.CharField(max_length=16, choices=Status.choices)
+    query_snapshot = models.JSONField(default=dict)
+    capability_snapshot = models.JSONField(default=dict)
+    fetched_count = models.PositiveIntegerField(default=0)
+    created_account_count = models.PositiveIntegerField(default=0)
+    created_signal_count = models.PositiveIntegerField(default=0)
+    duplicate_count = models.PositiveIntegerField(default=0)
+    skipped_count = models.PositiveIntegerField(default=0)
+    error_code = models.CharField(max_length=64, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Discovery run history cannot be deleted.")

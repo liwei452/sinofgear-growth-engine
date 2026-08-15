@@ -166,6 +166,8 @@ def test_pending_candidate_can_be_reviewed_into_enrichment_without_creating_an_o
         "license_contract": "Internal prospecting licence 2026",
         "import_format": "CSV",
         "is_demo": False,
+        "score": 0,
+        "grade": "C",
         "created_at": candidate.created_at.isoformat().replace("+00:00", "Z"),
     }]
     assert reviewed.status_code == 200

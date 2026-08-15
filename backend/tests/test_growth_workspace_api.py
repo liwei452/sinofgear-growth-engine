@@ -368,6 +368,36 @@ def test_channel_package_approval_and_metric_backfill_are_persisted_without_publ
 
 
 @pytest.mark.django_db
+def test_verified_manual_metric_requires_source_and_observation_time(growth_client):
+    client, _organization = growth_client
+
+    blocked = client.post(
+        "/api/v1/growth/metric-receipts",
+        {"channel": "LINKEDIN", "payload": {"clicks": 12}, "is_demo": False},
+        format="json",
+    )
+    saved = client.post(
+        "/api/v1/growth/metric-receipts",
+        {
+            "channel": "LINKEDIN",
+            "payload": {
+                "clicks": 12,
+                "source_note": "LinkedIn Page analytics manually checked by owner",
+                "observed_at": "2026-08-15T09:30:00Z",
+            },
+            "is_demo": False,
+        },
+        format="json",
+    )
+
+    assert blocked.status_code == 400
+    assert set(blocked.data["payload"]) == {"source_note", "observed_at"}
+    assert saved.status_code == 201
+    assert saved.data["is_demo"] is False
+    assert saved.data["payload"]["source_note"].startswith("LinkedIn Page analytics")
+
+
+@pytest.mark.django_db
 def test_four_channel_content_review_is_atomic_idempotent_and_organization_scoped(growth_client):
     client, organization = growth_client
     from apps.growth.models import ChannelPackage

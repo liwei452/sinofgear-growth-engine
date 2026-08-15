@@ -425,6 +425,27 @@ class MetricReceiptSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Metrics must be a JSON object.")
         return value
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if attrs.get("is_demo", False):
+            return attrs
+        payload = attrs.get("payload", {})
+        errors = {}
+        source_note = payload.get("source_note")
+        if not isinstance(source_note, str) or not source_note.strip():
+            errors["source_note"] = "人工核实结果必须说明数据来源。"
+        elif len(source_note.strip()) > 500:
+            errors["source_note"] = "数据来源说明不能超过 500 个字符。"
+        try:
+            serializers.DateTimeField().run_validation(payload.get("observed_at"))
+        except serializers.ValidationError:
+            errors["observed_at"] = "人工核实结果必须填写有效观察时间。"
+        if errors:
+            raise serializers.ValidationError({"payload": errors})
+        payload["source_note"] = source_note.strip()
+        attrs["payload"] = payload
+        return attrs
+
 
 class FieldProvenanceSerializer(serializers.ModelSerializer):
     class Meta:

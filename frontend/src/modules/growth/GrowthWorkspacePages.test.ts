@@ -47,7 +47,7 @@ it("shows no channel success metrics until a result has actually been recorded",
   const workspace = {
     target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
     outreach_drafts: [], opportunity_reviews: [], crm_handoffs: [], reactivations: [],
-    channel_packages: [], publish_batches: [], metric_receipts: [], field_provenance: [], connectors: [],
+    channel_packages: [], publish_batches: [], metric_receipts: [] as Array<Record<string, unknown>>, field_provenance: [], connectors: [],
   }
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(workspace), {
     status: 200, headers: { "Content-Type": "application/json" },
@@ -85,6 +85,47 @@ it("shows persisted account approval in the effectiveness attribution panel", as
   const panel = await screen.findByRole("region", { name: "账户获客漏斗" })
   expect(within(panel).getByRole("article", { name: "PackTech GmbH 归因记录" })).toHaveTextContent("人工批准")
   expect(within(panel).getByText("已批准，尚未发送")).toBeInTheDocument()
+})
+
+it("requires provenance before saving a verified manual channel result", async () => {
+  document.cookie = "csrftoken=manual-metric-provenance-token"
+  const workspace = {
+    target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
+    outreach_drafts: [], opportunity_reviews: [], crm_handoffs: [], reactivations: [],
+    channel_packages: [], publish_batches: [], metric_receipts: [], field_provenance: [], connectors: [],
+  }
+  let submitted: Record<string, unknown> | undefined
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/v1/growth/workspace") {
+      return new Response(JSON.stringify(workspace), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    submitted = JSON.parse(String(init?.body))
+    const saved = { id: "metric-real", ...(submitted ?? {}), created_at: "2026-08-15T10:00:00Z", updated_at: "2026-08-15T10:00:00Z" }
+    workspace.metric_receipts.unshift(saved)
+    return new Response(JSON.stringify(saved), {
+      status: 201, headers: { "Content-Type": "application/json" },
+    })
+  }))
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+  render(EffectivenessPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  await screen.findByText("尚未回填渠道结果")
+  await user.selectOptions(screen.getByLabelText("数据性质"), "VERIFIED_MANUAL")
+  await user.type(screen.getByLabelText("数据来源说明"), "LinkedIn Page analytics checked by owner")
+  await user.type(screen.getByLabelText("观察时间"), "2026-08-15T09:30")
+  await user.click(screen.getByRole("button", { name: "保存回填" }))
+
+  await waitFor(() => expect(submitted).toBeDefined())
+  expect(submitted).toMatchObject({
+    is_demo: false,
+    payload: {
+      source_note: "LinkedIn Page analytics checked by owner",
+      observed_at: "2026-08-15T09:30",
+    },
+  })
+  expect(await screen.findByText("LinkedIn Page analytics checked by owner")).toBeInTheDocument()
+  expect(screen.getByText(/观察时间.*2026-08-15T09:30/)).toBeInTheDocument()
 })
 
 it("persists content-package approval and manual metric backfill", async () => {

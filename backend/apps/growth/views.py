@@ -53,6 +53,7 @@ from .maps_discovery import (
     run_maps_discovery,
 )
 from .website_enrichment import build_website_transport, prepare_website_enrichment
+from .promotion_plan import generate_promotion_plan
 from .manual_imports import import_manual_opportunity
 from .market_pilots import market_pilot_summary, market_profiles_for
 from .serializers import (
@@ -320,6 +321,7 @@ class GrowthWorkspaceView(APIView):
                 accounts=accounts,
                 profiles=market_profiles_for(organization),
             ),
+            "promotion_plan": generate_promotion_plan(organization),
         }
 
 

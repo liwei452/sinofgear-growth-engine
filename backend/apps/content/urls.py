@@ -1,6 +1,8 @@
 from django.urls import path
 
 from .views import (
+    ContentRecommendationDetailView, ContentRecommendationListCreateView,
+    ContentRecommendationSelectView,
     GenerateMasterView, GeneratePlatformView, MasterApproveView, MasterArchiveView,
     MasterDetailView, MasterListView, MasterRejectView, MasterRevisionView,
     MasterSubmitView, PlatformDetailView, PlatformListView,
@@ -10,6 +12,12 @@ from .views import (
 
 
 urlpatterns = [
+    path("content-recommendations", ContentRecommendationListCreateView.as_view()),
+    path("content-recommendations/<uuid:recommendation_id>", ContentRecommendationDetailView.as_view()),
+    path(
+        "content-recommendations/<uuid:recommendation_id>/options/<uuid:option_id>/select",
+        ContentRecommendationSelectView.as_view(),
+    ),
     path("content-briefs/<uuid:brief_id>/generate-master-content", GenerateMasterView.as_view()),
     path("master-contents", MasterListView.as_view()),
     path("master-contents/<uuid:content_id>", MasterDetailView.as_view()),

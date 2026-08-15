@@ -8,6 +8,12 @@ from jsonschema.validators import validator_for
 
 from apps.assets.models import ProductEvidenceFact
 from apps.catalog.models import Product
+from apps.campaigns.models import Campaign
+from apps.campaigns.services import (
+    create_campaign,
+    create_content_brief,
+    mark_content_brief_ready,
+)
 from apps.growth.models import MarketCountryProfile
 from apps.platforms.models import Platform
 
@@ -278,3 +284,75 @@ def finalize_recommendation_result(run, output):
     recommendation.status = ContentRecommendation.Status.READY
     recommendation.save(update_fields=["status", "updated_at"])
     return {"type": "content_recommendation", "id": str(recommendation.id)}
+
+
+@transaction.atomic
+def select_recommendation_option(*, recommendation, option, actor):
+    recommendation = ContentRecommendation.objects.select_for_update().get(
+        pk=recommendation.pk, organization=recommendation.organization
+    )
+    option = ContentRecommendationOption.objects.select_for_update().select_related(
+        "product"
+    ).get(
+        pk=option.pk,
+        recommendation=recommendation,
+        organization=recommendation.organization,
+    )
+    if recommendation.status != ContentRecommendation.Status.READY:
+        raise ContentRecommendationError("Recommendation is not ready for selection.")
+    if recommendation.selected_brief_id:
+        if recommendation.selected_option_id != option.id:
+            raise ContentRecommendationError("A different direction was already selected.")
+        return recommendation.selected_brief
+    fact_ids = [row.get("fact_id") for row in option.evidence if isinstance(row, dict)]
+    facts = list(ProductEvidenceFact.objects.select_for_update().filter(
+        id__in=fact_ids,
+        organization=recommendation.organization,
+        product=option.product,
+        review_status=ProductEvidenceFact.ReviewStatus.VERIFIED,
+    ).order_by("source_page", "id"))
+    if len(facts) != len(set(fact_ids)) or not facts:
+        raise ContentRecommendationError("Selected direction has invalid verified evidence.")
+    platforms = list(Platform.objects.filter(code__in=option.channel_codes).order_by("code"))
+    if len(platforms) != len(set(option.channel_codes)) or not platforms:
+        raise ContentRecommendationError("Selected direction has unavailable channels.")
+    campaign = create_campaign(
+        organization=recommendation.organization,
+        values={
+            "name": f"{option.market_code} · {option.product.name_en}",
+            "description": option.rationale,
+            "status": Campaign.Status.DRAFT,
+        },
+        product_ids=[option.product_id],
+    )
+    fact_values = list(dict.fromkeys(fact.value for fact in facts))
+    brief = create_content_brief(
+        organization=recommendation.organization,
+        campaign=campaign,
+        creator=actor,
+        values={
+            "target_country": option.market_code,
+            "customer_type": option.customer_profile,
+            "content_objective": option.theme,
+            "cta": "Contact us to discuss your requirements",
+            "landing_page_url": option.product.landing_page_url,
+            "language": option.language,
+            "prohibited_claims": [
+                "Unverified certification", "Unverified price or lead time",
+            ],
+            "selling_points": fact_values[:10],
+            "advantages": fact_values[:10],
+            "keywords": [option.product.name_en, option.market_code],
+        },
+        product_ids=[option.product_id],
+        asset_ids=list(dict.fromkeys(fact.asset_id for fact in facts)),
+        platform_ids=[platform.id for platform in platforms],
+        concept_links=[],
+    )
+    brief = mark_content_brief_ready(brief.id, reviewer=actor)
+    recommendation.selected_option = option
+    recommendation.selected_brief = brief
+    recommendation.save(
+        update_fields=["selected_option", "selected_brief", "updated_at"]
+    )
+    return brief

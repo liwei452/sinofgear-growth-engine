@@ -1,7 +1,12 @@
 from drf_spectacular.utils import OpenApiTypes, extend_schema_field
 from rest_framework import serializers
 
-from .models import MasterContent, PlatformContent
+from .models import (
+    ContentRecommendation,
+    ContentRecommendationOption,
+    MasterContent,
+    PlatformContent,
+)
 from .payloads import validate_content_payload
 
 
@@ -108,6 +113,38 @@ class JobAcceptedSerializer(serializers.Serializer):
     status = serializers.CharField()
     generation_mode = serializers.CharField()
     generation_label = serializers.CharField()
+
+
+class ContentRecommendationOptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContentRecommendationOption
+        fields = [
+            "id", "position", "product_id", "market_code", "language",
+            "customer_profile", "channel_codes", "theme", "rationale",
+            "evidence", "missing_information", "selected_at",
+        ]
+
+
+class ContentRecommendationSerializer(serializers.ModelSerializer):
+    options = ContentRecommendationOptionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ContentRecommendation
+        fields = [
+            "id", "job_id", "status", "provider_mode", "selected_option_id",
+            "selected_brief_id", "options", "created_at", "updated_at",
+        ]
+
+
+class RecommendationAcceptedSerializer(JobAcceptedSerializer):
+    recommendation_id = serializers.UUIDField()
+
+
+class RecommendationSelectionSerializer(serializers.Serializer):
+    recommendation_id = serializers.UUIDField()
+    option_id = serializers.UUIDField()
+    brief_id = serializers.UUIDField()
+    brief_status = serializers.CharField()
 
 
 class ContentFilterSerializer(StrictMixin, serializers.Serializer):

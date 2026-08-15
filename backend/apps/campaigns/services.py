@@ -235,7 +235,6 @@ def _ready_errors(brief: ContentBrief) -> dict[str, list[str]]:
         "customer_type",
         "content_objective",
         "cta",
-        "landing_page_url",
         "language",
     ):
         if not getattr(brief, field).strip():

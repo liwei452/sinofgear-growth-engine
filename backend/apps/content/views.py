@@ -1,4 +1,6 @@
 from django.db import transaction
+import hashlib
+import json
 from django.db.models import Exists, OuterRef
 from django.http import Http404
 from drf_spectacular.utils import (
@@ -13,24 +15,33 @@ from apps.ai.models import PromptVersion
 from apps.ai.runtime import product_ai_status
 from apps.campaigns.models import ContentBrief, ContentBriefPlatform
 from apps.campaigns.services import build_content_generation_input
+from django.core.exceptions import ValidationError
 from apps.common.openapi import bounded_integer_query_parameter
 from apps.identity.permissions import CanManageContent, CanReadContent, CanReviewContent
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
 from apps.platforms.models import Platform
 
-from .models import MasterContent, PlatformContent
+from .models import (
+    ContentRecommendation, ContentRecommendationOption, MasterContent, PlatformContent,
+)
+from .recommendations import (
+    ContentRecommendationError, build_recommendation_input,
+    select_recommendation_option,
+)
 from .serializers import (
     EmptySerializer, JobAcceptedSerializer, MasterContentSerializer,
     MasterRevisionSerializer, PlatformContentSerializer,
     PlatformGenerationSerializer, PlatformRevisionSerializer, ReviewSerializer,
     ContentFilterSerializer,
+    ContentRecommendationSerializer, RecommendationAcceptedSerializer,
+    RecommendationSelectionSerializer,
 )
 from .services import (
     ContentStateError, create_master_revision, create_platform_content,
     create_platform_revision, transition_content, content_is_consistent,
 )
-from .tasks import generate_master_content_job
+from .tasks import generate_content_recommendations_job, generate_master_content_job
 
 
 class ContentPagination(CursorPagination):
@@ -38,6 +49,142 @@ class ContentPagination(CursorPagination):
     page_size_query_param = "page_size"
     max_page_size = 50
     ordering = ("-created_at", "-id")
+
+
+@extend_schema(tags=["ContentRecommendations"])
+class ContentRecommendationListCreateView(APIView):
+    def get_permissions(self):
+        return [CanManageContent()] if self.request.method == "POST" else [CanReadContent()]
+
+    @extend_schema(responses={200: ContentRecommendationSerializer(many=True)})
+    def get(self, request):
+        rows = ContentRecommendation.objects.filter(
+            organization=request.organization
+        ).exclude(status=ContentRecommendation.Status.ARCHIVED).prefetch_related(
+            "options"
+        ).order_by("-created_at", "-id")[:50]
+        return Response({"results": ContentRecommendationSerializer(rows, many=True).data})
+
+    @extend_schema(request=EmptySerializer, responses={202: RecommendationAcceptedSerializer})
+    def post(self, request):
+        serializer = EmptySerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({"errors": serializer.errors}, status=400)
+        provider_status = product_ai_status()
+        if provider_status["mode"] == "CONFIGURATION_REQUIRED":
+            return Response({
+                "code": "CONFIGURATION_REQUIRED",
+                "message": "AI provider is not configured.",
+                "recovery_action": "Configure the product AI provider in settings.",
+            }, status=status.HTTP_409_CONFLICT)
+        try:
+            snapshot = build_recommendation_input(request.organization.id).to_dict()
+        except ContentRecommendationError as exc:
+            return Response({
+                "code": "RECOMMENDATION_INPUT_REQUIRED",
+                "message": str(exc),
+                "recovery_action": "Complete the missing verified product or market information.",
+            }, status=status.HTTP_409_CONFLICT)
+        prompt = PromptVersion.objects.filter(
+            purpose="CONTENT_RECOMMEND", status=PromptVersion.Status.PUBLISHED
+        ).order_by("-version").first()
+        if prompt is None:
+            return _error(
+                ContentStateError("Published recommendation prompt is unavailable."),
+                code="RECOMMENDATION_PROMPT_REQUIRED",
+            )
+        digest = hashlib.sha256(json.dumps(
+            snapshot, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")).hexdigest()[:32]
+        idempotency_key = f"recommend:{prompt.id}:{digest}"
+        existing_job = Job.objects.filter(
+            organization=request.organization,
+            type=Job.Type.CONTENT_RECOMMEND,
+            idempotency_key=idempotency_key,
+        ).first()
+        if existing_job is not None:
+            recommendation = ContentRecommendation.objects.get(job=existing_job)
+        else:
+            job = JobService.create(
+                organization=request.organization,
+                job_type=Job.Type.CONTENT_RECOMMEND,
+                input_snapshot=snapshot,
+                idempotency_key=idempotency_key,
+                created_by=request.user,
+            )
+            recommendation = ContentRecommendation.objects.create(
+                organization=request.organization,
+                job=job,
+                input_snapshot=snapshot,
+                provider_mode=(
+                    ContentRecommendation.ProviderMode.FAKE_OFFLINE
+                    if provider_status["mode"] == "FAKE_OFFLINE"
+                    else ContentRecommendation.ProviderMode.CONFIGURED_AI
+                ),
+                created_by=request.user,
+            )
+            transaction.on_commit(lambda: generate_content_recommendations_job.delay(
+                str(job.id), str(prompt.id)
+            ))
+            existing_job = job
+        return Response({
+            "recommendation_id": recommendation.id,
+            "job_id": existing_job.id,
+            "status": existing_job.status,
+            "generation_mode": recommendation.provider_mode,
+            "generation_label": (
+                "Fake / 离线演示推荐"
+                if recommendation.provider_mode == ContentRecommendation.ProviderMode.FAKE_OFFLINE
+                else "已配置真实 AI 推荐"
+            ),
+        }, status=202)
+
+
+@extend_schema(tags=["ContentRecommendations"])
+class ContentRecommendationDetailView(APIView):
+    permission_classes = [CanReadContent]
+
+    @extend_schema(responses={200: ContentRecommendationSerializer})
+    def get(self, request, recommendation_id):
+        try:
+            recommendation = ContentRecommendation.objects.prefetch_related("options").get(
+                pk=recommendation_id, organization=request.organization
+            )
+        except ContentRecommendation.DoesNotExist as exc:
+            raise Http404 from exc
+        return Response(ContentRecommendationSerializer(recommendation).data)
+
+
+@extend_schema(tags=["ContentRecommendations"])
+class ContentRecommendationSelectView(APIView):
+    permission_classes = [CanManageContent]
+
+    @extend_schema(request=EmptySerializer, responses={200: RecommendationSelectionSerializer})
+    def post(self, request, recommendation_id, option_id):
+        serializer = EmptySerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({"errors": serializer.errors}, status=400)
+        try:
+            recommendation = ContentRecommendation.objects.get(
+                pk=recommendation_id, organization=request.organization
+            )
+            option = ContentRecommendationOption.objects.get(
+                pk=option_id, recommendation=recommendation,
+                organization=request.organization,
+            )
+            brief = select_recommendation_option(
+                recommendation=recommendation, option=option, actor=request.user
+            )
+        except (ContentRecommendation.DoesNotExist, ContentRecommendationOption.DoesNotExist) as exc:
+            raise Http404 from exc
+        except (ContentRecommendationError, ValidationError) as exc:
+            return _error(exc, code="RECOMMENDATION_SELECTION_INVALID")
+        return Response({
+            "recommendation_id": recommendation.id,
+            "option_id": option.id,
+            "brief_id": brief.id,
+            "brief_status": brief.status,
+        })
 
 
 def _generation_job_response(job, provider_status):

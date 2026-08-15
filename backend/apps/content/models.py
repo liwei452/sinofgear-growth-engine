@@ -98,6 +98,13 @@ class ContentRecommendation(OrganizationScopedModel):
         blank=True,
         related_name="selected_by_recommendations",
     )
+    selected_brief = models.OneToOneField(
+        "campaigns.ContentBrief",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="source_content_recommendation",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,

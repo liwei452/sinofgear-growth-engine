@@ -8,26 +8,18 @@ import EffectivenessPage from "./EffectivenessPage.vue"
 import OpportunitiesPage from "./OpportunitiesPage.vue"
 import PromotionPage from "./PromotionPage.vue"
 
-it("reviews an ICP and a complete TikTok manual publishing package", async () => {
-  const user = userEvent.setup()
+it("shows real content actions without a fabricated channel package in an empty workspace", () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
   expect(screen.getByRole("heading", { name: "推广计划与内容包" })).toBeInTheDocument()
   expect(screen.getByText("尚未形成客户画像")).toBeInTheDocument()
-  expect(screen.queryByText("德国包装机械制造商 · 51–500 人")).not.toBeInTheDocument()
-  const tiktok = screen.getByRole("article", { name: "TikTok 内容包" })
-  expect(tiktok).toHaveTextContent("15–60 秒")
-  expect(tiktok).toHaveTextContent("9:16")
-  expect(tiktok).toHaveTextContent("英文口播")
-  expect(tiktok).toHaveTextContent("中文字幕")
-  expect(tiktok).toHaveTextContent("分镜")
-  expect(tiktok).toHaveTextContent("标题 / 标签 / CTA")
-  expect(tiktok).toHaveTextContent("UTM")
-  expect(tiktok).toHaveTextContent("手工发布包")
-  expect(tiktok).toHaveTextContent("Demo / Fake")
-  await user.click(screen.getByRole("button", { name: "批准内容包" }))
-  expect(screen.getByRole("status")).toHaveTextContent("已批准，等待人工下载或手工发布")
+  expect(screen.getByText("还没有可审核的渠道内容包")).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "创建内容" })).toHaveAttribute("href", "/content-factory")
+  expect(screen.getByRole("link", { name: "进入审核中心" })).toHaveAttribute("href", "/reviews")
+  expect(screen.queryByRole("article", { name: "TikTok 内容包" })).not.toBeInTheDocument()
+  expect(screen.queryByText(/15–60 秒结构|din6-proof-demo|齿面特写/)).not.toBeInTheDocument()
+  expect(screen.queryByText("Demo / Fake")).not.toBeInTheDocument()
 })
 
 it("keeps growth objects distinct and does not invent an opportunity for an empty workspace", () => {
@@ -168,10 +160,10 @@ it("persists content-package approval and manual metric backfill", async () => {
         verified_fact_evidence: [{
           fact_id: "11111111-1111-4111-8111-111111111111",
           field_name: "process", value: "Gear grinding", source_filename: "gear-catalog.pdf",
-          source_page: 2, source_excerpt: "Process: Gear grinding", is_demo: true,
+          source_page: 2, source_excerpt: "Process: Gear grinding", is_demo: false,
         }],
       },
-      status: "AWAITING_REVIEW", is_demo: true, data_label: "Demo / Fake",
+      status: "AWAITING_REVIEW", is_demo: false, data_label: "Reviewed content package",
       delivery: "MANUAL_ONLY", created_at: "2026-08-14T08:00:00Z", updated_at: "2026-08-14T08:00:00Z",
     }],
   }
@@ -188,14 +180,14 @@ it("persists content-package approval and manual metric backfill", async () => {
     if (path.endsWith("/manual-export")) {
       return new Response(JSON.stringify({
         package_id: workspace.channel_packages[0].id,
-        channel: "TIKTOK", mode: "MANUAL_PACKAGE", data_label: "Demo / Fake",
+        channel: "TIKTOK", mode: "MANUAL_PACKAGE", data_label: "Reviewed content package",
         delivery: "MANUAL_ONLY", filename: "tiktok-manual-package.json",
         payload: workspace.channel_packages[0].payload,
       }), { status: 200, headers: { "Content-Type": "application/json" } })
     }
     if (path === "/api/v1/growth/metric-receipts") {
       return new Response(JSON.stringify({
-        id: "metric-1", channel: "TIKTOK", payload: { views: 7000, clicks: 200 }, is_demo: true,
+        id: "metric-1", channel: "TIKTOK", payload: { views: 7000, clicks: 200 }, is_demo: false,
         created_at: "2026-08-14T09:00:00Z", updated_at: "2026-08-14T09:00:00Z",
       }), { status: 201, headers: { "Content-Type": "application/json" } })
     }
@@ -211,7 +203,7 @@ it("persists content-package approval and manual metric backfill", async () => {
   expect(await screen.findByText("API TikTok package")).toBeInTheDocument()
   const tiktokPackage = screen.getByRole("article", { name: "TikTok 内容包" })
   expect(within(tiktokPackage).getByText("process：Gear grinding")).toBeInTheDocument()
-  expect(within(tiktokPackage).getByText("gear-catalog.pdf · 第 2 页 · Demo/Fake")).toBeInTheDocument()
+  expect(within(tiktokPackage).getByText("gear-catalog.pdf · 第 2 页")).toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "批准内容包" }))
   expect(await screen.findByRole("status")).toHaveTextContent("已批准")
   await user.click(screen.getByRole("button", { name: "下载发布包" }))
@@ -243,13 +235,13 @@ it("keeps channel package review state independent", async () => {
       {
         id: "10000000-0000-4000-8000-000000001201", account_id: null, channel: "LINKEDIN",
         payload: { title: "LinkedIn evidence post", format: "English post with Chinese copy" },
-        status: "AWAITING_REVIEW", is_demo: true, data_label: "Demo / Fake",
+        status: "AWAITING_REVIEW", is_demo: false, data_label: "Reviewed content package",
         delivery: "MANUAL_ONLY", created_at: "2026-08-14T08:00:00Z", updated_at: "2026-08-14T08:00:00Z",
       },
       {
         id: "10000000-0000-4000-8000-000000001204", account_id: null, channel: "TIKTOK",
         payload: { title: "TikTok proof video", duration_seconds: 30, aspect_ratio: "9:16" },
-        status: "AWAITING_REVIEW", is_demo: true, data_label: "Demo / Fake",
+        status: "AWAITING_REVIEW", is_demo: false, data_label: "Reviewed content package",
         delivery: "MANUAL_ONLY", created_at: "2026-08-14T08:00:00Z", updated_at: "2026-08-14T08:00:00Z",
       },
     ],
@@ -291,7 +283,7 @@ it("requires one explicit confirmation before approving all four channel package
     target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
     outreach_drafts: [], field_provenance: [], metric_receipts: [], publish_batches: [],
     connectors: channels.map(channel => ({
-      channel, status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "DEMO_FAKE",
+      channel, status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "OFFICIAL",
     })),
     channel_packages: channels.map((channel, index) => ({
       id: `40000000-0000-4000-8000-00000000120${index + 1}`,
@@ -300,7 +292,7 @@ it("requires one explicit confirmation before approving all four channel package
       payload: channel === "TIKTOK"
         ? { title: "TikTok evidence version", duration_seconds: 30, aspect_ratio: "9:16" }
         : { title: `${channel} evidence version` },
-      status: "AWAITING_REVIEW", is_demo: true, data_label: "Demo / Fake", delivery: "MANUAL_ONLY",
+      status: "AWAITING_REVIEW", is_demo: false, data_label: "Reviewed content package", delivery: "MANUAL_ONLY",
       created_at: "2026-08-15T10:00:00Z", updated_at: "2026-08-15T10:00:00Z",
     })),
   }
@@ -348,7 +340,7 @@ it("downloads one approved four-channel manual package without publishing", asyn
       payload: channel === "TIKTOK"
         ? { title: "TikTok approved", duration_seconds: 30, aspect_ratio: "9:16" }
         : { title: `${channel} approved` },
-      status: "APPROVED", is_demo: true, data_label: "Demo / Fake", delivery: "MANUAL_ONLY",
+      status: "APPROVED", is_demo: false, data_label: "Reviewed content package", delivery: "MANUAL_ONLY",
       created_at: "2026-08-15T10:00:00Z", updated_at: "2026-08-15T10:00:00Z",
     })),
   }
@@ -399,7 +391,7 @@ it("publishes all approved channels once and retries only failed channels", asyn
     target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
     outreach_drafts: [], field_provenance: [], metric_receipts: [],
     connectors: channels.map(channel => ({
-      channel, status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "DEMO_FAKE",
+      channel, status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "OFFICIAL",
     })),
     channel_packages: channels.map((channel, index) => ({
       id: `10000000-0000-4000-8000-00000000120${index + 1}`,
@@ -409,8 +401,8 @@ it("publishes all approved channels once and retries only failed channels", asyn
         ? { title: `${channel} inspection proof`, duration_seconds: 30, aspect_ratio: "9:16" }
         : { title: `${channel} inspection proof` },
       status: "APPROVED",
-      is_demo: true,
-      data_label: "Demo / Fake",
+      is_demo: false,
+      data_label: "Reviewed content package",
       delivery: "MANUAL_ONLY",
       created_at: "2026-08-14T08:00:00Z",
       updated_at: "2026-08-14T08:00:00Z",
@@ -437,15 +429,15 @@ it("publishes all approved channels once and retries only failed channels", asyn
       const key = new Headers(init?.headers).get("Idempotency-Key") ?? ""
       expect(key).toMatch(/^[\x21-\x7e]{1,128}$/)
       return new Response(JSON.stringify({
-        id: "batch-1", status: "PARTIAL_SUCCESS", is_demo: true,
-        data_label: "Demo / Fake 发布结果", created_at: "2026-08-14T08:00:00Z",
+        id: "batch-1", status: "PARTIAL_SUCCESS", is_demo: false,
+        data_label: "官方平台发布结果", created_at: "2026-08-14T08:00:00Z",
         updated_at: "2026-08-14T08:00:00Z", items: resultItems,
       }), { status: 201, headers: { "Content-Type": "application/json" } })
     }
     if (path === "/api/v1/growth/publish-batches/batch-1/retry-failed") {
       return new Response(JSON.stringify({
-        id: "batch-1", status: "SUCCEEDED", is_demo: true,
-        data_label: "Demo / Fake 发布结果", created_at: "2026-08-14T08:00:00Z",
+        id: "batch-1", status: "SUCCEEDED", is_demo: false,
+        data_label: "官方平台发布结果", created_at: "2026-08-14T08:00:00Z",
         updated_at: "2026-08-14T08:01:00Z",
         items: resultItems.map(item => item.channel === "TIKTOK" ? {
           ...item, status: "SUCCEEDED", attempt_number: 2,
@@ -467,9 +459,9 @@ it("publishes all approved channels once and retries only failed channels", asyn
   expect(within(readiness).getByText("TikTok · 已就绪")).toBeInTheDocument()
   await user.click(await screen.findByRole("button", { name: "一键发布到 4 个渠道" }))
 
-  expect(await screen.findByText("Demo / Fake 发布结果")).toBeInTheDocument()
+  expect(await screen.findByText("官方平台发布结果")).toBeInTheDocument()
   expect(screen.getByText("3 个渠道发布成功，1 个渠道需要重试。")).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "查看 LinkedIn Demo 帖子" })).toHaveAttribute("href", expect.stringContaining("example.invalid"))
+  expect(screen.getByRole("link", { name: "查看 LinkedIn 平台帖子" })).toHaveAttribute("href", expect.stringContaining("example.invalid"))
   await user.click(screen.getByRole("button", { name: "重试失败渠道" }))
   expect(await screen.findByText("4 个渠道均已发布成功。")).toBeInTheDocument()
   expect(fetchMock.mock.calls.filter(([path]) => String(path) === "/api/v1/growth/publish-batches")).toHaveLength(1)
@@ -486,7 +478,7 @@ it("explains every blocked channel and never silently publishes a partial batch"
       status: channel === "INSTAGRAM" ? "NOT_CONNECTED" : "CONNECTED",
       connection_label: channel === "INSTAGRAM" ? "未连接" : "已连接",
       recovery_action: channel === "INSTAGRAM" ? "连接账号" : "",
-      mode: "DEMO_FAKE",
+      mode: "OFFICIAL",
     })),
     channel_packages: channels.map((channel, index) => ({
       id: `20000000-0000-4000-8000-00000000120${index + 1}`,
@@ -496,7 +488,7 @@ it("explains every blocked channel and never silently publishes a partial batch"
         ? { title: "Incomplete TikTok", duration_seconds: 10, aspect_ratio: "16:9" }
         : { title: `${channel} reviewed content` },
       status: channel === "FACEBOOK" ? "AWAITING_REVIEW" : "APPROVED",
-      is_demo: true, data_label: "Demo / Fake", delivery: "MANUAL_ONLY",
+      is_demo: false, data_label: "Reviewed content package", delivery: "MANUAL_ONLY",
       created_at: "2026-08-15T10:00:00Z", updated_at: "2026-08-15T10:00:00Z",
     })),
   }
@@ -529,7 +521,7 @@ it("explains every blocked channel and never silently publishes a partial batch"
   expect(fetchMock.mock.calls.some(([path]) => String(path) === "/api/v1/growth/publish-batches")).toBe(false)
 })
 
-it("restores the latest one-click publish result after a page reload", async () => {
+it("does not restore a Demo publish result in the formal interface", async () => {
   const workspace = {
     target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
     outreach_drafts: [], field_provenance: [], metric_receipts: [], connectors: [], channel_packages: [],
@@ -551,8 +543,9 @@ it("restores the latest one-click publish result after a page reload", async () 
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
-  expect(await screen.findByText("Demo / Fake 发布结果")).toBeInTheDocument()
-  expect(screen.getByText("4 个渠道均已发布成功。")).toBeInTheDocument()
+  expect(await screen.findByText("还没有可审核的渠道内容包")).toBeInTheDocument()
+  expect(screen.queryByText("Demo / Fake 发布结果")).not.toBeInTheDocument()
+  expect(screen.queryByText("4 个渠道均已发布成功。")).not.toBeInTheDocument()
 })
 
 it("labels official publish links truthfully and uses the recorded success count", async () => {
@@ -985,18 +978,16 @@ it("shows safe channel connection states and starts authorization without publis
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
   expect(await screen.findAllByText("LINKEDIN package")).not.toHaveLength(0)
-  expect(screen.getByText("印度尼西亚 + 南非 · 当前试点")).toBeInTheDocument()
-  expect(screen.getByText("工业传动、矿业设备、工业维护相关企业")).toBeInTheDocument()
-  expect(screen.getByText("8 周市场验证")).toBeInTheDocument()
+  expect(screen.getByText("尚未选择市场")).toBeInTheDocument()
+  expect(screen.getByText("尚未形成客户画像")).toBeInTheDocument()
+  expect(screen.getByText("尚未设置验证周期")).toBeInTheDocument()
   expect(screen.queryByText("德国 · 包装机械")).not.toBeInTheDocument()
   const linkedIn = screen.getByRole("article", { name: "LinkedIn Company Page 内容包" })
-  const facebook = screen.getByRole("article", { name: "Facebook Page 内容包" })
+  expect(screen.queryByRole("article", { name: "Facebook Page 内容包" })).not.toBeInTheDocument()
   const instagram = screen.getByRole("article", { name: "Instagram Business 内容包" })
   const tiktok = screen.getByRole("article", { name: "TikTok 内容包" })
   expect(linkedIn).toHaveTextContent("已连接")
   expect(linkedIn).toHaveTextContent("发布方式：官方接口 · 仍需人工确认")
-  expect(facebook).toHaveTextContent("已连接 · Demo / Fake")
-  expect(facebook).toHaveTextContent("发布方式：Demo / Fake · 不会真实发布")
   expect(instagram).toHaveTextContent("未连接")
   expect(instagram).toHaveTextContent("发布方式：手工发布包 · 不会调用平台")
   expect(tiktok).toHaveTextContent("需要重新授权")
@@ -1011,9 +1002,9 @@ it("shows safe channel connection states and starts authorization without publis
   expect(tiktok).not.toHaveTextContent("痛点 4 秒")
   expect(screen.getByText("混合发布方式 · 以各渠道状态为准")).toBeInTheDocument()
   expect(screen.queryByText("Fake Connector · 一键发布演示")).not.toBeInTheDocument()
-  expect(screen.getByText("当前路径：官方连接 1 个 · Demo 演示 1 个 · 手工发布包 2 个")).toBeInTheDocument()
+  expect(screen.getByText("当前路径：官方连接 1 个 · 手工发布包 3 个")).toBeInTheDocument()
   const calendar = screen.getByRole("region", { name: "内容日历" })
-  expect(calendar).toHaveTextContent("4 个内容包")
+  expect(calendar).toHaveTextContent("3 个内容包")
   expect(calendar).toHaveTextContent("LINKEDIN package")
   expect(calendar).toHaveTextContent("待安排")
   expect(calendar).not.toHaveTextContent("精密检测如何降低装机返工")

@@ -24,7 +24,7 @@ import {
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
 const activeMarkets = computed(() => (workspaceQuery.data.value?.market_pilots?.markets ?? [])
-  .filter(market => market.status === "ACTIVE_MARKET"))
+  .filter(market => market.status === "ACTIVE_MARKET" && !market.is_demo))
 const activeMarketLabel = computed(() => activeMarkets.value.length
   ? `${activeMarkets.value.map(market => market.country_label).join(" + ")} · 当前试点`
   : "尚未选择市场")
@@ -33,11 +33,11 @@ const activeMarketIndustries = computed(() => {
   return industries.length ? `${industries.slice(0, 3).join("、")}相关企业` : "尚未形成客户画像"
 })
 const validationPeriodLabel = computed(() => {
+  if (!activeMarkets.value.length) return "尚未设置验证周期"
   const weeks = workspaceQuery.data.value?.market_pilots?.validation_goals.weeks
   return typeof weeks === "number" && weeks > 0 ? `${weeks} 周市场验证` : "尚未设置验证周期"
 })
 const locallyApprovedIds = ref(new Set<string>())
-const fallbackApproved = ref(false)
 const approvalError = ref("")
 const batchReviewConfirmed = ref(false)
 const downloadMessage = ref("")
@@ -80,35 +80,35 @@ function payloadList(channelPackage: ChannelPackage | undefined, field: string):
   ))
 }
 const tiktokFormatLabel = computed(() => {
-  if (!activePackage.value) return "30 秒 · 9:16"
+  if (!activePackage.value) return "格式待准备"
   const duration = activePackage.value.payload.duration_seconds
   const aspectRatio = payloadText(activePackage.value, "aspect_ratio", 16)
   return `${typeof duration === "number" ? `${duration} 秒` : "时长待补全"} · ${aspectRatio || "画幅待补全"}`
 })
 const tiktokScript = computed(() => activePackage.value
   ? payloadText(activePackage.value, "script") || "待补全"
-  : "15–60 秒结构：痛点 4 秒 → 检测过程 18 秒 → 证据与 CTA 8 秒")
+  : "待准备")
 const tiktokShots = computed(() => activePackage.value
   ? payloadList(activePackage.value, "shot_list").join(" · ") || "待补全"
-  : "1. 齿面特写 2. 测量仪读数 3. 检测报告 4. 包装线应用")
+  : "待准备")
 const tiktokVoiceover = computed(() => activePackage.value
   ? payloadText(activePackage.value, "english_voiceover") || "待补全"
-  : "英文口播，术语由人工核对")
+  : "待准备")
 const tiktokSubtitles = computed(() => activePackage.value
   ? payloadText(activePackage.value, "chinese_subtitles") || "待补全"
-  : "完整中文字幕，术语由人工核对")
+  : "待准备")
 const tiktokHashtags = computed(() => activePackage.value
   ? payloadList(activePackage.value, "hashtags").join(" ") || "待补全"
   : "待人工补充")
 const tiktokCta = computed(() => activePackage.value
   ? payloadText(activePackage.value, "cta") || "待补全"
-  : "查看检测能力摘要")
+  : "待准备")
 const tiktokUtm = computed(() => activePackage.value
   ? payloadText(activePackage.value, "utm") || "待补全"
-  : "tiktok / organic / din6-proof-demo")
+  : "待准备")
 function packageFor(channel: string): ChannelPackage | undefined {
   return [...(workspaceQuery.data.value?.channel_packages ?? [])]
-    .filter(item => item.channel === channel)
+    .filter(item => item.channel === channel && !item.is_demo)
     .sort((left, right) => {
       const sourcePriority = Number(Boolean(right.source_platform_content_id))
         - Number(Boolean(left.source_platform_content_id))
@@ -141,7 +141,8 @@ function packageFactEvidence(channelPackage: ChannelPackage | undefined): Packag
     const sourcePage = typeof fact.source_page === "number" && Number.isSafeInteger(fact.source_page)
       && fact.source_page > 0 ? fact.source_page : null
     if (!id || !fieldName || !value || !sourceFilename || !sourceExcerpt) return []
-    return [{ id, fieldName, value, sourceFilename, sourcePage, sourceExcerpt, isDemo: fact.is_demo === true }]
+    if (fact.is_demo === true) return []
+    return [{ id, fieldName, value, sourceFilename, sourcePage, sourceExcerpt, isDemo: false }]
   })
 }
 function isApproved(channelPackage: ChannelPackage | undefined): boolean {
@@ -151,7 +152,7 @@ function isApproved(channelPackage: ChannelPackage | undefined): boolean {
 }
 const approved = computed(() => activePackage.value
   ? isApproved(activePackage.value)
-  : fallbackApproved.value)
+  : false)
 const connectionsByChannel = computed(() => new Map(
   (workspaceQuery.data.value?.connectors ?? []).map(item => [item.channel, item]),
 ))
@@ -190,21 +191,18 @@ const publishingModeSummary = computed(() => {
   if (connections.every(connection => connection?.status === "CONNECTED" && connection.mode === "OFFICIAL")) {
     return "官方接口 · 人工确认后发布"
   }
-  if (connections.every(connection => connection?.status === "CONNECTED" && connection.mode === "DEMO_FAKE")) {
-    return "Demo / Fake · 一键发布演示"
+  if (connections.some(connection => connection?.status === "CONNECTED" && connection.mode === "OFFICIAL")) {
+    return "混合发布方式 · 以各渠道状态为准"
   }
-  return "混合发布方式 · 以各渠道状态为准"
+  return "手工发布包 · 尚未连接官方账号"
 })
 const publishingRouteSummary = computed(() => {
   const connections = publishChannelCodes.map(channel => connectionFor(channel))
   const officialCount = connections.filter(connection => (
     connection?.status === "CONNECTED" && connection.mode === "OFFICIAL"
   )).length
-  const demoCount = connections.filter(connection => (
-    connection?.status === "CONNECTED" && connection.mode === "DEMO_FAKE"
-  )).length
-  const manualCount = publishChannelCodes.length - officialCount - demoCount
-  return `当前路径：官方连接 ${officialCount} 个 · Demo 演示 ${demoCount} 个 · 手工发布包 ${manualCount} 个`
+  const manualCount = publishChannelCodes.length - officialCount
+  return `当前路径：官方连接 ${officialCount} 个 · 手工发布包 ${manualCount} 个`
 })
 const reviewPackages = computed(() => publishChannelCodes
   .map(packageFor)
@@ -226,7 +224,7 @@ const failedPublishItems = computed(() => publishBatch.value?.items
 const succeededPublishCount = computed(() => publishBatch.value?.items
   .filter(item => item.status === "SUCCEEDED").length ?? 0)
 watchEffect(() => {
-  const latest = workspaceQuery.data.value?.publish_batches?.[0]
+  const latest = workspaceQuery.data.value?.publish_batches?.find(batch => !batch.is_demo)
   if (!publishBatch.value && latest) publishBatch.value = latest
 })
 const approveMutation = useMutation({
@@ -327,23 +325,21 @@ function candidateChannel(candidate: PlatformConnectionCandidate): string {
 }
 
 function connectionFor(channel: string): PlatformConnection | undefined {
-  return connectionsByChannel.value.get(channel)
+  const connection = connectionsByChannel.value.get(channel)
+  return connection?.mode === "DEMO_FAKE" ? undefined : connection
 }
 
 function connectionDisplay(channel: string): string {
   const connection = connectionFor(channel)
   if (!connection) return "未连接"
-  return connection.mode === "DEMO_FAKE"
-    ? `${connection.connection_label} · Demo / Fake`
-    : connection.connection_label
+  return connection.connection_label
 }
 
 function modeLabel(channel: string): string {
   const mode = connectionFor(channel)?.mode
   if (mode === "OFFICIAL") return "官方连接"
-  if (mode === "DEMO_FAKE") return "Demo / Fake"
   const channelPackage = packageFor(channel)
-  if (!channelPackage || channelPackage.is_demo) return "Demo / Fake"
+  if (!channelPackage) return "尚无内容包"
   return "仅发布包"
 }
 
@@ -351,9 +347,6 @@ function publishingRouteLabel(channel: string): string {
   const connection = connectionFor(channel)
   if (connection?.status === "CONNECTED" && connection.mode === "OFFICIAL") {
     return "发布方式：官方接口 · 仍需人工确认"
-  }
-  if (connection?.status === "CONNECTED" && connection.mode === "DEMO_FAKE") {
-    return "发布方式：Demo / Fake · 不会真实发布"
   }
   return "发布方式：手工发布包 · 不会调用平台"
 }
@@ -379,10 +372,7 @@ async function approve(): Promise<void> {
 
 async function approvePackage(channelPackage: ChannelPackage | undefined): Promise<void> {
   approvalError.value = ""
-  if (!channelPackage) {
-    fallbackApproved.value = true
-    return
-  }
+  if (!channelPackage) return
   await approveMutation.mutateAsync(channelPackage.id).catch(() => undefined)
 }
 
@@ -516,13 +506,14 @@ const channels: Array<{
   { code: "FACEBOOK", actionName: "Facebook", name: "Facebook Page", format: "案例图文 + CTA" },
   { code: "INSTAGRAM", actionName: "Instagram", name: "Instagram Business", format: "轮播提纲 + Reels 文案" },
 ]
+const preparedStandardChannels = computed(() => channels.filter(channel => Boolean(packageFor(channel.code))))
 </script>
 
 <template>
   <div class="growth-page">
     <header class="growth-hero">
-      <div><p class="eyebrow">推广</p><h1>推广计划与内容包</h1><p>AI 已准备内容；人工批准后，可一次发布到所有已连接渠道。</p></div>
-      <span class="fake-label">Demo / Fake</span>
+      <div><p class="eyebrow">推广</p><h1>推广计划与内容包</h1><p>从已验证的公司事实创建内容；人工批准后，再下载发布包或提交到已连接渠道。</p></div>
+      <span class="fake-label">{{ hasPublishingPackages ? `${calendarPackages.length} 个正式内容包` : "尚无内容包" }}</span>
     </header>
 
     <section v-if="connectionSessionId" class="growth-card account-picker" aria-labelledby="account-picker-title">
@@ -585,8 +576,8 @@ const channels: Array<{
 
     <section class="growth-card">
       <div class="growth-heading"><div><h2>各渠道内容包</h2><p>先审核内容，再一次提交到所有可用渠道。</p></div><span class="connector-state">{{ publishingModeSummary }}</span></div>
-      <div class="package-grid">
-        <article v-for="channel in channels" :id="`channel-package-${channel.code}`" :key="channel.name" tabindex="-1" :aria-label="`${channel.name} 内容包`">
+      <div v-if="hasPublishingPackages" class="package-grid">
+        <article v-for="channel in preparedStandardChannels" :id="`channel-package-${channel.code}`" :key="channel.name" tabindex="-1" :aria-label="`${channel.name} 内容包`">
           <span class="fake-label">{{ modeLabel(channel.code) }}</span><h3>{{ channel.name }}</h3>
           <div class="channel-connection">
             <span>{{ connectionDisplay(channel.code) }}</span>
@@ -603,7 +594,7 @@ const channels: Array<{
           <p class="publishing-route">{{ publishingRouteLabel(channel.code) }}</p>
           <p class="package-source">{{ String(packageFor(channel.code)?.payload.title ?? channel.format) }}</p>
           <p>{{ channel.format }}</p><strong>手工发布包</strong>
-          <details v-if="packageFactEvidence(packageFor(channel.code)).length" class="package-evidence"><summary>查看已验证事实依据</summary><article v-for="fact in packageFactEvidence(packageFor(channel.code))" :key="fact.id"><strong>{{ fact.fieldName }}：{{ fact.value }}</strong><p>{{ fact.sourceFilename }}<template v-if="fact.sourcePage"> · 第 {{ fact.sourcePage }} 页</template><template v-if="fact.isDemo"> · Demo/Fake</template></p><blockquote>{{ fact.sourceExcerpt }}</blockquote></article></details>
+          <details v-if="packageFactEvidence(packageFor(channel.code)).length" class="package-evidence"><summary>查看已验证事实依据</summary><article v-for="fact in packageFactEvidence(packageFor(channel.code))" :key="fact.id"><strong>{{ fact.fieldName }}：{{ fact.value }}</strong><p>{{ fact.sourceFilename }}<template v-if="fact.sourcePage"> · 第 {{ fact.sourcePage }} 页</template></p><blockquote>{{ fact.sourceExcerpt }}</blockquote></article></details>
           <div v-if="packageFor(channel.code)" class="package-actions">
             <button
               class="button button-secondary" type="button"
@@ -622,7 +613,7 @@ const channels: Array<{
             </button>
           </div>
         </article>
-        <article id="channel-package-TIKTOK" class="tiktok-package" tabindex="-1" aria-label="TikTok 内容包">
+        <article v-if="activePackage" id="channel-package-TIKTOK" class="tiktok-package" tabindex="-1" aria-label="TikTok 内容包">
           <span class="fake-label">{{ modeLabel('TIKTOK') }}</span><h3>TikTok</h3>
           <div class="channel-connection">
             <span>{{ connectionDisplay('TIKTOK') }}</span>
@@ -648,7 +639,7 @@ const channels: Array<{
             <div><dt>归因</dt><dd>UTM：{{ tiktokUtm }}</dd></div>
             <div><dt>回填</dt><dd>发布结果、播放、完播、点击、回复、询盘可手工录入</dd></div>
           </dl>
-          <details v-if="packageFactEvidence(activePackage).length" class="package-evidence"><summary>查看已验证事实依据</summary><article v-for="fact in packageFactEvidence(activePackage)" :key="fact.id"><strong>{{ fact.fieldName }}：{{ fact.value }}</strong><p>{{ fact.sourceFilename }}<template v-if="fact.sourcePage"> · 第 {{ fact.sourcePage }} 页</template><template v-if="fact.isDemo"> · Demo/Fake</template></p><blockquote>{{ fact.sourceExcerpt }}</blockquote></article></details>
+          <details v-if="packageFactEvidence(activePackage).length" class="package-evidence"><summary>查看已验证事实依据</summary><article v-for="fact in packageFactEvidence(activePackage)" :key="fact.id"><strong>{{ fact.fieldName }}：{{ fact.value }}</strong><p>{{ fact.sourceFilename }}<template v-if="fact.sourcePage"> · 第 {{ fact.sourcePage }} 页</template></p><blockquote>{{ fact.sourceExcerpt }}</blockquote></article></details>
           <div v-if="activePackage" class="package-actions">
             <button
               class="button button-secondary" type="button"
@@ -666,6 +657,14 @@ const channels: Array<{
             </button>
           </div>
         </article>
+      </div>
+      <div v-else class="promotion-empty">
+        <h3>还没有可审核的渠道内容包</h3>
+        <p>请先用已确认的公司和产品事实创建内容，再到审核中心逐个平台核对；空工作区不会生成固定脚本或文案。</p>
+        <div class="page-actions">
+          <a class="button button-primary" href="/content-factory">创建内容</a>
+          <a class="button button-secondary" href="/reviews">进入审核中心</a>
+        </div>
       </div>
       <section v-if="hasFourReviewPackages" class="batch-review-panel" aria-label="四渠道内容总审核">
         <div>
@@ -726,7 +725,7 @@ const channels: Array<{
               >{{ item.issue === 'REVIEW' ? '去审核' : '去连接' }}</button>
             </li>
           </ul>
-          <p>全部内容须人工批准且账号就绪；本地演示不会请求真实社媒平台。</p>
+          <p>全部内容须人工批准且账号就绪；未连接官方账号时请下载手工发布包。</p>
         </div>
         <button
           class="button button-primary" type="button"
@@ -754,8 +753,8 @@ const channels: Array<{
               <a
                 v-if="item.status === 'SUCCEEDED'" :href="item.external_post_url"
                 target="_blank" rel="noreferrer"
-                :aria-label="`查看 ${channelLabel(item.channel)} ${item.mode === 'OFFICIAL' ? '平台帖子' : 'Demo 帖子'}`"
-              >发布成功 · 查看 {{ item.mode === "OFFICIAL" ? "平台帖子" : "Demo 帖子" }}</a>
+                :aria-label="`查看 ${channelLabel(item.channel)} 平台帖子`"
+              >发布成功 · 查看平台帖子</a>
               <span v-else>{{ item.recovery_action || "等待发布" }}</span>
               <small>
                 <span>结果记录时间：</span>
@@ -773,7 +772,7 @@ const channels: Array<{
       </section>
       <p v-if="publishError" role="alert" class="approval-status">{{ publishError }}</p>
       <p v-if="connectionError" role="alert" class="approval-status connection-error">{{ connectionError }}</p>
-      <div class="approval-row">
+      <div v-if="activePackage" class="approval-row">
         <p>批准后状态：{{ approved ? "等待人工下载或手工发布" : "等待你的审核" }}</p>
         <div class="page-actions">
           <button

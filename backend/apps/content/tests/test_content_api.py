@@ -74,6 +74,26 @@ def test_content_cross_organization_is_non_leaking_404(content_provenance):
     ).status_code == 404
 
 
+def test_master_detail_exposes_bounded_verified_fact_evidence(content_provenance):
+    organization, actor, brief, job, run = content_provenance
+    content = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)
+
+    response = _client(organization, Role.Code.READ_ONLY).get(
+        f"/api/v1/master-contents/{content.id}"
+    )
+
+    assert response.status_code == 200
+    assert response.data["evidence_summary"] == [{
+        "fact_id": "11111111-1111-4111-8111-111111111111",
+        "field_name": "process",
+        "value": "Gear grinding",
+        "source_filename": "gear-catalog.pdf",
+        "source_page": 2,
+        "source_excerpt": "Process: Gear grinding",
+        "is_demo": True,
+    }]
+
+
 def test_content_openapi_documents_generation_and_review_actions(content_provenance):
     organization, *_ = content_provenance
     schema = _client(organization, Role.Code.READ_ONLY).get("/api/v1/schema").json()

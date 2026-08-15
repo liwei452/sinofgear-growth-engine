@@ -22,6 +22,7 @@ class StrictMixin:
 
 class MasterContentSerializer(serializers.ModelSerializer):
     is_current_head = serializers.SerializerMethodField()
+    evidence_summary = serializers.SerializerMethodField()
 
     @extend_schema_field(OpenApiTypes.BOOL)
     def get_is_current_head(self, content):
@@ -34,12 +35,28 @@ class MasterContentSerializer(serializers.ModelSerializer):
             previous_version_id=content.id,
         ).exists()
 
+    @extend_schema_field({"type": "array", "items": {"type": "object"}})
+    def get_evidence_summary(self, content):
+        rows = content.ai_run.input_snapshot.get("verified_product_facts", [])
+        if not isinstance(rows, list):
+            return []
+        fields = (
+            "fact_id", "field_name", "value", "source_filename", "source_page",
+            "source_excerpt", "is_demo",
+        )
+        return [
+            {field: row.get(field) for field in fields}
+            for row in rows[:20]
+            if isinstance(row, dict)
+        ]
+
     class Meta:
         model = MasterContent
         fields = [
             "id", "brief_id", "brief_version", "generation_job_id", "ai_run_id",
             "lineage_id", "previous_version_id", "version", "payload", "provenance",
             "status", "is_current_head", "created_by_id", "created_at", "updated_at",
+            "evidence_summary",
         ]
 
 

@@ -127,6 +127,12 @@ def test_seed_phase_a_is_stable_idempotent_and_repairs_owned_drift():
         provider="fake",
         status=PromptVersion.Status.PUBLISHED,
     ).exists()
+    assert PromptVersion.objects.filter(
+        purpose="CONTENT_RECOMMEND",
+        code="phase-a-e2e-recommend-v1",
+        provider="fake",
+        status=PromptVersion.Status.PUBLISHED,
+    ).exists()
     assert TargetAccount.objects.filter(organization=organization, is_demo=True).count() == 3
     assert Contact.objects.filter(organization=organization).count() == 1
     assert IntentSignal.objects.filter(organization=organization, is_demo=True).count() == 3

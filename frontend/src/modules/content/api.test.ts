@@ -3,6 +3,8 @@ import { afterEach, expect, it, vi } from "vitest"
 import { ApiError } from "../../api/client"
 import {
   contentQueryKeys,
+  createRecommendation,
+  selectRecommendationOption,
   getCursorPage,
   listMasterContents,
   safeCursorUrl,
@@ -28,6 +30,25 @@ it("keeps every content workflow query family isolated by organization", () => {
   ])
   expect(contentQueryKeys.platforms("org-b")).toEqual(["content-workflow", "org-b", "platforms"])
   expect(contentQueryKeys.assets("org-b")).toEqual(["content-workflow", "org-b", "assets"])
+  expect(contentQueryKeys.recommendations("org-b")).toEqual([
+    "content-workflow", "org-b", "recommendations",
+  ])
+})
+
+it("creates and selects an AI recommendation with empty explicit bodies", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const fetchMock = vi.fn(async (path: string) => new Response(JSON.stringify(
+    path === "/api/v1/content-recommendations"
+      ? { recommendation_id: "rec-1", job_id: "job-1", status: "QUEUED", generation_mode: "FAKE_OFFLINE", generation_label: "Fake / 离线演示推荐" }
+      : { recommendation_id: "rec-1", option_id: "opt-1", brief_id: "brief-1", brief_status: "READY" },
+  ), { status: path === "/api/v1/content-recommendations" ? 202 : 200, headers: { "Content-Type": "application/json" } }))
+  vi.stubGlobal("fetch", fetchMock)
+
+  await createRecommendation()
+  await selectRecommendationOption("rec-1", "opt-1")
+
+  expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/content-recommendations", expect.objectContaining({ method: "POST", body: "{}" }))
+  expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/content-recommendations/rec-1/options/opt-1/select", expect.objectContaining({ method: "POST", body: "{}" }))
 })
 
 it("accepts only same-origin cursor links at the exact requested API path", async () => {

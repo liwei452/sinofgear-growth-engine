@@ -188,18 +188,31 @@ it("starts generation only for READY briefs with content.manage and shows one jo
       })
     }
     if (path === "/api/v1/jobs/job-1") {
-      return new Response(JSON.stringify({ job_id: "job-1", type: "CONTENT_GENERATE", status: "SUCCEEDED", progress: 100, attempt: 1, max_attempts: 3, created_at: "", finished_at: "", error: null, result_reference: {}, generation_mode: "FAKE_OFFLINE", generation_label: "Fake / 离线演示生成" }), {
+      return new Response(JSON.stringify({ job_id: "job-1", type: "CONTENT_GENERATE", status: "SUCCEEDED", progress: 100, attempt: 1, max_attempts: 3, created_at: "", finished_at: "", error: null, result_reference: { type: "master_content", id: "master-1", version: 1 }, generation_mode: "FAKE_OFFLINE", generation_label: "Fake / 离线演示生成" }), {
         status: 200, headers: { "Content-Type": "application/json" },
       })
+    }
+    if (path === "/api/v1/master-contents/master-1") {
+      return new Response(JSON.stringify({
+        id: "master-1", brief_id: "brief-1", brief_version: 1, generation_job_id: "job-1",
+        ai_run_id: "run-1", lineage_id: "master-1", previous_version_id: null, version: 1,
+        payload: { title: "Generated visible title", body: "Generated body", cta: "Contact us", concept_codes: [] },
+        provenance: { verified_product_facts: [{ field_name: "process", value: "Gear hobbing" }] },
+        evidence_summary: [{ fact_id: "fact-1", field_name: "process", value: "Gear hobbing", source_filename: "gear.pdf", source_page: 2, source_excerpt: "Process", is_demo: false }],
+        status: "IN_REVIEW", is_current_head: true, created_by_id: 1, created_at: "", updated_at: "",
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
     }
     return new Response(JSON.stringify(baseResponse(path, [brief("READY")])), { status: 200, headers: { "Content-Type": "application/json" } })
   })
   vi.stubGlobal("fetch", fetchMock)
   const user = userEvent.setup()
-  renderPage(["campaigns.read", "content.manage", "jobs.read", "jobs.manage"])
+  renderPage(["campaigns.read", "content.read", "content.manage", "jobs.read", "jobs.manage"])
   await user.click(await screen.findByRole("button", { name: "开始AI生成" }))
 
   expect(await screen.findByText("生成完成")).toBeInTheDocument()
+  expect(await screen.findByRole("heading", { name: "Generated visible title" })).toBeVisible()
+  expect(screen.getByText("Generated body")).toBeVisible()
+  expect(screen.getByText(/process：Gear hobbing/)).toBeVisible()
   expect(screen.getByText("Fake / 离线演示生成")).toBeInTheDocument()
   expect(screen.getByText("该结果必须人工审核，不能视为真实模型结论。")).toBeInTheDocument()
   expect(screen.getAllByText(/任务 job-1/)).toHaveLength(1)

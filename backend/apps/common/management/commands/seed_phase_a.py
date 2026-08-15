@@ -24,6 +24,7 @@ from apps.campaigns.models import (
 )
 from apps.campaigns.services import mark_content_brief_ready
 from apps.catalog.models import Product, ProductConceptLink
+from apps.content.recommendations import RECOMMENDATION_SCHEMA
 from apps.identity.models import Membership, Organization, PhaseAE2EOwnership, Role
 from apps.growth.models import (
     ChannelPackage,
@@ -52,6 +53,7 @@ CAMPAIGN_ID = UUID("10000000-0000-4000-8000-000000000301")
 CAMPAIGN_PRODUCT_ID = UUID("10000000-0000-4000-8000-000000000302")
 BRIEF_ID = UUID("10000000-0000-4000-8000-000000000401")
 PROMPT_ID = UUID("10000000-0000-4000-8000-000000000501")
+RECOMMEND_PROMPT_ID = UUID("10000000-0000-4000-8000-000000000502")
 PASSWORD = "PhaseA-E2E-Only!"
 
 USERS = (
@@ -315,6 +317,17 @@ class Command(BaseCommand):
                 or prompt.pk != natural_prompt.pk or prompt.code != "phase-a-e2e-content-v1"
             ):
                 cls._collision("prompt version")
+        recommend_prompt = PromptVersion.objects.filter(pk=RECOMMEND_PROMPT_ID).first()
+        natural_recommend_prompt = PromptVersion.objects.filter(
+            purpose="CONTENT_RECOMMEND", version=1
+        ).first()
+        if recommend_prompt is not None or natural_recommend_prompt is not None:
+            if (
+                not owned or recommend_prompt is None or natural_recommend_prompt is None
+                or recommend_prompt.pk != natural_recommend_prompt.pk
+                or recommend_prompt.code != "phase-a-e2e-recommend-v1"
+            ):
+                cls._collision("recommendation prompt version")
 
         graph_lock = KnowledgeGraphLock.objects.filter(pk=1).first()
         if graph_lock is not None and graph_lock.name != "is_a_graph":
@@ -955,3 +968,25 @@ class Command(BaseCommand):
                 PromptVersion.objects.create(id=PROMPT_ID, **expected)
         elif any(getattr(prompt, field) != value for field, value in expected.items()):
             raise CommandError("Immutable Phase A prompt prerequisite drift was detected.")
+        recommend_prompt = PromptVersion.objects.filter(pk=RECOMMEND_PROMPT_ID).first()
+        recommend_expected = {
+            "purpose": "CONTENT_RECOMMEND",
+            "code": "phase-a-e2e-recommend-v1",
+            "provider": "fake",
+            "model": "fake-v1",
+            "template": "Recommend three evidence-backed market, product and buyer directions.",
+            "output_schema": RECOMMENDATION_SCHEMA,
+            "version": 1,
+            "status": PromptVersion.Status.PUBLISHED,
+            "created_by": created_by,
+        }
+        if recommend_prompt is None:
+            with ai_audit_writes():
+                PromptVersion.objects.create(id=RECOMMEND_PROMPT_ID, **recommend_expected)
+        elif any(
+            getattr(recommend_prompt, field) != value
+            for field, value in recommend_expected.items()
+        ):
+            raise CommandError(
+                "Immutable Phase A recommendation prompt prerequisite drift was detected."
+            )

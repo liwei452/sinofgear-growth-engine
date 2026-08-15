@@ -39,6 +39,25 @@ export type Job = {
   generation_mode: "NOT_STARTED" | "FAKE_OFFLINE" | "CONFIGURED_AI"
   generation_label: string
 }
+export type ContentRecommendationOption = {
+  id: string; position: number; product_id: string; market_code: string; language: string
+  customer_profile: string; channel_codes: string[]; theme: string; rationale: string
+  evidence: Array<{ fact_id: string }>; missing_information: string[]; selected_at: string | null
+}
+export type ContentRecommendation = {
+  id: string; job_id: string
+  status: "QUEUED" | "RUNNING" | "READY" | "FAILED" | "ARCHIVED"
+  provider_mode: "NOT_STARTED" | "FAKE_OFFLINE" | "CONFIGURED_AI"
+  selected_option_id: string | null; selected_brief_id: string | null
+  options: ContentRecommendationOption[]; created_at: string; updated_at: string
+}
+export type RecommendationAccepted = {
+  recommendation_id: string; job_id: string; status: JobStatus
+  generation_mode: "FAKE_OFFLINE" | "CONFIGURED_AI"; generation_label: string
+}
+export type RecommendationSelection = {
+  recommendation_id: string; option_id: string; brief_id: string; brief_status: "READY"
+}
 export type ContentStatus = "DRAFT" | "IN_REVIEW" | "APPROVED" | "REJECTED" | "PUBLISHED" | "ARCHIVED"
 export type MasterPayload = { title: string; body: string; cta: string; concept_codes: string[] }
 export type PlatformPayload = MasterPayload & { platform_code: string }
@@ -46,6 +65,7 @@ export type MasterContent = {
   id: string; brief_id: string; brief_version: number; generation_job_id: string
   ai_run_id: string; lineage_id: string; previous_version_id: string | null; version: number
   payload: MasterPayload; provenance: Record<string, unknown>; status: ContentStatus
+  evidence_summary?: Array<{ fact_id: string; field_name: string; value: string; source_filename: string; source_page: number | null; source_excerpt: string; is_demo: boolean }>
   is_current_head: boolean; created_by_id: number | null; created_at: string; updated_at: string
 }
 export type PlatformContent = {
@@ -84,6 +104,8 @@ export const contentQueryKeys = {
   aiRun: (organizationId: string, id: string) => [...root(organizationId), "ai-runs", id] as const,
   platforms: (organizationId: string) => [...root(organizationId), "platforms"] as const,
   assets: (organizationId: string) => [...root(organizationId), "assets"] as const,
+  recommendations: (organizationId: string) =>
+    [...root(organizationId), "recommendations"] as const,
 }
 
 function required<T>(value: T | undefined, message = "服务响应不完整，请重试。"): T {
@@ -134,6 +156,21 @@ export const markBriefReady = async (id: string): Promise<ContentBrief> =>
   required(await apiRequest<ContentBrief>(`/api/v1/content-briefs/${id}/ready`, { method: "POST", body: {} }))
 export const reviseBrief = async (id: string): Promise<ContentBrief> =>
   required(await apiRequest<ContentBrief>(`/api/v1/content-briefs/${id}/revisions`, { method: "POST", body: {} }))
+
+export const listRecommendations = async (): Promise<{ results: ContentRecommendation[] }> =>
+  required(await apiRequest<{ results: ContentRecommendation[] }>("/api/v1/content-recommendations"))
+export const createRecommendation = async (): Promise<RecommendationAccepted> =>
+  required(await apiRequest<RecommendationAccepted>("/api/v1/content-recommendations", {
+    method: "POST", body: {},
+  }))
+export const getRecommendation = async (id: string): Promise<ContentRecommendation> =>
+  required(await apiRequest<ContentRecommendation>(`/api/v1/content-recommendations/${id}`))
+export const selectRecommendationOption = async (
+  recommendationId: string, optionId: string,
+): Promise<RecommendationSelection> => required(await apiRequest<RecommendationSelection>(
+  `/api/v1/content-recommendations/${recommendationId}/options/${optionId}/select`,
+  { method: "POST", body: {} },
+))
 
 export const listPlatforms = async (): Promise<Platform[]> =>
   (required(await apiRequest<{ results: Platform[] }>("/api/v1/platforms"))).results

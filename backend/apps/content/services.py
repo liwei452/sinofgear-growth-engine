@@ -155,7 +155,9 @@ def _validated_payload(payload):
 
 
 @transaction.atomic
-def create_generated_master(*, brief, job, ai_run, actor=None):
+def create_generated_master(
+    *, brief, job, ai_run, actor=None, submit_for_review=True,
+):
     existing = MasterContent.objects.filter(generation_job=job, ai_run=ai_run).first()
     if existing:
         if not content_is_consistent(existing):
@@ -189,7 +191,10 @@ def create_generated_master(*, brief, job, ai_run, actor=None):
             payload=payload,
             lineage_id=content_id,
             provenance=_master_provenance(provenance_source),
-            status=MasterContent.Status.IN_REVIEW,
+            status=(
+                MasterContent.Status.IN_REVIEW
+                if submit_for_review else MasterContent.Status.DRAFT
+            ),
             created_by=actor,
         )
 
@@ -204,6 +209,7 @@ def finalize_master_result(run, output):
         job=run.job,
         ai_run=run,
         actor=run.job.created_by,
+        submit_for_review=False,
     )
     return {"type": "master_content", "id": str(master.id), "version": master.version}
 

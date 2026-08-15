@@ -567,7 +567,9 @@ const channels: Array<{
       <section v-if="publishBatch" class="publish-results" aria-label="发布结果">
         <div class="growth-heading">
           <div><p class="eyebrow">{{ publishBatch.data_label }}</p><h3>渠道发布结果</h3></div>
-          <strong v-if="publishBatch.status === 'SUCCEEDED'">4 个渠道均已发布成功。</strong>
+          <strong v-if="publishBatch.status === 'SUCCEEDED'">
+            {{ succeededPublishCount }} 个渠道{{ succeededPublishCount > 1 ? "均" : "" }}已发布成功。
+          </strong>
           <strong v-else-if="failedPublishItems.length">
             {{ succeededPublishCount }} 个渠道发布成功，{{ failedPublishItems.length }} 个渠道需要重试。
           </strong>
@@ -579,8 +581,8 @@ const channels: Array<{
             <a
               v-if="item.status === 'SUCCEEDED'" :href="item.external_post_url"
               target="_blank" rel="noreferrer"
-              :aria-label="`查看 ${channelLabel(item.channel)} Demo 帖子`"
-            >发布成功 · 查看 Demo 帖子</a>
+              :aria-label="`查看 ${channelLabel(item.channel)} ${item.mode === 'OFFICIAL' ? '平台帖子' : 'Demo 帖子'}`"
+            >发布成功 · 查看 {{ item.mode === "OFFICIAL" ? "平台帖子" : "Demo 帖子" }}</a>
             <span v-else>{{ item.recovery_action || "等待发布" }}</span>
           </li>
         </ul>

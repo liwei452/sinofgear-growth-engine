@@ -466,6 +466,35 @@ it("restores the latest one-click publish result after a page reload", async () 
   expect(screen.getByText("4 个渠道均已发布成功。")).toBeInTheDocument()
 })
 
+it("labels official publish links truthfully and uses the recorded success count", async () => {
+  const workspace = {
+    target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
+    outreach_drafts: [], field_provenance: [], metric_receipts: [], connectors: [], channel_packages: [],
+    publish_batches: [{
+      id: "batch-official", status: "SUCCEEDED", is_demo: false,
+      data_label: "真实平台发布结果", created_at: "2026-08-15T08:00:00Z",
+      updated_at: "2026-08-15T08:01:00Z",
+      items: [{
+        id: "item-linkedin", channel: "LINKEDIN", status: "SUCCEEDED", attempt_number: 1,
+        external_post_url: "https://www.linkedin.com/feed/update/urn:li:activity:123",
+        mode: "OFFICIAL", error_code: "", retryable: false, recovery_action: "",
+        created_at: "2026-08-15T08:00:00Z", updated_at: "2026-08-15T08:01:00Z",
+      }],
+    }],
+  }
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(workspace), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  expect(await screen.findByRole("link", { name: "查看 LinkedIn 平台帖子" })).toHaveAttribute(
+    "href", "https://www.linkedin.com/feed/update/urn:li:activity:123",
+  )
+  expect(screen.getByText("1 个渠道已发布成功。")).toBeInTheDocument()
+  expect(screen.queryByText(/Demo 帖子/)).not.toBeInTheDocument()
+})
+
 it("shows company facts with provenance, verification, cost, and gaps", () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(CompanyPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })

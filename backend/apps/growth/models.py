@@ -442,6 +442,9 @@ class DiscoveryCandidate(OrganizationOwnedModel):
     raw_record = models.JSONField(default=dict)
     record_hash = models.CharField(max_length=64)
     is_demo = models.BooleanField(default=False)
+    score = models.PositiveSmallIntegerField(default=0)
+    grade = models.CharField(max_length=1, default="C")
+    score_breakdown = models.JSONField(default=dict)
     review_note = models.CharField(max_length=255, blank=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     reviewed_by = models.ForeignKey(

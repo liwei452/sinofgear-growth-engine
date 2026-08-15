@@ -10,6 +10,7 @@ from integrations.sources.base import SourceAdapterError, maps_governance_for
 from integrations.sources.google_places import GooglePlacesSource, MapsQuery
 
 from .models import DiscoveryCandidate, GoogleMapsDiscoveryConfig
+from .grading import grade_candidate
 
 
 COUNTRY_NAMES = {
@@ -93,6 +94,12 @@ def _ingest_places(*, config_id, places, fetched, skipped, trigger) -> dict:
     duplicates = 0
     for place, is_demo in places:
         record_hash = _record_hash(place.place_id)
+        score, grade, score_breakdown = grade_candidate(
+            primary_type=place.primary_type,
+            types=place.types,
+            website=place.website,
+            country=place.country_code,
+        )
         candidate, was_created = DiscoveryCandidate.objects.get_or_create(
             organization=config.organization,
             record_hash=record_hash,
@@ -105,6 +112,9 @@ def _ingest_places(*, config_id, places, fetched, skipped, trigger) -> dict:
                 "source_governance": _governance_payload(place),
                 "raw_record": _raw_record(place),
                 "is_demo": is_demo,
+                "score": score,
+                "grade": grade,
+                "score_breakdown": score_breakdown,
             },
         )
         if was_created:

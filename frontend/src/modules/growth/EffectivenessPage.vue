@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
 import { computed, ref } from "vue"
 
 import { createMetricReceipt, growthQueryKeys, growthWorkspaceQueryOptions } from "./api"
+import AccountAttributionPanel from "./AccountAttributionPanel.vue"
 
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
@@ -49,6 +50,8 @@ async function saveMetrics(): Promise<void> {
 <template>
   <div class="growth-page">
     <header class="growth-hero"><div><p class="eyebrow">效果</p><h1>推广效果</h1><p>每个结论都保留时间范围、分子、分母和数据来源。</p></div><span class="fake-label">Demo / Fake</span></header>
+    <AccountAttributionPanel v-if="workspaceQuery.data.value" :workspace="workspaceQuery.data.value" />
+    <div class="attribution-auxiliary-label"><strong>以下为 Demo / Fake 渠道回填样例</strong><span>仅辅助检查内容与渠道，不计入上方账户漏斗。</span></div>
     <section class="metric-grid">
       <article><span>内容带来访问</span><strong>15.5</strong><p>点击 186 / 已发布内容包 12</p></article>
       <article><span>人工触达回复率</span><strong>26.5%</strong><p>回复 9 / 已人工触达 34</p></article>

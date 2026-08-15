@@ -55,6 +55,30 @@ it("explains effectiveness denominators and low-sample uncertainty", () => {
   expect(screen.getByText(/2026-08-08 至 2026-08-14/)).toBeInTheDocument()
 })
 
+it("shows persisted account approval in the effectiveness attribution panel", async () => {
+  const workspace = {
+    target_accounts: [{ id: "account-pack", name: "PackTech GmbH", country: "Germany", industry: "Packaging machinery", employee_range: "51-200", website: "", is_demo: true, data_label: "Demo / Fake" }],
+    contacts: [], inbound_leads: [], follow_ups: [], outreach_drafts: [], opportunity_reviews: [], crm_handoffs: [],
+    intent_signals: [], channel_packages: [], publish_batches: [], metric_receipts: [], field_provenance: [], connectors: [],
+    reactivations: [{
+      id: "react-pack", account_id: "account-pack", account_name: "PackTech GmbH", industry: "Packaging machinery",
+      relationship_source: "PAST_INQUIRY", last_interacted_at: "2026-04-15T08:00:00Z",
+      interaction_summary: "2025 trade fair discussion.", tier: "STRATEGIC", status: "APPROVED", is_demo: true,
+      why_reactivate: "已有合法关系", recommended_action: "人工复核", evidence: "已有关系记录",
+      risk: "发送前复核", draft: { id: "draft-pack", english_draft: "Hello", chinese_explanation: "已有事实", status: "APPROVED" },
+      events: [{ event_type: "REACTIVATION_APPROVED", created_at: "2026-08-15T08:30:00Z", delivery: "NEVER_SENT" }],
+      delivery: "NEVER_SENT",
+    }],
+  }
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(workspace), { status: 200, headers: { "Content-Type": "application/json" } })))
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(EffectivenessPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  const panel = await screen.findByRole("region", { name: "账户获客漏斗" })
+  expect(within(panel).getByRole("article", { name: "PackTech GmbH 归因记录" })).toHaveTextContent("人工批准")
+  expect(within(panel).getByText("已批准，尚未发送")).toBeInTheDocument()
+})
+
 it("persists content-package approval and manual metric backfill", async () => {
   document.cookie = "csrftoken=growth-pages-test-token"
   const workspace = {

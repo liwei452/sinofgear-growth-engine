@@ -79,7 +79,7 @@ def test_workspace_exposes_an_owner_friendly_discovery_summary(organization):
     assert [market["country_code"] for market in workspace["market_pilots"]["markets"][:5]] == [
         "IDN", "ZAF", "CHL", "VNM", "PHL",
     ]
-    assert len(workspace["market_pilots"]["markets"]) == 15
+    assert len(workspace["market_pilots"]["markets"]) == 21
     assert DiscoveryProfile.objects.filter(organization=organization).count() == 1
 
 

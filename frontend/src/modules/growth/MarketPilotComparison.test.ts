@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/vue"
+import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
@@ -21,7 +22,8 @@ const summary = {
 
 describe("MarketPilotComparison", () => {
   it("compares two active routes without inventing rates and keeps phase two gated", () => {
-    render(MarketPilotComparison, { props: { summary } })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(MarketPilotComparison, { props: { summary }, global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
     const indonesia = screen.getByRole("article", { name: "印度尼西亚 强海关数据路线" })
     const southAfrica = screen.getByRole("article", { name: "南非 混合信号路线" })
@@ -43,11 +45,53 @@ describe("MarketPilotComparison", () => {
   it("opens the candidate entry for any selected market", async () => {
     const user = userEvent.setup()
     const onSelectMarket = vi.fn()
-    render(MarketPilotComparison, { props: { summary, onSelectMarket } })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(MarketPilotComparison, { props: { summary, onSelectMarket }, global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
     const indonesia = screen.getByRole("article", { name: "印度尼西亚 强海关数据路线" })
     await user.click(within(indonesia).getByRole("button", { name: "查看该市场候选公司" }))
 
     expect(onSelectMarket).toHaveBeenCalledWith({ countryCode: "IDN", countryName: "印度尼西亚" })
+  })
+
+  it("searches and filters explainable markets, persists watching, and opens the data path", async () => {
+    document.cookie = "csrftoken=market-watch-token"
+    const user = userEvent.setup()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      country_code: "USA", is_watched: true, message: "已加入观察市场。",
+    }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    vi.stubGlobal("fetch", fetchMock)
+    const expandedSummary = {
+      ...summary,
+      markets: [...summary.markets, {
+        ...summary.markets[0],
+        country_code: "USA", country_label: "美国", status: "OBSERVATION_POOL",
+        route: "LICENSED_TRADE", route_label: "海关强数据路线", region: "NORTH_AMERICA",
+        path_family: "CUSTOMS_STRONG", suitable_industries: ["工业设备", "包装机械"],
+        data_availability_label: "中高：需许可企业级交易数据",
+        evidence_note: "研究配置；来源方向为许可交易数据、企业官网与公开采购",
+        recommended_action: "查看该市场候选公司并选择许可名单或公开线索路径",
+        recommendation_reasons: ["制造业规模大，值得验证"], hold_reasons: ["付费数据尚未接入"],
+        is_demo: true, is_watched: false,
+      }],
+    }
+    const onSelectMarket = vi.fn()
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(MarketPilotComparison, {
+      props: { summary: expandedSummary, onSelectMarket },
+      global: { plugins: [[VueQueryPlugin, { queryClient }]] },
+    })
+
+    await user.type(screen.getByRole("searchbox", { name: "搜索国家" }), "美国")
+    const usa = screen.getByRole("article", { name: "美国 海关强数据路线" })
+    expect(within(usa).getByText("Demo / 研究配置")).toBeInTheDocument()
+    expect(within(usa).getByText(/工业设备/)).toBeInTheDocument()
+    expect(within(usa).getByText(/许可企业级交易数据/)).toBeInTheDocument()
+    expect(within(usa).getByText(/来源方向为许可交易数据/)).toBeInTheDocument()
+    expect(within(usa).getByText(/付费数据尚未接入/)).toBeInTheDocument()
+    await user.click(within(usa).getByRole("button", { name: "加入观察市场" }))
+    expect(await within(usa).findByText("已观察")).toBeInTheDocument()
+    await user.click(within(usa).getByRole("button", { name: "查看该市场候选公司" }))
+    expect(onSelectMarket).toHaveBeenCalledWith({ countryCode: "USA", countryName: "美国" })
   })
 })

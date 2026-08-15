@@ -263,6 +263,14 @@ export type MarketPilotSummary = {
   markets: Array<{
     country_code: string
     country_label: string
+    region?: string
+    path_family?: "CUSTOMS_STRONG" | "MIXED_ACQUISITION"
+    suitable_industries?: string[]
+    data_availability_label?: string
+    evidence_note?: string
+    recommended_action?: string
+    is_demo?: boolean
+    is_watched?: boolean
     status: "OBSERVATION_POOL" | "DATA_VALIDATION" | "SMALL_PILOT" | "ACTIVE_MARKET" | "PAUSED"
     route: string
     route_label: string
@@ -464,6 +472,19 @@ export async function addCandidateToFollowUp(
     { method: "POST", body: {} },
   )
   if (!result) throw new Error("加入跟进响应为空。")
+  return result
+}
+
+export async function watchMarket(countryCode: string): Promise<{
+  country_code: string
+  is_watched: true
+  message: string
+}> {
+  const result = await apiRequest<{ country_code: string; is_watched: true; message: string }>(
+    `/api/v1/growth/markets/${countryCode}/watch`,
+    { method: "POST", body: {} },
+  )
+  if (!result) throw new Error("观察市场响应为空。")
   return result
 }
 

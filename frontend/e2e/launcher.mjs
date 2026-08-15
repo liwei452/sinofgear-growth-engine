@@ -95,10 +95,10 @@ function browserExecutable() {
   }) ?? ""
 }
 
-function pnpmInvocation(args) {
-  const cli = process.env.npm_execpath
-  if (!cli) throw new Error("The E2E launcher must be started by pnpm.")
-  return { command: process.execPath, args: [cli, ...args] }
+function localNodeInvocation(entrypoint, args) {
+  const script = join(frontendDir, "node_modules", ...entrypoint)
+  if (!existsSync(script)) throw new Error(`Missing local E2E tool: ${script}`)
+  return { command: process.execPath, args: [script, ...args] }
 }
 
 export function spawnOwnedChild(command, args, options = {}) {
@@ -241,9 +241,10 @@ async function main() {
       { cwd: backendDir, env: environment, stdio: "inherit", windowsHide: true },
     )
     children.push(backend)
-    const vite = pnpmInvocation([
-      "exec", "vite", "--host", "127.0.0.1", "--port", String(webPort), "--strictPort",
-    ])
+    const vite = localNodeInvocation(
+      ["vite", "bin", "vite.js"],
+      ["--host", "127.0.0.1", "--port", String(webPort), "--strictPort"],
+    )
     const frontend = spawnOwnedChild(vite.command, vite.args, {
       cwd: frontendDir, env: environment, stdio: "inherit", windowsHide: true,
     })
@@ -252,9 +253,10 @@ async function main() {
       waitFor(`${apiOrigin}/api/v1/auth/csrf`, backend, "Django"),
       waitFor(webOrigin, frontend, "Vite"),
     ])
-    const playwright = pnpmInvocation([
-      "exec", "playwright", "test", ...process.argv.slice(2),
-    ])
+    const playwright = localNodeInvocation(
+      ["@playwright", "test", "cli.js"],
+      ["test", ...process.argv.slice(2)],
+    )
     await run(playwright.command, playwright.args, {
       cwd: frontendDir, env: environment, children,
     })

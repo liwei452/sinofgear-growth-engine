@@ -30,6 +30,7 @@ from .models import (
     InboundLead,
     IntentSignal,
     MetricReceipt,
+    MarketCountryProfile,
     OpportunityReview,
     OutreachDraft,
     CRMHandoff,
@@ -367,6 +368,27 @@ class CandidateEnrichmentFollowUpView(APIView):
             "created": created,
             "message": "已加入人工跟进；没有生成采购意向，也没有联系客户。",
         }, status=201 if created else 200)
+
+
+class MarketWatchView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(tags=["Growth workspace"], request=None)
+    def post(self, request, country_code):
+        market_profiles_for(request.organization)
+        market = get_object_or_404(
+            MarketCountryProfile,
+            organization=request.organization,
+            country_code=country_code.upper(),
+        )
+        if not market.is_watched:
+            market.is_watched = True
+            market.save(update_fields=["is_watched", "updated_at"])
+        return Response({
+            "country_code": market.country_code,
+            "is_watched": True,
+            "message": "已加入观察市场。",
+        })
 
 
 class DiscoveryProfileView(APIView):

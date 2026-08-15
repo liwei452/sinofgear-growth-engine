@@ -48,7 +48,7 @@ def config(code: str, *, audited=True, scopes=("publish",)):
     }
 
 
-def build(raw, secrets):
+def build(raw, secrets, *, youtube_media_loader=None):
     configs = load_provider_configs(raw, allowed_origins=(ORIGIN,))
     transports = {}
 
@@ -61,6 +61,7 @@ def build(raw, secrets):
         FixtureSecretResolver(secrets),
         FixtureTokenStore(),
         transport_factory,
+        youtube_media_loader=youtube_media_loader,
     )
     return runtime, transports
 
@@ -115,3 +116,25 @@ def test_tiktok_unaudited_runtime_is_private_only_not_public_direct_post() -> No
         connector_metadata={"connection_kind": "official_oauth"},
     )
     assert runtime.connector_registry.resolve(account) is not None
+
+
+def test_youtube_authorization_and_upload_readiness_are_separate() -> None:
+    raw = {
+        "YOUTUBE": config(
+            "YOUTUBE",
+            scopes=("https://www.googleapis.com/auth/youtube.upload",),
+        )
+    }
+    without_media, _ = build(
+        raw, {"fixture://youtube": "fixture-youtube-secret"}
+    )
+    with_media, transports = build(
+        raw,
+        {"fixture://youtube": "fixture-youtube-secret"},
+        youtube_media_loader=object(),
+    )
+
+    assert without_media.readiness["YOUTUBE"].authorization_ready is True
+    assert without_media.readiness["YOUTUBE"].publishing_ready is False
+    assert with_media.readiness["YOUTUBE"].publishing_ready is True
+    assert transports["YOUTUBE"].calls == []

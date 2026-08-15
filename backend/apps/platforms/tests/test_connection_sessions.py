@@ -87,7 +87,7 @@ def test_connection_session_rejects_unbounded_duplicate_or_unsupported_candidate
         [candidate(candidate_id=duplicate_id), candidate(candidate_id=duplicate_id, external_id="page-456")],
         [candidate(external_id="page-duplicate"), candidate(external_id="page-duplicate")],
         [candidate(publication_mode="UNREVIEWED")],
-        [candidate(channel="YOUTUBE")],
+        [candidate(channel="DOUYIN")],
     ]
 
     for candidates in invalid_sets:

@@ -284,7 +284,9 @@ class PlatformAuthorizationCallbackSerializer(StrictMixin, serializers.Serialize
 class ConnectionCandidateSerializer(serializers.Serializer):
     candidate_id = serializers.UUIDField()
     display_name = serializers.CharField()
-    channel = serializers.ChoiceField(choices=["FACEBOOK", "INSTAGRAM", "LINKEDIN", "TIKTOK"])
+    channel = serializers.ChoiceField(
+        choices=["FACEBOOK", "INSTAGRAM", "LINKEDIN", "TIKTOK", "YOUTUBE"]
+    )
     capability_label = serializers.CharField()
     publication_mode = serializers.ChoiceField(choices=["PUBLIC", "PRIVATE_ONLY"])
 

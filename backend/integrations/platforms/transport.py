@@ -12,5 +12,5 @@ class HttpResponse:
 class HttpTransport(Protocol):
     def request(
         self, method: str, url: str, *, headers: dict[str, str],
-        json: dict | None, timeout_seconds: int,
+        json: dict | None, timeout_seconds: int, data: bytes | None = None,
     ) -> HttpResponse: ...

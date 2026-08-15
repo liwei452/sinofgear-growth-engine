@@ -26,6 +26,8 @@ from .tiktok import TikTokConnector
 from .tiktok_authorization import TikTokAuthorizationAdapter
 from .token_store import DisabledTokenStore, TokenStore
 from .transport import HttpResponse
+from .youtube import YouTubeConnector
+from .youtube_authorization import YouTubeAuthorizationAdapter
 
 
 @dataclass(frozen=True)
@@ -55,8 +57,11 @@ class SocialProviderRuntime:
 class UrllibPlatformTransport:
     max_response_bytes = 1_000_000
 
-    def request(self, method, url, *, headers, json: dict | None, timeout_seconds):
-        data = None if json is None else json_dumps(json)
+    def request(
+        self, method, url, *, headers, json: dict | None, timeout_seconds,
+        data: bytes | None = None,
+    ):
+        data = data if data is not None else (None if json is None else json_dumps(json))
         request = Request(url, data=data, headers=headers, method=method)
         try:
             with urlopen(request, timeout=min(max(int(timeout_seconds), 1), 30)) as response:  # noqa: S310
@@ -101,12 +106,13 @@ def build_social_provider_runtime(
     secret_resolver: SecretResolver,
     token_store: TokenStore,
     transport_factory,
+    youtube_media_loader=None,
 ) -> SocialProviderRuntime:
     adapters = {}
     connectors = {}
     readiness = {code: _unavailable() for code in ("FACEBOOK", "INSTAGRAM", "LINKEDIN", "TIKTOK", "YOUTUBE")}
     token_store_ready = not isinstance(token_store, DisabledTokenStore)
-    for provider_code in ("META", "LINKEDIN", "TIKTOK"):
+    for provider_code in ("META", "LINKEDIN", "TIKTOK", "YOUTUBE"):
         config = configs.get(provider_code)
         if config is None or not config.enabled or not token_store_ready:
             continue
@@ -162,7 +168,7 @@ def build_social_provider_runtime(
                 "PUBLIC" if config.audited else "UNAVAILABLE",
                 config.audited,
             )
-        else:
+        elif provider_code == "TIKTOK":
             adapters["TIKTOK"] = TikTokAuthorizationAdapter(
                 transport=transport,
                 client_key=config.client_id,
@@ -181,6 +187,27 @@ def build_social_provider_runtime(
                 "可公开发布。" if config.audited else "可上传，但当前仅支持私密发布。",
                 "PUBLIC" if config.audited else "PRIVATE_ONLY",
                 config.audited,
+            )
+        else:
+            adapters["YOUTUBE"] = YouTubeAuthorizationAdapter(
+                transport=transport,
+                client_id=config.client_id,
+                client_secret=client_secret,
+            )
+            publishing_ready = config.audited and youtube_media_loader is not None
+            if publishing_ready:
+                connectors["YOUTUBE"] = YouTubeConnector(
+                    transport=transport,
+                    token_store=token_store,
+                    media_loader=youtube_media_loader,
+                )
+            readiness["YOUTUBE"] = ProviderReadiness(
+                True,
+                publishing_ready,
+                "CONNECTED" if publishing_ready else "WAITING_PLATFORM_REVIEW",
+                "可上传视频。" if publishing_ready else "可连接账号，视频上传仍未激活。",
+                "UPLOAD" if publishing_ready else "UNAVAILABLE",
+                False,
             )
     return SocialProviderRuntime(
         AuthorizationAdapterRegistry(adapters),

@@ -8,6 +8,7 @@ import {
   authorizePlatformConnection,
   confirmPlatformConnection,
   createPublishBatch,
+  disconnectPlatformConnection,
   exportChannelPackage,
   exportFourChannelPackage,
   growthQueryKeys,
@@ -272,6 +273,14 @@ const connectionMutation = useMutation({
   },
   onError: () => { connectionError.value = "官方账号连接尚未配置。" },
 })
+const disconnectMutation = useMutation({
+  mutationFn: disconnectPlatformConnection,
+  onSuccess: async () => {
+    connectionMessage.value = "账号连接已断开；历史内容和效果记录仍然保留。"
+    await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+  },
+  onError: () => { connectionError.value = "暂时无法断开账号连接，请稍后重试。" },
+})
 const confirmConnectionMutation = useMutation({
   mutationFn: confirmPlatformConnection,
   onSuccess: async () => {
@@ -363,6 +372,18 @@ function connectionActionLabel(channel: string, channelName: string): string {
 async function connectChannel(channel: PlatformConnection["channel"]): Promise<void> {
   connectionError.value = ""
   await connectionMutation.mutateAsync(channel).catch(() => undefined)
+}
+
+async function disconnectChannel(connection: PlatformConnection, label: string): Promise<void> {
+  if (!connection.account_id) return
+  if (!window.confirm(`确认断开 ${label}？历史内容和效果记录会保留，也不会触发发布。`)) return
+  connectionError.value = ""
+  await disconnectMutation.mutateAsync(connection.account_id).catch(() => undefined)
+}
+
+async function disconnectSocialChannel(channel: PlatformConnection["channel"], label: string): Promise<void> {
+  const connection = formalConnection(channel)
+  if (connection) await disconnectChannel(connection, label)
 }
 
 async function approve(): Promise<void> {
@@ -476,6 +497,7 @@ function channelLabel(channel: string): string {
     FACEBOOK: "Facebook",
     INSTAGRAM: "Instagram",
     TIKTOK: "TikTok",
+    YOUTUBE: "YouTube",
   } as Record<string, string>)[channel] ?? channel
 }
 
@@ -506,6 +528,35 @@ const channels: Array<{
   { code: "INSTAGRAM", actionName: "Instagram", name: "Instagram Business", format: "轮播提纲 + Reels 文案" },
 ]
 const preparedStandardChannels = computed(() => channels.filter(channel => Boolean(packageFor(channel.code))))
+const socialChannels: Array<{
+  code: PlatformConnection["channel"]
+  name: string
+  actionName: string
+}> = [
+  { code: "FACEBOOK", name: "Facebook Page", actionName: "Facebook" },
+  { code: "INSTAGRAM", name: "Instagram Business", actionName: "Instagram" },
+  { code: "LINKEDIN", name: "LinkedIn Company Page", actionName: "LinkedIn" },
+  { code: "TIKTOK", name: "TikTok", actionName: "TikTok" },
+  { code: "YOUTUBE", name: "YouTube", actionName: "YouTube" },
+]
+
+function formalConnection(channel: PlatformConnection["channel"]): PlatformConnection | undefined {
+  const connection = connectionsByChannel.value.get(channel)
+  return connection?.mode === "DEMO_FAKE" ? undefined : connection
+}
+
+function socialStatus(channel: PlatformConnection["channel"]): string {
+  const connection = formalConnection(channel)
+  return connection?.connection_label || "未连接"
+}
+
+function socialCapability(channel: PlatformConnection["channel"]): string {
+  const connection = formalConnection(channel)
+  if (channel === "TIKTOK" && connection?.publication_mode === "PRIVATE_ONLY") return "仅私密发布"
+  if (channel === "YOUTUBE") return "可上传草稿"
+  if (connection?.status === "CONNECTED") return "可准备发布，仍需人工确认"
+  return "当前不会向平台发送内容"
+}
 </script>
 
 <template>
@@ -559,6 +610,43 @@ const preparedStandardChannels = computed(() => channels.filter(channel => Boole
       <div><span>理想客户</span><strong>{{ activeMarketIndustries }}</strong></div>
       <div><span>验证周期</span><strong>{{ validationPeriodLabel }}</strong></div>
       <div><span>审核边界</span><strong>所有内容人工批准后导出</strong></div>
+    </section>
+
+    <section class="growth-card social-readiness" aria-label="社媒账号连接状态">
+      <div class="growth-heading">
+        <div><h2>社媒账号连接</h2><p>连接只激活官方账号边界；任何内容仍需人工批准后才能提交。</p></div>
+        <span>5 个渠道</span>
+      </div>
+      <div class="social-readiness-grid">
+        <article v-for="channel in socialChannels" :key="channel.code">
+          <div>
+            <h3>{{ channel.name }}</h3>
+            <span class="connection-state">{{ socialStatus(channel.code) }}</span>
+          </div>
+          <p>{{ socialCapability(channel.code) }}</p>
+          <div class="social-readiness-actions">
+            <button
+              v-if="formalConnection(channel.code)?.status === 'CONNECTED' && formalConnection(channel.code)?.account_id"
+              class="button button-secondary" type="button"
+              :disabled="disconnectMutation.isPending.value"
+              :aria-label="`断开 ${channel.actionName} 连接`"
+              @click="disconnectSocialChannel(channel.code, channel.name)"
+            >
+              断开连接
+            </button>
+            <button
+              v-else-if="!['WAITING_PLATFORM_REVIEW', 'PRIVATE_ONLY'].includes(formalConnection(channel.code)?.status ?? '')"
+              class="button button-secondary" type="button"
+              :disabled="connectionMutation.isPending.value"
+              :aria-label="connectionActionLabel(channel.code, channel.actionName)"
+              @click="connectChannel(channel.code)"
+            >
+              {{ formalConnection(channel.code)?.status === 'REAUTHORIZATION_REQUIRED' ? '重新授权' : '连接账号' }}
+            </button>
+            <small v-else>无需在此输入密钥</small>
+          </div>
+        </article>
+      </div>
     </section>
 
     <section class="growth-card" aria-label="内容日历">

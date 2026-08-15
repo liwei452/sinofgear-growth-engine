@@ -44,12 +44,14 @@ def test_publishing_reader_lists_only_safe_connection_summaries(connection_api_c
     response = client.get("/api/v1/platform-connections")
 
     assert response.status_code == 200
-    assert response.json() == {"results": [
-        {"platform": "LINKEDIN", "platform_name": "LinkedIn", "status": "NOT_CONNECTED", "connection_label": "未连接", "recovery_action": "连接账号", "mode": ""},
-        {"platform": "FACEBOOK", "platform_name": "Facebook", "status": "NOT_CONNECTED", "connection_label": "未连接", "recovery_action": "连接账号", "mode": ""},
-        {"platform": "INSTAGRAM", "platform_name": "Instagram", "status": "NOT_CONNECTED", "connection_label": "未连接", "recovery_action": "连接账号", "mode": ""},
-        {"platform": "TIKTOK", "platform_name": "TikTok", "status": "NOT_CONNECTED", "connection_label": "未连接", "recovery_action": "连接账号", "mode": ""},
-    ]}
+    assert response.json() == {"results": [{
+        "platform": code, "platform_name": name, "status": "NOT_CONNECTED",
+        "connection_label": "未连接", "recovery_action": "连接账号", "mode": "",
+        "account_id": "", "publication_mode": "UNAVAILABLE",
+    } for code, name in [
+        ("LINKEDIN", "LinkedIn"), ("FACEBOOK", "Facebook"),
+        ("INSTAGRAM", "Instagram"), ("TIKTOK", "TikTok"), ("YOUTUBE", "YouTube"),
+    ]]}
     serialized = str(response.json()).lower()
     assert "token" not in serialized
     assert "secret" not in serialized

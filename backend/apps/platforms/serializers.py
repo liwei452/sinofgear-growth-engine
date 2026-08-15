@@ -246,10 +246,16 @@ class PlatformConnectionSerializer(serializers.Serializer):
     platform_name = serializers.CharField()
     status = serializers.ChoiceField(choices=[
         "NOT_CONNECTED", "CONNECTED", "REAUTHORIZATION_REQUIRED", "CONFIGURATION_REQUIRED",
+        "WAITING_PLATFORM_REVIEW", "PRIVATE_ONLY", "PROVIDER_UNAVAILABLE",
+        "INSUFFICIENT_CAPABILITY",
     ])
     connection_label = serializers.CharField()
     recovery_action = serializers.CharField(allow_blank=True)
     mode = serializers.CharField(allow_blank=True)
+    account_id = serializers.CharField(allow_blank=True)
+    publication_mode = serializers.ChoiceField(
+        choices=["UNAVAILABLE", "PUBLIC", "PRIVATE_ONLY", "UPLOAD"]
+    )
 
 
 class PlatformConnectionListSerializer(serializers.Serializer):

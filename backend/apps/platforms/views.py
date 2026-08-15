@@ -279,6 +279,7 @@ PLATFORM_CONNECTIONS = (
     ("FACEBOOK", "Facebook"),
     ("INSTAGRAM", "Instagram"),
     ("TIKTOK", "TikTok"),
+    ("YOUTUBE", "YouTube"),
 )
 
 
@@ -300,6 +301,9 @@ class PlatformConnectionListView(APIView):
                 "connection_label": summary.connection_label,
                 "recovery_action": summary.recovery_action,
                 "mode": summary.mode,
+                "account_id": summary.account_id,
+                "publication_mode": _social_runtime.readiness.get(code).publication_mode
+                if _social_runtime.readiness.get(code) else "UNAVAILABLE",
             })
         return Response({"results": results})
 

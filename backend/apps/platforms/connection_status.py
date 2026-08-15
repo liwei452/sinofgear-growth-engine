@@ -20,6 +20,8 @@ def _summary(status: str, account=None, *, mode: str = "") -> ConnectionSummary:
         "CONNECTED": ("已连接", ""),
         "REAUTHORIZATION_REQUIRED": ("需要重新授权", "重新连接"),
         "CONFIGURATION_REQUIRED": ("未连接", "连接账号"),
+        "PROVIDER_UNAVAILABLE": ("平台暂时不可用", "稍后重试"),
+        "INSUFFICIENT_CAPABILITY": ("权限不足", "重新授权"),
     }
     label, recovery = labels[status]
     return ConnectionSummary(
@@ -43,6 +45,12 @@ def connection_summary(*, organization, platform_code: str) -> ConnectionSummary
         return _summary("CONFIGURATION_REQUIRED")
 
     account = accounts[0]
+    if account.connection_state in {
+        SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED,
+        SocialAccount.ConnectionState.PROVIDER_UNAVAILABLE,
+        SocialAccount.ConnectionState.INSUFFICIENT_CAPABILITY,
+    }:
+        return _summary(account.connection_state, account, mode="OFFICIAL")
     metadata = account.connector_metadata if isinstance(account.connector_metadata, dict) else {}
     connection_kind = metadata.get("connection_kind", "")
     if not connection_kind and metadata.get("fixture") == "phase-a-e2e":

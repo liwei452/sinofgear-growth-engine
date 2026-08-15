@@ -967,10 +967,11 @@ it("shows safe channel connection states and starts authorization without publis
       validation_goals: { weeks: 8 },
     },
     connectors: [
-      { channel: "LINKEDIN", status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "OFFICIAL" },
+      { channel: "LINKEDIN", status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "OFFICIAL", account_id: "linkedin-account" },
       { channel: "FACEBOOK", status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "DEMO_FAKE" },
       { channel: "INSTAGRAM", status: "NOT_CONNECTED", connection_label: "未连接", recovery_action: "连接账号", mode: "" },
-      { channel: "TIKTOK", status: "REAUTHORIZATION_REQUIRED", connection_label: "需要重新授权", recovery_action: "重新连接", mode: "OFFICIAL" },
+      { channel: "TIKTOK", status: "REAUTHORIZATION_REQUIRED", connection_label: "需要重新授权", recovery_action: "重新连接", mode: "OFFICIAL", account_id: "tiktok-account", publication_mode: "PRIVATE_ONLY" },
+      { channel: "YOUTUBE", status: "WAITING_PLATFORM_REVIEW", connection_label: "等待平台审核", recovery_action: "", mode: "OFFICIAL", publication_mode: "UPLOAD" },
     ],
     channel_packages: channels.map((channel, index) => ({
       id: `20000000-0000-4000-8000-00000000120${index + 1}`,
@@ -1029,6 +1030,16 @@ it("shows safe channel connection states and starts authorization without publis
   expect(screen.getByText("混合发布方式 · 以各渠道状态为准")).toBeInTheDocument()
   expect(screen.queryByText("Fake Connector · 一键发布演示")).not.toBeInTheDocument()
   expect(screen.getByText("当前路径：官方连接 1 个 · 手工发布包 3 个")).toBeInTheDocument()
+  const readiness = screen.getByRole("region", { name: "社媒账号连接状态" })
+  expect(within(readiness).getByText("Facebook Page")).toBeInTheDocument()
+  expect(within(readiness).getByText("Instagram Business")).toBeInTheDocument()
+  expect(within(readiness).getByText("LinkedIn Company Page")).toBeInTheDocument()
+  expect(within(readiness).getByText("TikTok")).toBeInTheDocument()
+  expect(within(readiness).getByText("YouTube")).toBeInTheDocument()
+  expect(within(readiness).getByText("仅私密发布")).toBeInTheDocument()
+  expect(within(readiness).getByText("可上传草稿")).toBeInTheDocument()
+  expect(within(readiness).getByText("等待平台审核")).toBeInTheDocument()
+  expect(within(readiness).getByRole("button", { name: "断开 LinkedIn 连接" })).toBeEnabled()
   const calendar = screen.getByRole("region", { name: "内容日历" })
   expect(calendar).toHaveTextContent("3 个内容包")
   expect(calendar).toHaveTextContent("LINKEDIN package")

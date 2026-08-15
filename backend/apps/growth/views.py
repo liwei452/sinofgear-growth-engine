@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from apps.content.models import PlatformContent
 from apps.identity.permissions import CanManageCampaigns, CanManagePublishing, CanReadCampaigns
 from apps.platforms.connection_status import connection_summary
+from integrations.platforms.runtime import get_social_provider_runtime
 from integrations.sources.base import SourceAdapterError
 
 from .candidate_imports import CandidateImportInvalid, import_candidate_list
@@ -112,16 +113,34 @@ from .services import (
 
 def connector_readiness(organization):
     results = []
-    for channel in ("LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"):
+    runtime = get_social_provider_runtime()
+    for channel in ("LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK", "YOUTUBE"):
         summary = connection_summary(
             organization=organization, platform_code=channel,
         )
+        provider = runtime.readiness.get(channel)
+        status = summary.status
+        connection_label = summary.connection_label
+        recovery_action = summary.recovery_action
+        if status == "NOT_CONNECTED" and provider is not None:
+            status = provider.status
+            if status == "CONFIGURATION_REQUIRED":
+                connection_label = "未配置"
+                recovery_action = "连接账号"
+            elif status == "WAITING_PLATFORM_REVIEW":
+                connection_label = "等待平台审核"
+                recovery_action = ""
+            elif status == "PRIVATE_ONLY":
+                connection_label = "仅私密发布"
+                recovery_action = ""
         results.append({
             "channel": channel,
-            "status": summary.status,
-            "connection_label": summary.connection_label,
-            "recovery_action": summary.recovery_action,
+            "status": status,
+            "connection_label": connection_label,
+            "recovery_action": recovery_action,
             "mode": summary.mode,
+            "account_id": summary.account_id,
+            "publication_mode": provider.publication_mode if provider else "UNAVAILABLE",
         })
     return results
 

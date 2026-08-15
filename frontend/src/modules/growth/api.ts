@@ -218,11 +218,13 @@ export type FieldProvenance = {
 }
 
 export type PlatformConnection = {
-  channel: "LINKEDIN" | "FACEBOOK" | "INSTAGRAM" | "TIKTOK"
-  status: "NOT_CONNECTED" | "CONNECTED" | "REAUTHORIZATION_REQUIRED" | "CONFIGURATION_REQUIRED"
+  channel: "LINKEDIN" | "FACEBOOK" | "INSTAGRAM" | "TIKTOK" | "YOUTUBE"
+  status: "NOT_CONNECTED" | "CONNECTED" | "REAUTHORIZATION_REQUIRED" | "CONFIGURATION_REQUIRED" | "WAITING_PLATFORM_REVIEW" | "PRIVATE_ONLY" | "PROVIDER_UNAVAILABLE" | "INSUFFICIENT_CAPABILITY"
   connection_label: string
   recovery_action: string
   mode: "" | "DEMO_FAKE" | "OFFICIAL"
+  account_id?: string
+  publication_mode?: "UNAVAILABLE" | "PUBLIC" | "PRIVATE_ONLY" | "UPLOAD"
 }
 
 export type DiscoveryRunResult = {
@@ -728,6 +730,13 @@ export async function authorizePlatformConnection(
   )
   if (!result) throw new Error("账号连接响应为空。")
   return result
+}
+
+export async function disconnectPlatformConnection(accountId: string): Promise<void> {
+  await apiRequest(`/api/v1/social-accounts/${accountId}/disconnect`, {
+    method: "POST",
+    body: { confirm: true },
+  })
 }
 
 export type PublishBatch = {

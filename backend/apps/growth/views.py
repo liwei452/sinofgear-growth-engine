@@ -50,6 +50,7 @@ from .maps_discovery import (
     MapsDiscoveryNotEnabled,
     run_maps_discovery,
 )
+from .website_enrichment import build_website_transport, prepare_website_enrichment
 from .manual_imports import import_manual_opportunity
 from .market_pilots import market_pilot_summary, market_profiles_for
 from .serializers import (
@@ -408,6 +409,46 @@ class CandidateEnrichmentPrepareView(APIView):
                 "message": "请先核实这家公司，再准备资料补全。",
                 "recovery_action": "回到待核实公司并选择加入资料补全。",
             }, status=409)
+        return Response(
+            enrichment_payload(snapshot, created=created),
+            status=201 if created else 200,
+        )
+
+
+class CandidateWebsiteEnrichmentView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=None,
+        responses={
+            200: CandidateEnrichmentResultSerializer,
+            201: CandidateEnrichmentResultSerializer,
+        },
+    )
+    def post(self, request, candidate_id):
+        candidate = get_object_or_404(
+            DiscoveryCandidate,
+            id=candidate_id,
+            organization=request.organization,
+        )
+        try:
+            snapshot, created = prepare_website_enrichment(
+                candidate,
+                transport=build_website_transport(),
+            )
+        except CandidateReviewRequired:
+            return Response({
+                "code": "CANDIDATE_REVIEW_REQUIRED",
+                "message": "请先核实这家公司，再读取官网补全。",
+                "recovery_action": "回到待核实公司并选择加入资料补全。",
+            }, status=409)
+        except ValueError as error:
+            return Response({
+                "code": "WEBSITE_UNREADABLE",
+                "message": str(error),
+                "recovery_action": "这家公司没有官网或官网暂时无法读取，可稍后重试或改用名单事实。",
+            }, status=422)
         return Response(
             enrichment_payload(snapshot, created=created),
             status=201 if created else 200,

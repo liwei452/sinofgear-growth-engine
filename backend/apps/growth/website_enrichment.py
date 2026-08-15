@@ -6,7 +6,9 @@ from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 from urllib.robotparser import RobotFileParser
 
+from django.conf import settings
 from django.utils import timezone
+from django.utils.module_loading import import_string
 
 from .market_pilots import matched_gear_terms
 
@@ -77,6 +79,13 @@ def extract_website_facts(html: str, base_url: str) -> WebsiteFacts:
         gear_terms=gear_terms,
         text_excerpt=_clean_text(text)[:1500],
     )
+
+
+def build_website_transport():
+    factory_path = getattr(settings, "GROWTH_WEBSITE_TRANSPORT_FACTORY", "")
+    if factory_path:
+        return import_string(factory_path)()
+    return UrllibWebsiteTransport()
 
 
 def prepare_website_enrichment(candidate, *, transport=None):

@@ -63,20 +63,24 @@ def prepare_candidate_enrichment(*, candidate: DiscoveryCandidate):
 
 def enrichment_payload(snapshot, *, created):
     is_demo = snapshot.mode == "FAKE_PREVIEW"
+    is_website = snapshot.mode == "WEBSITE_PUBLIC"
+    if is_demo:
+        data_label = "Demo / Fake 资料补全预演"
+        message = "已生成资料补全预演；没有联网抓取，也不会联系客户。"
+    elif is_website:
+        data_label = "官网公开信息 · 待人工确认"
+        message = "已读取官网公开信息并提取联系方式；没有采购意向，也不会联系客户。"
+    else:
+        data_label = "许可名单事实 · 待人工确认"
+        message = "仅整理已导入事实；没有联网核实、没有采购意向，也不会联系客户。"
     return {
         "candidate_id": str(snapshot.candidate_id),
         "mode": snapshot.mode,
-        "data_label": (
-            "Demo / Fake 资料补全预演" if is_demo else "许可名单事实 · 待人工确认"
-        ),
+        "data_label": data_label,
         "facts": snapshot.facts,
         "public_contact_paths": snapshot.public_contact_paths,
         "uncertainties": snapshot.uncertainties,
-        "message": (
-            "已生成资料补全预演；没有联网抓取，也不会联系客户。"
-            if is_demo else
-            "仅整理已导入事实；没有联网核实、没有采购意向，也不会联系客户。"
-        ),
+        "message": message,
         "created": created,
         "account_id": str(snapshot.target_account_id) if snapshot.target_account_id else None,
     }

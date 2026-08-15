@@ -7,6 +7,7 @@ from .views import (
     CandidateListImportView,
     CandidateEnrichmentPrepareView,
     CandidateEnrichmentFollowUpView,
+    CandidateWebsiteEnrichmentView,
     DiscoveryCandidateReviewView,
     ChannelPackageManualExportView,
     FourChannelManualExportView,
@@ -74,6 +75,11 @@ urlpatterns = [
         "growth/enrichment/candidates/<uuid:candidate_id>/prepare",
         CandidateEnrichmentPrepareView.as_view(),
         name="growth-candidate-enrichment-prepare",
+    ),
+    path(
+        "growth/enrichment/candidates/<uuid:candidate_id>/website",
+        CandidateWebsiteEnrichmentView.as_view(),
+        name="growth-candidate-website-enrichment",
     ),
     path(
         "growth/enrichment/candidates/<uuid:candidate_id>/follow-up",

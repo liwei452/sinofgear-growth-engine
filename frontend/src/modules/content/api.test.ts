@@ -8,6 +8,9 @@ import {
   getCursorPage,
   listMasterContents,
   safeCursorUrl,
+  archiveBrief,
+  restoreBrief,
+  restoreMasterContent,
 } from "./api"
 
 afterEach(() => {
@@ -80,4 +83,22 @@ it("encodes content filters with URLSearchParams", async () => {
     "/api/v1/master-contents?status=IN_REVIEW&campaign=campaign+id&page_size=20",
     expect.anything(),
   )
+})
+
+it("uses reversible archive and restore endpoints without delete requests", async () => {
+  document.cookie = "csrftoken=csrf-value; path=/"
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "x", status: "DRAFT" }), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  }))
+  vi.stubGlobal("fetch", fetchMock)
+
+  await archiveBrief("brief-1")
+  await restoreBrief("brief-1")
+  await restoreMasterContent("master-1")
+
+  expect(fetchMock.mock.calls.map(([path, options]) => [path, (options as RequestInit).method])).toEqual([
+    ["/api/v1/content-briefs/brief-1/archive", "POST"],
+    ["/api/v1/content-briefs/brief-1/restore", "POST"],
+    ["/api/v1/master-contents/master-1/restore", "POST"],
+  ])
 })

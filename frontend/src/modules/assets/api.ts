@@ -15,6 +15,8 @@ const casefold = (value:string) => value.normalize("NFKC").trim().toLocaleLowerC
 export const normalizeAssetTags = (tags:string[]) => [...new Set(tags.map(casefold).filter(Boolean))]
 export const uploadAsset=async(input:{file:File;asset_type:string;language:string;tags:string[]}):Promise<Asset>=>{const body=new FormData();body.append("file",input.file);body.append("asset_type",input.asset_type);body.append("language",input.language);body.append("tags",JSON.stringify(normalizeAssetTags(input.tags)));body.append("metadata_json","{}");return required(await apiRequest<Asset>(path,{method:"POST",body}))}
 export const linkAssetProduct=async(assetId:string,productId:string):Promise<Asset>=>required(await apiRequest<Asset>(`${path}/${assetId}/link-product`,{method:"POST",body:{product_id:productId}}))
+export const archiveAsset=async(assetId:string):Promise<Asset>=>required(await apiRequest<Asset>(`${path}/${assetId}/archive`,{method:"POST",body:{}}))
+export const restoreAsset=async(assetId:string):Promise<Asset>=>required(await apiRequest<Asset>(`${path}/${assetId}/restore`,{method:"POST",body:{}}))
 export const getAssetDownload=async(assetId:string):Promise<{url:string;expires_in:number}>=>required(await apiRequest(`${path}/${assetId}/download-url`,{method:"POST",body:{}}))
 export const startAssetUnderstanding=async(assetId:string,productId:string,externalTextConsent=false):Promise<AssetUnderstanding>=>required(await apiRequest<AssetUnderstanding>(`${path}/${assetId}/understanding`,{method:"POST",body:{product_id:productId,external_text_consent:externalTextConsent}}))
 export const getAssetUnderstanding=async(assetId:string):Promise<AssetUnderstanding>=>required(await apiRequest<AssetUnderstanding>(`${path}/${assetId}/understanding`))

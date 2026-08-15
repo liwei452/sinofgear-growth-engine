@@ -7,13 +7,14 @@ export type Campaign = {
 }
 export type ContentBrief = {
   id: string; campaign_id: string; previous_version_id: string | null; version: number
-  status: "DRAFT" | "READY"; target_country: string; customer_type: string
+  status: "DRAFT" | "READY" | "ARCHIVED"; target_country: string; customer_type: string
   content_objective: string; cta: string; landing_page_url: string; language: string
   prohibited_claims: string[]; selling_points: string[]; advantages: string[]; keywords: string[]
   product_ids: string[]; asset_ids: string[]; platform_ids: string[]
   concept_links: Array<{ role: string; concept_id: string }>
   created_by: number; reviewed_by: number | null; reviewed_at: string | null
   created_at: string; updated_at: string
+  archived_from_status?: string; archived_at?: string | null; archived_by?: number | null
 }
 export type BriefInput = Pick<ContentBrief,
   "campaign_id" | "target_country" | "customer_type" | "content_objective" | "cta"
@@ -156,6 +157,10 @@ export const markBriefReady = async (id: string): Promise<ContentBrief> =>
   required(await apiRequest<ContentBrief>(`/api/v1/content-briefs/${id}/ready`, { method: "POST", body: {} }))
 export const reviseBrief = async (id: string): Promise<ContentBrief> =>
   required(await apiRequest<ContentBrief>(`/api/v1/content-briefs/${id}/revisions`, { method: "POST", body: {} }))
+export const archiveBrief = async (id: string): Promise<ContentBrief> =>
+  required(await apiRequest<ContentBrief>(`/api/v1/content-briefs/${id}/archive`, { method: "POST", body: {} }))
+export const restoreBrief = async (id: string): Promise<ContentBrief> =>
+  required(await apiRequest<ContentBrief>(`/api/v1/content-briefs/${id}/restore`, { method: "POST", body: {} }))
 
 export const listRecommendations = async (): Promise<{ results: ContentRecommendation[] }> =>
   required(await apiRequest<{ results: ContentRecommendation[] }>("/api/v1/content-recommendations"))
@@ -207,6 +212,8 @@ export async function listPlatformContents(filters: ContentFilters = {}): Promis
 }
 export const getMasterContent = async (id: string): Promise<MasterContent> =>
   required(await apiRequest<MasterContent>(`/api/v1/master-contents/${id}`))
+export const restoreMasterContent = async (id: string): Promise<MasterContent> =>
+  required(await apiRequest<MasterContent>(`/api/v1/master-contents/${id}/restore`, { method: "POST", body: {} }))
 export const getPlatformContent = async (id: string): Promise<PlatformContent> =>
   required(await apiRequest<PlatformContent>(`/api/v1/platform-contents/${id}`))
 export const reviseMasterContent = async (id: string, payload: MasterPayload): Promise<MasterContent> =>

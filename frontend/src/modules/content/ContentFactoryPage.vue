@@ -7,8 +7,9 @@ import { currentUserQueryOptions } from "../auth/auth"
 import { listProducts, productQueryKeys } from "../products/api"
 import ContentBriefWizard from "./ContentBriefWizard.vue"
 import ContentRecommendationPanel from "./ContentRecommendationPanel.vue"
+import ContentTrashPanel from "./ContentTrashPanel.vue"
 import {
-  cancelJob, contentAction, contentQueryKeys, generateMaster, getJob, getMasterContent, listAssets, listBriefs,
+  archiveBrief, cancelJob, contentAction, contentQueryKeys, generateMaster, getJob, getMasterContent, listAssets, listBriefs,
   listApprovedBriefConcepts, listCampaigns, listJobs, listMasterContents, listPlatformPage, markBriefReady,
   retryJob, reviseBrief, type ContentBrief, type Job, type MasterContent,
 } from "./api"
@@ -160,6 +161,26 @@ async function submitFocused(): Promise<void> {
   } catch (error) { actionError.value = safeError(error) }
 }
 
+async function archiveFocused(): Promise<void> {
+  if (!focusedMaster.value || !has("content.review")) return
+  try {
+    await contentAction("master", focusedMaster.value.id, "archive")
+    focusedMaster.value = null
+    await queryClient.invalidateQueries({ queryKey: contentQueryKeys.all(organizationId.value) })
+    notice.value = "内容已移到回收站，可随时恢复。"
+  } catch (error) { actionError.value = safeError(error) }
+}
+
+async function archiveBriefItem(brief: ContentBrief): Promise<void> {
+  if (!has("campaigns.manage") || actionId.value) return
+  actionId.value = brief.id
+  try {
+    await archiveBrief(brief.id)
+    await queryClient.invalidateQueries({ queryKey: contentQueryKeys.all(organizationId.value) })
+    notice.value = "内容任务已移到回收站。"
+  } catch (error) { actionError.value = safeError(error) } finally { actionId.value = "" }
+}
+
 async function ready(brief: ContentBrief): Promise<void> {
   if (brief.status !== "DRAFT" || !has("campaigns.review")) return
   actionId.value = brief.id
@@ -235,6 +256,16 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
 
     <section aria-labelledby="briefs-title"><h2 id="briefs-title">内容需求</h2><p v-if="briefsQuery.isPending.value" role="status">正在加载内容需求…</p><div v-else-if="!briefs.length" class="state-panel"><h3>还没有内容需求</h3><p>从“创建内容任务”开始，向导会帮你准备完整信息。</p></div><div v-else class="card-grid"><article v-for="item in briefs" :key="item.id" class="workflow-card"><div class="card-heading"><h3>{{ campaigns.items.value.find(c => c.id === item.campaign_id)?.name || '内容需求' }}</h3><span class="status-chip">{{ item.status === 'READY' ? '可生成' : '需求草稿' }}</span></div><p>{{ item.target_country }} · {{ item.customer_type }} · {{ item.language }}</p><p v-if="item.status === 'DRAFT' && !has('campaigns.review')" class="muted">等待审核人员确认</p><div class="card-actions"><button v-if="item.status === 'DRAFT' && has('campaigns.manage')" type="button" @click="openBriefEditor(item)">编辑需求草稿</button><button v-if="item.status === 'DRAFT' && has('campaigns.review')" type="button" :disabled="actionId === item.id" @click="ready(item)">确认需求可生成</button><button v-if="item.status === 'READY' && has('campaigns.manage')" type="button" @click="createBriefRevision(item)">创建需求修订版</button><button v-if="item.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId)" @click="startGeneration(item)">开始AI生成</button></div></article></div><p v-if="briefPages.error.value" role="alert">{{ briefPages.error.value }} <button type="button" @click="briefPages.loadMore">重试</button></p><button v-else-if="briefPages.next.value" type="button" @click="briefPages.loadMore">加载更多内容需求</button></section>
 
+    <section v-if="briefs.length && has('campaigns.manage')" class="state-panel" aria-labelledby="cleanup-title">
+      <h2 id="cleanup-title">整理内容任务</h2>
+      <p>不再需要的任务可移到回收站，不会删除关联素材、事实或生成记录。</p>
+      <div class="card-actions">
+        <button v-for="item in briefs" :key="`archive-${item.id}`" type="button" :disabled="actionId === item.id" @click="archiveBriefItem(item)">
+          移到回收站 · {{ campaigns.items.value.find(c => c.id === item.campaign_id)?.name || item.target_country || '未命名任务' }}
+        </button>
+      </div>
+    </section>
+
     <section v-if="focusedMaster" ref="focusedMasterElement" class="generated-result" aria-labelledby="generated-result-title">
       <div class="card-heading"><div><p class="eyebrow">AI 已生成，请先检查</p><h2 id="generated-result-title">{{ focusedMaster.payload.title }}</h2></div><span class="status-chip">{{ focusedMaster.status === 'DRAFT' ? '草稿' : '待人工审核' }}</span></div>
       <p class="generated-body">{{ focusedMaster.payload.body }}</p>
@@ -246,8 +277,10 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
       </div>
       <p v-else class="muted">当前结果没有可展示的事实引用，请不要提交审核。</p>
       <p class="muted">发布前仍需人工审核。</p>
-      <div class="card-actions"><button v-if="focusedMaster.status === 'DRAFT' && has('content.manage')" class="primary-action" type="button" @click="submitFocused">提交审核</button></div>
+      <div class="card-actions"><button v-if="focusedMaster.status === 'DRAFT' && has('content.manage')" class="primary-action" type="button" @click="submitFocused">提交审核</button><button v-if="has('content.review')" type="button" @click="archiveFocused">移到回收站</button></div>
     </section>
+
+    <ContentTrashPanel v-if="has('campaigns.read') || has('content.read')" @restored="notice = '已恢复内容。'" />
 
     <section aria-labelledby="jobs-title"><h2 id="jobs-title">生成任务</h2><div v-if="jobs.length" class="card-grid"><article v-for="job in jobs" :key="job.job_id" class="workflow-card"><div class="card-heading"><h3>任务详情</h3><span class="status-chip">{{ job.status }}</span></div><p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p><p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p><p v-else-if="job.status === 'FAILED'" role="alert">{{ job.error?.message || '生成未完成，可以重试。' }}</p><details><summary>任务 {{ job.job_id }}</summary></details><div class="card-actions"><button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">取消任务</button><button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">重新尝试</button></div></article></div><p v-else class="muted">提交生成后，进度会显示在这里。</p><p v-if="jobPages.error.value" role="alert">{{ jobPages.error.value }} <button type="button" @click="jobPages.loadMore">重试</button></p><button v-else-if="jobPages.next.value" type="button" @click="jobPages.loadMore">加载更多生成任务</button></section>
 

@@ -6,7 +6,7 @@ import OperationModal from "../../shared/components/OperationModal.vue"
 import { currentUserQueryOptions } from "../auth/auth"
 import { getProductPage, listProducts, safeProductPageUrl, type Product } from "../products/api"
 import AssetUnderstandingPanel from "./AssetUnderstandingPanel.vue"
-import { assetKeys, getAssetDownload, getAssetPage, linkAssetProduct, listAssets, resolveAssetDownloadUrl, uploadAsset, type AssetFilters } from "./api"
+import { archiveAsset, assetKeys, getAssetDownload, getAssetPage, linkAssetProduct, listAssets, resolveAssetDownloadUrl, restoreAsset, uploadAsset, type AssetFilters } from "./api"
 
 const client=useQueryClient(),user=useQuery(currentUserQueryOptions())
 const type=ref(""),status=ref(""),tag=ref(""),dialog=ref(false),file=ref<File>(),uploadType=ref("IMAGE"),language=ref(""),tags=ref(""),message=ref(""),pageUrl=ref<string|null>(null),productByAsset=ref<Record<string,string>>({}),fileInput=ref<HTMLInputElement|null>(null)
@@ -18,6 +18,7 @@ const products=useQuery({queryKey:computed(()=>[...assetKeys.all(org.value),"pro
 const upload=useMutation({mutationFn:()=>uploadAsset({file:file.value!,asset_type:uploadType.value,language:language.value,tags:tags.value.split(",")}),onSuccess:async()=>{closeUpload();message.value="素材已上传。";await client.invalidateQueries({queryKey:assetKeys.all(org.value)})},onError:async()=>{await nextTick();fileInput.value?.focus()}})
 const uploadError=computed(()=>upload.error.value instanceof ApiError?(upload.error.value.fieldErrors?.file?.[0]??upload.error.value.userMessage):"素材上传失败，请检查后重试。")
 const link=useMutation({mutationFn:({assetId,productId}:{assetId:string;productId:string})=>linkAssetProduct(assetId,productId),onSuccess:async()=>{message.value="产品已关联。";await client.invalidateQueries({queryKey:assetKeys.all(org.value)})}})
+const archive=useMutation({mutationFn:({assetId,restore}:{assetId:string;restore:boolean})=>restore?restoreAsset(assetId):archiveAsset(assetId),onSuccess:async(_,variables)=>{message.value=variables.restore?"素材已恢复。":"素材已移到回收站，文件和事实没有删除。";await client.invalidateQueries({queryKey:assetKeys.all(org.value)})}})
 const error=(value:unknown)=>value instanceof ApiError?value.userMessage:"素材暂时无法加载，请稍后重试。"
 function pick(event:Event){
   const selected=(event.target as HTMLInputElement).files?.[0]
@@ -61,8 +62,8 @@ watch([org,type,status,tag],resetPage)
           <label>整理到产品<select v-model="productByAsset[asset.id]"><option value="">请选择</option><option v-for="product in products.data.value" :key="product.id" :value="product.id">{{ product.name_zh||product.name_en }}</option></select></label>
           <button :disabled="!productByAsset[asset.id]" @click="link.mutate({assetId:asset.id,productId:productByAsset[asset.id]})">关联</button>
         </div>
-        <div class="actions"><button @click="download(asset.id)">安全下载</button></div>
-        <AssetUnderstandingPanel :asset-id="asset.id" :product-id="selectedProduct(asset)" :can-manage="canManage" />
+        <div class="actions"><button v-if="asset.status !== 'ARCHIVED'" @click="download(asset.id)">安全下载</button><button v-if="canManage && asset.status !== 'ARCHIVED'" @click="archive.mutate({assetId:asset.id,restore:false})">移到回收站</button><button v-if="canManage && asset.status === 'ARCHIVED'" @click="archive.mutate({assetId:asset.id,restore:true})">恢复素材</button></div>
+        <AssetUnderstandingPanel v-if="asset.status !== 'ARCHIVED'" :asset-id="asset.id" :product-id="selectedProduct(asset)" :can-manage="canManage" />
       </article>
       <nav class="actions" aria-label="素材分页"><button :disabled="!assets.data.value?.previous" @click="pageUrl=assets.data.value?.previous??null">上一页</button><button :disabled="!assets.data.value?.next" @click="pageUrl=assets.data.value?.next??null">下一页</button></nav>
     </section>

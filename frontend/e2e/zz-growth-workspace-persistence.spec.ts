@@ -123,6 +123,55 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await expect(page.getByRole("heading", { name: "证据化客户机会" })).toBeVisible()
   await expect(page.getByText("3 家目标公司")).toBeVisible()
   await expect(page.getByRole("heading", { name: "PackTech GmbH" })).toBeVisible()
+  await page.getByRole("button", { name: "导入公开线索" }).click()
+  await page.getByLabel("公司名称").fill("Browser Import Drives Ltd")
+  await page.getByLabel("国家或地区").fill("United Kingdom")
+  await page.getByLabel("行业（选填）").fill("Packaging machinery")
+  await page.getByLabel("来源名称").fill("User supplied public news")
+  await page.getByLabel("公开 HTTPS 链接").fill("https://example.invalid/manual-import/evidence")
+  await page.getByLabel("原始证据摘要").fill("The company announced a permitted public packaging line expansion.")
+  const manualImportResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname === "/api/v1/growth/opportunity-imports/manual-url"
+      && response.request().method() === "POST",
+  )
+  await page.getByRole("button", { name: "保存为待核实机会" }).click()
+  expect((await manualImportResponse).status()).toBe(201)
+  await expect(page.getByRole("heading", { name: "Browser Import Drives Ltd" })).toBeVisible()
+  await expect(page.getByText("许可 / 用户提供来源")).toBeVisible()
+  await expect(page.getByText("继续观察 · 50")).toHaveCount(2)
+  await page.getByRole("button", { name: "查看证据" }).click()
+  await expect(page.getByText("人工导入网页")).toBeVisible()
+  await expect(page.getByText("manual-opportunity-v1")).toBeVisible()
+  await expect(page.getByText("公司身份仍需人工核实")).toBeVisible()
+  await expect(page.getByText("采购范围与时间仍需人工确认")).toBeVisible()
+  await expect(page.getByRole("link", { name: "打开原始来源" }))
+    .toHaveAttribute("href", "https://example.invalid/manual-import/evidence")
+
+  const csrfToken = (await page.context().cookies()).find(cookie => cookie.name === "csrftoken")?.value
+  expect(csrfToken).toBeTruthy()
+  const duplicateResponse = await page.context().request.post(
+    `${new URL(page.url()).origin}/api/v1/growth/opportunity-imports/manual-url`,
+    {
+      headers: { "X-CSRFToken": csrfToken ?? "" },
+      data: {
+        company_name: "Duplicate name must not replace the company",
+        country: "United Kingdom",
+        industry: "Packaging machinery",
+        source_label: "User supplied public news",
+        source_url: "https://example.invalid/manual-import/evidence",
+        evidence_text: "The company announced a permitted public packaging line expansion.",
+      },
+    },
+  )
+  expect(duplicateResponse.status()).toBe(200)
+  expect((await duplicateResponse.json()).created).toBe(false)
+
+  await page.reload()
+  await expect(page.getByText("4 家目标公司")).toBeVisible()
+  await page.getByRole("button", { name: /Browser Import Drives Ltd/ }).click()
+  await expect(page.getByRole("heading", { name: "Browser Import Drives Ltd" })).toBeVisible()
+  await page.getByRole("button", { name: /PackTech GmbH/ }).click()
+  await expect(page.getByRole("heading", { name: "PackTech GmbH" })).toBeVisible()
   await expect(page.getByRole("button", { name: "已加入跟进" })).toBeDisabled()
   await page.getByRole("button", { name: /NordMotion AB/ }).click()
   await expect(page.getByRole("heading", { name: "NordMotion AB" })).toBeVisible()

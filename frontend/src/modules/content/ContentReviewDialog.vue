@@ -61,6 +61,34 @@ const auditOntologyCodes = computed(() => {
     return typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code) ? [code] : []
   })
 })
+type AuditVerifiedFact = {
+  id: string
+  fieldName: string
+  value: string
+  sourceFilename: string
+  sourcePage: number | null
+  sourceExcerpt: string
+  isDemo: boolean
+}
+const safeAuditText = (value: unknown, maxLength: number): string =>
+  typeof value === "string" ? value.trim().slice(0, maxLength) : ""
+const auditVerifiedFacts = computed<AuditVerifiedFact[]>(() => {
+  const facts = audit.value?.input_snapshot.verified_product_facts
+  if (!Array.isArray(facts)) return []
+  return facts.slice(0, 50).flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return []
+    const fact = entry as Record<string, unknown>
+    const id = safeAuditText(fact.fact_id, 36)
+    const fieldName = safeAuditText(fact.field_name, 100)
+    const value = safeAuditText(fact.value, 500)
+    const sourceFilename = safeAuditText(fact.source_filename, 255)
+    const sourceExcerpt = safeAuditText(fact.source_excerpt, 500)
+    const sourcePage = typeof fact.source_page === "number" && Number.isSafeInteger(fact.source_page)
+      && fact.source_page > 0 ? fact.source_page : null
+    if (!/^[0-9a-f-]{36}$/i.test(id) || !fieldName || !value || !sourceFilename || !sourceExcerpt) return []
+    return [{ id, fieldName, value, sourceFilename, sourcePage, sourceExcerpt, isDemo: fact.is_demo === true }]
+  })
+})
 
 function codes(): string[] {
   return [...new Set(form.concept_codes.split(/[,，\n]/).map((value) => value.trim()).filter(Boolean))]
@@ -176,7 +204,7 @@ async function generate(platform: Platform): Promise<void> {
         <template v-else>
           <section class="content-fields" aria-label="内容详情"><div><h3>正文</h3><p class="body-copy">{{ item.payload.body }}</p></div><div><h3>行动号召</h3><p>{{ item.payload.cta }}</p></div><div><h3>知识代码</h3><div class="chips"><span v-for="code in item.payload.concept_codes" :key="code">{{ code }}</span></div></div><div v-if="'platform_code' in item.payload"><h3>平台代码</h3><p>{{ item.payload.platform_code }}</p></div></section>
           <details><summary>来源可追溯</summary><p>来源需求 {{ kind === 'master' ? (item as MasterContent).brief_id : '由主内容生成' }}，任务与版本信息已保留供审计。</p></details>
-          <section v-if="kind === 'master'" class="audit-panel"><button type="button" @click="loadAudit">查看AI生成记录</button><div v-if="auditOpen && audit"><p>状态 <strong>{{ audit.status }}</strong></p><p><strong>{{ audit.model }}</strong> · {{ audit.provider }}</p><p>{{ audit.prompt.code }} · v{{ audit.prompt.version }}</p><p>置信度 {{ audit.confidence ?? '未提供' }} · {{ audit.started_at }} 至 {{ audit.finished_at || '进行中' }}</p><p>人工修订：{{ audit.human_correction ? '有' : '无' }}</p><p v-if="auditOntologyCodes.length">已锁定知识：<span v-for="code in auditOntologyCodes" :key="code" class="audit-code">{{ code }}</span></p><details><summary>安全字段摘要</summary><p>输入字段：{{ safeFieldNames(audit.input_snapshot) }}</p><p>输出字段：{{ safeFieldNames(audit.output_json) }}</p></details></div></section>
+          <section v-if="kind === 'master'" class="audit-panel"><button type="button" @click="loadAudit">查看AI生成记录</button><div v-if="auditOpen && audit"><p>状态 <strong>{{ audit.status }}</strong></p><p><strong>{{ audit.model }}</strong> · {{ audit.provider }}</p><p>{{ audit.prompt.code }} · v{{ audit.prompt.version }}</p><p>置信度 {{ audit.confidence ?? '未提供' }} · {{ audit.started_at }} 至 {{ audit.finished_at || '进行中' }}</p><p>人工修订：{{ audit.human_correction ? '有' : '无' }}</p><p v-if="auditOntologyCodes.length">已锁定知识：<span v-for="code in auditOntologyCodes" :key="code" class="audit-code">{{ code }}</span></p><section v-if="auditVerifiedFacts.length" class="fact-evidence" aria-label="本次使用的已验证事实"><h3>本次使用的已验证事实</h3><article v-for="fact in auditVerifiedFacts" :key="fact.id"><strong>{{ fact.fieldName }}：{{ fact.value }}</strong><p>{{ fact.sourceFilename }}<template v-if="fact.sourcePage"> · 第 {{ fact.sourcePage }} 页</template><template v-if="fact.isDemo"> · Demo/Fake</template></p><blockquote>{{ fact.sourceExcerpt }}</blockquote></article></section><p v-else class="muted">本次生成未使用已验证的资料事实。</p><details><summary>安全字段摘要</summary><p>输入字段：{{ safeFieldNames(audit.input_snapshot) }}</p><p>输出字段：{{ safeFieldNames(audit.output_json) }}</p></details></div></section>
 
           <form v-if="rejecting" class="reject-form" @submit.prevent="act('reject')"><label>驳回原因（必填）<textarea v-model="rejectionReason" aria-label="驳回原因（必填）" rows="3" /></label><div class="dialog-actions"><button type="button" @click="rejecting = false">取消</button><button type="submit">确认驳回</button></div></form>
           <section v-if="platformPicker" class="platform-picker"><h3>为已选平台生成版本</h3><p v-if="!selectedPlatforms.length">源需求没有可用平台。</p><button v-for="platform in selectedPlatforms" :key="platform.id" type="button" :disabled="busy" @click="generate(platform)">为 {{ platform.name }} 生成</button></section>
@@ -188,5 +216,5 @@ async function generate(platform: Platform): Promise<void> {
 </template>
 
 <style scoped>
-.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.review-dialog{width:min(860px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:#fff}.review-dialog header,.dialog-actions{display:flex;justify-content:space-between;gap:1rem}.content-fields,.edit-form,.reject-form,.audit-panel,.platform-picker{display:grid;gap:1rem}.body-copy{white-space:pre-wrap}.chips{display:flex;flex-wrap:wrap;gap:.5rem}.chips span{padding:.25rem .55rem;border-radius:999px;background:#edf4f1}.dialog-actions{justify-content:flex-end;flex-wrap:wrap;margin-top:1rem}.notice,.form-alert{padding:.75rem;border-radius:.7rem}.notice{background:#edf8f2}.form-alert{background:#fff0ed;color:#79291d}.edit-form label,.reject-form label{display:grid;gap:.4rem}
+.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.review-dialog{width:min(860px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:#fff}.review-dialog header,.dialog-actions{display:flex;justify-content:space-between;gap:1rem}.content-fields,.edit-form,.reject-form,.audit-panel,.platform-picker{display:grid;gap:1rem}.body-copy{white-space:pre-wrap}.chips{display:flex;flex-wrap:wrap;gap:.5rem}.chips span{padding:.25rem .55rem;border-radius:999px;background:#edf4f1}.fact-evidence{display:grid;gap:.65rem;padding:1rem;border:1px solid #dce8f4;border-radius:.8rem;background:#f8fbff}.fact-evidence h3,.fact-evidence p{margin:0}.fact-evidence article{display:grid;gap:.35rem}.fact-evidence blockquote{margin:0;padding:.55rem .75rem;border-left:3px solid #8eb8e0;background:#fff;color:#41556a}.muted{color:#66788a}.dialog-actions{justify-content:flex-end;flex-wrap:wrap;margin-top:1rem}.notice,.form-alert{padding:.75rem;border-radius:.7rem}.notice{background:#edf8f2}.form-alert{background:#fff0ed;color:#79291d}.edit-form label,.reject-form label{display:grid;gap:.4rem}
 </style>

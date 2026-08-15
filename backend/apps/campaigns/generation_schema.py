@@ -94,11 +94,12 @@ VERIFIED_PRODUCT_FACT_SCHEMA = object_schema(
         "value": NON_EMPTY_STRING,
         "category": NON_EMPTY_STRING,
         "source_asset_id": UUID,
+        "source_filename": NON_EMPTY_STRING,
         "source_page": {"type": ["integer", "null"], "minimum": 1},
         "source_excerpt": NON_EMPTY_STRING,
         "is_demo": {"type": "boolean"},
     },
-    ["fact_id", "product_id", "field_name", "value", "category", "source_asset_id", "source_page", "source_excerpt", "is_demo"],
+    ["fact_id", "product_id", "field_name", "value", "category", "source_asset_id", "source_filename", "source_page", "source_excerpt", "is_demo"],
 )
 
 CONCEPT_VERSION_SCHEMA = object_schema(

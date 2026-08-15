@@ -51,6 +51,18 @@ function common(path: string) {
     input_snapshot: {
       Authorization: "never-render",
       ontology_snapshot: { concept_versions: [{ code: "DIN" }, { code: "PACKAGING_MACHINERY" }] },
+      verified_product_facts: [{
+        fact_id: "11111111-1111-4111-8111-111111111111",
+        product_id: "22222222-2222-4222-8222-222222222222",
+        field_name: "process",
+        value: "Gear grinding",
+        category: "PROCESS",
+        source_asset_id: "33333333-3333-4333-8333-333333333333",
+        source_filename: "gear-catalog.pdf",
+        source_page: 2,
+        source_excerpt: "Process: Gear grinding",
+        is_demo: true,
+      }],
     }, output_json: { title: "safe" }, error: null, provider_metadata: {},
   }
   return page([])
@@ -83,6 +95,9 @@ it("shows plain content fields and a safe, collapsed AI audit summary", async ()
   expect(screen.getByText("DIN")).toBeInTheDocument()
   expect(screen.getByText("PACKAGING_MACHINERY")).toBeInTheDocument()
   expect(screen.getByText("content-default · v3")).toBeInTheDocument()
+  expect(screen.getByText("process：Gear grinding")).toBeInTheDocument()
+  expect(screen.getByText(/gear-catalog\.pdf · 第 2 页 · Demo\/Fake/)).toBeInTheDocument()
+  expect(screen.getByText("Process: Gear grinding")).toBeInTheDocument()
   expect(screen.queryByText(/Authorization|never-render/)).not.toBeInTheDocument()
 })
 

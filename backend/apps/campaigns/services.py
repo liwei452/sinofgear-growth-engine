@@ -391,6 +391,7 @@ class VerifiedProductFactSnapshot:
     value: str
     category: str
     source_asset_id: UUID
+    source_filename: str
     source_page: int | None
     source_excerpt: str
     is_demo: bool
@@ -604,6 +605,7 @@ def build_content_generation_input(brief_id: UUID) -> ContentGenerationInput:
             value=fact.value,
             category=fact.category,
             source_asset_id=fact.asset_id,
+            source_filename=fact.asset.original_filename,
             source_page=fact.source_page,
             source_excerpt=fact.source_excerpt,
             is_demo=fact.is_demo,

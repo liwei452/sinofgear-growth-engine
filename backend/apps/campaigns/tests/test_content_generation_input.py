@@ -157,6 +157,7 @@ def test_generation_input_includes_only_human_verified_product_facts(
         "fact_id": str(verified.id), "product_id": str(product.id),
         "field_name": "process", "value": "Gear grinding", "category": "PROCESS",
         "source_asset_id": str(asset.id), "source_page": 1,
+        "source_filename": asset.original_filename,
         "source_excerpt": "Process: Gear grinding", "is_demo": True,
     }]
     assert generation_input_errors(snapshot) == []

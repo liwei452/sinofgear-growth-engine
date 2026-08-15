@@ -23,6 +23,7 @@ import {
 } from "./api"
 
 import PromotionPlanSummary from "./PromotionPlanSummary.vue"
+import SocialReadinessPanel, { type SocialChannelStatus } from "./SocialReadinessPanel.vue"
 import { packageFactEvidence, payloadList, payloadShots, payloadText } from "./packagePayload"
 
 const queryClient = useQueryClient()
@@ -520,6 +521,23 @@ function socialCapability(channel: PlatformConnection["channel"]): string {
   if (connection?.status === "CONNECTED") return "可准备发布，仍需人工确认"
   return "当前不会向平台发送内容"
 }
+
+const socialChannelStatuses = computed<SocialChannelStatus[]>(() => socialChannels.map(channel => {
+  const connection = formalConnection(channel.code)
+  const status = connection?.status ?? ""
+  return {
+    code: channel.code,
+    name: channel.name,
+    actionName: channel.actionName,
+    status: socialStatus(channel.code),
+    capability: socialCapability(channel.code),
+    connected: connection?.status === "CONNECTED",
+    accountId: connection?.account_id ?? null,
+    actionLabel: connectionActionLabel(channel.code, channel.actionName),
+    reauthorizationRequired: connection?.status === "REAUTHORIZATION_REQUIRED",
+    blocked: ["WAITING_PLATFORM_REVIEW", "PRIVATE_ONLY"].includes(status),
+  }
+}))
 </script>
 
 <template>
@@ -574,42 +592,13 @@ function socialCapability(channel: PlatformConnection["channel"]): string {
       :validation-period-label="validationPeriodLabel"
     />
 
-    <section class="growth-card social-readiness" aria-label="社媒账号连接状态">
-      <div class="growth-heading">
-        <div><h2>社媒账号连接</h2><p>连接只激活官方账号边界；任何内容仍需人工批准后才能提交。</p></div>
-        <span>5 个渠道</span>
-      </div>
-      <div class="social-readiness-grid">
-        <article v-for="channel in socialChannels" :key="channel.code">
-          <div>
-            <h3>{{ channel.name }}</h3>
-            <span class="connection-state">{{ socialStatus(channel.code) }}</span>
-          </div>
-          <p>{{ socialCapability(channel.code) }}</p>
-          <div class="social-readiness-actions">
-            <button
-              v-if="formalConnection(channel.code)?.status === 'CONNECTED' && formalConnection(channel.code)?.account_id"
-              class="button button-secondary" type="button"
-              :disabled="disconnectMutation.isPending.value"
-              :aria-label="`断开 ${channel.actionName} 连接`"
-              @click="disconnectSocialChannel(channel.code, channel.name)"
-            >
-              断开连接
-            </button>
-            <button
-              v-else-if="!['WAITING_PLATFORM_REVIEW', 'PRIVATE_ONLY'].includes(formalConnection(channel.code)?.status ?? '')"
-              class="button button-secondary" type="button"
-              :disabled="connectionMutation.isPending.value"
-              :aria-label="connectionActionLabel(channel.code, channel.actionName)"
-              @click="connectChannel(channel.code)"
-            >
-              {{ formalConnection(channel.code)?.status === 'REAUTHORIZATION_REQUIRED' ? '重新授权' : '连接账号' }}
-            </button>
-            <small v-else>无需在此输入密钥</small>
-          </div>
-        </article>
-      </div>
-    </section>
+    <SocialReadinessPanel
+      :channels="socialChannelStatuses"
+      :connecting="connectionMutation.isPending.value"
+      :disconnecting="disconnectMutation.isPending.value"
+      @connect="connectChannel"
+      @disconnect="disconnectSocialChannel"
+    />
 
     <section class="growth-card" aria-label="内容日历">
       <div class="growth-heading"><div><h2>内容日历</h2><p>显示当前真实内容包；没有正式排期时不会编造发布日期。</p></div><span>{{ calendarPackages.length }} 个内容包</span></div>

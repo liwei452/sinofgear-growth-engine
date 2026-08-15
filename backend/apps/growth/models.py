@@ -722,3 +722,27 @@ class PromotionPlanApproval(OrganizationOwnedModel):
 
     def delete(self, *args, **kwargs):
         raise ValueError("Promotion plan approval history cannot be deleted.")
+
+
+class SalesDeal(OrganizationOwnedModel):
+    class Stage(models.TextChoices):
+        QUOTE_CREATED = "QUOTE_CREATED", "Quote created"
+        QUOTE_SENT = "QUOTE_SENT", "Quote sent"
+        NEGOTIATING = "NEGOTIATING", "Negotiating"
+        WON = "WON", "Won"
+        LOST = "LOST", "Lost"
+        NURTURE = "NURTURE", "Nurture"
+
+    account = models.ForeignKey(
+        TargetAccount,
+        on_delete=models.PROTECT,
+        related_name="sales_deals",
+    )
+    stage = models.CharField(max_length=24, choices=Stage.choices, default=Stage.QUOTE_CREATED)
+    quote_amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    feedback = models.TextField(blank=True)
+    won_at = models.DateTimeField(null=True, blank=True)
+    lost_at = models.DateTimeField(null=True, blank=True)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Sales deal history cannot be deleted.")

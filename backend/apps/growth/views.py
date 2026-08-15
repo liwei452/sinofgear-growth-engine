@@ -6,6 +6,7 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 from rest_framework.views import APIView
 
 from apps.content.models import PlatformContent
@@ -239,40 +240,66 @@ class GrowthWorkspaceView(APIView):
     @extend_schema(tags=["Growth workspace"])
     def get(self, request):
         organization = request.organization
-        cache_key = f"growth:workspace:{organization.id}"
+        limit, offset = self._pagination(request)
+        cache_key = f"growth:workspace:{organization.id}:{limit}:{offset}"
         payload = cache.get(cache_key)
         if payload is not None:
             return Response(payload)
-        payload = self._workspace_payload(organization)
+        payload = self._workspace_payload(organization, limit=limit, offset=offset)
         cache.set(cache_key, payload, timeout=30)
         return Response(payload)
 
-    def _workspace_payload(self, organization):
-        accounts = list(TargetAccount.objects.filter(organization=organization))
-        signals = list(IntentSignal.objects.filter(organization=organization))
+    @staticmethod
+    def _pagination(request):
+        try:
+            limit = int(request.query_params.get("limit", 500))
+            offset = int(request.query_params.get("offset", 0))
+        except (TypeError, ValueError):
+            raise ValidationError("分页参数必须是整数。")
+        return max(1, min(limit, 500)), max(0, offset)
+
+    def _workspace_payload(self, organization, *, limit, offset):
+        accounts = list(
+            TargetAccount.objects.filter(organization=organization).order_by("-created_at", "-id")
+        )
+        all_signals = list(IntentSignal.objects.filter(organization=organization))
+        page_accounts = accounts[offset:offset + limit]
         return {
-            "target_accounts": TargetAccountSerializer(accounts, many=True).data,
-            "contacts": ContactSerializer(Contact.objects.filter(organization=organization), many=True).data,
-            "intent_signals": IntentSignalSerializer(signals, many=True).data,
-            "inbound_leads": InboundLeadSerializer(InboundLead.objects.filter(organization=organization), many=True).data,
-            "follow_ups": FollowUpSerializer(FollowUp.objects.filter(organization=organization), many=True).data,
+            "target_accounts": TargetAccountSerializer(page_accounts, many=True).data,
+            "accounts_total": len(accounts),
+            "accounts_has_more": offset + limit < len(accounts),
+            "accounts_offset": offset,
+            "contacts": ContactSerializer(
+                Contact.objects.filter(organization=organization)[:limit], many=True,
+            ).data,
+            "intent_signals": IntentSignalSerializer(
+                all_signals[:limit], many=True,
+            ).data,
+            "inbound_leads": InboundLeadSerializer(
+                InboundLead.objects.filter(organization=organization)[:limit], many=True,
+            ).data,
+            "follow_ups": FollowUpSerializer(
+                FollowUp.objects.filter(organization=organization)[:limit], many=True,
+            ).data,
             "outreach_drafts": OutreachDraftSerializer(
-                OutreachDraft.objects.filter(organization=organization).order_by("-created_at", "-id"), many=True,
+                OutreachDraft.objects.filter(organization=organization)
+                .order_by("-created_at", "-id")[:limit], many=True,
             ).data,
             "reactivations": [
                 reactivation_payload(record)
                 for record in ReactivationRecord.objects.filter(organization=organization)
                 .select_related("account", "draft")
-                .prefetch_related("events", "account__intent_signals")
+                .prefetch_related("events", "account__intent_signals")[:limit]
             ],
             "opportunity_reviews": OpportunityReviewSerializer(
-                OpportunityReview.objects.filter(organization=organization), many=True,
+                OpportunityReview.objects.filter(organization=organization)[:limit], many=True,
             ).data,
             "crm_handoffs": CRMHandoffSerializer(
-                CRMHandoff.objects.filter(organization=organization), many=True,
+                CRMHandoff.objects.filter(organization=organization)[:limit], many=True,
             ).data,
             "channel_packages": ChannelPackageSerializer(
-                ChannelPackage.objects.filter(organization=organization).order_by("channel", "id"), many=True,
+                ChannelPackage.objects.filter(organization=organization)
+                .order_by("channel", "id")[:limit], many=True,
             ).data,
             "publish_batches": GrowthPublishBatchSerializer(
                 GrowthPublishBatch.objects.filter(organization=organization)
@@ -280,15 +307,16 @@ class GrowthWorkspaceView(APIView):
                 many=True,
             ).data,
             "metric_receipts": MetricReceiptSerializer(
-                MetricReceipt.objects.filter(organization=organization).order_by("-created_at", "-id"), many=True,
+                MetricReceipt.objects.filter(organization=organization)
+                .order_by("-created_at", "-id")[:limit], many=True,
             ).data,
             "field_provenance": FieldProvenanceSerializer(
-                FieldProvenance.objects.filter(organization=organization), many=True,
+                FieldProvenance.objects.filter(organization=organization)[:limit], many=True,
             ).data,
             "connectors": connector_readiness(organization),
             "discovery": discovery_summary(discovery_profile_for(organization)),
             "market_pilots": market_pilot_summary(
-                signals=signals,
+                signals=all_signals,
                 accounts=accounts,
                 profiles=market_profiles_for(organization),
             ),

@@ -114,7 +114,6 @@ class FakeAIProvider:
                     "landing_page_url": snapshot["landing_page_url"],
                     "concept_codes": codes,
                     "evidence_fact_ids": fact_ids,
-                    "internal_translation_zh": "Fake 离线内部中文释义，不得发布。",
                     "platform_variants": variants,
                 }
             platform = snapshot.get("target_platforms", [{}])[0].get("code", "")

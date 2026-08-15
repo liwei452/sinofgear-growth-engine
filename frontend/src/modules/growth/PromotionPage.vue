@@ -80,6 +80,19 @@ function payloadList(channelPackage: ChannelPackage | undefined, field: string):
     typeof item === "string" && item.trim() ? [item.trim().slice(0, 500)] : []
   ))
 }
+function payloadShots(channelPackage: ChannelPackage | undefined): string[] {
+  const value = channelPackage?.payload.shot_list
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 20).flatMap((item) => {
+    if (typeof item === "string" && item.trim()) return [item.trim().slice(0, 500)]
+    if (!item || typeof item !== "object" || Array.isArray(item)) return []
+    const shot = item as Record<string, unknown>
+    const visual = typeof shot.visual === "string" ? shot.visual.trim().slice(0, 300) : ""
+    const onScreenText = typeof shot.on_screen_text === "string" ? shot.on_screen_text.trim().slice(0, 300) : ""
+    const scene = typeof shot.scene === "string" ? shot.scene.trim().slice(0, 64) : ""
+    return visual ? [[scene, visual, onScreenText].filter(Boolean).join(" · ")] : []
+  })
+}
 const tiktokFormatLabel = computed(() => {
   if (!activePackage.value) return "格式待准备"
   const duration = activePackage.value.payload.duration_seconds
@@ -90,13 +103,13 @@ const tiktokScript = computed(() => activePackage.value
   ? payloadText(activePackage.value, "script") || "待补全"
   : "待准备")
 const tiktokShots = computed(() => activePackage.value
-  ? payloadList(activePackage.value, "shot_list").join(" · ") || "待补全"
+  ? payloadShots(activePackage.value).join(" / ") || "待补全"
   : "待准备")
 const tiktokVoiceover = computed(() => activePackage.value
-  ? payloadText(activePackage.value, "english_voiceover") || "待补全"
+  ? payloadText(activePackage.value, "voiceover") || payloadText(activePackage.value, "english_voiceover") || "待补全"
   : "待准备")
 const tiktokSubtitles = computed(() => activePackage.value
-  ? payloadText(activePackage.value, "chinese_subtitles") || "待补全"
+  ? payloadText(activePackage.value, "subtitles") || payloadText(activePackage.value, "chinese_subtitles") || "待补全"
   : "待准备")
 const tiktokHashtags = computed(() => activePackage.value
   ? payloadList(activePackage.value, "hashtags").join(" ") || "待补全"
@@ -720,8 +733,8 @@ function socialCapability(channel: PlatformConnection["channel"]): string {
           <dl>
             <div><dt>脚本</dt><dd>{{ tiktokScript }}</dd></div>
             <div><dt>分镜</dt><dd>{{ tiktokShots }}</dd></div>
-            <div><dt>英文口播</dt><dd>{{ tiktokVoiceover }}</dd></div>
-            <div><dt>中文字幕</dt><dd>{{ tiktokSubtitles }}</dd></div>
+            <div><dt>目标语言口播</dt><dd>{{ tiktokVoiceover }}</dd></div>
+            <div><dt>目标语言字幕</dt><dd>{{ tiktokSubtitles }}</dd></div>
             <div><dt>标题 / 标签 / CTA</dt><dd>{{ packageTitle || "待补全" }} · {{ tiktokHashtags }} · {{ tiktokCta }}</dd></div>
             <div><dt>归因</dt><dd>UTM：{{ tiktokUtm }}</dd></div>
             <div><dt>回填</dt><dd>发布结果、播放、完播、点击、回复、询盘可手工录入</dd></div>

@@ -58,6 +58,7 @@ export function buildE2EEnvironment(runRoot, { apiOrigin, webOrigin, browser, ow
     PLAYWRIGHT_EXECUTABLE_PATH: browser,
     PLAYWRIGHT_OUTPUT_DIR: join(root, "playwright", "test-results"),
     PLAYWRIGHT_REPORT_DIR: join(root, "playwright", "report"),
+    PUBLIC_TRADE_PROVIDER_MODE: "FIXTURE",
   }
 }
 

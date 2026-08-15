@@ -27,6 +27,16 @@ const platformContent = (status = "DRAFT") => ({
   is_current_head: true,
   created_by_id: 1, created_at: "2026-08-09T00:00:00Z", updated_at: "2026-08-09T00:00:00Z",
 })
+const tiktokContentV2 = () => ({
+  ...platformContent("IN_REVIEW"), id: "platform-content-v2", platform_id: "platform-1",
+  payload: {
+    schema_version: 2, platform_code: "TIKTOK", language: "de", title: "TikTok Zahnrad",
+    body: "Kurzer deutscher TikTok-Text", cta: "Kontakt aufnehmen", landing_page_url: "https://example.com/de",
+    hashtags: ["#Zahnrad"], evidence_fact_ids: ["fact-1"], duration_seconds: 42, aspect_ratio: "9:16",
+    script: "Deutsches Skript", shot_list: [{ scene: "1", visual: "齿轮检测", on_screen_text: "Praezise Kontrolle" }],
+    voiceover: "Deutsche Sprachausgabe", voiceover_language: "de", subtitles: "Deutsche Untertitel", subtitle_language: "de",
+  },
+})
 const brief = {
   id: "brief-1", campaign_id: "campaign-1", previous_version_id: null, version: 1, status: "READY",
   target_country: "德国", customer_type: "采购", content_objective: "询盘", cta: "询价",
@@ -111,6 +121,26 @@ it("shows plain content fields and a safe, collapsed AI audit summary", async ()
   expect(screen.getByText(/gear-catalog\.pdf · 第 2 页 · Demo\/Fake/)).toBeInTheDocument()
   expect(screen.getByText("Process: Gear grinding")).toBeInTheDocument()
   expect(screen.queryByText(/Authorization|never-render/)).not.toBeInTheDocument()
+})
+
+it("shows the exact target-language TikTok package without an internal Chinese publication field", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
+    path.startsWith("/api/v1/platform-contents") ? page([tiktokContentV2()])
+      : path.startsWith("/api/v1/master-contents") ? page([]) : common(path),
+  ), { status: 200, headers: { "Content-Type": "application/json" } })))
+  const user = userEvent.setup()
+  renderPage(["content.read"])
+  await user.click(await screen.findByRole("tab", { name: "平台版本" }))
+  await user.selectOptions(screen.getByLabelText("内容状态"), "IN_REVIEW")
+  await user.click(await screen.findByRole("button", { name: "查看详情" }))
+  const dialog = within(screen.getByRole("dialog"))
+
+  expect(dialog.getByText("de")).toBeInTheDocument()
+  expect(dialog.getByText("42 秒 · 9:16")).toBeInTheDocument()
+  expect(dialog.getByText(/目标语言口播：/)).toBeInTheDocument()
+  expect(dialog.getByText("Deutsche Sprachausgabe")).toBeInTheDocument()
+  expect(dialog.getByText("Deutsche Untertitel")).toBeInTheDocument()
+  expect(dialog.queryByText("内部中文释义（不会发布）")).not.toBeInTheDocument()
 })
 
 it("creates a platform revision with the exact schema and immutable platform code", async () => {

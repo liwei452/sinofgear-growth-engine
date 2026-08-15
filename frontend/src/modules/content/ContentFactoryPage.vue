@@ -11,7 +11,7 @@ import ContentTrashPanel from "./ContentTrashPanel.vue"
 import {
   archiveBrief, cancelJob, contentAction, contentQueryKeys, generateMaster, getJob, getMasterContent, listAssets, listBriefs,
   listApprovedBriefConcepts, listCampaigns, listJobs, listMasterContents, listPlatformPage, markBriefReady,
-  retryJob, reviseBrief, type ContentBrief, type Job, type MasterContent,
+  retryJob, reviseBrief, type ContentBrief, type Job, type MasterContent, type MasterPayloadV2,
 } from "./api"
 import { useCursorCollection } from "./useCursorCollection"
 
@@ -28,6 +28,10 @@ const actionId = ref("")
 const liveJobs = ref<Job[]>([])
 const editingBrief = ref<ContentBrief | null>(null)
 const focusedMaster = ref<MasterContent | null>(null)
+const focusedMasterV2 = computed<MasterPayloadV2 | null>(() => {
+  const payload = focusedMaster.value?.payload
+  return payload && "schema_version" in payload && payload.schema_version === 2 ? payload : null
+})
 const focusedMasterElement = ref<HTMLElement | null>(null)
 const timers = new Set<ReturnType<typeof setTimeout>>()
 const pollingJobs = new Set<string>()
@@ -240,7 +244,7 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
 
 <template>
   <main class="page-stack content-factory" aria-labelledby="factory-title">
-    <header class="library-header"><div><p class="eyebrow">从需求到可审核内容</p><h1 id="factory-title">AI 内容工厂</h1><p>按“准备需求、提交审核、AI 生成、查看结果”四步完成内容生产。</p></div><button v-if="has('campaigns.manage')" class="primary-action" type="button" @click="wizardOpen = true">创建内容任务</button></header>
+    <header class="library-header"><div><p class="eyebrow">一个事实库，多渠道内容</p><h1 id="factory-title">AI 内容工厂</h1><p>AI 根据产品事实、市场、客户画像和目标发布语言准备内容，你只需选择方向并审核结果。</p></div></header>
     <p v-if="notice" role="status" class="notice">{{ notice }}</p><p v-if="actionError" role="alert" class="form-alert">{{ actionError }}</p>
     <ContentRecommendationPanel v-if="has('content.read') || has('content.manage')" :can-manage="has('content.manage')" @brief-ready="generateRecommendedBrief" />
     <section class="query-errors" aria-label="数据加载问题">
@@ -254,7 +258,13 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
     </section>
     <section class="summary-grid" aria-label="当前工作摘要"><article><strong>{{ campaigns.items.value.length }}</strong><span>活动</span></article><article><strong>{{ briefs.length }}</strong><span>内容需求</span></article><article><strong>{{ jobs.length }}</strong><span>生成任务</span></article><article><strong>{{ masterPages.items.value.length }}</strong><span>生成结果</span><button v-if="masterPages.next.value" type="button" @click="masterPages.loadMore">加载更多生成结果</button><span v-if="masterPages.error.value" role="alert">{{ masterPages.error.value }} <button type="button" @click="masterPages.loadMore">重试</button></span></article></section>
 
-    <section aria-labelledby="briefs-title"><h2 id="briefs-title">内容需求</h2><p v-if="briefsQuery.isPending.value" role="status">正在加载内容需求…</p><div v-else-if="!briefs.length" class="state-panel"><h3>还没有内容需求</h3><p>从“创建内容任务”开始，向导会帮你准备完整信息。</p></div><div v-else class="card-grid"><article v-for="item in briefs" :key="item.id" class="workflow-card"><div class="card-heading"><h3>{{ campaigns.items.value.find(c => c.id === item.campaign_id)?.name || '内容需求' }}</h3><span class="status-chip">{{ item.status === 'READY' ? '可生成' : '需求草稿' }}</span></div><p>{{ item.target_country }} · {{ item.customer_type }} · {{ item.language }}</p><p v-if="item.status === 'DRAFT' && !has('campaigns.review')" class="muted">等待审核人员确认</p><div class="card-actions"><button v-if="item.status === 'DRAFT' && has('campaigns.manage')" type="button" @click="openBriefEditor(item)">编辑需求草稿</button><button v-if="item.status === 'DRAFT' && has('campaigns.review')" type="button" :disabled="actionId === item.id" @click="ready(item)">确认需求可生成</button><button v-if="item.status === 'READY' && has('campaigns.manage')" type="button" @click="createBriefRevision(item)">创建需求修订版</button><button v-if="item.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId)" @click="startGeneration(item)">开始AI生成</button></div></article></div><p v-if="briefPages.error.value" role="alert">{{ briefPages.error.value }} <button type="button" @click="briefPages.loadMore">重试</button></p><button v-else-if="briefPages.next.value" type="button" @click="briefPages.loadMore">加载更多内容需求</button></section>
+    <section aria-labelledby="briefs-title"><h2 id="briefs-title">内容需求</h2><p v-if="briefsQuery.isPending.value" role="status">正在加载内容需求…</p><div v-else-if="!briefs.length" class="state-panel"><h3>还没有内容需求</h3><p>点击上方“让 AI 推荐推广方向”，AI 会自动组合产品、市场、客户画像、语言和渠道。</p></div><div v-else class="card-grid"><article v-for="item in briefs" :key="item.id" class="workflow-card"><div class="card-heading"><h3>{{ campaigns.items.value.find(c => c.id === item.campaign_id)?.name || '内容需求' }}</h3><span class="status-chip">{{ item.status === 'READY' ? '可生成' : '需求草稿' }}</span></div><p>{{ item.target_country }} · {{ item.customer_type }} · {{ item.language }}</p><p v-if="item.status === 'DRAFT' && !has('campaigns.review')" class="muted">等待审核人员确认</p><div class="card-actions"><button v-if="item.status === 'DRAFT' && has('campaigns.manage')" type="button" @click="openBriefEditor(item)">编辑需求草稿</button><button v-if="item.status === 'DRAFT' && has('campaigns.review')" type="button" :disabled="actionId === item.id" @click="ready(item)">确认需求可生成</button><button v-if="item.status === 'READY' && has('campaigns.manage')" type="button" @click="createBriefRevision(item)">创建需求修订版</button><button v-if="item.status === 'READY' && has('content.manage')" class="primary-action" type="button" :disabled="Boolean(actionId)" @click="startGeneration(item)">开始AI生成</button></div></article></div><p v-if="briefPages.error.value" role="alert">{{ briefPages.error.value }} <button type="button" @click="briefPages.loadMore">重试</button></p><button v-else-if="briefPages.next.value" type="button" @click="briefPages.loadMore">加载更多内容需求</button></section>
+
+    <details v-if="has('campaigns.manage')" class="state-panel advanced-create">
+      <summary>高级手动创建（可选）</summary>
+      <p>仅在需要逐项覆盖 AI 设置时使用。</p>
+      <button type="button" @click="wizardOpen = true">打开手动向导</button>
+    </details>
 
     <section v-if="briefs.length && has('campaigns.manage')" class="state-panel" aria-labelledby="cleanup-title">
       <h2 id="cleanup-title">整理内容任务</h2>
@@ -271,6 +281,24 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
       <p class="generated-body">{{ focusedMaster.payload.body }}</p>
       <p><strong>CTA：</strong>{{ focusedMaster.payload.cta }}</p>
       <p v-if="focusedMaster.payload.concept_codes.length"><strong>事实标签：</strong>{{ focusedMaster.payload.concept_codes.join('、') }}</p>
+      <template v-if="focusedMasterV2">
+        <p><strong>发布语言：{{ focusedMasterV2.language }}</strong> · 所有渠道文案、口播和字幕均使用该语言</p>
+        <details v-if="focusedMasterV2.internal_translation_zh" class="internal-translation">
+          <summary>内部中文释义（不会发布）</summary><p>{{ focusedMasterV2.internal_translation_zh }}</p>
+        </details>
+        <section class="platform-previews" aria-label="各渠道生成内容">
+          <article v-for="variant in focusedMasterV2.platform_variants" :key="variant.platform_code">
+            <p class="eyebrow">{{ variant.platform_code }} · {{ variant.language }}</p><h3>{{ variant.title }}</h3>
+            <p class="generated-body">{{ variant.body }}</p><p><strong>CTA：</strong>{{ variant.cta }}</p>
+            <p v-if="variant.hashtags.length">{{ variant.hashtags.join(' ') }}</p>
+            <template v-if="variant.platform_code === 'TIKTOK'">
+              <p><strong>{{ variant.duration_seconds }} 秒 · {{ variant.aspect_ratio }}</strong></p>
+              <p><strong>目标语言口播：</strong>{{ variant.voiceover }}</p>
+              <p><strong>目标语言字幕：</strong>{{ variant.subtitles }}</p>
+            </template>
+          </article>
+        </section>
+      </template>
       <div v-if="focusedMaster.evidence_summary?.length" class="evidence-list">
         <strong>引用的已确认事实</strong>
         <ul><li v-for="fact in focusedMaster.evidence_summary" :key="fact.fact_id">{{ fact.field_name }}：{{ fact.value }} · {{ fact.source_filename }}<template v-if="fact.source_page"> 第 {{ fact.source_page }} 页</template><span v-if="fact.is_demo"> · Demo</span></li></ul>
@@ -294,5 +322,5 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
 </template>
 
 <style scoped>
-.content-factory{display:grid;gap:1.5rem}.library-header,.card-heading,.card-actions{display:flex;justify-content:space-between;gap:1rem;align-items:flex-start}.summary-grid,.card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}.summary-grid article,.workflow-card,.generated-result{padding:1rem;border:1px solid #d8dee8;border-radius:1rem;background:#fff}.generated-result{display:grid;gap:.8rem;border-color:#9dbce8;scroll-margin-top:1rem}.generated-body{white-space:pre-wrap;line-height:1.7}.summary-grid article{display:grid}.summary-grid strong{font-size:1.8rem}.status-chip{padding:.25rem .55rem;border-radius:999px;background:#edf4f1;font-weight:700}.notice,.form-alert{padding:.8rem 1rem;border-radius:.75rem}.notice{background:#edf8f2;color:#225c42}.form-alert{background:#fff0ed;color:#79291d}.muted{color:#667085}.success{color:#187249;font-weight:700}.card-actions{justify-content:flex-end;flex-wrap:wrap}.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.brief-editor{display:grid;gap:.8rem;width:min(560px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:#fff}.brief-editor label{display:grid;gap:.35rem}@media(max-width:600px){.library-header{display:grid}.card-actions{justify-content:stretch}.card-actions button{width:100%}}
+.content-factory{display:grid;gap:1.5rem}.library-header,.card-heading,.card-actions{display:flex;justify-content:space-between;gap:1rem;align-items:flex-start}.summary-grid,.card-grid,.platform-previews{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}.summary-grid article,.workflow-card,.generated-result,.platform-previews article{padding:1rem;border:1px solid #d8dee8;border-radius:1rem;background:#fff}.generated-result{display:grid;gap:.8rem;border-color:#9dbce8;scroll-margin-top:1rem}.generated-body{white-space:pre-wrap;line-height:1.7}.internal-translation{padding:1rem;border-left:3px solid #7f8ea3;background:#f6f8fa}.internal-translation h3{margin-top:0}.advanced-create summary{cursor:pointer;font-weight:700}.summary-grid article{display:grid}.summary-grid strong{font-size:1.8rem}.status-chip{padding:.25rem .55rem;border-radius:999px;background:#edf4f1;font-weight:700}.notice,.form-alert{padding:.8rem 1rem;border-radius:.75rem}.notice{background:#edf8f2;color:#225c42}.form-alert{background:#fff0ed;color:#79291d}.muted{color:#667085}.success{color:#187249;font-weight:700}.card-actions{justify-content:flex-end;flex-wrap:wrap}.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.brief-editor{display:grid;gap:.8rem;width:min(560px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:#fff}.brief-editor label{display:grid;gap:.35rem}@media(max-width:600px){.library-header{display:grid}.card-actions{justify-content:stretch}.card-actions button{width:100%}}
 </style>

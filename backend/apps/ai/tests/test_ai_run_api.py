@@ -76,7 +76,7 @@ def test_ai_run_detail_is_organization_scoped_and_recursively_scrubbed(ai_api):
         "provider_metadata",
     }
     assert data["prompt"] == {
-        "purpose": "CONTENT_GENERATE", "code": "prompt-safe", "version": 1,
+        "purpose": "CONTENT_GENERATE", "code": "prompt-safe", "version": run.prompt_version.version,
         "provider": "fake", "model": "fake-v1",
     }
     serialized = str(data).casefold()

@@ -976,9 +976,10 @@ it("shows safe channel connection states and starts authorization without publis
     channel_packages: channels.map((channel, index) => ({
       id: `20000000-0000-4000-8000-00000000120${index + 1}`,
       account_id: null, channel, payload: channel === "TIKTOK" ? {
-        title: "TIKTOK package", duration_seconds: 30, aspect_ratio: "9:16",
-        script: "Verified TikTok script", shot_list: ["Gear inspection close-up", "Measurement result"],
-        english_voiceover: "Verified English voiceover", chinese_subtitles: "已核对中文字幕",
+        title: "TIKTOK package", language: "de", duration_seconds: 42, aspect_ratio: "9:16",
+        script: "Verified TikTok script", shot_list: [{ scene: "1", visual: "Gear inspection close-up", on_screen_text: "Praezise Kontrolle" }],
+        voiceover: "Gepruefte deutsche Sprachausgabe", voiceover_language: "de",
+        subtitles: "Gepruefte deutsche Untertitel", subtitle_language: "de",
         hashtags: ["#customgear", "#manufacturing"], cta: "View verified capabilities",
         utm: "utm_source=tiktok&utm_medium=organic&utm_campaign=verified-package",
       } : { title: `${channel} package` },
@@ -1020,9 +1021,12 @@ it("shows safe channel connection states and starts authorization without publis
   expect(tiktok).toHaveTextContent("需要重新授权")
   expect(tiktok).toHaveTextContent("发布方式：手工发布包 · 不会调用平台")
   expect(tiktok).toHaveTextContent("Verified TikTok script")
-  expect(tiktok).toHaveTextContent("Gear inspection close-up · Measurement result")
-  expect(tiktok).toHaveTextContent("Verified English voiceover")
-  expect(tiktok).toHaveTextContent("已核对中文字幕")
+  expect(tiktok).toHaveTextContent("42 秒 · 9:16")
+  expect(tiktok).toHaveTextContent("1 · Gear inspection close-up · Praezise Kontrolle")
+  expect(tiktok).toHaveTextContent("目标语言口播")
+  expect(tiktok).toHaveTextContent("Gepruefte deutsche Sprachausgabe")
+  expect(tiktok).toHaveTextContent("目标语言字幕")
+  expect(tiktok).toHaveTextContent("Gepruefte deutsche Untertitel")
   expect(tiktok).toHaveTextContent("#customgear #manufacturing")
   expect(tiktok).toHaveTextContent("View verified capabilities")
   expect(tiktok).toHaveTextContent("utm_campaign=verified-package")

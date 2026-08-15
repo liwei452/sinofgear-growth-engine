@@ -148,13 +148,18 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   await expect(seededJobCard).toContainText("SUCCEEDED")
   await expect(seededJobCard).toContainText("生成完成")
   await expect(page.locator(".generated-result")).toBeVisible()
+  await expect(page.locator(".generated-result")).toContainText("发布语言：en")
+  for (const channel of ["LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"]) {
+    await expect(page.locator(".platform-previews")).toContainText(channel)
+  }
   const seededSubmitPromise = page.waitForResponse(response =>
     new URL(response.url()).pathname.endsWith("/submit-review") && response.request().method() === "POST",
   )
   await page.locator(".generated-result").getByRole("button", { name: "提交审核" }).click()
   expect((await seededSubmitPromise).status()).toBe(200)
 
-  await page.getByRole("button", { name: "创建内容任务" }).click()
+  await page.getByText("高级手动创建（可选）").click()
+  await page.getByRole("button", { name: "打开手动向导" }).click()
   await page.getByLabel("快速新建活动").check()
   await page.getByLabel("活动名称（必填）").fill(campaignName)
   await page.getByLabel("活动说明").fill("Browser-created industrial growth campaign")
@@ -243,7 +248,7 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   await page.getByRole("button", { name: "查看AI生成记录" }).click()
   const audit = page.locator(".audit-panel")
   await expect(audit.getByText("SUCCEEDED", { exact: true })).toBeVisible()
-  await expect(audit.getByText(/phase-a-e2e-content-v1/)).toBeVisible()
+  await expect(audit.getByText(/evidence-multichannel-v2/)).toBeVisible()
   await expect(audit.getByText("HELICAL_GEAR", { exact: true })).toBeVisible()
   await expect(audit.getByText("GRINDING", { exact: true })).toBeVisible()
   await expect(audit.getByText("DIN", { exact: true })).toBeVisible()

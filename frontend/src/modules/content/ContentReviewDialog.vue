@@ -7,7 +7,7 @@ import { prepareChannelPackage } from "../growth/api"
 import {
   contentAction, generatePlatformContent, getAIRun, getBrief, reviseMasterContent,
   revisePlatformContent, type AIRun, type MasterContent, type Platform,
-  type PlatformContent,
+  type PlatformContent, type PlatformPayloadV2, type MasterPayloadV2,
 } from "./api"
 
 type ReviewItem = MasterContent | PlatformContent
@@ -39,8 +39,18 @@ const form = reactive({
   title: props.item.payload.title,
   body: props.item.payload.body,
   cta: props.item.payload.cta,
-  concept_codes: props.item.payload.concept_codes.join(", "),
+  concept_codes: "concept_codes" in props.item.payload ? props.item.payload.concept_codes.join(", ") : "",
   platform_code: "platform_code" in props.item.payload ? props.item.payload.platform_code : "",
+})
+const masterPayloadV2 = computed<MasterPayloadV2 | null>(() => {
+  const payload = props.item.payload
+  return props.kind === "master" && "schema_version" in payload && payload.schema_version === 2
+    ? payload as MasterPayloadV2 : null
+})
+const platformPayloadV2 = computed<PlatformPayloadV2 | null>(() => {
+  const payload = props.item.payload
+  return props.kind === "platform" && "schema_version" in payload && payload.schema_version === 2
+    ? payload as PlatformPayloadV2 : null
 })
 
 useModalFocus({ backdrop, dialog, initialFocus: title, close: () => emit("close") })
@@ -115,8 +125,10 @@ async function saveRevision(): Promise<void> {
     dialog.value?.querySelector<HTMLInputElement>("[data-review-field]:invalid, [data-review-field]")?.focus()
     return
   }
-  const base = { title: form.title.trim(), body: form.body.trim(), cta: form.cta.trim(), concept_codes: codes() }
-  const comparable = props.kind === "master" ? base : { ...base, platform_code: form.platform_code }
+  const editable = { title: form.title.trim(), body: form.body.trim(), cta: form.cta.trim() }
+  const comparable = "schema_version" in props.item.payload
+    ? { ...props.item.payload, ...editable }
+    : { ...editable, concept_codes: codes(), ...(props.kind === "platform" ? { platform_code: form.platform_code } : {}) }
   if (JSON.stringify(comparable) === JSON.stringify(props.item.payload)) {
     alert.value = "请先修改至少一项内容。"
     return
@@ -124,8 +136,8 @@ async function saveRevision(): Promise<void> {
   busy.value = true
   try {
     const updated = props.kind === "master"
-      ? await reviseMasterContent(props.item.id, base)
-      : await revisePlatformContent(props.item.id, { ...base, platform_code: form.platform_code })
+      ? await reviseMasterContent(props.item.id, comparable as MasterContent["payload"])
+      : await revisePlatformContent(props.item.id, comparable as PlatformContent["payload"])
     notice.value = `已创建第 ${updated.version} 版。`
     editing.value = false
     emit("updated", updated)
@@ -217,12 +229,20 @@ async function preparePublishing(): Promise<void> {
           <label>标题（必填）<input v-model="form.title" aria-label="标题（必填）" data-review-field required></label>
           <label>正文（必填）<textarea v-model="form.body" aria-label="正文（必填）" data-review-field required rows="8" /></label>
           <label>行动号召（必填）<input v-model="form.cta" aria-label="行动号召（必填）" data-review-field required></label>
-          <label>知识代码（逗号分隔）<input v-model="form.concept_codes" aria-label="知识代码（逗号分隔）"></label>
+          <label v-if="'concept_codes' in item.payload">知识代码（逗号分隔）<input v-model="form.concept_codes" aria-label="知识代码（逗号分隔）"></label>
           <label v-if="kind === 'platform'">平台代码<input v-model="form.platform_code" disabled></label>
           <div class="dialog-actions"><button type="button" @click="editing = false">取消修改</button><button class="primary-action" type="submit" :disabled="busy">保存修改版</button></div>
         </form>
         <template v-else>
-          <section class="content-fields" aria-label="内容详情"><div><h3>正文</h3><p class="body-copy">{{ item.payload.body }}</p></div><div><h3>行动号召</h3><p>{{ item.payload.cta }}</p></div><div><h3>知识代码</h3><div class="chips"><span v-for="code in item.payload.concept_codes" :key="code">{{ code }}</span></div></div><div v-if="'platform_code' in item.payload"><h3>平台代码</h3><p>{{ item.payload.platform_code }}</p></div></section>
+          <section class="content-fields" aria-label="内容详情">
+            <div v-if="masterPayloadV2 || platformPayloadV2"><h3>发布语言</h3><p>{{ (masterPayloadV2 || platformPayloadV2)?.language }}</p></div>
+            <div><h3>正文</h3><p class="body-copy">{{ item.payload.body }}</p></div><div><h3>行动号召</h3><p>{{ item.payload.cta }}</p></div>
+            <div v-if="'concept_codes' in item.payload"><h3>知识代码</h3><div class="chips"><span v-for="code in item.payload.concept_codes" :key="code">{{ code }}</span></div></div>
+            <div v-if="'platform_code' in item.payload"><h3>平台代码</h3><p>{{ item.payload.platform_code }}</p></div>
+            <div v-if="platformPayloadV2?.hashtags.length"><h3>标签</h3><p>{{ platformPayloadV2.hashtags.join(' ') }}</p></div>
+            <div v-if="platformPayloadV2?.platform_code === 'TIKTOK'"><h3>TikTok 成片要求</h3><p>{{ platformPayloadV2.duration_seconds }} 秒 · {{ platformPayloadV2.aspect_ratio }}</p><p><strong>目标语言口播：</strong>{{ platformPayloadV2.voiceover }}</p><p><strong>目标语言字幕：</strong>{{ platformPayloadV2.subtitles }}</p></div>
+            <details v-if="masterPayloadV2?.internal_translation_zh"><summary>内部中文释义（不会发布）</summary><p>{{ masterPayloadV2.internal_translation_zh }}</p></details>
+          </section>
           <details><summary>来源可追溯</summary><p>来源需求 {{ kind === 'master' ? (item as MasterContent).brief_id : '由主内容生成' }}，任务与版本信息已保留供审计。</p></details>
           <section v-if="kind === 'master'" class="audit-panel"><button type="button" @click="loadAudit">查看AI生成记录</button><div v-if="auditOpen && audit"><p>状态 <strong>{{ audit.status }}</strong></p><p><strong>{{ audit.model }}</strong> · {{ audit.provider }}</p><p>{{ audit.prompt.code }} · v{{ audit.prompt.version }}</p><p>置信度 {{ audit.confidence ?? '未提供' }} · {{ audit.started_at }} 至 {{ audit.finished_at || '进行中' }}</p><p>人工修订：{{ audit.human_correction ? '有' : '无' }}</p><p v-if="auditOntologyCodes.length">已锁定知识：<span v-for="code in auditOntologyCodes" :key="code" class="audit-code">{{ code }}</span></p><section v-if="auditVerifiedFacts.length" class="fact-evidence" aria-label="本次使用的已验证事实"><h3>本次使用的已验证事实</h3><article v-for="fact in auditVerifiedFacts" :key="fact.id"><strong>{{ fact.fieldName }}：{{ fact.value }}</strong><p>{{ fact.sourceFilename }}<template v-if="fact.sourcePage"> · 第 {{ fact.sourcePage }} 页</template><template v-if="fact.isDemo"> · Demo/Fake</template></p><blockquote>{{ fact.sourceExcerpt }}</blockquote></article></section><p v-else class="muted">本次生成未使用已验证的资料事实。</p><details><summary>安全字段摘要</summary><p>输入字段：{{ safeFieldNames(audit.input_snapshot) }}</p><p>输出字段：{{ safeFieldNames(audit.output_json) }}</p></details></div></section>
 

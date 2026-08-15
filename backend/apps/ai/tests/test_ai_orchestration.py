@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError
 from apps.ai.models import AIRun, PromptVersion
 from apps.ai.orchestration import GenerationPreflightError, execute_generation_job
 from apps.ai.services import PromptVersionService, scrub_secrets
+from apps.content.payloads import CONTENT_OUTPUT_SCHEMA_V2
 from apps.identity.models import Organization
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
@@ -168,6 +169,7 @@ def test_generation_prompt_sends_the_complete_frozen_business_context(
     instruction, separator, raw_input = provider.prompt.partition("||INPUT:")
     assert separator == "||INPUT:"
     assert "single publication language" in instruction
+    assert "omit internal_translation_zh" in instruction
     sent = __import__("json").loads(raw_input)
     assert sent["language"] == "en"
     assert sent["customer_type"] == "Industrial buyer"
@@ -231,6 +233,15 @@ def test_fake_ai_is_deterministic_and_uses_sorted_approved_codes(frozen_input):
         "cta": "Request a quote",
         "concept_codes": ["ALPHA", "ZETA"],
     }
+
+
+def test_fake_v2_does_not_generate_an_unrequested_chinese_translation(frozen_input):
+    prompt = "Create content||INPUT:" + __import__("json").dumps(frozen_input)
+
+    result = FakeAIProvider().generate(prompt=prompt, schema=CONTENT_OUTPUT_SCHEMA_V2)
+
+    assert result["language"] == "en"
+    assert "internal_translation_zh" not in result
 
 
 @pytest.mark.django_db

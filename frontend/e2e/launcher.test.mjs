@@ -44,6 +44,7 @@ test("Playwright artifacts are confined to the owned run root", async () => {
     assert.equal(environment.PLAYWRIGHT_REPORT_DIR, join(runRoot, "playwright", "report"))
     assert.equal(environment.SINO_PHASE_A_E2E_OWNERSHIP_SECRET, "a".repeat(64))
     assert.equal(environment.SINO_PHASE_A_E2E_RUN_ID, runRoot)
+    assert.equal(environment.PUBLIC_TRADE_PROVIDER_MODE, "FIXTURE")
   } finally {
     await removeOwnedRunRoot(runRoot)
   }

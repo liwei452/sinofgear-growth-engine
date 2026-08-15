@@ -48,9 +48,25 @@ function renderPage(permissions: string[]) {
   return render(ContentFactoryPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 }
 
+async function openAdvancedManualWizard(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByText("高级手动创建（可选）"))
+  await user.click(screen.getByRole("button", { name: "打开手动向导" }))
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
   document.cookie = "csrftoken=; Max-Age=0; path=/"
+})
+
+it("uses AI recommendation as the single primary creation path", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(baseResponse(path)), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
+  renderPage(["campaigns.read", "campaigns.manage", "content.read", "content.manage", "products.read"])
+
+  expect(await screen.findByRole("button", { name: "让 AI 推荐推广方向" })).toBeVisible()
+  expect(screen.queryByRole("button", { name: "创建内容任务" })).not.toBeInTheDocument()
+  expect(screen.getByText("高级手动创建（可选）")).toBeVisible()
 })
 
 it("guides a beginner through campaign creation and sends the exact brief payload", async () => {
@@ -71,7 +87,7 @@ it("guides a beginner through campaign creation and sends the exact brief payloa
   const user = userEvent.setup()
   renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read", "jobs.read", "knowledge.read"])
   await screen.findByRole("heading", { name: "AI 内容工厂" })
-  await user.click(screen.getByRole("button", { name: "创建内容任务" }))
+  await openAdvancedManualWizard(user)
 
   await user.click(screen.getByLabelText("快速新建活动"))
   await user.type(screen.getByLabelText("活动名称（必填）"), "德国获客")
@@ -124,7 +140,7 @@ it("validates product/platform choices and respects the brief reviewer split", a
   renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read"])
   await screen.findByText("等待审核人员确认")
   expect(screen.queryByRole("button", { name: "确认需求可生成" })).not.toBeInTheDocument()
-  await user.click(screen.getByRole("button", { name: "创建内容任务" }))
+  await openAdvancedManualWizard(user)
   await user.click(screen.getByRole("button", { name: "下一步" }))
   await user.click(screen.getByRole("button", { name: "下一步" }))
   expect(screen.getByRole("alert")).toHaveTextContent("请至少选择一个产品和一个平台")
@@ -143,7 +159,7 @@ it("loads one safe cursor page and selects products and assets from page two", a
   vi.stubGlobal("fetch", fetchMock)
   const user = userEvent.setup()
   renderPage(["campaigns.read", "campaigns.manage", "products.read", "assets.read"])
-  await user.click(await screen.findByRole("button", { name: "创建内容任务" }))
+  await openAdvancedManualWizard(user)
   await user.click(screen.getByRole("button", { name: "下一步" }))
 
   await user.click(await screen.findByRole("button", { name: "加载更多产品" }))
@@ -162,7 +178,7 @@ it("requires selling points, advantages, and keywords before confirmation", asyn
   })))
   const user = userEvent.setup()
   renderPage(["campaigns.read", "campaigns.manage", "products.read"])
-  await user.click(await screen.findByRole("button", { name: "创建内容任务" }))
+  await openAdvancedManualWizard(user)
   await user.click(screen.getByRole("button", { name: "下一步" }))
   await user.click(screen.getByLabelText("精密齿轮"))
   await user.click(screen.getByLabelText("LinkedIn"))
@@ -196,7 +212,15 @@ it("starts generation only for READY briefs with content.manage and shows one jo
       return new Response(JSON.stringify({
         id: "master-1", brief_id: "brief-1", brief_version: 1, generation_job_id: "job-1",
         ai_run_id: "run-1", lineage_id: "master-1", previous_version_id: null, version: 1,
-        payload: { title: "Generated visible title", body: "Generated body", cta: "Contact us", concept_codes: [] },
+        payload: {
+          schema_version: 2, language: "de", title: "Generated visible title", body: "Generated body",
+          cta: "Kontakt aufnehmen", landing_page_url: "https://example.com/de", concept_codes: [],
+          evidence_fact_ids: ["fact-1"], internal_translation_zh: "仅供内部理解，不发布",
+          platform_variants: [
+            { platform_code: "LINKEDIN", language: "de", title: "LinkedIn Fachbeitrag", body: "LinkedIn 专属德语正文", cta: "Kontakt aufnehmen", landing_page_url: "https://example.com/de", hashtags: ["#Praezisionszahnrad"], evidence_fact_ids: ["fact-1"] },
+            { platform_code: "TIKTOK", language: "de", title: "TikTok Zahnrad", body: "TikTok 专属德语正文", cta: "Kontakt aufnehmen", landing_page_url: "https://example.com/de", hashtags: ["#Zahnrad"], evidence_fact_ids: ["fact-1"], duration_seconds: 42, aspect_ratio: "9:16", script: "Deutsches TikTok-Skript", shot_list: [{ scene: "1", visual: "齿轮检测", on_screen_text: "Praezise Kontrolle" }], voiceover: "Deutsche Sprachausgabe", voiceover_language: "de", subtitles: "Deutsche Untertitel", subtitle_language: "de" },
+          ],
+        },
         provenance: { verified_product_facts: [{ field_name: "process", value: "Gear hobbing" }] },
         evidence_summary: [{ fact_id: "fact-1", field_name: "process", value: "Gear hobbing", source_filename: "gear.pdf", source_page: 2, source_excerpt: "Process", is_demo: false }],
         status: "IN_REVIEW", is_current_head: true, created_by_id: 1, created_at: "", updated_at: "",
@@ -212,6 +236,11 @@ it("starts generation only for READY briefs with content.manage and shows one jo
   expect(await screen.findByText("生成完成")).toBeInTheDocument()
   expect(await screen.findByRole("heading", { name: "Generated visible title" })).toBeVisible()
   expect(screen.getByText("Generated body")).toBeVisible()
+  expect(screen.getByText("发布语言：de")).toBeVisible()
+  expect(screen.getByRole("heading", { name: "LinkedIn Fachbeitrag" })).toBeVisible()
+  expect(screen.getByText("TikTok 专属德语正文")).toBeVisible()
+  expect(screen.getByText("42 秒 · 9:16")).toBeVisible()
+  expect(screen.getByText("内部中文释义（不会发布）")).toBeVisible()
   expect(screen.getByText(/process：Gear hobbing/)).toBeVisible()
   expect(screen.getByText("Fake / 离线演示生成")).toBeInTheDocument()
   expect(screen.getByText("该结果必须人工审核，不能视为真实模型结论。")).toBeInTheDocument()
@@ -298,7 +327,7 @@ it("shows named product, platform, and job errors and recovers each query", asyn
   await user.click(screen.getByRole("button", { name: "重新加载生成任务" }))
 
   expect(await screen.findByText("任务 job-recovered")).toBeInTheDocument()
-  await user.click(screen.getByRole("button", { name: "创建内容任务" }))
+  await openAdvancedManualWizard(user)
   await user.click(screen.getByRole("button", { name: "下一步" }))
   expect(await screen.findByLabelText("精密齿轮")).toBeInTheDocument()
   expect(screen.getByLabelText("LinkedIn")).toBeInTheDocument()

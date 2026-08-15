@@ -60,8 +60,21 @@ export type RecommendationSelection = {
   recommendation_id: string; option_id: string; brief_id: string; brief_status: "READY"
 }
 export type ContentStatus = "DRAFT" | "IN_REVIEW" | "APPROVED" | "REJECTED" | "PUBLISHED" | "ARCHIVED"
-export type MasterPayload = { title: string; body: string; cta: string; concept_codes: string[] }
-export type PlatformPayload = MasterPayload & { platform_code: string }
+export type LegacyMasterPayload = { title: string; body: string; cta: string; concept_codes: string[] }
+export type ContentShot = { scene: string; visual: string; on_screen_text: string }
+export type PlatformPayloadV2 = {
+  schema_version: 2; platform_code: string; language: string; title: string; body: string; cta: string
+  landing_page_url: string; hashtags: string[]; evidence_fact_ids: string[]
+  duration_seconds?: number; aspect_ratio?: "9:16"; script?: string; shot_list?: ContentShot[]
+  voiceover?: string; voiceover_language?: string; subtitles?: string; subtitle_language?: string
+}
+export type MasterPayloadV2 = {
+  schema_version: 2; language: string; title: string; body: string; cta: string; landing_page_url: string
+  concept_codes: string[]; evidence_fact_ids: string[]; internal_translation_zh?: string
+  platform_variants: Array<Omit<PlatformPayloadV2, "schema_version">>
+}
+export type MasterPayload = LegacyMasterPayload | MasterPayloadV2
+export type PlatformPayload = (LegacyMasterPayload & { platform_code: string }) | PlatformPayloadV2
 export type MasterContent = {
   id: string; brief_id: string; brief_version: number; generation_job_id: string
   ai_run_id: string; lineage_id: string; previous_version_id: string | null; version: number

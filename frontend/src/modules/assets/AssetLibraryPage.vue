@@ -19,7 +19,14 @@ const upload=useMutation({mutationFn:()=>uploadAsset({file:file.value!,asset_typ
 const uploadError=computed(()=>upload.error.value instanceof ApiError?(upload.error.value.fieldErrors?.file?.[0]??upload.error.value.userMessage):"素材上传失败，请检查后重试。")
 const link=useMutation({mutationFn:({assetId,productId}:{assetId:string;productId:string})=>linkAssetProduct(assetId,productId),onSuccess:async()=>{message.value="产品已关联。";await client.invalidateQueries({queryKey:assetKeys.all(org.value)})}})
 const error=(value:unknown)=>value instanceof ApiError?value.userMessage:"素材暂时无法加载，请稍后重试。"
-function pick(event:Event){file.value=(event.target as HTMLInputElement).files?.[0]}
+function pick(event:Event){
+  const selected=(event.target as HTMLInputElement).files?.[0]
+  file.value=selected
+  if(!selected)return
+  const mimeType={"application/pdf":"DOCUMENT","video/mp4":"VIDEO","image/jpeg":"IMAGE","image/png":"IMAGE","image/webp":"IMAGE"}[selected.type]
+  if(mimeType)uploadType.value=mimeType
+  else if(selected.name.toLocaleLowerCase().endsWith(".pdf"))uploadType.value="DOCUMENT"
+}
 function resetPage(){pageUrl.value=null}
 function clearFilters(){type.value="";status.value="";tag.value="";resetPage()}
 function closeUpload(){dialog.value=false;file.value=undefined;uploadType.value="IMAGE";language.value="";tags.value=""}

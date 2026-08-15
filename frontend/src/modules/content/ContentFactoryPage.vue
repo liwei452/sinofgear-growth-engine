@@ -61,6 +61,12 @@ const jobs = computed(() => {
   return [...new Map(combined.map((job) => [job.job_id, job])).values()]
 })
 const activeJobStatuses = new Set(["QUEUED", "RUNNING", "RETRY_QUEUED"])
+const currentStep = computed(() => {
+  if (!briefs.value.length) return 1
+  if (!jobs.value.length) return 2
+  if (jobs.value.some(job => activeJobStatuses.has(job.status))) return 3
+  return 4
+})
 
 function safeError(error: unknown): string {
   if (error instanceof ApiError) return error.status === 409
@@ -246,7 +252,7 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
 <template>
   <main class="page-stack content-factory" aria-labelledby="factory-title">
     <header class="library-header"><div><p class="eyebrow">一个事实库，多渠道内容</p><h1 id="factory-title">AI 内容工厂</h1><p>AI 根据产品事实、市场、客户画像和目标发布语言准备内容，你只需选择方向并审核结果。</p></div></header>
-    <ContentSteps />
+    <ContentSteps :current-step="currentStep" />
     <p v-if="notice" role="status" class="notice">{{ notice }}</p><p v-if="actionError" role="alert" class="form-alert">{{ actionError }}</p>
     <ContentRecommendationPanel v-if="has('content.read') || has('content.manage')" :can-manage="has('content.manage')" @brief-ready="generateRecommendedBrief" />
     <section class="query-errors" aria-label="数据加载问题">

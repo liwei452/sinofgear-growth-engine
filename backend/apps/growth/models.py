@@ -746,3 +746,20 @@ class SalesDeal(OrganizationOwnedModel):
 
     def delete(self, *args, **kwargs):
         raise ValueError("Sales deal history cannot be deleted.")
+
+
+class TradeCompanyMatch(OrganizationOwnedModel):
+    importer_name = models.CharField(max_length=255)
+    country_code = models.CharField(max_length=3)
+    account = models.ForeignKey(
+        TargetAccount,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="trade_company_matches",
+    )
+    method = models.CharField(max_length=24, default="NO_MATCH")
+    confidence = models.FloatField(default=0.0)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Trade company match history cannot be deleted.")

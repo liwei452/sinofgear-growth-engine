@@ -6,6 +6,12 @@ ALLOWED_PROCUREMENT_FIELDS = (
     "buyer_identifier", "buyer_name", "buyer_country", "notice_title",
     "publication_date", "deadline_date", "cpv_codes", "source_url",
 )
+ALLOWED_TRADE_FIELDS = (
+    "reporter_code", "reporter_name", "partner_code", "partner_name",
+    "flow", "flow_name", "hs_code", "period", "trade_value_usd",
+    "quantity", "quantity_unit", "source_url", "source_dataset",
+    "dataset_version",
+)
 SOURCE_GOVERNANCE = {
     "TED": {
         "source_owner": "Publications Office of the European Union",
@@ -16,6 +22,11 @@ SOURCE_GOVERNANCE = {
         "source_owner": "UK Cabinet Office",
         "access_method": "OFFICIAL_PUBLIC_API",
         "license_contract": "OPEN_GOVERNMENT_LICENCE_3.0",
+    },
+    "UN_COMTRADE": {
+        "source_owner": "United Nations Statistics Division",
+        "access_method": "OFFICIAL_PUBLIC_API",
+        "license_contract": "UN_COMTRADE_PUBLIC_API_TERMS_REVIEW_REQUIRED",
     },
 }
 
@@ -30,6 +41,21 @@ def governance_for(source_code: str) -> dict[str, object]:
         "retention_period": "365_DAYS_THEN_REVIEW",
         "redistribution_restriction": "SOURCE_LINK_AND_SHORT_EXCERPT_ONLY",
         "queue": "MONITORING",
+    }
+
+
+def trade_governance_for(source_code: str) -> dict[str, object]:
+    if source_code != "UN_COMTRADE":
+        raise KeyError(source_code)
+    source = SOURCE_GOVERNANCE[source_code]
+    return {
+        **source,
+        "robots_policy": "API_NOT_WEB_SCRAPING",
+        "rate_limit": "PUBLIC_API_LIMITS_AND_DAILY_SCHEDULE",
+        "allowed_fields": list(ALLOWED_TRADE_FIELDS),
+        "retention_period": "365_DAYS_THEN_REVIEW",
+        "redistribution_restriction": "AGGREGATES_WITH_SOURCE_ATTRIBUTION_ONLY",
+        "queue": "MARKET_RESEARCH",
     }
 
 

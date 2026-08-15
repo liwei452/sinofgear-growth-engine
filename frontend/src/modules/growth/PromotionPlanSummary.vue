@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed } from "vue"
+import { computed, ref } from "vue"
 
 import type { PromotionPlan } from "./api"
 
 const props = defineProps<{ plan?: PromotionPlan }>()
+const approved = ref(false)
+const emit = defineEmits<{ regenerate: [] }>()
 
 const marketsLabel = computed(() => (
   props.plan?.target_markets.map(market => market.country_label).join("、") || "待 AI 生成"
@@ -44,6 +46,12 @@ function channelLabel(code: string): string {
       <div><span>内容策略</span><strong>{{ themesLabel }}</strong></div>
       <div><span>发布渠道</span><strong>{{ channelsLabel }}</strong></div>
     </div>
+    <div class="plan-summary-actions">
+      <button v-if="!approved" class="button button-primary" type="button" @click="approved = true">确认推广计划</button>
+      <p v-else class="plan-approved" role="status">计划已确认，可以开始创建内容。</p>
+      <a v-if="approved" class="button button-primary" href="/content-factory">去创建内容</a>
+      <button class="button button-secondary" type="button" @click="emit('regenerate')">重新生成</button>
+    </div>
   </section>
 </template>
 
@@ -70,5 +78,16 @@ function channelLabel(code: string): string {
 .plan-summary-grid span {
   color: var(--sg-muted);
   font-size: 0.72rem;
+}
+.plan-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.plan-approved {
+  margin: 0;
+  color: var(--sg-success, #18875d);
+  font-weight: 700;
 }
 </style>

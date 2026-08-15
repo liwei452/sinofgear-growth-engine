@@ -32,6 +32,9 @@ import { packageFactEvidence, payloadList, payloadShots, payloadText } from "./p
 
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
+async function regeneratePlan(): Promise<void> {
+  await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+}
 const locallyApprovedIds = ref(new Set<string>())
 const approvalError = ref("")
 const batchReviewConfirmed = ref(false)
@@ -550,6 +553,7 @@ const socialChannelStatuses = computed<SocialChannelStatus[]>(() => socialChanne
 
     <PromotionPlanSummary
       :plan="workspaceQuery.data.value?.promotion_plan"
+      @regenerate="regeneratePlan"
     />
 
     <SocialReadinessPanel

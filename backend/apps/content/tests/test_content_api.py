@@ -279,6 +279,22 @@ def test_generation_discloses_fake_provider_before_work_starts(content_provenanc
     assert response.data["generation_label"] == "Fake / 离线演示生成"
 
 
+def test_generation_selects_latest_published_content_prompt(content_provenance):
+    organization, _actor, brief, _job, _run = content_provenance
+    latest = PromptVersion.objects.filter(
+        purpose="CONTENT_GENERATE",
+        status=PromptVersion.Status.PUBLISHED,
+    ).order_by("-version").first()
+    response = _client(organization, Role.Code.ADMINISTRATOR).post(
+        f"/api/v1/content-briefs/{brief.id}/generate-master-content", {}, format="json",
+    )
+
+    assert latest is not None
+    assert response.status_code == 202
+    created_job = Job.objects.get(pk=response.data["job_id"])
+    assert created_job.idempotency_key.endswith(f":{latest.id}")
+
+
 def test_generation_does_not_reschedule_completed_idempotent_job(
     content_provenance, monkeypatch,
 ):

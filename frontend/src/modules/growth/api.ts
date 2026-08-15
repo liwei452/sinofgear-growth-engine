@@ -41,6 +41,21 @@ export type OpportunityScoreBreakdown = {
   risk_penalty: number
 }
 
+export type ManualOpportunityImportInput = {
+  company_name: string
+  country: string
+  industry: string
+  source_label: string
+  source_url: string
+  evidence_text: string
+}
+
+export type ManualOpportunityImportResult = {
+  account: TargetAccount
+  signal: IntentSignal
+  created: boolean
+}
+
 export type FollowUp = {
   id: string
   account_id: string
@@ -152,6 +167,17 @@ export async function createOpportunityDraft(accountId: string): Promise<DraftAc
     `/api/v1/growth/opportunities/${accountId}/draft`, { method: "POST", body: {} },
   )
   if (!result) throw new Error("草稿响应为空。")
+  return result
+}
+
+export async function importManualOpportunity(
+  input: ManualOpportunityImportInput,
+): Promise<ManualOpportunityImportResult> {
+  const result = await apiRequest<ManualOpportunityImportResult>(
+    "/api/v1/growth/opportunity-imports/manual-url",
+    { method: "POST", body: input },
+  )
+  if (!result) throw new Error("公开线索导入响应为空。")
   return result
 }
 

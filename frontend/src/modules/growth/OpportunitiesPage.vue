@@ -8,6 +8,7 @@ import {
   growthQueryKeys,
   growthWorkspaceQueryOptions,
 } from "./api"
+import ManualOpportunityImportForm from "./ManualOpportunityImportForm.vue"
 
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
@@ -18,6 +19,8 @@ const draftOpen = ref(false)
 const generatedDraftEnglish = ref("")
 const generatedDraftChinese = ref("")
 const actionError = ref("")
+const importOpen = ref(false)
+const importStatus = ref("")
 
 const scoreLabels = {
   icp_fit: "ICP 匹配",
@@ -112,7 +115,9 @@ const detail = computed(() => ({
   country: activeAccount.value?.country === "Germany" ? "德国" : activeAccount.value?.country ?? "德国",
   industry: activeAccount.value?.industry ?? "包装机械",
   size: activeAccount.value?.employee_range ?? "51–200",
-  label: activeAccount.value?.data_label ?? "Demo / Fake",
+  label: activeAccount.value?.is_demo === false
+    ? "许可 / 用户提供来源"
+    : activeAccount.value?.data_label ?? "Demo / Fake",
   confidence: activeSignal.value?.confidence ?? 91,
   priority: activeSignal.value?.priority_label ?? "继续观察",
   signal: activeSignal.value?.evidence_text ?? "公开采购岗位：精密传动采购；发现于 2026-08-14 09:20。",
@@ -163,17 +168,31 @@ async function generateDraft(): Promise<void> {
     actionError.value = "联系草稿暂时无法生成，请稍后重试。"
   }
 }
+
+async function handleImported(accountId: string): Promise<void> {
+  selectedAccountId.value = accountId
+  importOpen.value = false
+  importStatus.value = ""
+  await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+  importStatus.value = "已保存为待核实机会；系统没有访问来源网页，也没有联系客户。"
+}
 </script>
 
 <template>
   <div class="growth-page">
-    <header class="growth-hero"><div><p class="eyebrow">客户机会</p><h1>证据化客户机会</h1><p>目标公司不是联系人，公开信号也不是已确认询盘。</p></div><span class="fake-label">Demo / Fake</span></header>
+    <header class="growth-hero"><div><p class="eyebrow">客户机会</p><h1>证据化客户机会</h1><p>目标公司不是联系人，公开信号也不是已确认询盘。</p></div><span class="fake-label">人工审核后跟进</span></header>
     <dl class="object-legend">
       <div><dt>目标公司</dt><dd>符合 ICP、值得研究的企业</dd></div>
       <div><dt>联系人</dt><dd>公开可验证的角色或联系路径</dd></div>
       <div><dt>需求信号</dt><dd>带时间和原始证据的变化</dd></div>
       <div><dt>入站线索</dt><dd>主动留下联系信息的人或企业</dd></div>
     </dl>
+    <div class="opportunity-import-bar">
+      <div><strong>已有公开采购线索？</strong><span>保存证据后由你决定是否跟进。</span></div>
+      <button class="button button-secondary" type="button" :aria-expanded="importOpen" @click="importOpen = !importOpen">{{ importOpen ? "收起导入" : "导入公开线索" }}</button>
+    </div>
+    <ManualOpportunityImportForm v-if="importOpen" @imported="handleImported" @cancelled="importOpen = false" />
+    <p v-if="importStatus" class="approval-status" role="status">{{ importStatus }}</p>
     <section v-if="sortedAccounts.length" class="growth-card opportunity-queue" aria-labelledby="opportunity-queue-title">
       <div class="growth-heading"><div><h2 id="opportunity-queue-title">今日机会队列</h2><p>先按证据门槛、再按信号强度排序；点击公司查看依据。</p></div><span>{{ sortedAccounts.length }} 家目标公司</span></div>
       <div class="opportunity-queue-grid">

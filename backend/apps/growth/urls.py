@@ -7,6 +7,7 @@ from .views import (
     FollowUpView,
     GrowthWorkspaceView,
     MetricReceiptCreateView,
+    ManualOpportunityImportView,
     OutreachDraftView,
     PublishBatchCreateView,
     PublishBatchDetailView,
@@ -15,6 +16,11 @@ from .views import (
 
 urlpatterns = [
     path("growth/workspace", GrowthWorkspaceView.as_view(), name="growth-workspace"),
+    path(
+        "growth/opportunity-imports/manual-url",
+        ManualOpportunityImportView.as_view(),
+        name="growth-manual-opportunity-import",
+    ),
     path("growth/opportunities/<uuid:account_id>/follow-up", FollowUpView.as_view(), name="growth-follow-up"),
     path("growth/opportunities/<uuid:account_id>/draft", OutreachDraftView.as_view(), name="growth-draft"),
     path(

@@ -18,14 +18,19 @@ from .models import (
     OutreachDraft,
     TargetAccount,
 )
+from .manual_imports import import_manual_opportunity
 from .serializers import (
     ChannelPackageSerializer,
     ContactSerializer,
     FieldProvenanceSerializer,
     FollowUpSerializer,
     GrowthPublishBatchSerializer,
+    GrowthErrorSerializer,
+    GrowthValidationErrorSerializer,
     InboundLeadSerializer,
     IntentSignalSerializer,
+    ManualOpportunityImportResponseSerializer,
+    ManualOpportunityImportSerializer,
     MetricReceiptSerializer,
     OutreachDraftSerializer,
     PublishBatchCreateSerializer,
@@ -94,6 +99,41 @@ class GrowthWorkspaceView(APIView):
             ).data,
             "connectors": connector_readiness(organization),
         })
+
+
+class ManualOpportunityImportView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=ManualOpportunityImportSerializer,
+        responses={
+            200: ManualOpportunityImportResponseSerializer,
+            201: ManualOpportunityImportResponseSerializer,
+            400: GrowthValidationErrorSerializer,
+            403: GrowthErrorSerializer,
+        },
+    )
+    def post(self, request):
+        serializer = ManualOpportunityImportSerializer(data=request.data)
+        if not serializer.is_valid():
+            first_messages = next(iter(serializer.errors.values()), ["请检查导入内容。"])
+            first_message = first_messages[0] if first_messages else "请检查导入内容。"
+            return Response({
+                "code": "INVALID_MANUAL_OPPORTUNITY",
+                "message": str(first_message),
+                "errors": serializer.errors,
+            }, status=400)
+        account, signal, created = import_manual_opportunity(
+            organization=request.organization,
+            data=serializer.validated_data,
+        )
+        payload = {
+            "account": TargetAccountSerializer(account).data,
+            "signal": IntentSignalSerializer(signal).data,
+            "created": created,
+        }
+        return Response(payload, status=201 if created else 200)
 
 
 class FollowUpView(APIView):

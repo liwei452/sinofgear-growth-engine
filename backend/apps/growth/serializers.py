@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from .models import (
@@ -13,12 +14,23 @@ from .models import (
     OutreachDraft,
     TargetAccount,
 )
+from .manual_imports import validate_manual_source_url
 
 
 class PublishBatchCreateSerializer(serializers.Serializer):
     package_ids = serializers.ListField(
         child=serializers.UUIDField(), allow_empty=False, max_length=8,
     )
+
+
+class GrowthErrorSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    message = serializers.CharField()
+    recovery_action = serializers.CharField()
+
+
+class GrowthValidationErrorSerializer(GrowthErrorSerializer):
+    errors = serializers.DictField(required=False)
 
 
 class GrowthPublishItemSerializer(serializers.ModelSerializer):
@@ -119,6 +131,30 @@ class IntentSignalSerializer(serializers.ModelSerializer):
     def get_priority_label(self, obj: IntentSignal) -> str:
         coverage = int((obj.score_breakdown or {}).get("evidence_coverage", 0))
         return "优先跟进" if obj.confidence >= 80 and coverage >= 15 else "继续观察"
+
+
+class ManualOpportunityImportSerializer(serializers.Serializer):
+    company_name = serializers.CharField(min_length=2, max_length=255)
+    country = serializers.CharField(min_length=2, max_length=96)
+    industry = serializers.CharField(max_length=160, allow_blank=True, required=False, default="")
+    source_label = serializers.CharField(min_length=2, max_length=255)
+    source_url = serializers.CharField(max_length=200)
+    evidence_text = serializers.CharField(
+        min_length=10,
+        error_messages={"min_length": "原始证据至少需要 10 个字符。"},
+    )
+
+    def validate_source_url(self, value: str) -> str:
+        try:
+            return validate_manual_source_url(value)
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message) from error
+
+
+class ManualOpportunityImportResponseSerializer(serializers.Serializer):
+    account = TargetAccountSerializer()
+    signal = IntentSignalSerializer()
+    created = serializers.BooleanField()
 
 
 class InboundLeadSerializer(serializers.ModelSerializer):

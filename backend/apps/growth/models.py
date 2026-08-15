@@ -612,3 +612,61 @@ class TradeDatasetSnapshot(OrganizationOwnedModel):
 
     def delete(self, *args, **kwargs):
         raise ValueError("Trade dataset snapshot history cannot be deleted.")
+
+
+DEFAULT_MAPS_CITIES = (
+    {"name": "Ho Chi Minh", "country_code": "VN"},
+    {"name": "Hanoi", "country_code": "VN"},
+    {"name": "Haiphong", "country_code": "VN"},
+    {"name": "Binh Duong", "country_code": "VN"},
+    {"name": "Dong Nai", "country_code": "VN"},
+    {"name": "Jakarta", "country_code": "ID"},
+    {"name": "Surabaya", "country_code": "ID"},
+    {"name": "Bandung", "country_code": "ID"},
+    {"name": "Manila", "country_code": "PH"},
+    {"name": "Cebu", "country_code": "PH"},
+    {"name": "Johannesburg", "country_code": "ZA"},
+    {"name": "Durban", "country_code": "ZA"},
+    {"name": "Cape Town", "country_code": "ZA"},
+)
+DEFAULT_MAPS_KEYWORDS = (
+    "mining equipment",
+    "conveyor",
+    "crusher",
+    "industrial machinery",
+    "gearbox repair",
+    "cement equipment",
+    "agricultural machinery",
+    "packaging machinery",
+)
+
+
+def default_maps_cities():
+    return [dict(city) for city in DEFAULT_MAPS_CITIES]
+
+
+def default_maps_keywords():
+    return list(DEFAULT_MAPS_KEYWORDS)
+
+
+class GoogleMapsDiscoveryConfig(OrganizationOwnedModel):
+    organization = models.OneToOneField(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name="google_maps_discovery_config",
+    )
+    enabled = models.BooleanField(default=False)
+    api_key_ciphertext = models.TextField(blank=True)
+    api_key_key_version = models.PositiveSmallIntegerField(default=1)
+    cities = models.JSONField(default=default_maps_cities)
+    keywords = models.JSONField(default=default_maps_keywords)
+    radius_km = models.PositiveSmallIntegerField(default=50)
+    daily_quota = models.PositiveSmallIntegerField(default=500)
+    schedule_time = models.CharField(max_length=5, default="02:00")
+    next_run_at = models.DateTimeField(null=True, blank=True)
+    last_succeeded_at = models.DateTimeField(null=True, blank=True)
+    consecutive_failures = models.PositiveSmallIntegerField(default=0)
+    last_error_code = models.CharField(max_length=64, blank=True)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Google Maps discovery config cannot be deleted.")

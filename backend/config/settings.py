@@ -178,6 +178,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.growth.tasks.scan_due_discovery_profiles",
         "schedule": 3600.0,
     },
+    "growth-maps-discovery-hourly": {
+        "task": "apps.growth.tasks.scan_due_maps_configs",
+        "schedule": 3600.0,
+    },
 }
 
 OBJECT_STORAGE_BACKEND = os.environ.get("OBJECT_STORAGE_BACKEND", "minio")

@@ -61,7 +61,10 @@ function formatDate(value: string): string {
       <div class="candidate-review-title">
         <div>
           <h3>{{ candidate.company_name }}</h3>
-          <p>{{ candidate.country }}<template v-if="candidate.industry"> · {{ candidate.industry }}</template></p>
+          <p>
+            {{ candidate.country }}<template v-if="candidate.industry"> · {{ candidate.industry }}</template>
+            · <span class="candidate-grade">{{ candidate.grade }} 级</span>
+          </p>
         </div>
         <span class="status-pill">{{ candidate.status_label }}</span>
       </div>
@@ -79,5 +82,9 @@ function formatDate(value: string): string {
     </article>
   </section>
 </template>
+
+<style scoped>
+.candidate-grade { color: var(--sg-brand); font-weight: 700; }
+</style>
 
 <style scoped src="./growth-pages.css"></style>

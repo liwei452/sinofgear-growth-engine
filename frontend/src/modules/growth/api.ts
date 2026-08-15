@@ -284,6 +284,8 @@ export type DiscoveryCandidate = {
   license_contract: string
   import_format: "CSV" | "JSON"
   is_demo: boolean
+  score: number
+  grade: "A" | "B" | "C"
   created_at: string
 }
 

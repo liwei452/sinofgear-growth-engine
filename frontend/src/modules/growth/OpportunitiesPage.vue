@@ -361,6 +361,10 @@ async function handleImported(accountId: string): Promise<void> {
           <div v-if="activeSignal?.evidence_envelope?.matched_keywords"><dt>命中关键词</dt><dd>{{ activeSignal.evidence_envelope.matched_keywords.join("、") || "未命中产品关键词" }}</dd></div>
           <div v-if="activeSignal?.evidence_envelope?.company_match_confidence !== undefined"><dt>企业匹配置信度</dt><dd>{{ activeSignal.evidence_envelope.company_match_confidence }}%</dd></div>
           <div v-if="activeSignal?.evidence_envelope?.ai_exclusion_reasons"><dt>AI 排除理由</dt><dd>{{ activeSignal.evidence_envelope.ai_exclusion_reasons.join("；") || "无 AI 排除项" }}</dd></div>
+          <div v-if="activeSignal?.evidence_envelope?.screenshot_reference">
+            <dt>截图证据</dt>
+            <dd>{{ activeSignal.evidence_envelope.screenshot_reference.file_name }} · {{ formatDate(activeSignal.evidence_envelope.screenshot_reference.captured_at) }}（仅元数据）</dd>
+          </div>
           <div><dt>评分规则</dt><dd>{{ activeSignal?.scoring_rule_version || "规则版本未记录" }}</dd></div>
           <div><dt>证据哈希</dt><dd><code>{{ activeSignal?.content_hash ? `${activeSignal.content_hash.slice(0, 12)}…` : "未记录" }}</code></dd></div>
         </dl>

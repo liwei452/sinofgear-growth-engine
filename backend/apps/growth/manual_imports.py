@@ -55,14 +55,16 @@ def validate_manual_source_url(value: str) -> str:
 
 
 def import_manual_opportunity(
-    *, organization: Organization, data: Mapping[str, str],
+    *, organization: Organization, data: Mapping[str, object],
 ) -> tuple[TargetAccount, IntentSignal, bool]:
-    company_name = data["company_name"].strip()
-    country = data["country"].strip()
-    industry = data.get("industry", "").strip()
-    source_label = data["source_label"].strip()
-    source_url = validate_manual_source_url(data["source_url"])
-    evidence_text = data["evidence_text"].strip()
+    company_name = str(data["company_name"]).strip()
+    country = str(data["country"]).strip()
+    industry = str(data.get("industry", "")).strip()
+    source_label = str(data["source_label"]).strip()
+    source_url = validate_manual_source_url(str(data["source_url"]))
+    evidence_text = str(data["evidence_text"]).strip()
+    screenshot_file_name = str(data.get("screenshot_file_name", "")).strip()
+    screenshot_captured_at = data.get("screenshot_captured_at")
     fingerprint = hashlib.sha256(
         f"{source_url}\n{evidence_text}".encode("utf-8"),
     ).hexdigest()
@@ -93,6 +95,34 @@ def import_manual_opportunity(
             account.save(update_fields=["is_demo", "updated_at"])
 
         validate_company_evidence_source("COMPANY_WEB")
+        evidence_envelope = {
+            "field_value": evidence_text,
+            "source_url": source_url,
+            "source_excerpt": evidence_text,
+            "confidence": 50,
+            "observed_at": timezone.now().isoformat(),
+            "source_cost_micros": 0,
+            "license_contract": "USER_ASSERTED_PERMISSION",
+            "usage_rights": "INTERNAL_DISCOVERY_WITH_SOURCE_LINK",
+            "review_status": "PENDING_REVIEW",
+            "queue": "MONITORING",
+            "source_type": "COMPANY_WEB",
+            "matched_keywords": matched_gear_terms(evidence_text),
+            "company_match_confidence": 50,
+            "ai_exclusion_reasons": [],
+        }
+        if screenshot_file_name and screenshot_captured_at is not None:
+            captured_at = screenshot_captured_at.isoformat()
+            metadata_hash = hashlib.sha256(
+                f"{screenshot_file_name}\n{captured_at}\n{source_url}".encode("utf-8"),
+            ).hexdigest()
+            evidence_envelope["screenshot_reference"] = {
+                "file_name": screenshot_file_name,
+                "captured_at": captured_at,
+                "source_url": source_url,
+                "metadata_hash": metadata_hash,
+            }
+
         signal = IntentSignal(
             organization=locked_organization,
             account=account,
@@ -102,27 +132,14 @@ def import_manual_opportunity(
             evidence_text=evidence_text,
             confidence=50,
             is_demo=False,
-            collection_method="MANUAL_URL",
+            collection_method=(
+                "MANUAL_URL_WITH_SCREENSHOT" if screenshot_file_name else "MANUAL_URL"
+            ),
             content_hash=fingerprint,
             score_breakdown=MANUAL_SCORE_BREAKDOWN,
             scoring_rule_version="manual-opportunity-v1",
             uncertainty_notes=MANUAL_UNCERTAINTIES,
-            evidence_envelope={
-                "field_value": evidence_text,
-                "source_url": source_url,
-                "source_excerpt": evidence_text,
-                "confidence": 50,
-                "observed_at": timezone.now().isoformat(),
-                "source_cost_micros": 0,
-                "license_contract": "USER_ASSERTED_PERMISSION",
-                "usage_rights": "INTERNAL_DISCOVERY_WITH_SOURCE_LINK",
-                "review_status": "PENDING_REVIEW",
-                "queue": "MONITORING",
-                "source_type": "COMPANY_WEB",
-                "matched_keywords": matched_gear_terms(evidence_text),
-                "company_match_confidence": 50,
-                "ai_exclusion_reasons": [],
-            },
+            evidence_envelope=evidence_envelope,
         )
         signal.full_clean()
         signal.save()

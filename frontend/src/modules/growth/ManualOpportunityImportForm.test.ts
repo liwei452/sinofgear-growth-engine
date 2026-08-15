@@ -1,5 +1,5 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
-import { render, screen, waitFor } from "@testing-library/vue"
+import { fireEvent, render, screen, waitFor } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
 import { expect, it, vi } from "vitest"
 
@@ -18,7 +18,7 @@ const importedSignal = {
   source_url: "https://example.invalid/news/expansion",
   evidence_text: "The company announced a new packaging line.", confidence: 50,
   observed_at: "2026-08-15T03:00:00Z", data_label: "Licensed / permitted source",
-  collection_method: "MANUAL_URL", collection_method_label: "人工导入网页",
+  collection_method: "MANUAL_URL_WITH_SCREENSHOT", collection_method_label: "人工导入网页与截图信息",
   content_hash: "48a8545300b0ee9cd550dafab4b43eccaceb82a9086d6acf547ccd20acbb65e1",
   score_breakdown: {
     icp_fit: 15, intent_strength: 15, recency: 12,
@@ -26,6 +26,23 @@ const importedSignal = {
   },
   scoring_rule_version: "manual-opportunity-v1",
   uncertainty_notes: ["公司身份仍需人工核实", "采购范围与时间仍需人工确认"],
+  evidence_envelope: {
+    field_value: "The company announced a new packaging line.",
+    source_url: "https://example.invalid/news/expansion",
+    source_excerpt: "The company announced a new packaging line.",
+    confidence: 50,
+    observed_at: "2026-08-15T03:00:00Z",
+    source_cost_micros: 0,
+    license_contract: "USER_ASSERTED_PERMISSION",
+    usage_rights: "INTERNAL_DISCOVERY_WITH_SOURCE_LINK",
+    review_status: "PENDING_REVIEW",
+    screenshot_reference: {
+      file_name: "buyer-expansion.png",
+      captured_at: "2026-08-14T01:30:00Z",
+      source_url: "https://example.invalid/news/expansion",
+      metadata_hash: "a".repeat(64),
+    },
+  },
   priority_label: "继续观察",
 }
 
@@ -50,6 +67,8 @@ async function fillImportForm(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText("来源名称"), "Public company news")
   await user.type(screen.getByLabelText("公开 HTTPS 链接"), "https://example.invalid/news/expansion")
   await user.type(screen.getByLabelText("原始证据摘要"), "The company announced a new packaging line.")
+  await user.type(screen.getByLabelText("截图文件名（可选）"), "buyer-expansion.png")
+  await fireEvent.update(screen.getByLabelText("截图时间（可选）"), "2026-08-14T09:30")
 }
 
 it("imports a permitted public source and selects the persisted conservative opportunity", async () => {
@@ -88,12 +107,16 @@ it("imports a permitted public source and selects the persisted conservative opp
     source_label: "Public company news",
     source_url: "https://example.invalid/news/expansion",
     evidence_text: "The company announced a new packaging line.",
+    screenshot_file_name: "buyer-expansion.png",
+    screenshot_captured_at: "2026-08-14T09:30",
   }))
   expect(await screen.findByRole("heading", { name: "Buyer Systems GmbH" })).toBeInTheDocument()
   expect(screen.getAllByText("继续观察 · 50")).toHaveLength(2)
   expect(screen.getByText("许可 / 用户提供来源")).toBeInTheDocument()
   expect(screen.getByRole("status")).toHaveTextContent("已保存为待核实机会")
   expect(screen.queryByLabelText("公司名称")).not.toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "查看证据" }))
+  expect(screen.getByText(/buyer-expansion\.png/)).toHaveTextContent("仅元数据")
 })
 
 it("keeps the form values and shows field guidance when an import fails", async () => {

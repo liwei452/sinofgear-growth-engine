@@ -28,6 +28,12 @@ export type EvidenceEnvelope = {
   matched_keywords?: string[]
   company_match_confidence?: number
   ai_exclusion_reasons?: string[]
+  screenshot_reference?: {
+    file_name: string
+    captured_at: string
+    source_url: string
+    metadata_hash: string
+  }
 }
 
 export type IntentSignal = {
@@ -66,6 +72,8 @@ export type ManualOpportunityImportInput = {
   source_label: string
   source_url: string
   evidence_text: string
+  screenshot_file_name?: string
+  screenshot_captured_at?: string | null
 }
 
 export type ManualOpportunityImportResult = {

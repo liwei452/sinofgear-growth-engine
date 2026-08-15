@@ -189,6 +189,8 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await page.getByLabel("来源名称").fill("User supplied public news")
   await page.getByLabel("公开 HTTPS 链接").fill("https://example.invalid/manual-import/evidence")
   await page.getByLabel("原始证据摘要").fill("The company announced a permitted public packaging line expansion.")
+  await page.getByLabel("截图文件名（可选）").fill("browser-import-evidence.png")
+  await page.getByLabel("截图时间（可选）").fill("2026-08-14T09:30")
   const manualImportResponse = page.waitForResponse(response =>
     new URL(response.url()).pathname === "/api/v1/growth/opportunity-imports/manual-url"
       && response.request().method() === "POST",
@@ -199,11 +201,12 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await expect(page.getByText("许可 / 用户提供来源")).toBeVisible()
   await expect(page.getByText("继续观察 · 50")).toHaveCount(2)
   await page.getByRole("button", { name: "查看证据" }).click()
-  await expect(page.getByText("人工导入网页")).toBeVisible()
+  await expect(page.getByText("人工导入网页与截图信息")).toBeVisible()
   await expect(page.getByText("manual-opportunity-v1")).toBeVisible()
   await expect(page.getByText("COMPANY_WEB · 企业官网或公开目录")).toBeVisible()
   await expect(page.getByText("公司身份仍需人工核实")).toBeVisible()
   await expect(page.getByText("采购范围与时间仍需人工确认")).toBeVisible()
+  await expect(page.getByText(/browser-import-evidence\.png/)).toContainText("仅元数据")
   await expect(page.getByRole("link", { name: "打开原始来源" }))
     .toHaveAttribute("href", "https://example.invalid/manual-import/evidence")
 

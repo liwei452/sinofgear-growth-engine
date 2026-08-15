@@ -132,6 +132,50 @@ def test_import_rejects_unsafe_source_locators_without_partial_rows(
     assert IntentSignal.objects.filter(organization=organization).count() == 0
 
 
+def test_import_preserves_screenshot_metadata_as_auxiliary_evidence(organization):
+    response = _client(organization, suffix="screenshot").post(
+        IMPORT_URL,
+        _payload(
+            screenshot_file_name="buyer-expansion-2026-08-14.png",
+            screenshot_captured_at="2026-08-14T09:30:00Z",
+        ),
+        format="json",
+    )
+
+    assert response.status_code == 201
+    signal = response.data["signal"]
+    assert signal["confidence"] == 50
+    assert signal["collection_method"] == "MANUAL_URL_WITH_SCREENSHOT"
+    assert signal["collection_method_label"] == "人工导入网页与截图信息"
+    screenshot = signal["evidence_envelope"]["screenshot_reference"]
+    assert screenshot["file_name"] == "buyer-expansion-2026-08-14.png"
+    assert screenshot["captured_at"] == "2026-08-14T09:30:00+00:00"
+    assert screenshot["source_url"] == "https://example.invalid/news/expansion"
+    assert len(screenshot["metadata_hash"]) == 64
+
+
+@pytest.mark.parametrize(
+    ("overrides", "field_name"),
+    [
+        ({"screenshot_file_name": "../private.png", "screenshot_captured_at": "2026-08-14T09:30:00Z"}, "screenshot_file_name"),
+        ({"screenshot_file_name": "evidence.exe", "screenshot_captured_at": "2026-08-14T09:30:00Z"}, "screenshot_file_name"),
+        ({"screenshot_file_name": "future.png", "screenshot_captured_at": "2099-01-01T00:00:00Z"}, "screenshot_captured_at"),
+        ({"screenshot_file_name": "missing-time.png"}, "screenshot_captured_at"),
+    ],
+)
+def test_import_rejects_untraceable_screenshot_metadata_without_partial_rows(
+    organization, overrides, field_name,
+):
+    response = _client(organization, suffix=field_name + str(len(overrides))).post(
+        IMPORT_URL, _payload(**overrides), format="json",
+    )
+
+    assert response.status_code == 400
+    assert field_name in response.data["errors"]
+    assert TargetAccount.objects.filter(organization=organization).count() == 0
+    assert IntentSignal.objects.filter(organization=organization).count() == 0
+
+
 def test_import_requires_meaningful_evidence_and_manage_permission(organization):
     operator_response = _client(organization, suffix="blank").post(
         IMPORT_URL, _payload(evidence_text="short"), format="json",

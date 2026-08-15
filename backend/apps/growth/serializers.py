@@ -1,4 +1,5 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
 from rest_framework import serializers
 
 from .models import (
@@ -210,6 +211,7 @@ class IntentSignalSerializer(serializers.ModelSerializer):
         return {
             "DEMO_FIXTURE": "本地演示样本",
             "MANUAL_URL": "人工导入网页",
+            "MANUAL_URL_WITH_SCREENSHOT": "人工导入网页与截图信息",
             "LICENSED_API": "许可数据接口",
             "INBOUND": "主动入站",
             "OFFICIAL_PUBLIC_API": "官方公开数据接口",
@@ -230,12 +232,39 @@ class ManualOpportunityImportSerializer(serializers.Serializer):
         min_length=10,
         error_messages={"min_length": "原始证据至少需要 10 个字符。"},
     )
+    screenshot_file_name = serializers.CharField(
+        max_length=120, allow_blank=True, required=False, default="",
+    )
+    screenshot_captured_at = serializers.DateTimeField(
+        allow_null=True, required=False, default=None,
+    )
 
     def validate_source_url(self, value: str) -> str:
         try:
             return validate_manual_source_url(value)
         except DjangoValidationError as error:
             raise serializers.ValidationError(error.message) from error
+
+    def validate_screenshot_file_name(self, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return value
+        if "/" in value or "\\" in value or value in {".", ".."}:
+            raise serializers.ValidationError("截图文件名不能包含路径。")
+        if not value.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            raise serializers.ValidationError("截图文件仅支持 PNG、JPG、JPEG 或 WEBP。")
+        return value
+
+    def validate(self, attrs):
+        file_name = attrs.get("screenshot_file_name", "")
+        captured_at = attrs.get("screenshot_captured_at")
+        if file_name and captured_at is None:
+            raise serializers.ValidationError({"screenshot_captured_at": ["填写截图文件名时必须填写截图时间。"]})
+        if captured_at is not None and not file_name:
+            raise serializers.ValidationError({"screenshot_file_name": ["填写截图时间时必须填写截图文件名。"]})
+        if captured_at is not None and captured_at > timezone.now():
+            raise serializers.ValidationError({"screenshot_captured_at": ["截图时间不能晚于当前时间。"]})
+        return attrs
 
 
 class ManualOpportunityImportResponseSerializer(serializers.Serializer):

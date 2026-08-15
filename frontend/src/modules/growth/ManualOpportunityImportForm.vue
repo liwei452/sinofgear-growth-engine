@@ -16,6 +16,8 @@ const form = reactive({
   source_label: "",
   source_url: "",
   evidence_text: "",
+  screenshot_file_name: "",
+  screenshot_captured_at: "",
 })
 const pending = ref(false)
 const errorMessage = ref("")
@@ -26,7 +28,10 @@ async function submit(): Promise<void> {
   errorMessage.value = ""
   fieldErrors.value = {}
   try {
-    const result = await importManualOpportunity({ ...form })
+    const result = await importManualOpportunity({
+      ...form,
+      screenshot_captured_at: form.screenshot_captured_at || null,
+    })
     emit("imported", result.account.id)
   } catch (error) {
     if (error instanceof ApiError) {
@@ -78,6 +83,20 @@ async function submit(): Promise<void> {
         原始证据摘要
         <textarea v-model.trim="form.evidence_text" name="evidence_text" required minlength="10" rows="4" />
         <small v-if="fieldErrors.evidence_text">{{ fieldErrors.evidence_text[0] }}</small>
+      </label>
+      <div class="manual-import-wide screenshot-metadata-heading">
+        <strong>截图信息（可选，不上传图片）</strong>
+        <small>只保存文件名和截图时间，用于证明证据来源；不会自动识别截图内容。</small>
+      </div>
+      <label>
+        截图文件名（可选）
+        <input v-model.trim="form.screenshot_file_name" name="screenshot_file_name" maxlength="120" placeholder="例如：buyer-news.png">
+        <small v-if="fieldErrors.screenshot_file_name">{{ fieldErrors.screenshot_file_name[0] }}</small>
+      </label>
+      <label>
+        截图时间（可选）
+        <input v-model="form.screenshot_captured_at" name="screenshot_captured_at" type="datetime-local">
+        <small v-if="fieldErrors.screenshot_captured_at">{{ fieldErrors.screenshot_captured_at[0] }}</small>
       </label>
       <p v-if="errorMessage" class="manual-import-error" role="alert">{{ errorMessage }}</p>
       <div class="page-actions manual-import-actions">

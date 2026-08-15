@@ -15,14 +15,37 @@ class StrictFieldsMixin:
 
 class JobSerializer(serializers.ModelSerializer):
     job_id = serializers.UUIDField(source="id", read_only=True)
+    generation_mode = serializers.SerializerMethodField()
+    generation_label = serializers.SerializerMethodField()
 
     class Meta:
         model = Job
         fields = [
             "job_id", "type", "status", "progress", "attempt", "max_attempts",
             "created_at", "finished_at", "error", "result_reference",
+            "generation_mode", "generation_label",
         ]
         read_only_fields = fields
+
+    @staticmethod
+    def _provider(obj):
+        runs = list(obj.ai_runs.all())
+        if not runs:
+            return ""
+        return max(runs, key=lambda run: (run.job_attempt, run.created_at)).provider
+
+    def get_generation_mode(self, obj):
+        provider = self._provider(obj)
+        if not provider:
+            return "NOT_STARTED"
+        return "FAKE_OFFLINE" if provider == "fake" else "CONFIGURED_AI"
+
+    def get_generation_label(self, obj):
+        return {
+            "NOT_STARTED": "尚未启动生成服务",
+            "FAKE_OFFLINE": "Fake / 离线演示生成",
+            "CONFIGURED_AI": "已配置真实 AI 生成",
+        }[self.get_generation_mode(obj)]
 
 
 class JobListSerializer(serializers.Serializer):

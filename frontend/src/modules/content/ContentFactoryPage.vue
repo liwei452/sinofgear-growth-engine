@@ -121,7 +121,7 @@ async function startGeneration(brief: ContentBrief): Promise<void> {
   try {
     const accepted = await generateMaster(brief.id)
     if (!jobs.value.some((job) => job.job_id === accepted.job_id)) {
-      upsertJob({ job_id: accepted.job_id, type: "CONTENT_GENERATE", status: accepted.status, progress: 0, attempt: 1, max_attempts: 3, created_at: new Date().toISOString(), finished_at: null, error: null, result_reference: null })
+      upsertJob({ job_id: accepted.job_id, type: "CONTENT_GENERATE", status: accepted.status, progress: 0, attempt: 1, max_attempts: 3, created_at: new Date().toISOString(), finished_at: null, error: null, result_reference: null, generation_mode: accepted.generation_mode, generation_label: accepted.generation_label })
     }
     beginPolling(accepted.job_id)
   } catch (error) { actionError.value = safeError(error) } finally { actionId.value = "" }
@@ -204,6 +204,11 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
     <section aria-labelledby="jobs-title"><h2 id="jobs-title">生成任务</h2><div v-if="jobs.length" class="card-grid"><article v-for="job in jobs" :key="job.job_id" class="workflow-card"><div class="card-heading"><h3>任务 {{ job.job_id }}</h3><span class="status-chip">{{ job.status }}</span></div><p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p><p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p><p v-else-if="job.status === 'FAILED'" role="alert">{{ job.error?.message || '生成未完成，可以重试。' }}</p><div class="card-actions"><button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">取消任务</button><button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">重新尝试</button></div></article></div><p v-else class="muted">提交生成后，进度会显示在这里。</p><p v-if="jobPages.error.value" role="alert">{{ jobPages.error.value }} <button type="button" @click="jobPages.loadMore">重试</button></p><button v-else-if="jobPages.next.value" type="button" @click="jobPages.loadMore">加载更多生成任务</button></section>
 
     <ContentBriefWizard v-if="wizardOpen || editingBrief" :brief="editingBrief" :campaigns="campaigns.items.value" :products="productPages.items.value" :platforms="platformPages.items.value" :assets="assetPages.items.value" :concepts="conceptsQuery.data.value?.results ?? []" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
+    <section v-if="jobs.length" class="state-panel generation-disclosure" aria-label="生成模式">
+      <h2>生成模式</h2>
+      <p v-for="job in jobs" :key="`mode-${job.job_id}`">{{ job.generation_label || "生成方式尚未记录" }}</p>
+      <small v-if="jobs.some(job => job.generation_mode === 'FAKE_OFFLINE')">该结果必须人工审核，不能视为真实模型结论。</small>
+    </section>
   </main>
 </template>
 

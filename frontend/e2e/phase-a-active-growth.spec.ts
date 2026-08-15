@@ -139,6 +139,8 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
     new URL(response.url()).pathname.endsWith("/generate-master-content") && response.request().method() === "POST",
   )
   await seededReadyCard.getByRole("button", { name: "开始AI生成" }).click()
+  await expect(page.getByText("Fake / 离线演示生成").first()).toBeVisible()
+  await expect(page.getByText("该结果必须人工审核，不能视为真实模型结论。")).toBeVisible()
   const seededGenerationResponse = await seededGenerationPromise
   expect(seededGenerationResponse.status()).toBe(202)
   const seededGenerationJobId = (await seededGenerationResponse.json() as { job_id: string }).job_id

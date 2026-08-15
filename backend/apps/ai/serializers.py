@@ -250,3 +250,13 @@ class AIRunFilterSerializer(serializers.Serializer):
 
 class AIRunValidationErrorSerializer(serializers.Serializer):
     errors = serializers.DictField()
+
+
+class ProductAIStatusSerializer(serializers.Serializer):
+    mode = serializers.ChoiceField(choices=[
+        "FAKE_OFFLINE", "CONFIGURATION_REQUIRED", "CONFIGURED_AI",
+    ])
+    provider_label = serializers.CharField()
+    model = serializers.CharField()
+    configured = serializers.BooleanField()
+    real_requests_enabled = serializers.BooleanField()

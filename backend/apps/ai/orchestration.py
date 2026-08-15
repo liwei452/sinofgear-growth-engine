@@ -109,7 +109,7 @@ def _render_prompt(template: str, snapshot: dict) -> str:
 
 
 @transaction.atomic
-def _create_run(*, job: Job, prompt: PromptVersion, provider: str) -> AIRun:
+def _create_run(*, job: Job, prompt: PromptVersion, provider: str, model: str | None = None) -> AIRun:
     existing = AIRun.objects.filter(job=job, job_attempt=job.attempt).first()
     if existing:
         return existing
@@ -121,7 +121,7 @@ def _create_run(*, job: Job, prompt: PromptVersion, provider: str) -> AIRun:
                 job_attempt=job.attempt,
                 prompt_version=prompt,
                 provider=provider,
-                model=prompt.model,
+                model=model or prompt.model,
                 input_snapshot=scrub_secrets(job.input_snapshot),
                 status=AIRun.Status.RUNNING,
                 started_at=timezone.now(),
@@ -204,6 +204,7 @@ def _record_canceled_run(run: AIRun) -> AIRun:
 
 def execute_generation_job(
     job_id, *, prompt_version_id, provider_code: str | None = None,
+    provider_model: str | None = None,
     worker_id="ai-worker", result_writer=None,
 ) -> AIRun:
     job = Job.objects.get(pk=job_id)
@@ -266,7 +267,9 @@ def execute_generation_job(
         raise JobConflictError(f"Job in status {job.status} cannot be claimed.")
     token = claimed.claim_token
     try:
-        run = _create_run(job=claimed, prompt=prompt, provider=provider_name)
+        run = _create_run(
+            job=claimed, prompt=prompt, provider=provider_name, model=provider_model,
+        )
     except Exception as exc:
         JobService.fail(
             claimed.id,

@@ -22,7 +22,7 @@ test("formal workspace stays clean and persists only explicitly recorded data", 
   await expect(page).toHaveURL(/\/settings\?from=/)
   await expect(page.getByRole("heading", { name: "设置中心" })).toBeVisible()
   await expect(page.getByRole("heading", { name: "高级管理" })).toHaveCount(0)
-  await expect(page.getByText("真实 AI Provider 尚未配置")).toBeVisible()
+  await expect(page.getByText("Fake / 离线演示 · 未启用真实请求")).toBeVisible()
   await page.getByRole("link", { name: "返回工作台" }).click()
   await expect(page).toHaveURL(/\/$/)
 

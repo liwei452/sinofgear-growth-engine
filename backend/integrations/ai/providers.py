@@ -1,5 +1,14 @@
 import json
+import os
+import re
+import time
 from typing import Protocol
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+from jsonschema import ValidationError as JSONSchemaValidationError
+from jsonschema.exceptions import SchemaError as JSONSchemaError
+from jsonschema.validators import validator_for
 
 
 class AIProvider(Protocol):
@@ -43,5 +52,81 @@ class FakeAIProvider:
         }
 
 
+class DeepSeekAIProvider:
+    endpoint = "https://api.deepseek.com/chat/completions"
+    max_response_bytes = 1_000_000
+
+    def __init__(
+        self, *, opener=urlopen, timeout_seconds: int = 30,
+        max_attempts: int = 2, sleeper=time.sleep,
+    ):
+        self._opener = opener
+        self._timeout_seconds = timeout_seconds
+        self._max_attempts = max(1, min(max_attempts, 2))
+        self._sleeper = sleeper
+
+    def generate(self, *, prompt: str, schema: dict) -> dict:
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("DeepSeek API key is not configured.")
+        model = os.environ.get("PRODUCT_AI_MODEL", "deepseek-chat").strip() or "deepseek-chat"
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", model):
+            raise RuntimeError("DeepSeek model configuration is invalid.")
+        schema_text = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+        payload = json.dumps({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": (
+                    "Return one JSON object matching the supplied JSON schema. "
+                    "Use only facts present in the user input. Never invent certifications, "
+                    "performance, customers, prices, lead times, or capacity."
+                )},
+                {"role": "user", "content": f"JSON schema: {schema_text}\nInput: {prompt}"},
+            ],
+            "response_format": {"type": "json_object"},
+            "stream": False,
+            "max_tokens": 2_000,
+        }, ensure_ascii=False).encode("utf-8")
+        request = Request(self.endpoint, data=payload, headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }, method="POST")
+        raw = None
+        for attempt in range(self._max_attempts):
+            try:
+                with self._opener(request, timeout=self._timeout_seconds) as response:
+                    raw = response.read(self.max_response_bytes + 1)
+                break
+            except HTTPError as exc:
+                retryable = exc.code == 429 or 500 <= exc.code < 600
+                if not retryable or attempt + 1 >= self._max_attempts:
+                    raise RuntimeError("DeepSeek request failed.") from exc
+            except (URLError, TimeoutError) as exc:
+                if attempt + 1 >= self._max_attempts:
+                    raise RuntimeError("DeepSeek request failed.") from exc
+            self._sleeper(0.25)
+        if raw is None:
+            raise RuntimeError("DeepSeek request failed.")
+        if len(raw) > self.max_response_bytes:
+            raise RuntimeError("DeepSeek response exceeded the size limit.")
+        try:
+            envelope = json.loads(raw.decode("utf-8"))
+            content = envelope["choices"][0]["message"]["content"]
+            result = json.loads(content)
+        except (KeyError, IndexError, TypeError, ValueError, UnicodeDecodeError) as exc:
+            raise RuntimeError("DeepSeek returned an invalid JSON response.") from exc
+        if not isinstance(result, dict):
+            raise RuntimeError("DeepSeek returned an invalid JSON response.")
+        try:
+            validator_class = validator_for(schema)
+            validator_class.check_schema(schema)
+            validator_class(schema).validate(result)
+        except (JSONSchemaValidationError, JSONSchemaError, ValueError, TypeError) as exc:
+            raise RuntimeError("DeepSeek response did not match the required schema.") from exc
+        return result
+
+
 provider_registry = ProviderRegistry()
 provider_registry.register("fake", FakeAIProvider())
+provider_registry.register("deepseek", DeepSeekAIProvider())

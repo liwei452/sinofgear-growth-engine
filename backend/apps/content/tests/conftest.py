@@ -5,8 +5,9 @@ from django.utils import timezone
 from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
 from apps.ai.services import PromptVersionService
 from apps.campaigns.models import (
-    Campaign, ContentBrief, ContentBriefPlatform, lifecycle_writes,
+    Campaign, ContentBrief, ContentBriefPlatform, ContentBriefProduct, lifecycle_writes,
 )
+from apps.catalog.models import Product
 from apps.identity.models import Organization
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
@@ -36,6 +37,16 @@ def content_provenance(db):
     selected_platform = Platform.objects.create(code="SELECTED", name="Selected")
     ContentBriefPlatform.objects.create(
         organization=organization, brief=brief, platform=selected_platform
+    )
+    product = Product.objects.create(
+        organization=organization, name_en="Precision gear",
+        module_min="1.0000", module_max="2.0000",
+        tooth_count_min=10, tooth_count_max=40, pressure_angle="20.000",
+        manufacturing_capabilities=["hobbing"], inspection_capabilities=["CMM"],
+        moq=1, status=Product.Status.ACTIVE,
+    )
+    ContentBriefProduct.objects.create(
+        organization=organization, brief=brief, product=product,
     )
     brief.status = ContentBrief.Status.READY
     with lifecycle_writes():

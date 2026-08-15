@@ -36,6 +36,8 @@ export type Job = {
   job_id: string; type: string; status: JobStatus; progress: number; attempt: number
   max_attempts: number; created_at: string; finished_at: string | null
   error: { code?: string; message?: string } | null; result_reference: Record<string, unknown> | null
+  generation_mode: "NOT_STARTED" | "FAKE_OFFLINE" | "CONFIGURED_AI"
+  generation_label: string
 }
 export type ContentStatus = "DRAFT" | "IN_REVIEW" | "APPROVED" | "REJECTED" | "PUBLISHED" | "ARCHIVED"
 export type MasterPayload = { title: string; body: string; cta: string; concept_codes: string[] }
@@ -149,8 +151,14 @@ export const cancelJob = async (id: string): Promise<Job> =>
   required(await apiRequest<Job>(`/api/v1/jobs/${id}/cancel`, { method: "POST", body: {} }))
 export const retryJob = async (id: string): Promise<Job> =>
   required(await apiRequest<Job>(`/api/v1/jobs/${id}/retry`, { method: "POST", body: {} }))
-export const generateMaster = async (briefId: string): Promise<{ job_id: string; status: JobStatus }> =>
-  required(await apiRequest<{ job_id: string; status: JobStatus }>(
+export const generateMaster = async (briefId: string): Promise<{
+  job_id: string; status: JobStatus
+  generation_mode: Job["generation_mode"]; generation_label: string
+}> =>
+  required(await apiRequest<{
+    job_id: string; status: JobStatus
+    generation_mode: Job["generation_mode"]; generation_label: string
+  }>(
     `/api/v1/content-briefs/${briefId}/generate-master-content`, { method: "POST", body: {} },
   ))
 

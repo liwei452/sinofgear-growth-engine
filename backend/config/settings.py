@@ -188,6 +188,13 @@ ASSET_SPOOL_MEMORY_BYTES = int(
     os.environ.get("ASSET_SPOOL_MEMORY_BYTES", str(8 * 1024 * 1024))
 )
 PLATFORM_CONNECTOR_CAPABILITIES = {}
+PRODUCT_AI_PROVIDER = os.environ.get("PRODUCT_AI_PROVIDER", "fake").strip().lower()
+if PRODUCT_AI_PROVIDER not in {"fake", "deepseek"}:
+    raise ValueError("PRODUCT_AI_PROVIDER must be 'fake' or 'deepseek'.")
+PRODUCT_AI_MODEL = os.environ.get(
+    "PRODUCT_AI_MODEL",
+    "deepseek-chat" if PRODUCT_AI_PROVIDER == "deepseek" else "fake-v1",
+).strip()
 
 
 def _provider_enabled(name: str) -> bool:

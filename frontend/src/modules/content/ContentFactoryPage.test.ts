@@ -183,12 +183,12 @@ it("starts generation only for READY briefs with content.manage and shows one jo
   document.cookie = "csrftoken=csrf-value; path=/"
   const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
     if (path.endsWith("/generate-master-content") && options?.method === "POST") {
-      return new Response(JSON.stringify({ job_id: "job-1", status: "QUEUED" }), {
+      return new Response(JSON.stringify({ job_id: "job-1", status: "QUEUED", generation_mode: "FAKE_OFFLINE", generation_label: "Fake / 离线演示生成" }), {
         status: 202, headers: { "Content-Type": "application/json" },
       })
     }
     if (path === "/api/v1/jobs/job-1") {
-      return new Response(JSON.stringify({ job_id: "job-1", type: "CONTENT_GENERATE", status: "SUCCEEDED", progress: 100, attempt: 1, max_attempts: 3, created_at: "", finished_at: "", error: null, result_reference: {} }), {
+      return new Response(JSON.stringify({ job_id: "job-1", type: "CONTENT_GENERATE", status: "SUCCEEDED", progress: 100, attempt: 1, max_attempts: 3, created_at: "", finished_at: "", error: null, result_reference: {}, generation_mode: "FAKE_OFFLINE", generation_label: "Fake / 离线演示生成" }), {
         status: 200, headers: { "Content-Type": "application/json" },
       })
     }
@@ -200,6 +200,8 @@ it("starts generation only for READY briefs with content.manage and shows one jo
   await user.click(await screen.findByRole("button", { name: "开始AI生成" }))
 
   expect(await screen.findByText("生成完成")).toBeInTheDocument()
+  expect(screen.getByText("Fake / 离线演示生成")).toBeInTheDocument()
+  expect(screen.getByText("该结果必须人工审核，不能视为真实模型结论。")).toBeInTheDocument()
   expect(screen.getAllByText(/任务 job-1/)).toHaveLength(1)
   expect(fetchMock.mock.calls.filter(([path]) => String(path).endsWith("/generate-master-content"))).toHaveLength(1)
 })

@@ -52,7 +52,9 @@ def _validate_filters(request):
 
 def _job(organization, job_id):
     try:
-        return Job.objects.get(pk=job_id, organization=organization)
+        return Job.objects.prefetch_related("ai_runs").get(
+            pk=job_id, organization=organization,
+        )
     except (Job.DoesNotExist, ValueError) as exc:
         raise Http404 from exc
 
@@ -80,7 +82,9 @@ class JobListView(APIView):
         values, error = _validate_filters(request)
         if error:
             return error
-        queryset = Job.objects.filter(organization=request.organization)
+        queryset = Job.objects.filter(
+            organization=request.organization,
+        ).prefetch_related("ai_runs")
         for field in ("type", "status"):
             if field in values:
                 queryset = queryset.filter(**{field: values[field]})

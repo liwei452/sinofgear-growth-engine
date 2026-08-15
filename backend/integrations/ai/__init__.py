@@ -1,3 +1,3 @@
-from .providers import AIProvider, FakeAIProvider, provider_registry
+from .providers import AIProvider, DeepSeekAIProvider, FakeAIProvider, provider_registry
 
-__all__ = ["AIProvider", "FakeAIProvider", "provider_registry"]
+__all__ = ["AIProvider", "DeepSeekAIProvider", "FakeAIProvider", "provider_registry"]

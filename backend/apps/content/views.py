@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.ai.models import PromptVersion
+from apps.ai.runtime import product_ai_status
 from apps.campaigns.models import ContentBrief, ContentBriefPlatform
 from apps.campaigns.services import build_content_generation_input
 from apps.common.openapi import bounded_integer_query_parameter
@@ -332,6 +333,13 @@ class GenerateMasterView(APIView):
             raise Http404 from exc
         if brief.status != ContentBrief.Status.READY:
             return _error(ContentStateError("Content brief must be READY."))
+        provider_status = product_ai_status()
+        if provider_status["mode"] == "CONFIGURATION_REQUIRED":
+            return Response({
+                "code": "CONFIGURATION_REQUIRED",
+                "message": "DeepSeek API key is not configured.",
+                "recovery_action": "Configure the server environment before using real AI.",
+            }, status=status.HTTP_409_CONFLICT)
         prompt = PromptVersion.objects.filter(
             purpose="CONTENT_GENERATE", status=PromptVersion.Status.PUBLISHED
         ).order_by("-version").first()
@@ -348,4 +356,10 @@ class GenerateMasterView(APIView):
         transaction.on_commit(
             lambda: generate_master_content_job.delay(str(job.id), str(prompt.id))
         )
-        return Response({"job_id": job.id, "status": job.status}, status=202)
+        fake_mode = provider_status["mode"] == "FAKE_OFFLINE"
+        return Response({
+            "job_id": job.id,
+            "status": job.status,
+            "generation_mode": "FAKE_OFFLINE" if fake_mode else "CONFIGURED_AI",
+            "generation_label": "Fake / 离线演示生成" if fake_mode else "已配置真实 AI 生成",
+        }, status=202)

@@ -106,6 +106,8 @@ class EmptySerializer(StrictMixin, serializers.Serializer):
 class JobAcceptedSerializer(serializers.Serializer):
     job_id = serializers.UUIDField()
     status = serializers.CharField()
+    generation_mode = serializers.CharField()
+    generation_label = serializers.CharField()
 
 
 class ContentFilterSerializer(StrictMixin, serializers.Serializer):

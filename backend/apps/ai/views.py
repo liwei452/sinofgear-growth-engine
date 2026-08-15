@@ -5,6 +5,7 @@ from rest_framework.exceptions import NotFound
 from rest_framework.pagination import CursorPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
 
 from apps.common.openapi import bounded_integer_query_parameter
 from apps.identity.permissions import CanReadJobs
@@ -15,7 +16,18 @@ from .serializers import (
     AIRunListSerializer,
     AIRunSerializer,
     AIRunValidationErrorSerializer,
+    ProductAIStatusSerializer,
 )
+from .runtime import product_ai_status
+
+
+@extend_schema(tags=["AIRuns"])
+class ProductAIStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: ProductAIStatusSerializer})
+    def get(self, _request):
+        return Response(product_ai_status())
 
 
 class AIRunCursorPagination(CursorPagination):

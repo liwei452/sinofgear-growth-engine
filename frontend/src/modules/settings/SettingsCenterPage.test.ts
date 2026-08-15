@@ -8,8 +8,13 @@ import SettingsCenterPage from "./SettingsCenterPage.vue"
 
 afterEach(() => vi.unstubAllGlobals())
 
-async function renderSettings(role: string, permissions: string[], accounts: unknown[] = []) {
-  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({ results: accounts }), {
+async function renderSettings(role: string, permissions: string[], accounts: unknown[] = [], providerStatus = {
+  mode: "FAKE_OFFLINE", provider_label: "Fake / 离线演示", model: "fake-v1",
+  configured: false, real_requests_enabled: false,
+}) {
+  vi.stubGlobal("fetch", vi.fn((path: string) => Promise.resolve(new Response(JSON.stringify(
+    path === "/api/v1/ai/provider-status" ? providerStatus : { results: accounts },
+  ), {
     status: 200,
     headers: { "Content-Type": "application/json" },
   }))))
@@ -41,7 +46,7 @@ it("shows only real permission-backed destinations and truthful unconfigured sta
   expect(screen.getByRole("link", { name: "渠道账户" })).toHaveAttribute("href", "/platform-accounts")
   expect(screen.getByRole("link", { name: "发布日历" })).toHaveAttribute("href", "/publishing-calendar")
   expect(await screen.findByText("尚未添加渠道账户；手工发布包仍可用")).toBeInTheDocument()
-  expect(screen.getByText("真实 AI Provider 尚未配置")).toBeInTheDocument()
+  expect(await screen.findByText("Fake / 离线演示 · 未启用真实请求")).toBeInTheDocument()
 
   const crm = screen.getByRole("region", { name: "CRM与通知" })
   expect(within(crm).getByText("尚未配置")).toBeInTheDocument()
@@ -49,6 +54,16 @@ it("shows only real permission-backed destinations and truthful unconfigured sta
   expect(within(crm).queryByRole("link")).not.toBeInTheDocument()
   expect(screen.queryByRole("heading", { name: "高级管理" })).not.toBeInTheDocument()
   expect(screen.queryByText(/secret|api[_ -]?key/i)).not.toBeInTheDocument()
+})
+
+it("shows a configured real product provider without exposing a key", async () => {
+  await renderSettings("OPERATOR", [], [], {
+    mode: "CONFIGURED_AI", provider_label: "DeepSeek 官方 API", model: "deepseek-chat",
+    configured: true, real_requests_enabled: true,
+  })
+
+  expect(await screen.findByText("DeepSeek 官方 API · deepseek-chat · 已启用真实请求")).toBeInTheDocument()
+  expect(document.body.textContent).not.toMatch(/api[_ -]?key|secret|bearer/i)
 })
 
 it("summarizes saved channel accounts without claiming a real connection", async () => {

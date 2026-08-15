@@ -5,6 +5,7 @@ import { RouterLink, useRoute } from "vue-router"
 
 import { currentUserQueryOptions } from "../auth/auth"
 import { listSocialAccounts, platformAccountKeys } from "../platformAccounts/api"
+import { getProductAIStatus } from "./api"
 
 type Destination = { label: string; to: string; permission?: string }
 type SettingsGroup = {
@@ -25,6 +26,20 @@ const socialAccounts = useQuery({
   queryKey: computed(() => platformAccountKeys.accounts(organizationId.value)),
   queryFn: listSocialAccounts,
   enabled: computed(() => Boolean(organizationId.value) && canReadPublishing.value),
+})
+const productAI = useQuery({
+  queryKey: computed(() => ["settings", organizationId.value, "product-ai"]),
+  queryFn: getProductAIStatus,
+  enabled: computed(() => Boolean(organizationId.value)),
+})
+const aiStatus = computed(() => {
+  if (productAI.isPending.value) return "正在读取产品 AI 状态"
+  if (productAI.isError.value) return "产品 AI 状态暂时无法读取"
+  const status = productAI.data.value
+  if (!status) return "产品 AI 状态尚未配置"
+  if (status.mode === "CONFIGURED_AI") return `${status.provider_label} · ${status.model} · 已启用真实请求`
+  if (status.mode === "CONFIGURATION_REQUIRED") return "真实 AI 配置不完整 · 当前不会发起请求"
+  return "Fake / 离线演示 · 未启用真实请求"
 })
 const channelStatus = computed(() => {
   if (!canReadPublishing.value) return "没有渠道账户查看权限；手工发布包仍可用"
@@ -61,7 +76,7 @@ const groups: SettingsGroup[] = [
   {
     title: "AI与资料理解",
     description: "资料解析只产生待确认事实，不会自动写入宣传内容。",
-    status: "真实 AI Provider 尚未配置",
+    status: "产品 AI 状态尚未配置",
     destinations: [{ label: "查看上传资料", to: "/assets", permission: "assets.read" }],
   },
   {
@@ -112,7 +127,8 @@ const visibleGroups = computed(() => groups
   .filter(group => !group.administratorOnly || isAdministrator.value)
   .map(group => ({
     ...group,
-    status: group.title === "渠道与发布" ? channelStatus.value : group.status,
+    status: group.title === "渠道与发布" ? channelStatus.value
+      : group.title === "AI与资料理解" ? aiStatus.value : group.status,
     destinations: group.destinations.filter(destination => (
       !destination.permission || permissions.value.has(destination.permission)
     )),

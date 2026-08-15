@@ -46,7 +46,10 @@ def test_job_permissions_and_safe_response(
     assert set(detail.json()) == {
         "job_id", "type", "status", "progress", "attempt", "max_attempts",
         "created_at", "finished_at", "error", "result_reference",
+        "generation_mode", "generation_label",
     }
+    assert detail.json()["generation_mode"] == "NOT_STARTED"
+    assert detail.json()["generation_label"] == "尚未启动生成服务"
     assert "must-not-leak" not in str(detail.json())
     assert cancel.status_code == (200 if can_manage else 403)
 

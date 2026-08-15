@@ -2,6 +2,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
+from django.test import override_settings
 from rest_framework.test import APIClient
 
 from apps.content.models import MasterContent, PlatformContent, content_writes
@@ -81,6 +82,30 @@ def test_content_openapi_documents_generation_and_review_actions(content_provena
     assert "post" in schema["paths"]["/api/v1/master-contents/{content_id}/approve"]
     assert "post" in schema["paths"]["/api/v1/master-contents/{content_id}/generate-platform-content"]
     assert "get" in schema["paths"]["/api/v1/platform-contents"]
+
+
+def test_generation_discloses_fake_provider_before_work_starts(content_provenance):
+    organization, _actor, brief, _job, _run = content_provenance
+    response = _client(organization, Role.Code.ADMINISTRATOR).post(
+        f"/api/v1/content-briefs/{brief.id}/generate-master-content", {}, format="json",
+    )
+
+    assert response.status_code == 202
+    assert response.data["generation_mode"] == "FAKE_OFFLINE"
+    assert response.data["generation_label"] == "Fake / 离线演示生成"
+
+
+@override_settings(PRODUCT_AI_PROVIDER="deepseek", PRODUCT_AI_MODEL="deepseek-chat")
+def test_generation_requires_key_before_claiming_real_ai(content_provenance, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    organization, _actor, brief, _job, _run = content_provenance
+    response = _client(organization, Role.Code.ADMINISTRATOR).post(
+        f"/api/v1/content-briefs/{brief.id}/generate-master-content", {}, format="json",
+    )
+
+    assert response.status_code == 409
+    assert response.data["code"] == "CONFIGURATION_REQUIRED"
+    assert "not configured" in response.data["message"]
 
 
 @pytest.mark.parametrize("channel", ["LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"])

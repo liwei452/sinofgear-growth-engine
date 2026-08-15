@@ -6,6 +6,7 @@ from urllib.parse import quote, unquote
 import pytest
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.test import override_settings
 from rest_framework.test import APIClient
 
 from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
@@ -96,6 +97,25 @@ def test_ai_run_nullable_json_fields_are_null_at_runtime(ai_api):
     assert response.status_code == 200
     assert response.json()["output_json"] is None
     assert response.json()["human_correction"] is None
+
+
+@pytest.mark.django_db
+@override_settings(PRODUCT_AI_PROVIDER="deepseek", PRODUCT_AI_MODEL="deepseek-chat")
+def test_product_ai_status_is_safe_and_never_returns_key(ai_api, monkeypatch):
+    _own, _other, _user, client = ai_api
+    secret = "provider-secret-never-return"
+    monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
+
+    data = client.get("/api/v1/ai/provider-status").json()
+
+    assert data == {
+        "mode": "CONFIGURED_AI",
+        "provider_label": "DeepSeek 官方 API",
+        "model": "deepseek-chat",
+        "configured": True,
+        "real_requests_enabled": True,
+    }
+    assert secret not in str(data)
 
 
 @pytest.mark.django_db

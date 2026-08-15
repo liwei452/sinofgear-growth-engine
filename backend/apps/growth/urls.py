@@ -16,6 +16,7 @@ from .views import (
     FollowUpView,
     GrowthWorkspaceView,
     MetricReceiptCreateView,
+    MarketWatchCreateView,
     MarketWatchView,
     ManualOpportunityImportView,
     OutreachDraftView,
@@ -31,6 +32,7 @@ from .views import (
 
 urlpatterns = [
     path("growth/workspace", GrowthWorkspaceView.as_view(), name="growth-workspace"),
+    path("growth/markets/watch", MarketWatchCreateView.as_view(), name="growth-market-watch-create"),
     path("growth/markets/<str:country_code>/watch", MarketWatchView.as_view(), name="growth-market-watch"),
     path("growth/reactivations", ReactivationCreateView.as_view(), name="growth-reactivation-create"),
     path(

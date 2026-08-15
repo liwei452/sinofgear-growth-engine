@@ -237,6 +237,13 @@ def market_pilot_summary(*, signals: Iterable, accounts: Iterable, profiles=None
             (signal.evidence_envelope or {}).get("source_cost_micros", 0)
         )
     markets = [_market_payload(market) for market in (profiles or MARKETS)]
+    for market in markets:
+        metrics.setdefault(market["country_code"], {
+            "effective_customer_rate": None,
+            "positive_reply_rate": None,
+            "source_cost_micros": 0,
+            "raw_sample_count": 0,
+        })
     return {
         "markets": [{**market, "metrics": metrics[market["country_code"]]} for market in markets],
         "score_weights": SCORE_WEIGHTS,

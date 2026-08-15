@@ -37,7 +37,7 @@ describe("MarketPilotComparison", () => {
     expect(screen.getByText("市场雷达")).toBeInTheDocument()
     expect(screen.getByText("智利 · 下一优先")).toBeInTheDocument()
     expect(screen.getByText("印度 · 条件观察")).toBeInTheDocument()
-    expect(screen.getByText("数据可获得性 25% · 需求强度 25% · 采购意图 20% · 企业可触达性 15% · 商业可执行性 15%" )).toBeInTheDocument()
+    expect(screen.queryByText("数据可获得性 25% · 需求强度 25% · 采购意图 20% · 企业可触达性 15% · 商业可执行性 15%" )).not.toBeInTheDocument()
     expect(screen.getByText("主体报关数据需要可核验授权与合同许可")).toBeInTheDocument()
     expect(screen.queryByText("INDIA DIRECT_CUSTOMS")).not.toBeInTheDocument()
   })
@@ -93,5 +93,45 @@ describe("MarketPilotComparison", () => {
     expect(await within(usa).findByText("已观察")).toBeInTheDocument()
     await user.click(within(usa).getByRole("button", { name: "查看该市场候选公司" }))
     expect(onSelectMarket).toHaveBeenCalledWith({ countryCode: "USA", countryName: "美国" })
+  })
+
+  it("creates a user-selected watch market from an empty formal radar without inferred scores", async () => {
+    document.cookie = "csrftoken=user-watch-market-token"
+    const user = userEvent.setup()
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => new Response(JSON.stringify({
+      created: true,
+      market: {
+        country_code: "DEU", country_label: "德国", status: "OBSERVATION_POOL",
+        path_family: "MIXED_ACQUISITION", route_label: "混合公开信号",
+        data_availability_label: "待验证", evidence_note: "用户建立的观察市场，尚无样本证据。",
+        recommended_action: "导入有许可的名单或公开线索，验证首批公司。",
+        is_demo: false, is_watched: true, scores: {}, sample_quality: {},
+        recommendation_reasons: [], hold_reasons: ["尚未验证数据来源、样本质量和真实需求。"],
+      },
+    }), { status: init?.method === "POST" ? 201 : 200, headers: { "Content-Type": "application/json" } }))
+    vi.stubGlobal("fetch", fetchMock)
+    const onSelectMarket = vi.fn()
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(MarketPilotComparison, {
+      props: {
+        summary: { ...summary, markets: summary.markets.map(market => ({ ...market, is_demo: true })) },
+        onSelectMarket,
+      },
+      global: { plugins: [[VueQueryPlugin, { queryClient }]] },
+    })
+
+    await user.type(screen.getByLabelText("国家或地区"), "德国")
+    await user.type(screen.getByLabelText("ISO 国家代码"), "deu")
+    await user.selectOptions(screen.getByRole("combobox", { name: "获客路径", exact: true }), "MIXED_ACQUISITION")
+    await user.click(screen.getByRole("button", { name: "加入观察市场" }))
+
+    const [, init] = fetchMock.mock.calls.find(([input]) => String(input) === "/api/v1/growth/markets/watch")!
+    expect(init?.method).toBe("POST")
+    expect(JSON.parse(String(init?.body))).toEqual({
+      country_code: "DEU", country_label: "德国", path_family: "MIXED_ACQUISITION",
+    })
+    expect(await screen.findByText("已加入观察市场，下一步导入真实候选公司。")).toBeInTheDocument()
+    expect(onSelectMarket).toHaveBeenCalledWith({ countryCode: "DEU", countryName: "德国" })
+    expect(screen.queryByText(/推荐分数|需求强度 25%/)).not.toBeInTheDocument()
   })
 })

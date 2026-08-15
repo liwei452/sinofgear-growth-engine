@@ -66,6 +66,7 @@ from .serializers import (
     IntentSignalSerializer,
     ManualOpportunityImportResponseSerializer,
     ManualOpportunityImportSerializer,
+    MarketWatchCreateSerializer,
     MetricReceiptSerializer,
     OpportunityReviewCreateSerializer,
     OpportunityReviewSerializer,
@@ -416,6 +417,70 @@ class MarketWatchView(APIView):
             "is_watched": True,
             "message": "已加入观察市场。",
         })
+
+
+class MarketWatchCreateView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(tags=["Growth workspace"], request=MarketWatchCreateSerializer)
+    @transaction.atomic
+    def post(self, request):
+        serializer = MarketWatchCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        existing = MarketCountryProfile.objects.select_for_update().filter(
+            organization=request.organization,
+            country_code=data["country_code"],
+        ).first()
+        created = existing is None or existing.is_demo or not existing.is_watched
+        market = existing or MarketCountryProfile(
+            organization=request.organization,
+            country_code=data["country_code"],
+            priority_order=MarketCountryProfile.objects.filter(organization=request.organization).count() + 100,
+        )
+        route_label = {
+            "CUSTOMS_STRONG": "许可交易数据",
+            "MIXED_ACQUISITION": "混合公开信号",
+        }[data["path_family"]]
+        market.country_label = data["country_label"]
+        market.region = "OTHER"
+        market.path_family = data["path_family"]
+        market.suitable_industries = []
+        market.data_availability_label = "待验证"
+        market.evidence_note = "用户建立的观察市场，尚无样本证据。"
+        market.recommended_action = "导入有许可的名单或公开线索，验证首批公司。"
+        market.is_demo = False
+        market.is_watched = True
+        market.status = MarketCountryProfile.Status.OBSERVATION_POOL
+        market.route = data["path_family"]
+        market.route_label = route_label
+        market.recommended_wave = "用户观察"
+        market.source_types = []
+        market.last_researched_at = timezone.localdate()
+        market.scores = {}
+        market.sample_quality = {}
+        market.recommendation_reasons = []
+        market.hold_reasons = ["尚未验证数据来源、样本质量和真实需求。"]
+        market.save()
+        return Response({
+            "created": created,
+            "market": {
+                "country_code": market.country_code,
+                "country_label": market.country_label,
+                "status": market.status,
+                "path_family": market.path_family,
+                "route_label": market.route_label,
+                "data_availability_label": market.data_availability_label,
+                "evidence_note": market.evidence_note,
+                "recommended_action": market.recommended_action,
+                "is_demo": market.is_demo,
+                "is_watched": market.is_watched,
+                "scores": market.scores,
+                "sample_quality": market.sample_quality,
+                "recommendation_reasons": market.recommendation_reasons,
+                "hold_reasons": market.hold_reasons,
+            },
+        }, status=201 if created else 200)
 
 
 class ReactivationCreateView(APIView):

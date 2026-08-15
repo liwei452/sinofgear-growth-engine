@@ -104,6 +104,88 @@ def test_operator_can_watch_a_market_for_only_their_organization_and_refresh_kee
     assert MarketCountryProfile.objects.get(organization=other, country_code="USA").is_watched is False
 
 
+@pytest.mark.django_db
+def test_operator_can_create_a_truthful_watch_market_without_reusing_demo_research():
+    organization = Organization.objects.create(name="Chosen markets", slug="chosen-markets")
+    other = Organization.objects.create(name="Other chosen markets", slug="other-chosen-markets")
+    role = Role.objects.create_operator()
+    user = get_user_model().objects.create_user(username="chosen-market-operator", password="password")
+    Membership.objects.create(user=user, organization=organization, role=role)
+    client = APIClient()
+    assert client.login(username=user.username, password="password")
+    market_profiles_for(other)
+
+    first = client.post("/api/v1/growth/markets/watch", {
+        "country_code": "usa",
+        "country_label": "United States",
+        "path_family": "MIXED_ACQUISITION",
+    }, format="json")
+    repeated = client.post("/api/v1/growth/markets/watch", {
+        "country_code": "USA",
+        "country_label": "United States",
+        "path_family": "MIXED_ACQUISITION",
+    }, format="json")
+
+    assert first.status_code == 201
+    assert repeated.status_code == 200
+    assert repeated.data["created"] is False
+    assert repeated.data["market"] == {
+        "country_code": "USA",
+        "country_label": "United States",
+        "status": "OBSERVATION_POOL",
+        "path_family": "MIXED_ACQUISITION",
+        "route_label": "混合公开信号",
+        "data_availability_label": "待验证",
+        "evidence_note": "用户建立的观察市场，尚无样本证据。",
+        "recommended_action": "导入有许可的名单或公开线索，验证首批公司。",
+        "is_demo": False,
+        "is_watched": True,
+        "scores": {},
+        "sample_quality": {},
+        "recommendation_reasons": [],
+        "hold_reasons": ["尚未验证数据来源、样本质量和真实需求。"],
+    }
+    saved = MarketCountryProfile.objects.get(organization=organization, country_code="USA")
+    assert saved.is_demo is False
+    assert saved.source_types == []
+    assert MarketCountryProfile.objects.get(organization=other, country_code="USA").is_demo is True
+
+    custom = client.post("/api/v1/growth/markets/watch", {
+        "country_code": "DEU",
+        "country_label": "Germany",
+        "path_family": "MIXED_ACQUISITION",
+    }, format="json")
+    workspace = client.get("/api/v1/growth/workspace")
+    assert custom.status_code == 201
+    assert workspace.status_code == 200
+    germany = next(market for market in workspace.data["market_pilots"]["markets"] if market["country_code"] == "DEU")
+    assert germany["metrics"] == {
+        "effective_customer_rate": None,
+        "positive_reply_rate": None,
+        "source_cost_micros": 0,
+        "raw_sample_count": 0,
+    }
+
+
+@pytest.mark.django_db
+def test_create_watch_market_rejects_invalid_country_codes_and_paths():
+    organization = Organization.objects.create(name="Invalid markets", slug="invalid-markets")
+    role = Role.objects.create_operator()
+    user = get_user_model().objects.create_user(username="invalid-market-operator", password="password")
+    Membership.objects.create(user=user, organization=organization, role=role)
+    client = APIClient()
+    assert client.login(username=user.username, password="password")
+
+    invalid = client.post("/api/v1/growth/markets/watch", {
+        "country_code": "U1",
+        "country_label": "Invalid",
+        "path_family": "DIRECT_CUSTOMS",
+    }, format="json")
+
+    assert invalid.status_code == 400
+    assert set(invalid.data) == {"country_code", "path_family"}
+
+
 def test_aggregate_trade_cannot_be_presented_as_company_purchase_evidence():
     with pytest.raises(ValueError, match="market context only"):
         validate_company_evidence_source("AGGREGATE_TRADE")

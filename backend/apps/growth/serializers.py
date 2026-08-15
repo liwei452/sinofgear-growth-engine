@@ -56,6 +56,15 @@ class DiscoveryProfileUpdateSerializer(serializers.Serializer):
     enabled = serializers.BooleanField()
 
 
+class MarketWatchCreateSerializer(serializers.Serializer):
+    country_code = serializers.RegexField(r"^[A-Za-z]{2,3}$", min_length=2, max_length=3)
+    country_label = serializers.CharField(min_length=1, max_length=96)
+    path_family = serializers.ChoiceField(choices=["CUSTOMS_STRONG", "MIXED_ACQUISITION"])
+
+    def validate_country_code(self, value):
+        return value.upper()
+
+
 class DiscoveryRunResultSerializer(serializers.Serializer):
     status = serializers.CharField()
     finished_at = serializers.DateTimeField(allow_null=True)

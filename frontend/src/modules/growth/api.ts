@@ -571,6 +571,37 @@ export async function watchMarket(countryCode: string): Promise<{
   return result
 }
 
+export async function createWatchMarket(input: {
+  countryCode: string
+  countryLabel: string
+  pathFamily: "CUSTOMS_STRONG" | "MIXED_ACQUISITION"
+}): Promise<{
+  created: boolean
+  market: {
+    country_code: string
+    country_label: string
+    path_family: "CUSTOMS_STRONG" | "MIXED_ACQUISITION"
+  }
+}> {
+  const result = await apiRequest<{
+    created: boolean
+    market: {
+      country_code: string
+      country_label: string
+      path_family: "CUSTOMS_STRONG" | "MIXED_ACQUISITION"
+    }
+  }>("/api/v1/growth/markets/watch", {
+    method: "POST",
+    body: {
+      country_code: input.countryCode.trim().toUpperCase(),
+      country_label: input.countryLabel.trim(),
+      path_family: input.pathFamily,
+    },
+  })
+  if (!result) throw new Error("观察市场响应为空。")
+  return result
+}
+
 export async function updateAutomaticDiscovery(
   enabled: boolean,
 ): Promise<DiscoverySummary> {

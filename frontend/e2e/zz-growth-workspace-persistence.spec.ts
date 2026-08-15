@@ -35,6 +35,25 @@ test("formal workspace stays clean and persists only explicitly recorded data", 
   await expect(page.getByRole("button", { name: "导入合法名单" })).toBeVisible()
   await expectNoSeededDemo(page)
 
+  await page.getByLabel("国家或地区").fill("德国")
+  await page.getByLabel("ISO 国家代码").fill("DEU")
+  await page.getByRole("combobox", { name: "获客路径", exact: true }).selectOption("MIXED_ACQUISITION")
+  const watchMarketResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname === "/api/v1/growth/markets/watch"
+      && response.request().method() === "POST",
+  )
+  await page.getByRole("button", { name: "加入观察市场" }).click()
+  expect([200, 201]).toContain((await watchMarketResponse).status())
+  await expect(page.getByText("已加入观察市场，下一步导入真实候选公司。")).toBeVisible()
+  await expect(page.getByText(/正在准备 德国 市场候选公司/)).toBeVisible()
+  await page.reload()
+  const germany = page.getByRole("article", { name: "德国 混合公开信号" })
+  await expect(germany).toBeVisible()
+  await expect(germany.getByText("待验证")).toBeVisible()
+  await expect(germany.getByText("用户建立的观察市场，尚无样本证据。")).toBeVisible()
+  await expect(page.getByText(/需求强度 25%/)).toHaveCount(0)
+  await expectNoSeededDemo(page)
+
   await page.getByRole("button", { name: "导入公开线索" }).click()
   await page.getByLabel("公司名称").fill("Browser Import Drives Ltd")
   await page.getByLabel("国家或地区").fill("United Kingdom")

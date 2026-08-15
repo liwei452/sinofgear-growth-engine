@@ -9,6 +9,7 @@ import {
   growthWorkspaceQueryOptions,
 } from "./api"
 import ManualOpportunityImportForm from "./ManualOpportunityImportForm.vue"
+import AutomaticDiscoveryCard from "./AutomaticDiscoveryCard.vue"
 
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
@@ -187,6 +188,10 @@ async function handleImported(accountId: string): Promise<void> {
       <div><dt>需求信号</dt><dd>带时间和原始证据的变化</dd></div>
       <div><dt>入站线索</dt><dd>主动留下联系信息的人或企业</dd></div>
     </dl>
+    <AutomaticDiscoveryCard
+      v-if="workspaceQuery.data.value?.discovery"
+      :discovery="workspaceQuery.data.value.discovery"
+    />
     <div class="opportunity-import-bar">
       <div><strong>已有公开采购线索？</strong><span>保存证据后由你决定是否跟进。</span></div>
       <button class="button button-secondary" type="button" :aria-expanded="importOpen" @click="importOpen = !importOpen">{{ importOpen ? "收起导入" : "导入公开线索" }}</button>

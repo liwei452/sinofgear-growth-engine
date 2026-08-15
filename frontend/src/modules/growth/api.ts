@@ -116,6 +116,33 @@ export type PlatformConnection = {
   mode: "" | "DEMO_FAKE" | "OFFICIAL"
 }
 
+export type DiscoveryRunResult = {
+  status: "RUNNING" | "SUCCEEDED" | "FAILED"
+  finished_at: string | null
+  found_count: number
+  new_company_count: number
+  new_signal_count: number
+  duplicate_count: number
+  skipped_count: number
+  message: string
+}
+
+export type DiscoverySourceSummary = {
+  code: "TED" | "GOOGLE_PLACES" | string
+  label: string
+  status: "ACTIVE" | "KEY_REQUIRED" | string
+}
+
+export type DiscoverySummary = {
+  enabled: boolean
+  source_label: string
+  schedule_label: string
+  product_scope_label: string
+  next_run_at: string | null
+  last_run: DiscoveryRunResult | null
+  available_sources: DiscoverySourceSummary[]
+}
+
 export type GrowthWorkspace = {
   target_accounts: TargetAccount[]
   contacts: Array<Record<string, unknown>>
@@ -128,6 +155,7 @@ export type GrowthWorkspace = {
   metric_receipts: MetricReceipt[]
   field_provenance: FieldProvenance[]
   connectors: PlatformConnection[]
+  discovery?: DiscoverySummary
 }
 
 export type DraftActionResponse = {
@@ -178,6 +206,26 @@ export async function importManualOpportunity(
     { method: "POST", body: input },
   )
   if (!result) throw new Error("公开线索导入响应为空。")
+  return result
+}
+
+export async function runAutomaticDiscovery(): Promise<DiscoveryRunResult> {
+  const result = await apiRequest<DiscoveryRunResult>(
+    "/api/v1/growth/discovery/run",
+    { method: "POST", body: {} },
+  )
+  if (!result) throw new Error("自动查找响应为空。")
+  return result
+}
+
+export async function updateAutomaticDiscovery(
+  enabled: boolean,
+): Promise<DiscoverySummary> {
+  const result = await apiRequest<DiscoverySummary>(
+    "/api/v1/growth/discovery/profile",
+    { method: "PATCH", body: { enabled } },
+  )
+  if (!result) throw new Error("自动查找设置响应为空。")
   return result
 }
 

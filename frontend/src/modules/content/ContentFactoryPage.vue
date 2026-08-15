@@ -7,6 +7,7 @@ import { currentUserQueryOptions } from "../auth/auth"
 import { listProducts, productQueryKeys } from "../products/api"
 import ContentBriefWizard from "./ContentBriefWizard.vue"
 import ContentRecommendationPanel from "./ContentRecommendationPanel.vue"
+import ContentSteps from "./ContentSteps.vue"
 import ContentTrashPanel from "./ContentTrashPanel.vue"
 import {
   archiveBrief, cancelJob, contentAction, contentQueryKeys, generateMaster, getJob, getMasterContent, listAssets, listBriefs,
@@ -245,6 +246,7 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
 <template>
   <main class="page-stack content-factory" aria-labelledby="factory-title">
     <header class="library-header"><div><p class="eyebrow">一个事实库，多渠道内容</p><h1 id="factory-title">AI 内容工厂</h1><p>AI 根据产品事实、市场、客户画像和目标发布语言准备内容，你只需选择方向并审核结果。</p></div></header>
+    <ContentSteps />
     <p v-if="notice" role="status" class="notice">{{ notice }}</p><p v-if="actionError" role="alert" class="form-alert">{{ actionError }}</p>
     <ContentRecommendationPanel v-if="has('content.read') || has('content.manage')" :can-manage="has('content.manage')" @brief-ready="generateRecommendedBrief" />
     <section class="query-errors" aria-label="数据加载问题">

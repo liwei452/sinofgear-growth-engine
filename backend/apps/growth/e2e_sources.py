@@ -7,6 +7,7 @@ class E2EDiscoverySource:
     def fetch(self, query):
         return SourceBatch(
             items=(SourceItem(
+                source_code="TED",
                 external_id="E2E-TED-42141300",
                 buyer_name="E2E Gear Procurement Authority",
                 buyer_country="DEU",

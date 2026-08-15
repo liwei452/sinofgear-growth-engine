@@ -34,6 +34,14 @@ class JsonTransport(Protocol):
         max_response_bytes: int,
     ) -> dict[str, object]: ...
 
+    def get_json(
+        self,
+        *,
+        url: str,
+        timeout_seconds: int,
+        max_response_bytes: int,
+    ) -> dict[str, object]: ...
+
 
 class UrllibJsonTransport:
     def post_json(
@@ -50,6 +58,20 @@ class UrllibJsonTransport:
             headers={"Accept": "application/json", "Content-Type": "application/json"},
             method="POST",
         )
+        return self._send(request, timeout_seconds, max_response_bytes)
+
+    def get_json(
+        self,
+        *,
+        url: str,
+        timeout_seconds: int,
+        max_response_bytes: int,
+    ) -> dict[str, object]:
+        request = Request(url, headers={"Accept": "application/json"}, method="GET")
+        return self._send(request, timeout_seconds, max_response_bytes)
+
+    @staticmethod
+    def _send(request, timeout_seconds, max_response_bytes):
         try:
             response: HTTPResponse
             with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - fixed trusted URL
@@ -161,6 +183,7 @@ class TedSource:
             if isinstance(code, str) and len(code) == 8 and code.isdigit()
         ))
         return SourceItem(
+            source_code="TED",
             external_id=external_id,
             buyer_name=buyer_name,
             buyer_country=country,

@@ -17,6 +17,7 @@ class FakeSource:
     def fetch(self, query):
         return SourceBatch(
             items=(SourceItem(
+                source_code="TED",
                 external_id="534032-2026",
                 buyer_name="API Contracting Authority",
                 buyer_country="DEU",

@@ -19,6 +19,7 @@ class DiscoveryQuery:
 
 @dataclass(frozen=True)
 class SourceItem:
+    source_code: str
     external_id: str
     buyer_name: str
     buyer_country: str

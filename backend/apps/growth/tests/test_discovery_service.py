@@ -35,6 +35,7 @@ def profile(organization):
 def source_batch():
     return SourceBatch(
         items=(SourceItem(
+            source_code="TED",
             external_id="534032-2026",
             buyer_name="Example Contracting Authority",
             buyer_country="DEU",

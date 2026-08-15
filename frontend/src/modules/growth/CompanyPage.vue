@@ -23,12 +23,6 @@ const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
 const locallyVerified = ref(new Set<string>())
 const verificationError = ref("")
-const fallbackFacts: FactRow[] = [
-  { id: null, name: "产品能力", value: "生产斜齿轮与直齿轮", source: "产品库 · 人工录入", verified: true, updated: "今天", cost: "免费" },
-  { id: null, name: "质量体系", value: "ISO 9001", source: "ISO 9001 证书 · 人工上传记录", verified: true, updated: "2 天前", cost: "免费" },
-  { id: null, name: "精度等级", value: "DIN 6 精度", source: "旧版产品说明中的 AI 提取候选", verified: false, updated: "今天", cost: "AI 0.02 元" },
-  { id: null, name: "最小起订量", value: "最小起订量", source: "暂无来源", verified: false, updated: "—", cost: "—" },
-]
 
 const fieldLabels: Record<string, string> = {
   company_name: "公司名称",
@@ -50,9 +44,7 @@ function apiFactRow(fact: FieldProvenance): FactRow {
   }
 }
 
-const facts = computed(() => workspaceQuery.data.value?.field_provenance.length
-  ? workspaceQuery.data.value.field_provenance.map(apiFactRow)
-  : fallbackFacts)
+const facts = computed(() => workspaceQuery.data.value?.field_provenance.map(apiFactRow) ?? [])
 
 const verifyMutation = useMutation({
   mutationFn: verifyCompanyFact,
@@ -72,7 +64,7 @@ async function verify(fact: FactRow): Promise<void> {
 
 <template>
   <div class="growth-page">
-    <header class="growth-hero"><div><p class="eyebrow">公司资料</p><h1>我的公司</h1><p>AI 只使用已确认事实生成推广内容；不确定字段会要求人工确认。</p></div><span class="fake-label">Demo / Fake</span></header>
+    <header class="growth-hero"><div><p class="eyebrow">公司资料</p><h1>我的公司</h1><p>AI 只使用已确认事实生成推广内容；不确定字段会要求人工确认。</p></div><span class="fake-label">{{ facts.length ? "事实库记录" : "尚无事实记录" }}</span></header>
     <section class="growth-card">
       <div class="growth-heading"><div><h2>AI 已理解的事实</h2><p>每个字段显示来源、更新时间和可能的来源成本。</p></div></div>
       <div class="fact-table-wrap">
@@ -86,12 +78,13 @@ async function verify(fact: FactRow): Promise<void> {
               <td>{{ fact.updated }}</td><td>{{ fact.cost }}</td>
               <td><button v-if="fact.id && !fact.verified" class="button button-secondary" type="button" :disabled="verifyMutation.isPending.value" :aria-label="`确认 ${fact.value}`" @click="verify(fact)">确认</button><span v-else>—</span></td>
             </tr>
+            <tr v-if="!facts.length"><td colspan="6">还没有已保存的公司事实</td></tr>
           </tbody>
         </table>
       </div>
       <p v-if="verificationError" role="alert" class="approval-status">{{ verificationError }}</p>
     </section>
-    <section class="growth-card suggestions"><h2>建议补充</h2><ul><li>可公开的检测设备与报告摘要</li><li>标准交付周期和加急边界</li><li>可公开的包装机械应用案例</li></ul><button class="button button-primary" type="button">补充公司事实</button></section>
+    <section class="growth-card suggestions"><h2>建议补充</h2><ul><li>可公开的检测设备与报告摘要</li><li>标准交付周期和加急边界</li><li>可公开的包装机械应用案例</li></ul><a class="button button-primary" href="/assets">上传资料并提取事实</a></section>
   </div>
 </template>
 <style scoped src="./growth-pages.css"></style>

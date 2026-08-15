@@ -588,7 +588,7 @@ it("labels official publish links truthfully and uses the recorded success count
   expect(screen.queryByText(/Demo 帖子/)).not.toBeInTheDocument()
 })
 
-it("shows company facts with provenance, verification, cost, and gaps", () => {
+it("shows a truthful empty company fact state and links to material understanding", () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(CompanyPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
@@ -596,9 +596,11 @@ it("shows company facts with provenance, verification, cost, and gaps", () => {
   expect(screen.getByRole("columnheader", { name: "字段来源" })).toBeInTheDocument()
   expect(screen.getByRole("columnheader", { name: "确认状态" })).toBeInTheDocument()
   expect(screen.getByRole("columnheader", { name: "来源成本" })).toBeInTheDocument()
-  expect(screen.getByText("ISO 9001 证书 · 人工上传记录")).toBeInTheDocument()
-  expect(screen.getAllByText("待确认", { exact: true }).length).toBe(2)
+  expect(screen.getByText("还没有已保存的公司事实")).toBeInTheDocument()
+  expect(screen.queryByText(/ISO 9001/)).not.toBeInTheDocument()
+  expect(screen.queryByText(/DIN 6/)).not.toBeInTheDocument()
   expect(screen.getByRole("heading", { name: "建议补充" })).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "上传资料并提取事实" })).toHaveAttribute("href", "/assets")
 })
 
 it("sorts and switches the opportunity queue without sharing follow-up state", async () => {

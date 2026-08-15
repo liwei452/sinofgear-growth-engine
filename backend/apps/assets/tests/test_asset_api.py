@@ -40,6 +40,27 @@ def test_upload_detail_and_same_org_dedup_runtime_contract(organizations, roles)
 
 
 @pytest.mark.django_db
+def test_asset_archive_is_reversible_and_hidden_from_default_list(organizations, roles):
+    own, _ = organizations
+    _, client = create_member_client(
+        organization=own, role=roles[Role.Code.ADMINISTRATOR], username="asset-trash"
+    )
+    asset_id = client.post("/api/v1/assets", upload_payload(), format="multipart").json()["id"]
+
+    archived = client.post(f"/api/v1/assets/{asset_id}/archive", {}, format="json")
+    normal = client.get("/api/v1/assets")
+    trash = client.get("/api/v1/assets?status=ARCHIVED")
+    restored = client.post(f"/api/v1/assets/{asset_id}/restore", {}, format="json")
+
+    assert archived.status_code == 200
+    assert archived.json()["status"] == "ARCHIVED"
+    assert normal.json()["results"] == []
+    assert [row["id"] for row in trash.json()["results"]] == [asset_id]
+    assert restored.json()["status"] == "ACTIVE"
+    assert client.get("/api/v1/assets").json()["results"][0]["id"] == asset_id
+
+
+@pytest.mark.django_db
 def test_cross_org_asset_detail_and_download_are_non_leaking_404(organizations, roles) -> None:
     own, other = organizations
     _, own_client = create_member_client(

@@ -216,6 +216,15 @@ class MasterContent(ProtectedContentModel):
     provenance = models.JSONField(default=dict)
     status = models.CharField(max_length=16, choices=Status.choices)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="master_content_versions")
+    archived_from_status = models.CharField(max_length=16, blank=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="archived_master_contents",
+    )
 
     class Meta(ProtectedContentModel.Meta):
         ordering = ["-created_at", "-id"]

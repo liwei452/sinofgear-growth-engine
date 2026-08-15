@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import transaction
+from django.utils import timezone
 
 from apps.audit.services import record_review_transition
 from apps.campaigns.models import ContentBrief
@@ -345,9 +346,16 @@ def transition_content(content, *, action, actor, comment=""):
     transition = master_transition if model is MasterContent else platform_transition
     target = transition(locked.status, action, comment=comment)
     before = {"status": locked.status}
+    if action == "ARCHIVE" and model is MasterContent:
+        locked.archived_from_status = locked.status
+        locked.archived_at = timezone.now()
+        locked.archived_by = actor
     locked.status = target
     with content_writes():
-        locked.save(update_fields=["status", "updated_at"])
+        fields = ["status", "updated_at"]
+        if action == "ARCHIVE" and model is MasterContent:
+            fields += ["archived_from_status", "archived_at", "archived_by"]
+        locked.save(update_fields=fields)
     record_review_transition(
         organization=locked.organization,
         object_type=f"content.{model.__name__}",
@@ -359,6 +367,37 @@ def transition_content(content, *, action, actor, comment=""):
         comment=comment.strip(),
         before_metadata=before,
         after_metadata={"status": target},
+    )
+    return locked
+
+
+@transaction.atomic
+def restore_master_content(content, *, actor):
+    locked = MasterContent.objects.select_for_update().get(pk=content.pk)
+    if locked.status != MasterContent.Status.ARCHIVED:
+        return locked
+    if not content_is_consistent(locked):
+        raise ContentStateError("Content provenance is inconsistent.")
+    target = locked.archived_from_status
+    if target not in {
+        MasterContent.Status.DRAFT, MasterContent.Status.IN_REVIEW,
+        MasterContent.Status.APPROVED, MasterContent.Status.REJECTED,
+    }:
+        target = MasterContent.Status.DRAFT
+    before = {"status": locked.status}
+    locked.status = target
+    locked.archived_from_status = ""
+    locked.archived_at = None
+    locked.archived_by = None
+    with content_writes():
+        locked.save(update_fields=[
+            "status", "archived_from_status", "archived_at", "archived_by", "updated_at"
+        ])
+    record_review_transition(
+        organization=locked.organization, object_type="content.MasterContent",
+        object_id=locked.id, action="RESTORE", status=target,
+        object_version=locked.version, actor=actor, comment="",
+        before_metadata=before, after_metadata={"status": target},
     )
     return locked
 

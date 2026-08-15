@@ -176,6 +176,7 @@ class ContentBrief(OrganizationScopedModel):
     class Status(models.TextChoices):
         DRAFT = "DRAFT", "Draft"
         READY = "READY", "Ready"
+        ARCHIVED = "ARCHIVED", "Archived"
 
     campaign = models.ForeignKey(Campaign, on_delete=models.PROTECT, related_name="briefs")
     previous_version = models.ForeignKey(
@@ -204,6 +205,15 @@ class ContentBrief(OrganizationScopedModel):
         related_name="reviewed_content_briefs",
     )
     reviewed_at = models.DateTimeField(null=True, blank=True)
+    archived_from_status = models.CharField(max_length=16, blank=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="archived_content_briefs",
+    )
 
     objects = VersionedManager()
 
@@ -273,7 +283,7 @@ class ContentBrief(OrganizationScopedModel):
                 for field in (*GENERATION_FIELDS, "status", "previous_version_id")
                 if getattr(self, field) != getattr(original, field)
             }
-            if original.status == self.Status.READY and changed:
+            if original.status == self.Status.READY and changed and not _allow_lifecycle_write.get():
                 raise ValidationError("READY content briefs are immutable; create a revision.")
             if self.status != original.status and not _allow_lifecycle_write.get():
                 raise ValidationError("Content brief lifecycle changes require the service.")

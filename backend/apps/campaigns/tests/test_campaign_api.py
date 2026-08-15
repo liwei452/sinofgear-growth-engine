@@ -144,6 +144,26 @@ def test_brief_list_filters_status_and_campaign_without_cross_org_leak(
 
 
 @pytest.mark.django_db
+def test_content_brief_archive_restores_exact_status_and_default_list_hides_it(
+    campaign_organizations, campaign_roles, campaign_user
+):
+    own, _ = campaign_organizations
+    campaign = Campaign.objects.create(organization=own, name="Trash test")
+    brief = ContentBrief.objects.create(
+        organization=own, campaign=campaign, created_by=campaign_user
+    )
+    _, client = create_member_client(
+        organization=own, role=campaign_roles[Role.Code.ADMINISTRATOR], username="brief-trash"
+    )
+
+    assert client.post(f"/api/v1/content-briefs/{brief.id}/archive", {}, format="json").json()["status"] == "ARCHIVED"
+    assert client.get("/api/v1/content-briefs").json()["results"] == []
+    assert client.get("/api/v1/content-briefs?status=ARCHIVED").json()["results"][0]["id"] == str(brief.id)
+    restored = client.post(f"/api/v1/content-briefs/{brief.id}/restore", {}, format="json")
+    assert restored.json()["status"] == "DRAFT"
+
+
+@pytest.mark.django_db
 def test_campaign_permission_migration_seeds_builtin_roles_without_touching_custom_role(
     campaign_roles,
 ):

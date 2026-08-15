@@ -6,6 +6,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 from apps.catalog.models import Product
 
@@ -447,8 +448,23 @@ def replace_original(asset: MaterialAsset, stream) -> None:
 
 
 @transaction.atomic
+def set_asset_archived(*, asset: MaterialAsset, actor, archived: bool) -> MaterialAsset:
+    locked = MaterialAsset.objects.select_for_update().get(pk=asset.pk)
+    target = MaterialAsset.Status.ARCHIVED if archived else MaterialAsset.Status.ACTIVE
+    if locked.status == target:
+        return locked
+    locked.status = target
+    locked.archived_at = timezone.now() if archived else None
+    locked.archived_by = actor if archived else None
+    locked.save(update_fields=["status", "archived_at", "archived_by", "updated_at"])
+    return locked
+
+
+@transaction.atomic
 def link_asset_to_product(*, asset: MaterialAsset, product: Product):
     locked_asset = MaterialAsset.objects.select_for_update().get(pk=asset.pk)
+    if locked_asset.status == MaterialAsset.Status.ARCHIVED:
+        raise ValidationError("Archived assets must be restored before use.")
     locked_product = Product.objects.select_for_update().get(pk=product.pk)
     existing = AssetProductLink.objects.filter(
         asset=locked_asset,

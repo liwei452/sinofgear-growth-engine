@@ -101,6 +101,7 @@ class ContentBriefSerializer(serializers.ModelSerializer):
             "advantages", "keywords", "product_ids", "asset_ids", "platform_ids",
             "concept_links", "created_by", "reviewed_by", "reviewed_at", "created_at",
             "updated_at",
+            "archived_from_status", "archived_at", "archived_by",
         ]
         read_only_fields = fields
 

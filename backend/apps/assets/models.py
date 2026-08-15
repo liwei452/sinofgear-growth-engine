@@ -147,6 +147,14 @@ class MaterialAsset(OrganizationScopedModel):
         on_delete=models.PROTECT,
         related_name="created_material_assets",
     )
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="archived_material_assets",
+    )
 
     objects = MaterialAssetManager()
 

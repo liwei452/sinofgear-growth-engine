@@ -7,6 +7,8 @@ from .views import (
     AssetListView,
     AssetUnderstandingRetryView,
     AssetUnderstandingView,
+    AssetArchiveView,
+    AssetRestoreView,
     ProductEvidenceFactReviewView,
 )
 
@@ -14,6 +16,8 @@ from .views import (
 urlpatterns = [
     path("assets", AssetListView.as_view(), name="assets"),
     path("assets/<uuid:asset_id>", AssetDetailView.as_view(), name="asset-detail"),
+    path("assets/<uuid:asset_id>/archive", AssetArchiveView.as_view(), name="asset-archive"),
+    path("assets/<uuid:asset_id>/restore", AssetRestoreView.as_view(), name="asset-restore"),
     path(
         "assets/<uuid:asset_id>/link-product",
         AssetLinkProductView.as_view(),

@@ -74,6 +74,23 @@ def test_content_cross_organization_is_non_leaking_404(content_provenance):
     ).status_code == 404
 
 
+def test_master_archive_is_reversible_and_hidden_from_default_list(content_provenance):
+    organization, actor, brief, job, run = content_provenance
+    content = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)
+    client = _client(organization, Role.Code.ADMINISTRATOR)
+
+    archived = client.post(
+        f"/api/v1/master-contents/{content.id}/archive", {"comment": "unused"}, format="json"
+    )
+    assert archived.status_code == 200
+    assert archived.data["status"] == "ARCHIVED"
+    assert client.get("/api/v1/master-contents").data["results"] == []
+    assert client.get("/api/v1/master-contents?status=ARCHIVED").data["results"][0]["id"] == str(content.id)
+    restored = client.post(f"/api/v1/master-contents/{content.id}/restore", {}, format="json")
+    assert restored.status_code == 200
+    assert restored.data["status"] == "IN_REVIEW"
+
+
 def test_master_detail_exposes_bounded_verified_fact_evidence(content_provenance):
     organization, actor, brief, job, run = content_provenance
     content = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)

@@ -60,6 +60,8 @@ class MaterialAssetSerializer(serializers.ModelSerializer):
             "tags",
             "metadata_json",
             "created_by",
+            "archived_at",
+            "archived_by",
             "created_at",
             "updated_at",
             "products",

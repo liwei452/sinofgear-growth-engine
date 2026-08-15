@@ -7,6 +7,8 @@ from .views import (
     ContentBriefListView,
     ContentBriefReadyView,
     ContentBriefRevisionView,
+    ContentBriefArchiveView,
+    ContentBriefRestoreView,
 )
 
 
@@ -17,4 +19,6 @@ urlpatterns = [
     path("content-briefs/<uuid:brief_id>", ContentBriefDetailView.as_view(), name="content-brief-detail"),
     path("content-briefs/<uuid:brief_id>/ready", ContentBriefReadyView.as_view(), name="content-brief-ready"),
     path("content-briefs/<uuid:brief_id>/revisions", ContentBriefRevisionView.as_view(), name="content-brief-revisions"),
+    path("content-briefs/<uuid:brief_id>/archive", ContentBriefArchiveView.as_view(), name="content-brief-archive"),
+    path("content-briefs/<uuid:brief_id>/restore", ContentBriefRestoreView.as_view(), name="content-brief-restore"),
 ]

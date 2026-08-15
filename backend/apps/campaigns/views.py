@@ -40,7 +40,7 @@ from .serializers import (
     ErrorSerializer,
     ValidationErrorSerializer,
 )
-from .services import mark_content_brief_ready, revise_content_brief
+from .services import mark_content_brief_ready, revise_content_brief, set_content_brief_archived
 
 
 ERRORS = {403: ErrorSerializer, 404: ErrorSerializer}
@@ -254,6 +254,8 @@ class ContentBriefListView(APIView):
         if error:
             return error
         queryset = _brief_queryset(request.organization)
+        if "status" not in values:
+            queryset = queryset.exclude(status=ContentBrief.Status.ARCHIVED)
         if "status" in values:
             queryset = queryset.filter(status=values["status"])
         if "campaign" in values:
@@ -339,3 +341,29 @@ class ContentBriefRevisionView(APIView):
         except DjangoValidationError as error:
             return _validation_response(error)
         return Response(ContentBriefSerializer(_get_brief(request.organization, revision.id)).data, status=201)
+
+
+class ContentBriefArchiveView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    def post(self, request, brief_id):
+        invalid_body = _unknown_action_body(request)
+        if invalid_body:
+            return invalid_body
+        brief = set_content_brief_archived(
+            brief=_get_brief(request.organization, brief_id), actor=request.user, archived=True
+        )
+        return Response(ContentBriefSerializer(_get_brief(request.organization, brief.id)).data)
+
+
+class ContentBriefRestoreView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    def post(self, request, brief_id):
+        invalid_body = _unknown_action_body(request)
+        if invalid_body:
+            return invalid_body
+        brief = set_content_brief_archived(
+            brief=_get_brief(request.organization, brief_id), actor=request.user, archived=False
+        )
+        return Response(ContentBriefSerializer(_get_brief(request.organization, brief.id)).data)

@@ -114,6 +114,34 @@ def create_content_brief(
     return brief
 
 
+@transaction.atomic
+def set_content_brief_archived(*, brief: ContentBrief, actor, archived: bool) -> ContentBrief:
+    brief = ContentBrief.objects.select_for_update().get(pk=brief.pk)
+    if archived:
+        if brief.status == ContentBrief.Status.ARCHIVED:
+            return brief
+        brief.archived_from_status = brief.status
+        brief.status = ContentBrief.Status.ARCHIVED
+        brief.archived_at = timezone.now()
+        brief.archived_by = actor
+    else:
+        if brief.status != ContentBrief.Status.ARCHIVED:
+            return brief
+        brief.status = (
+            brief.archived_from_status
+            if brief.archived_from_status in {ContentBrief.Status.DRAFT, ContentBrief.Status.READY}
+            else ContentBrief.Status.DRAFT
+        )
+        brief.archived_from_status = ""
+        brief.archived_at = None
+        brief.archived_by = None
+    with lifecycle_writes():
+        brief.save(update_fields=[
+            "status", "archived_from_status", "archived_at", "archived_by", "updated_at"
+        ])
+    return brief
+
+
 BRIEF_MUTABLE_FIELDS = frozenset(
     {
         "target_country", "customer_type", "content_objective", "cta",

@@ -40,6 +40,7 @@ from .serializers import (
 from .services import (
     ContentStateError, create_master_revision, create_platform_content,
     create_platform_revision, transition_content, content_is_consistent,
+    restore_master_content,
 )
 from .tasks import generate_content_recommendations_job, generate_master_content_job
 
@@ -292,6 +293,8 @@ class ContentListView(APIView):
             return Response(
                 {"errors": {"status": ["Select a valid choice."]}}, status=400
             )
+        if "status" not in values:
+            queryset = queryset.exclude(status=self.model.Status.ARCHIVED)
         for key in ("status", "version"):
             if key in values:
                 queryset = queryset.filter(**{key: values[key]})
@@ -426,6 +429,23 @@ class MasterRejectView(ContentActionView):
 @extend_schema(tags=["MasterContents"])
 class MasterArchiveView(ContentActionView):
     action = "ARCHIVE"
+
+
+@extend_schema(tags=["MasterContents"])
+class MasterRestoreView(APIView):
+    permission_classes = [CanReviewContent]
+
+    @extend_schema(request=EmptySerializer, responses={200: MasterContentSerializer})
+    def post(self, request, content_id):
+        serializer = EmptySerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({"errors": serializer.errors}, status=400)
+        content = _object(MasterContent, request.organization, content_id)
+        try:
+            content = restore_master_content(content, actor=request.user)
+        except ContentStateError as exc:
+            return _error(exc)
+        return Response(MasterContentSerializer(content).data)
 
 
 @extend_schema(tags=["MasterContents"])

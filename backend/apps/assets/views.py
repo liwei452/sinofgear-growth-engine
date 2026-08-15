@@ -34,7 +34,7 @@ from .serializers import (
     ProductEvidenceFactSerializer,
 )
 from .models import ProductEvidenceFact
-from .services import AssetUploadError, link_asset_to_product
+from .services import AssetUploadError, link_asset_to_product, set_asset_archived
 from .storage import get_object_storage
 from .understanding import (
     AssetUnderstandingError,
@@ -160,6 +160,8 @@ class AssetListView(APIView):
             return _validation_response(filters.errors)
         values = filters.validated_data
         queryset = _asset_queryset(request.organization)
+        if "status" not in values:
+            queryset = queryset.exclude(status=MaterialAsset.Status.ARCHIVED)
         if "type" in values:
             queryset = queryset.filter(asset_type=values["type"])
         if "status" in values:
@@ -225,6 +227,30 @@ class AssetDetailView(APIView):
     )
     def get(self, request: Request, asset_id) -> Response:
         return Response(MaterialAssetSerializer(_get_asset(request.organization, asset_id)).data)
+
+
+class AssetArchiveView(APIView):
+    permission_classes = [CanManageAssets]
+
+    def post(self, request: Request, asset_id) -> Response:
+        if request.data:
+            return _validation_response({name: ["Unknown field."] for name in request.data})
+        asset = set_asset_archived(
+            asset=_get_asset(request.organization, asset_id), actor=request.user, archived=True
+        )
+        return Response(MaterialAssetSerializer(_get_asset(request.organization, asset.id)).data)
+
+
+class AssetRestoreView(APIView):
+    permission_classes = [CanManageAssets]
+
+    def post(self, request: Request, asset_id) -> Response:
+        if request.data:
+            return _validation_response({name: ["Unknown field."] for name in request.data})
+        asset = set_asset_archived(
+            asset=_get_asset(request.organization, asset_id), actor=request.user, archived=False
+        )
+        return Response(MaterialAssetSerializer(_get_asset(request.organization, asset.id)).data)
 
 
 @extend_schema(tags=["Assets"])

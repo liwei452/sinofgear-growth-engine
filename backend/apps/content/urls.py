@@ -6,6 +6,7 @@ from .views import (
     GenerateMasterView, GeneratePlatformView, MasterApproveView, MasterArchiveView,
     MasterDetailView, MasterListView, MasterRejectView, MasterRevisionView,
     MasterSubmitView, PlatformDetailView, PlatformListView,
+    MasterRestoreView,
     PlatformApproveView, PlatformArchiveView, PlatformRejectView,
     PlatformRevisionView, PlatformSubmitView,
 )
@@ -26,6 +27,7 @@ urlpatterns = [
     path("master-contents/<uuid:content_id>/approve", MasterApproveView.as_view()),
     path("master-contents/<uuid:content_id>/reject", MasterRejectView.as_view()),
     path("master-contents/<uuid:content_id>/archive", MasterArchiveView.as_view()),
+    path("master-contents/<uuid:content_id>/restore", MasterRestoreView.as_view()),
     path("master-contents/<uuid:content_id>/generate-platform-content", GeneratePlatformView.as_view()),
     path("platform-contents", PlatformListView.as_view()),
     path("platform-contents/<uuid:content_id>", PlatformDetailView.as_view()),

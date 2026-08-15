@@ -57,6 +57,7 @@ class MasterContentSerializer(serializers.ModelSerializer):
             "lineage_id", "previous_version_id", "version", "payload", "provenance",
             "status", "is_current_head", "created_by_id", "created_at", "updated_at",
             "evidence_summary",
+            "archived_from_status", "archived_at", "archived_by",
         ]
 
 

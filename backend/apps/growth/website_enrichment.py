@@ -13,7 +13,7 @@ from django.utils.module_loading import import_string
 from .market_pilots import matched_gear_terms
 from .lead_judgment import judge_candidate
 from .buying_signals import detect_buying_signals
-from .contact_intelligence import infer_name_from_email
+from .contact_intelligence import extract_team_contacts, infer_name_from_email
 
 
 WEBSITE_TIMEOUT_SECONDS = 15
@@ -108,6 +108,7 @@ def prepare_website_enrichment(candidate, *, transport=None):
     facts = extract_website_facts(html, candidate.website)
     judgment = judge_candidate(candidate, website_facts=facts)
     buying_signals = detect_buying_signals(facts.text_excerpt)
+    team_contacts = extract_team_contacts(html, candidate.website)
     public_contact_paths = (
         [{
             "label": email,
@@ -144,6 +145,7 @@ def prepare_website_enrichment(candidate, *, transport=None):
             "review_status": "PENDING_REVIEW",
             "observed_at": timezone.now().isoformat(),
             "buying_signals": buying_signals,
+            "team_contacts": team_contacts,
         },
     }
     snapshot, created = CandidateEnrichmentSnapshot.objects.get_or_create(

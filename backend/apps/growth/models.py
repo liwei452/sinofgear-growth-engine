@@ -136,6 +136,87 @@ class OutreachDraft(OrganizationOwnedModel):
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
 
 
+class ReactivationRecord(OrganizationOwnedModel):
+    class RelationshipSource(models.TextChoices):
+        EXISTING_CUSTOMER = "EXISTING_CUSTOMER", "Existing customer"
+        PAST_INQUIRY = "PAST_INQUIRY", "Past inquiry"
+        TRADE_SHOW = "TRADE_SHOW", "Trade show"
+        OWNED_CRM = "OWNED_CRM", "Owned CRM"
+
+    class Tier(models.TextChoices):
+        STRATEGIC = "STRATEGIC", "Strategic"
+        NURTURE = "NURTURE", "Nurture"
+        OBSERVATION = "OBSERVATION", "Observation"
+
+    class Status(models.TextChoices):
+        SELECTED = "SELECTED", "Selected"
+        DRAFTED = "DRAFTED", "Drafted"
+        APPROVED = "APPROVED", "Approved"
+
+    account = models.ForeignKey(
+        TargetAccount, on_delete=models.PROTECT, related_name="reactivations",
+    )
+    relationship_source = models.CharField(max_length=32, choices=RelationshipSource.choices)
+    last_interacted_at = models.DateTimeField()
+    interaction_summary = models.TextField()
+    relationship_confirmed = models.BooleanField(default=False)
+    tier = models.CharField(max_length=16, choices=Tier.choices)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.SELECTED)
+    draft = models.ForeignKey(
+        OutreachDraft, null=True, blank=True, on_delete=models.PROTECT,
+        related_name="reactivation_records",
+    )
+    selected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="selected_reactivations",
+    )
+    is_demo = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "account"],
+                name="growth_one_reactivation_per_account",
+            ),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Reactivation history cannot be deleted.")
+
+
+class AccountFunnelEvent(OrganizationOwnedModel):
+    class EventType(models.TextChoices):
+        REACTIVATION_SELECTED = "REACTIVATION_SELECTED", "Reactivation selected"
+        REACTIVATION_DRAFTED = "REACTIVATION_DRAFTED", "Reactivation drafted"
+        REACTIVATION_APPROVED = "REACTIVATION_APPROVED", "Reactivation approved"
+
+    account = models.ForeignKey(
+        TargetAccount, on_delete=models.PROTECT, related_name="funnel_events",
+    )
+    reactivation = models.ForeignKey(
+        ReactivationRecord, on_delete=models.PROTECT, related_name="events",
+    )
+    event_type = models.CharField(max_length=32, choices=EventType.choices)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="growth_account_funnel_events",
+    )
+    payload = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["reactivation", "event_type"],
+                name="growth_one_reactivation_event_type",
+            ),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Account funnel history cannot be deleted.")
+
+
 class OpportunityReview(OrganizationOwnedModel):
     class Decision(models.TextChoices):
         PRIORITIZE = "PRIORITIZE", "Prioritize"

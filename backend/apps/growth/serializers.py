@@ -17,6 +17,7 @@ from .models import (
     MetricReceipt,
     OpportunityReview,
     OutreachDraft,
+    ReactivationRecord,
     TargetAccount,
 )
 from .manual_imports import validate_manual_source_url
@@ -331,6 +332,21 @@ class OutreachDraftSerializer(serializers.ModelSerializer):
 
     def get_delivery(self, _obj: OutreachDraft) -> str:
         return "NEVER_SENT"
+
+
+class ReactivationCreateSerializer(serializers.Serializer):
+    account_id = serializers.UUIDField()
+    relationship_source = serializers.ChoiceField(
+        choices=ReactivationRecord.RelationshipSource.values,
+    )
+    last_interacted_at = serializers.DateTimeField()
+    interaction_summary = serializers.CharField(min_length=10, max_length=1000)
+    relationship_confirmed = serializers.BooleanField()
+
+    def validate_last_interacted_at(self, value):
+        if value > timezone.now():
+            raise serializers.ValidationError("Last interaction cannot be in the future.")
+        return value
 
 
 class OpportunityReviewCreateSerializer(serializers.Serializer):

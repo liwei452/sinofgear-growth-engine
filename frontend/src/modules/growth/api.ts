@@ -110,6 +110,45 @@ export type OutreachDraft = {
   updated_at: string
 }
 
+export type Reactivation = {
+  id: string
+  account_id: string
+  account_name: string
+  industry: string
+  relationship_source: "EXISTING_CUSTOMER" | "PAST_INQUIRY" | "TRADE_SHOW" | "OWNED_CRM"
+  last_interacted_at: string
+  interaction_summary: string
+  tier: "STRATEGIC" | "NURTURE" | "OBSERVATION"
+  status: "SELECTED" | "DRAFTED" | "APPROVED"
+  is_demo: boolean
+  why_reactivate: string
+  recommended_action: string
+  evidence: string
+  risk: string
+  draft: null | {
+    id: string
+    english_draft: string
+    chinese_explanation: string
+    status: "DRAFT" | "APPROVED"
+  }
+  events: Array<{
+    event_type: "REACTIVATION_SELECTED" | "REACTIVATION_DRAFTED" | "REACTIVATION_APPROVED"
+    created_at: string
+    delivery: "NEVER_SENT"
+  }>
+  delivery: "NEVER_SENT"
+}
+
+export type ReactivationDraftResult = {
+  id: string
+  draft_id: string
+  status: "DRAFTED"
+  draft_status: "DRAFT"
+  english_draft: string
+  chinese_explanation: string
+  delivery: "NEVER_SENT"
+}
+
 export type OpportunityReview = {
   id: string
   account_id: string
@@ -327,6 +366,7 @@ export type GrowthWorkspace = {
   inbound_leads: Array<Record<string, unknown>>
   follow_ups: FollowUp[]
   outreach_drafts: OutreachDraft[]
+  reactivations?: Reactivation[]
   opportunity_reviews?: OpportunityReview[]
   crm_handoffs?: CRMHandoff[]
   channel_packages: ChannelPackage[]
@@ -375,6 +415,38 @@ export async function createOpportunityDraft(accountId: string): Promise<DraftAc
     `/api/v1/growth/opportunities/${accountId}/draft`, { method: "POST", body: {} },
   )
   if (!result) throw new Error("草稿响应为空。")
+  return result
+}
+
+export async function selectReactivation(input: {
+  account_id: string
+  relationship_source: Reactivation["relationship_source"]
+  last_interacted_at: string
+  interaction_summary: string
+  relationship_confirmed: boolean
+}): Promise<Reactivation> {
+  const result = await apiRequest<Reactivation>(
+    "/api/v1/growth/reactivations", { method: "POST", body: input },
+  )
+  if (!result) throw new Error("重新激活响应为空。")
+  return result
+}
+
+export async function createReactivationDraft(id: string): Promise<ReactivationDraftResult> {
+  const result = await apiRequest<ReactivationDraftResult>(
+    `/api/v1/growth/reactivations/${id}/draft`, { method: "POST", body: {} },
+  )
+  if (!result) throw new Error("重新激活草稿响应为空。")
+  return result
+}
+
+export async function approveReactivationDraft(id: string): Promise<{
+  id: string; status: "APPROVED"; draft_status: "APPROVED"; delivery: "NEVER_SENT"; message: string
+}> {
+  const result = await apiRequest<{
+    id: string; status: "APPROVED"; draft_status: "APPROVED"; delivery: "NEVER_SENT"; message: string
+  }>(`/api/v1/growth/reactivations/${id}/approve`, { method: "POST", body: {} })
+  if (!result) throw new Error("重新激活批准响应为空。")
   return result
 }
 

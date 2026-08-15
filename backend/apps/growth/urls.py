@@ -21,11 +21,25 @@ from .views import (
     PublishBatchCreateView,
     PublishBatchDetailView,
     PublishBatchRetryFailedView,
+    ReactivationApproveView,
+    ReactivationCreateView,
+    ReactivationDraftView,
 )
 
 urlpatterns = [
     path("growth/workspace", GrowthWorkspaceView.as_view(), name="growth-workspace"),
     path("growth/markets/<str:country_code>/watch", MarketWatchView.as_view(), name="growth-market-watch"),
+    path("growth/reactivations", ReactivationCreateView.as_view(), name="growth-reactivation-create"),
+    path(
+        "growth/reactivations/<uuid:reactivation_id>/draft",
+        ReactivationDraftView.as_view(),
+        name="growth-reactivation-draft",
+    ),
+    path(
+        "growth/reactivations/<uuid:reactivation_id>/approve",
+        ReactivationApproveView.as_view(),
+        name="growth-reactivation-approve",
+    ),
     path("growth/discovery/run", DiscoveryRunView.as_view(), name="growth-discovery-run"),
     path("growth/discovery/candidate-imports", CandidateListImportView.as_view(), name="growth-candidate-import"),
     path(

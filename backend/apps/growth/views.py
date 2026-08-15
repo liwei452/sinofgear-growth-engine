@@ -33,6 +33,7 @@ from .models import (
     MarketCountryProfile,
     OpportunityReview,
     OutreachDraft,
+    ReactivationRecord,
     CRMHandoff,
     TargetAccount,
 )
@@ -64,10 +65,20 @@ from .serializers import (
     OpportunityReviewCreateSerializer,
     OpportunityReviewSerializer,
     OutreachDraftSerializer,
+    ReactivationCreateSerializer,
     CRMHandoffCreateSerializer,
     CRMHandoffSerializer,
     PublishBatchCreateSerializer,
     TargetAccountSerializer,
+)
+from .reactivation import (
+    LegalRelationshipRequired,
+    ReactivationBlocked,
+    ReactivationEvidenceInsufficient,
+    approve_reactivation_draft,
+    create_reactivation_draft,
+    reactivation_payload,
+    select_for_reactivation,
 )
 from .publishing import (
     PublishBatchConflict,
@@ -183,6 +194,12 @@ class GrowthWorkspaceView(APIView):
             "outreach_drafts": OutreachDraftSerializer(
                 OutreachDraft.objects.filter(organization=organization).order_by("-created_at", "-id"), many=True,
             ).data,
+            "reactivations": [
+                reactivation_payload(record)
+                for record in ReactivationRecord.objects.filter(organization=organization)
+                .select_related("account", "draft")
+                .prefetch_related("events", "account__intent_signals")
+            ],
             "opportunity_reviews": OpportunityReviewSerializer(
                 OpportunityReview.objects.filter(organization=organization), many=True,
             ).data,
@@ -388,6 +405,80 @@ class MarketWatchView(APIView):
             "country_code": market.country_code,
             "is_watched": True,
             "message": "已加入观察市场。",
+        })
+
+
+class ReactivationCreateView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(tags=["Growth workspace"], request=ReactivationCreateSerializer)
+    def post(self, request):
+        serializer = ReactivationCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        account = get_object_or_404(
+            TargetAccount,
+            id=serializer.validated_data["account_id"],
+            organization=request.organization,
+        )
+        try:
+            record, created = select_for_reactivation(
+                account=account,
+                actor=request.user,
+                relationship_source=serializer.validated_data["relationship_source"],
+                last_interacted_at=serializer.validated_data["last_interacted_at"],
+                interaction_summary=serializer.validated_data["interaction_summary"],
+                relationship_confirmed=serializer.validated_data["relationship_confirmed"],
+            )
+        except LegalRelationshipRequired as error:
+            return Response({"code": error.code, "message": str(error)}, status=400)
+        return Response(reactivation_payload(record), status=201 if created else 200)
+
+
+class ReactivationDraftView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(tags=["Growth workspace"], request=None)
+    def post(self, request, reactivation_id):
+        record = get_object_or_404(
+            ReactivationRecord.objects.select_related("account", "draft"),
+            id=reactivation_id,
+            organization=request.organization,
+        )
+        try:
+            draft, created = create_reactivation_draft(record=record, actor=request.user)
+        except ReactivationEvidenceInsufficient as error:
+            return Response({"code": error.code, "message": str(error)}, status=409)
+        return Response({
+            "id": str(record.id),
+            "draft_id": str(draft.id),
+            "status": record.status,
+            "draft_status": draft.status,
+            "english_draft": draft.english_draft,
+            "chinese_explanation": draft.chinese_explanation,
+            "delivery": "NEVER_SENT",
+        }, status=201 if created else 200)
+
+
+class ReactivationApproveView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(tags=["Growth workspace"], request=None)
+    def post(self, request, reactivation_id):
+        record = get_object_or_404(
+            ReactivationRecord.objects.select_related("account", "draft"),
+            id=reactivation_id,
+            organization=request.organization,
+        )
+        try:
+            approve_reactivation_draft(record=record, actor=request.user)
+        except ReactivationBlocked as error:
+            return Response({"code": error.code, "message": str(error)}, status=409)
+        return Response({
+            "id": str(record.id),
+            "status": record.status,
+            "draft_status": record.draft.status,
+            "delivery": "NEVER_SENT",
+            "message": "Draft approved for future manual sending; nothing was sent.",
         })
 
 

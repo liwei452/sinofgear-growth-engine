@@ -16,6 +16,7 @@ import CandidateListImportForm from "./CandidateListImportForm.vue"
 import CandidateEnrichmentQueue from "./CandidateEnrichmentQueue.vue"
 import DiscoveryCandidateQueue from "./DiscoveryCandidateQueue.vue"
 import MarketPilotComparison from "./MarketPilotComparison.vue"
+import ReactivationWorkbench from "./ReactivationWorkbench.vue"
 
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
@@ -314,6 +315,11 @@ async function handleImported(accountId: string): Promise<void> {
     <AutomaticDiscoveryCard
       v-if="workspaceQuery.data.value?.discovery"
       :discovery="workspaceQuery.data.value.discovery"
+    />
+    <ReactivationWorkbench
+      v-if="workspaceQuery.data.value"
+      :accounts="workspaceQuery.data.value.target_accounts"
+      :reactivations="workspaceQuery.data.value.reactivations ?? []"
     />
     <section id="candidate-discovery-entry" class="market-candidate-entry">
       <p v-if="selectedMarketName" class="market-selection-note"><strong>{{ selectedMarketName }}</strong> · 先导入许可名单或公开线索，再进入人工核实。</p>

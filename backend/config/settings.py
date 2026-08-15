@@ -100,6 +100,19 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 DATABASES = {"default": database_from_url(os.environ["DATABASE_URL"])}
 
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "sinofgear-growth",
+    }
+}
+_cache_url = os.environ.get("CACHE_URL", "")
+if _cache_url:
+    CACHES["default"] = {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": _cache_url,
+    }
+
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = os.environ.get("DJANGO_TIME_ZONE", "UTC")
 USE_I18N = True

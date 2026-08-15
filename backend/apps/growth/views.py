@@ -1,5 +1,6 @@
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
+from django.core.cache import cache
 from django.db import transaction
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -238,9 +239,18 @@ class GrowthWorkspaceView(APIView):
     @extend_schema(tags=["Growth workspace"])
     def get(self, request):
         organization = request.organization
+        cache_key = f"growth:workspace:{organization.id}"
+        payload = cache.get(cache_key)
+        if payload is not None:
+            return Response(payload)
+        payload = self._workspace_payload(organization)
+        cache.set(cache_key, payload, timeout=30)
+        return Response(payload)
+
+    def _workspace_payload(self, organization):
         accounts = list(TargetAccount.objects.filter(organization=organization))
         signals = list(IntentSignal.objects.filter(organization=organization))
-        return Response({
+        return {
             "target_accounts": TargetAccountSerializer(accounts, many=True).data,
             "contacts": ContactSerializer(Contact.objects.filter(organization=organization), many=True).data,
             "intent_signals": IntentSignalSerializer(signals, many=True).data,
@@ -282,7 +292,7 @@ class GrowthWorkspaceView(APIView):
                 accounts=accounts,
                 profiles=market_profiles_for(organization),
             ),
-        })
+        }
 
 
 class DiscoveryRunView(APIView):

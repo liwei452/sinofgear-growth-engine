@@ -30,6 +30,7 @@ from .models import (
     DiscoveryRun,
     FieldProvenance,
     FollowUp,
+    GoogleMapsDiscoveryConfig,
     GrowthPublishBatch,
     InboundLead,
     IntentSignal,
@@ -42,6 +43,12 @@ from .models import (
     TargetAccount,
     TradeDatasetSnapshot,
     TradeSyncRun,
+)
+from integrations.secrets import encrypt_secret
+from .maps_discovery import (
+    MapsDiscoveryMissingKey,
+    MapsDiscoveryNotEnabled,
+    run_maps_discovery,
 )
 from .manual_imports import import_manual_opportunity
 from .market_pilots import market_pilot_summary, market_profiles_for
@@ -62,6 +69,9 @@ from .serializers import (
     DiscoverySummarySerializer,
     FieldProvenanceSerializer,
     FollowUpSerializer,
+    GoogleMapsDiscoveryConfigResponseSerializer,
+    GoogleMapsDiscoveryConfigUpdateSerializer,
+    GoogleMapsDiscoveryRunResultSerializer,
     GrowthPublishBatchSerializer,
     GrowthErrorSerializer,
     GrowthValidationErrorSerializer,
@@ -726,6 +736,110 @@ class DiscoveryProfileView(APIView):
         profile.enabled = serializer.validated_data["enabled"]
         profile.save(update_fields=["enabled", "updated_at"])
         return Response(discovery_summary(profile))
+
+
+def maps_config_for(organization):
+    config, _ = GoogleMapsDiscoveryConfig.objects.get_or_create(organization=organization)
+    return config
+
+
+def maps_config_payload(config):
+    return {
+        "api_key_configured": bool(config.api_key_ciphertext),
+        "enabled": config.enabled,
+        "cities": config.cities,
+        "keywords": config.keywords,
+        "radius_km": config.radius_km,
+        "daily_quota": config.daily_quota,
+        "schedule_time": config.schedule_time,
+        "next_run_at": config.next_run_at,
+        "last_succeeded_at": config.last_succeeded_at,
+        "consecutive_failures": config.consecutive_failures,
+        "last_error_code": config.last_error_code,
+    }
+
+
+class GoogleMapsDiscoveryConfigView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        responses={200: GoogleMapsDiscoveryConfigResponseSerializer},
+    )
+    def get(self, request):
+        return Response(maps_config_payload(maps_config_for(request.organization)))
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=GoogleMapsDiscoveryConfigUpdateSerializer,
+        responses={
+            200: GoogleMapsDiscoveryConfigResponseSerializer,
+            400: GrowthValidationErrorSerializer,
+        },
+    )
+    def put(self, request):
+        serializer = GoogleMapsDiscoveryConfigUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        config = maps_config_for(request.organization)
+        update_fields = []
+        if "api_key" in data:
+            api_key = data["api_key"].strip()
+            config.api_key_ciphertext = encrypt_secret(api_key) if api_key else ""
+            update_fields.append("api_key_ciphertext")
+        for field in ("enabled", "cities", "keywords", "radius_km", "daily_quota", "schedule_time"):
+            if field in data:
+                setattr(config, field, data[field])
+                update_fields.append(field)
+        if update_fields:
+            update_fields.append("updated_at")
+            config.save(update_fields=update_fields)
+        return Response(maps_config_payload(config))
+
+
+class GoogleMapsDiscoveryRunView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=None,
+        responses={
+            200: GoogleMapsDiscoveryRunResultSerializer,
+            400: GrowthValidationErrorSerializer,
+        },
+    )
+    def post(self, request):
+        config = maps_config_for(request.organization)
+        try:
+            result = run_maps_discovery(config.id, trigger="MANUAL")
+        except MapsDiscoveryNotEnabled:
+            return Response(
+                {
+                    "code": "MAPS_DISCOVERY_DISABLED",
+                    "message": "谷歌地图自动发现尚未启用。",
+                    "recovery_action": "先在数据源设置里填写 API Key 并开启自动发现。",
+                },
+                status=400,
+            )
+        except MapsDiscoveryMissingKey:
+            return Response(
+                {
+                    "code": "MAPS_API_KEY_NOT_CONFIGURED",
+                    "message": "还没有填写 Google Maps API Key。",
+                    "recovery_action": "请在数据源设置里填写你的 Google Maps API Key。",
+                },
+                status=400,
+            )
+        except SourceAdapterError as error:
+            return Response(
+                {
+                    "code": error.code,
+                    "message": "谷歌地图接口返回错误。",
+                    "recovery_action": "请检查 API Key 是否有效、是否启用了 Places API 及配额。",
+                },
+                status=502,
+            )
+        return Response(result)
 
 
 class ManualOpportunityImportView(APIView):

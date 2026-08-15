@@ -14,6 +14,8 @@ from .views import (
     DiscoveryProfileView,
     DiscoveryRunView,
     FollowUpView,
+    GoogleMapsDiscoveryConfigView,
+    GoogleMapsDiscoveryRunView,
     GrowthWorkspaceView,
     MetricReceiptCreateView,
     MarketWatchCreateView,
@@ -52,6 +54,16 @@ urlpatterns = [
         name="growth-reactivation-approve",
     ),
     path("growth/discovery/run", DiscoveryRunView.as_view(), name="growth-discovery-run"),
+    path(
+        "growth/maps-discovery/config",
+        GoogleMapsDiscoveryConfigView.as_view(),
+        name="growth-maps-discovery-config",
+    ),
+    path(
+        "growth/maps-discovery/run",
+        GoogleMapsDiscoveryRunView.as_view(),
+        name="growth-maps-discovery-run",
+    ),
     path("growth/discovery/candidate-imports", CandidateListImportView.as_view(), name="growth-candidate-import"),
     path(
         "growth/discovery/candidates/<uuid:candidate_id>/review",

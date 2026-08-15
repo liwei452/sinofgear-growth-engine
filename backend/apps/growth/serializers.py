@@ -57,6 +57,56 @@ class DiscoveryProfileUpdateSerializer(serializers.Serializer):
     enabled = serializers.BooleanField()
 
 
+class GoogleMapsDiscoveryConfigUpdateSerializer(serializers.Serializer):
+    api_key = serializers.CharField(
+        required=False, allow_blank=True, max_length=200, write_only=True,
+    )
+    enabled = serializers.BooleanField(required=False)
+    cities = serializers.ListField(required=False, allow_empty=False)
+    keywords = serializers.ListField(required=False, allow_empty=False)
+    radius_km = serializers.IntegerField(required=False, min_value=1, max_value=100)
+    daily_quota = serializers.IntegerField(required=False, min_value=1, max_value=5000)
+    schedule_time = serializers.RegexField(required=False, regex=r"^\d{2}:\d{2}$")
+
+    def validate_cities(self, value):
+        normalized = []
+        for item in value:
+            if not isinstance(item, dict):
+                raise serializers.ValidationError("每个城市必须是对象。")
+            name = str(item.get("name") or "").strip()
+            code = str(item.get("country_code") or "").strip().upper()
+            if not name or len(code) != 2 or not code.isalpha():
+                raise serializers.ValidationError("城市格式无效，请提供名称和两位国家代码。")
+            normalized.append({"name": name, "country_code": code})
+        return normalized
+
+    def validate_keywords(self, value):
+        return [str(keyword).strip() for keyword in value if str(keyword).strip()]
+
+
+class GoogleMapsDiscoveryConfigResponseSerializer(serializers.Serializer):
+    api_key_configured = serializers.BooleanField()
+    enabled = serializers.BooleanField()
+    cities = serializers.ListField()
+    keywords = serializers.ListField()
+    radius_km = serializers.IntegerField()
+    daily_quota = serializers.IntegerField()
+    schedule_time = serializers.CharField()
+    next_run_at = serializers.DateTimeField(required=False, allow_null=True)
+    last_succeeded_at = serializers.DateTimeField(required=False, allow_null=True)
+    consecutive_failures = serializers.IntegerField()
+    last_error_code = serializers.CharField()
+
+
+class GoogleMapsDiscoveryRunResultSerializer(serializers.Serializer):
+    config_id = serializers.UUIDField()
+    trigger = serializers.CharField()
+    fetched_count = serializers.IntegerField()
+    created_count = serializers.IntegerField()
+    duplicate_count = serializers.IntegerField()
+    skipped_count = serializers.IntegerField()
+
+
 class MarketWatchCreateSerializer(serializers.Serializer):
     country_code = serializers.RegexField(r"^[A-Za-z]{2,3}$", min_length=2, max_length=3)
     country_label = serializers.CharField(min_length=1, max_length=96)

@@ -127,7 +127,6 @@ CONTENT_OUTPUT_SCHEMA_V2 = {
         "evidence_fact_ids": {
             **STRING_LIST_SCHEMA, "minItems": 1, "maxItems": MAX_EVIDENCE_FACT_IDS,
         },
-        "internal_translation_zh": {"type": "string", "minLength": 1, "maxLength": 50_000},
         "platform_variants": {
             "type": "array", "minItems": 1, "maxItems": MAX_PLATFORM_VARIANTS,
             "items": {
@@ -282,6 +281,8 @@ def _validate_master_v2(payload):
 
 
 def validate_generated_content_output(payload, snapshot):
+    if isinstance(payload, dict) and "internal_translation_zh" in payload:
+        raise ValueError("Generated content must not include internal_translation_zh.")
     cleaned = _validate_master_v2(payload)
     target_language = snapshot.get("language")
     if cleaned["language"] != target_language:

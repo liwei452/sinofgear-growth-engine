@@ -169,7 +169,7 @@ def test_generation_prompt_sends_the_complete_frozen_business_context(
     instruction, separator, raw_input = provider.prompt.partition("||INPUT:")
     assert separator == "||INPUT:"
     assert "single publication language" in instruction
-    assert "omit internal_translation_zh" in instruction
+    assert "never include internal_translation_zh" in instruction.lower()
     sent = __import__("json").loads(raw_input)
     assert sent["language"] == "en"
     assert sent["customer_type"] == "Industrial buyer"

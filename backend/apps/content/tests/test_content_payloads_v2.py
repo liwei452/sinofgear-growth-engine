@@ -59,7 +59,6 @@ def _output():
         "landing_page_url": "https://example.com/id/gears",
         "concept_codes": ["HELICAL_GEAR"],
         "evidence_fact_ids": ["fact-1"],
-        "internal_translation_zh": "仅供内部审核的中文释义",
         "platform_variants": [
             _variant("LINKEDIN", "LinkedIn Indonesia body"),
             _variant("FACEBOOK", "Facebook Indonesia body"),
@@ -111,6 +110,33 @@ def test_platform_payload_never_contains_internal_chinese_reference():
     assert platform["voiceover_language"] == platform["subtitle_language"] == "id"
 
 
+@pytest.mark.parametrize("language", ["id", "zh-CN"])
+def test_new_generation_rejects_internal_chinese_translation(language):
+    output = _output()
+    snapshot = _snapshot()
+    output["language"] = language
+    snapshot["language"] = language
+    for variant in output["platform_variants"]:
+        variant["language"] = language
+        if variant["platform_code"] == "TIKTOK":
+            variant["voiceover_language"] = language
+            variant["subtitle_language"] = language
+    output["internal_translation_zh"] = "不得生成的内部翻译"
+
+    with pytest.raises(ValueError, match="internal_translation_zh"):
+        payloads.validate_generated_content_output(output, snapshot)
+
+
+def test_historical_version_two_payload_with_translation_remains_readable():
+    historical = _output()
+    historical["internal_translation_zh"] = "历史内部翻译"
+
+    cleaned = payloads.validate_content_payload(historical)
+
+    assert cleaned["internal_translation_zh"] == "历史内部翻译"
+
+
 def test_version_two_schema_requires_evidence_for_master_and_platforms():
     assert payloads.CONTENT_OUTPUT_SCHEMA_V2["properties"]["evidence_fact_ids"]["minItems"] == 1
     assert payloads.PLATFORM_VARIANT_V2_SCHEMA["properties"]["evidence_fact_ids"]["minItems"] == 1
+    assert "internal_translation_zh" not in payloads.CONTENT_OUTPUT_SCHEMA_V2["properties"]

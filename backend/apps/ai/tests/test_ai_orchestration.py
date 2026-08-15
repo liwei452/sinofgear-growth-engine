@@ -105,6 +105,32 @@ def prompt():
     )
 
 
+@pytest.mark.django_db
+def test_fake_generation_quotes_only_verified_fact_snapshot(
+    organization, frozen_input, prompt
+):
+    frozen_input["verified_product_facts"] = [{
+        "fact_id": str(uuid4()),
+        "product_id": frozen_input["products"][0]["product_id"],
+        "field_name": "process",
+        "value": "Gear grinding",
+        "category": "PROCESS",
+        "source_asset_id": frozen_input["assets"][0]["asset_id"],
+        "source_page": 1,
+        "source_excerpt": "Process: Gear grinding",
+        "is_demo": True,
+    }]
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+
+    run = execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert "Verified facts: process=Gear grinding." in run.output_json["body"]
+
+
 def test_scrub_secrets_recursively_without_mutating_source():
     source = {
         "api_key": "one",

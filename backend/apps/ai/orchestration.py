@@ -94,6 +94,17 @@ def _render_prompt(template: str, snapshot: dict) -> str:
         raise GenerationError("invalid_prompt_template", "Prompt rendering failed.") from exc
     if len(rendered) > MAX_PROMPT_CHARS:
         raise GenerationError("prompt_too_large", "Rendered prompt exceeds the size limit.")
+    facts = snapshot.get("verified_product_facts") or []
+    if facts:
+        fact_payload = [
+            {"field_name": item["field_name"], "value": item["value"]}
+            for item in facts
+        ]
+        rendered += "||FACTS:" + json.dumps(
+            fact_payload, ensure_ascii=False, separators=(",", ":")
+        )
+        if len(rendered) > MAX_PROMPT_CHARS:
+            raise GenerationError("prompt_too_large", "Rendered prompt exceeds the size limit.")
     return rendered
 
 

@@ -1,3 +1,4 @@
+import json
 from typing import Protocol
 
 
@@ -27,11 +28,16 @@ class ProviderRegistry:
 class FakeAIProvider:
     def generate(self, *, prompt: str, schema: dict) -> dict:
         del schema
-        product, country, platform, cta, codes_text = prompt.split("|", 4)
+        base_prompt, separator, facts_text = prompt.partition("||FACTS:")
+        product, country, platform, cta, codes_text = base_prompt.split("|", 4)
         codes = [item.strip() for item in codes_text.split(",") if item.strip()]
+        facts = json.loads(facts_text) if separator else []
+        verified = "" if not facts else " Verified facts: " + "; ".join(
+            f"{item['field_name']}={item['value']}" for item in facts
+        ) + "."
         return {
             "title": f"{product} for {country} on {platform}",
-            "body": f"{product} for {country}. Approved concepts: {', '.join(codes)}.",
+            "body": f"{product} for {country}. Approved concepts: {', '.join(codes)}.{verified}",
             "cta": cta,
             "concept_codes": codes,
         }

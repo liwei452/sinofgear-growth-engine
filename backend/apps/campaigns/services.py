@@ -7,7 +7,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from apps.assets.models import AssetProductLink, MaterialAsset
+from apps.assets.models import AssetProductLink, MaterialAsset, ProductEvidenceFact
 from apps.catalog.models import Product, ProductConceptLink
 from apps.catalog.services import ProductSnapshot, _snapshot_from_locked_product
 from apps.knowledge.graph import acquire_knowledge_graph_lock
@@ -384,6 +384,19 @@ class PlatformSnapshot:
 
 
 @dataclass(frozen=True)
+class VerifiedProductFactSnapshot:
+    fact_id: UUID
+    product_id: UUID
+    field_name: str
+    value: str
+    category: str
+    source_asset_id: UUID
+    source_page: int | None
+    source_excerpt: str
+    is_demo: bool
+
+
+@dataclass(frozen=True)
 class ContentGenerationInput:
     organization_id: UUID
     brief_id: UUID
@@ -404,6 +417,7 @@ class ContentGenerationInput:
     advantages: tuple[str, ...]
     target_platforms: tuple[PlatformSnapshot, ...]
     ontology_snapshot: OntologySnapshot
+    verified_product_facts: tuple[VerifiedProductFactSnapshot, ...]
     generated_at: datetime
 
     def to_dict(self) -> dict[str, object]:
@@ -573,6 +587,31 @@ def build_content_generation_input(brief_id: UUID) -> ContentGenerationInput:
         )
         for asset in assets
     )
+    verified_fact_rows = list(
+        ProductEvidenceFact.objects.select_for_update(of=("self",))
+        .filter(
+            organization=brief.organization,
+            product_id__in=product_ids,
+            review_status=ProductEvidenceFact.ReviewStatus.VERIFIED,
+        )
+        .order_by("product_id", "field_name", "source_page", "id")
+    )
+    verified_product_facts = tuple(
+        VerifiedProductFactSnapshot(
+            fact_id=fact.id,
+            product_id=fact.product_id,
+            field_name=fact.field_name,
+            value=fact.value,
+            category=fact.category,
+            source_asset_id=fact.asset_id,
+            source_page=fact.source_page,
+            source_excerpt=fact.source_excerpt,
+            is_demo=fact.is_demo,
+        )
+        for fact in verified_fact_rows
+        if fact.asset.organization_id == brief.organization_id
+        and fact.job.organization_id == brief.organization_id
+    )
 
     platform_links = list(
         brief.platform_links.select_for_update(of=("self",)).order_by("platform_id", "id")
@@ -657,5 +696,6 @@ def build_content_generation_input(brief_id: UUID) -> ContentGenerationInput:
         advantages=tuple(brief.advantages),
         target_platforms=platform_snapshots,
         ontology_snapshot=ontology,
+        verified_product_facts=verified_product_facts,
         generated_at=timezone.now(),
     )

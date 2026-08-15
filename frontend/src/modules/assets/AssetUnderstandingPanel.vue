@@ -30,6 +30,7 @@ const statusText=(status:string)=>({SUGGESTED:"待确认",VERIFIED:"已验证",R
       <article v-for="fact in result.facts" :key="fact.id" class="fact">
         <div class="result-head"><strong>{{ fact.field_name }}：{{ fact.value }}</strong><span class="pill">{{ statusText(fact.review_status) }}</span></div>
         <p v-if="fact.risk_level==='HIGH'" class="risk">高风险事实，必须人工确认</p>
+        <p v-if="fact.review_status==='VERIFIED'" class="verified-use">已进入事实库，可供 ICP 与多渠道内容使用</p>
         <p>置信度 {{ Math.round(Number(fact.confidence)*100) }}% · {{ fact.source_page ? `第 ${fact.source_page} 页` : "整份资料" }}</p>
         <blockquote>{{ fact.source_excerpt }}</blockquote>
         <div v-if="canManage&&fact.review_status==='SUGGESTED'" class="actions">
@@ -42,5 +43,5 @@ const statusText=(status:string)=>({SUGGESTED:"待确认",VERIFIED:"已验证",R
 </template>
 
 <style scoped>
-.understanding{margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border-color,#d8dee8)}.actions,.result-head{display:flex;gap:.65rem;align-items:center;justify-content:space-between;flex-wrap:wrap}.result{display:grid;gap:.75rem;margin-top:.85rem}.warning,.risk{color:#8a4b08;background:#fff7e6;border-radius:.65rem;padding:.65rem}.hint,.empty{color:#657184}.fact{border:1px solid #dbe4ef;border-radius:.8rem;padding:.85rem;background:#f9fbfe}.fact p{margin:.4rem 0}.pill{background:#eaf1fb;color:#245aa5;border-radius:999px;padding:.2rem .55rem;font-size:.8rem}blockquote{margin:.5rem 0;padding:.55rem .7rem;border-left:3px solid #8eb4e8;background:white;color:#42526a}
+.understanding{margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border-color,#d8dee8)}.actions,.result-head{display:flex;gap:.65rem;align-items:center;justify-content:space-between;flex-wrap:wrap}.result{display:grid;gap:.75rem;margin-top:.85rem}.warning,.risk{color:#8a4b08;background:#fff7e6;border-radius:.65rem;padding:.65rem}.verified-use{color:#276749;background:#edf9f2;border-radius:.65rem;padding:.55rem}.hint,.empty{color:#657184}.fact{border:1px solid #dbe4ef;border-radius:.8rem;padding:.85rem;background:#f9fbfe}.fact p{margin:.4rem 0}.pill{background:#eaf1fb;color:#245aa5;border-radius:999px;padding:.2rem .55rem;font-size:.8rem}blockquote{margin:.5rem 0;padding:.55rem .7rem;border-left:3px solid #8eb4e8;background:white;color:#42526a}
 </style>

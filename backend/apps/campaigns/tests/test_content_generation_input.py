@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 from django.core.exceptions import ValidationError
 
-from apps.assets.models import AssetProductLink, MaterialAsset
+from apps.assets.models import AssetProductLink, MaterialAsset, ProductEvidenceFact
 from apps.ai.models import AIRun, PromptVersion
 from apps.ai.orchestration import execute_generation_job
 from apps.ai.services import PromptVersionService
@@ -122,6 +122,44 @@ def test_generation_input_is_complete_frozen_and_json_serializable(
     assert generation_input_errors(before) == []
     assert "storage_key" not in before["assets"][0]
     json.dumps(before)
+
+
+@pytest.mark.django_db
+def test_generation_input_includes_only_human_verified_product_facts(
+    campaign_organizations, campaign_user
+):
+    own, _ = campaign_organizations
+    ready, _, product, asset, _, _ = make_ready_brief(own, campaign_user)
+    understanding_job = JobService.create(
+        organization=own,
+        job_type=Job.Type.ASSET_UNDERSTAND,
+        input_snapshot={"asset_id": str(asset.id), "product_id": str(product.id)},
+    )
+    common = dict(
+        organization=own, product=product, asset=asset, job=understanding_job,
+        category="PROCESS", confidence="0.9000", source_page=1,
+        provider_label="Fake Provider · 本地演示", is_demo=True,
+    )
+    verified = ProductEvidenceFact.objects.create(
+        **common, field_name="process", value="Gear grinding",
+        source_excerpt="Process: Gear grinding", review_status="VERIFIED",
+        reviewed_by=campaign_user, reviewed_at=ready.reviewed_at,
+    )
+    ProductEvidenceFact.objects.create(
+        **common, field_name="material", value="Invented steel",
+        source_excerpt="Material: Invented steel", review_status="REJECTED",
+        reviewed_by=campaign_user, reviewed_at=ready.reviewed_at,
+    )
+
+    snapshot = build_content_generation_input(ready.id).to_dict()
+
+    assert snapshot["verified_product_facts"] == [{
+        "fact_id": str(verified.id), "product_id": str(product.id),
+        "field_name": "process", "value": "Gear grinding", "category": "PROCESS",
+        "source_asset_id": str(asset.id), "source_page": 1,
+        "source_excerpt": "Process: Gear grinding", "is_demo": True,
+    }]
+    assert generation_input_errors(snapshot) == []
 
 
 @pytest.mark.django_db

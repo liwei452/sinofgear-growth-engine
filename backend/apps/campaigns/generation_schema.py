@@ -86,6 +86,21 @@ PLATFORM_SCHEMA = object_schema(
     ["platform_id", "code", "name", "capability_codes"],
 )
 
+VERIFIED_PRODUCT_FACT_SCHEMA = object_schema(
+    {
+        "fact_id": UUID,
+        "product_id": UUID,
+        "field_name": NON_EMPTY_STRING,
+        "value": NON_EMPTY_STRING,
+        "category": NON_EMPTY_STRING,
+        "source_asset_id": UUID,
+        "source_page": {"type": ["integer", "null"], "minimum": 1},
+        "source_excerpt": NON_EMPTY_STRING,
+        "is_demo": {"type": "boolean"},
+    },
+    ["fact_id", "product_id", "field_name", "value", "category", "source_asset_id", "source_page", "source_excerpt", "is_demo"],
+)
+
 CONCEPT_VERSION_SCHEMA = object_schema(
     {
         "concept_id": UUID,
@@ -162,6 +177,7 @@ CONTENT_GENERATION_INPUT_SCHEMA = object_schema(
         "advantages": STRING_LIST,
         "target_platforms": {"type": "array", "items": PLATFORM_SCHEMA, "minItems": 1},
         "ontology_snapshot": ONTOLOGY_SNAPSHOT_SCHEMA,
+        "verified_product_facts": {"type": "array", "items": VERIFIED_PRODUCT_FACT_SCHEMA},
         "generated_at": {"type": "string", "format": "date-time"},
     },
     [

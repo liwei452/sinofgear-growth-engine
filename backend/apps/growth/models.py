@@ -536,3 +536,78 @@ class DiscoveryRun(OrganizationOwnedModel):
 
     def delete(self, *args, **kwargs):
         raise ValueError("Discovery run history cannot be deleted.")
+
+
+class TradeSyncRun(OrganizationOwnedModel):
+    class Trigger(models.TextChoices):
+        MANUAL = "MANUAL", "Manual"
+        SCHEDULED = "SCHEDULED", "Scheduled"
+
+    class Status(models.TextChoices):
+        RUNNING = "RUNNING", "Running"
+        SUCCEEDED = "SUCCEEDED", "Succeeded"
+        FAILED = "FAILED", "Failed"
+
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="growth_trade_sync_runs",
+    )
+    source_code = models.CharField(max_length=32)
+    trigger = models.CharField(max_length=16, choices=Trigger.choices)
+    status = models.CharField(max_length=16, choices=Status.choices)
+    query_snapshot = models.JSONField(default=dict)
+    query_hash = models.CharField(max_length=64)
+    capability_snapshot = models.JSONField(default=dict)
+    fetched_count = models.PositiveIntegerField(default=0)
+    created_snapshot_count = models.PositiveIntegerField(default=0)
+    reused_snapshot_count = models.PositiveIntegerField(default=0)
+    skipped_count = models.PositiveIntegerField(default=0)
+    error_code = models.CharField(max_length=64, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Trade sync history cannot be deleted.")
+
+
+class TradeDatasetSnapshot(OrganizationOwnedModel):
+    first_seen_run = models.ForeignKey(
+        TradeSyncRun,
+        on_delete=models.PROTECT,
+        related_name="first_seen_snapshots",
+    )
+    reporter_code = models.CharField(max_length=3)
+    reporter_name = models.CharField(max_length=200, blank=True)
+    partner_code = models.CharField(max_length=3)
+    partner_name = models.CharField(max_length=200, blank=True)
+    flow = models.CharField(max_length=2)
+    flow_name = models.CharField(max_length=40, blank=True)
+    hs_code = models.CharField(max_length=6)
+    period = models.CharField(max_length=6)
+    frequency = models.CharField(max_length=8)
+    trade_value_usd = models.DecimalField(max_digits=24, decimal_places=2)
+    quantity = models.DecimalField(max_digits=24, decimal_places=4, null=True, blank=True)
+    quantity_unit = models.CharField(max_length=40, blank=True)
+    source_url = models.URLField(max_length=1000)
+    source_dataset = models.CharField(max_length=80)
+    dataset_version = models.CharField(max_length=100, blank=True)
+    observed_at = models.DateField()
+    fetched_at = models.DateTimeField()
+    freshness_days = models.PositiveIntegerField()
+    record_hash = models.CharField(max_length=64)
+    provenance = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["-observed_at", "hs_code", "partner_code", "-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "record_hash"],
+                name="growth_unique_trade_snapshot_hash",
+            ),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Trade dataset snapshot history cannot be deleted.")

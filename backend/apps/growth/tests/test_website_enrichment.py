@@ -46,6 +46,7 @@ def test_prepare_website_enrichment_persists_public_contacts():
         country="Vietnam",
         website="https://abc.example",
         industry="gearbox repair",
+        status=DiscoveryCandidate.Status.ACCEPTED,
         import_format="GOOGLE_MAPS",
         record_hash="web-test-hash",
     )

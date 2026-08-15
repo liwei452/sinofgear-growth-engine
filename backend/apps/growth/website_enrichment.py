@@ -80,8 +80,11 @@ def extract_website_facts(html: str, base_url: str) -> WebsiteFacts:
 
 
 def prepare_website_enrichment(candidate, *, transport=None):
-    from .models import CandidateEnrichmentSnapshot
+    from .enrichment import CandidateReviewRequired
+    from .models import CandidateEnrichmentSnapshot, DiscoveryCandidate
 
+    if candidate.status != DiscoveryCandidate.Status.ACCEPTED:
+        raise CandidateReviewRequired("Candidate must be accepted before website enrichment.")
     if not candidate.website:
         raise ValueError("Candidate has no website to enrich from.")
     fetcher = transport or UrllibWebsiteTransport()

@@ -505,6 +505,8 @@ def test_four_approved_channels_export_one_deterministic_safe_archive(growth_pub
             "title": f"{package.channel} inspection proof",
             "body": "Verified gear inspection evidence.",
             "cta": "Review the capability summary",
+            "language": "en",
+            "landing_page_url": "https://example.com/gears",
             "hashtags": ["gears", "inspection"],
             "utm": f"utm_source={package.channel.lower()}&utm_medium=organic",
             "verified_fact_evidence": [{
@@ -532,9 +534,15 @@ def test_four_approved_channels_export_one_deterministic_safe_archive(growth_pub
                 "duration_seconds": 30,
                 "aspect_ratio": "9:16",
                 "script": "Verified gear inspection evidence.",
-                "shot_list": ["Gear close-up", "Inspection report"],
-                "english_voiceover": "Verified gear inspection evidence.",
-                "chinese_subtitles": "齿轮检测证据。",
+                "shot_list": [{
+                    "scene": "1",
+                    "visual": "Gear close-up",
+                    "on_screen_text": "Inspection proof",
+                }],
+                "voiceover": "Verified gear inspection evidence.",
+                "voiceover_language": "en",
+                "subtitles": "Verified gear inspection evidence.",
+                "subtitle_language": "en",
             })
         package.save(update_fields=["payload", "updated_at"])
     payload = {"package_ids": [str(package.id) for package in packages]}
@@ -569,6 +577,15 @@ def test_four_approved_channels_export_one_deterministic_safe_archive(growth_pub
     assert manifest["delivery"] == "MANUAL_ONLY"
     assert manifest["channels"] == ["FACEBOOK", "INSTAGRAM", "LINKEDIN", "TIKTOK"]
     assert content["aspect_ratio"] == "9:16"
+    assert content["language"] == "en"
+    assert content["landing_page_url"] == "https://example.com/gears"
+    assert content["voiceover"] == "Verified gear inspection evidence."
+    assert content["subtitles"] == "Verified gear inspection evidence."
+    assert content["shot_list"] == [{
+        "scene": "1", "visual": "Gear close-up", "on_screen_text": "Inspection proof",
+    }]
+    assert "english_voiceover" not in content
+    assert "chinese_subtitles" not in content
     assert content["tags"] == ["gears", "inspection"]
     assert evidence[0]["source_filename"] == "gear-catalog.pdf"
     assert assets == [{

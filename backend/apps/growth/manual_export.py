@@ -43,6 +43,23 @@ def _safe_filename(value: object) -> str:
     return name or "asset"
 
 
+def _shot_list(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value[:24]:
+        if not isinstance(item, dict):
+            continue
+        shot = {
+            "scene": _text(item.get("scene"), 64),
+            "visual": _text(item.get("visual"), 2_000),
+            "on_screen_text": _text(item.get("on_screen_text"), 1_000),
+        }
+        if all(shot.values()):
+            result.append(shot)
+    return result
+
+
 def _content_payload(package: ChannelPackage) -> dict[str, object]:
     payload = package.payload if isinstance(package.payload, dict) else {}
     result: dict[str, object] = {
@@ -50,6 +67,8 @@ def _content_payload(package: ChannelPackage) -> dict[str, object]:
         "title": _text(payload.get("title")),
         "body": _text(payload.get("body")),
         "cta": _text(payload.get("cta"), 2_000),
+        "language": _text(payload.get("language"), 16),
+        "landing_page_url": _text(payload.get("landing_page_url"), 2_000),
         "tags": _text_list(payload.get("hashtags", payload.get("tags"))),
         "utm": _text(payload.get("utm"), 2_000),
     }
@@ -58,9 +77,11 @@ def _content_payload(package: ChannelPackage) -> dict[str, object]:
             "duration_seconds": payload.get("duration_seconds"),
             "aspect_ratio": _text(payload.get("aspect_ratio"), 16),
             "script": _text(payload.get("script")),
-            "shot_list": _text_list(payload.get("shot_list"), item_limit=2_000),
-            "english_voiceover": _text(payload.get("english_voiceover")),
-            "chinese_subtitles": _text(payload.get("chinese_subtitles")),
+            "shot_list": _shot_list(payload.get("shot_list")),
+            "voiceover": _text(payload.get("voiceover", payload.get("english_voiceover"))),
+            "voiceover_language": _text(payload.get("voiceover_language"), 16),
+            "subtitles": _text(payload.get("subtitles", payload.get("chinese_subtitles"))),
+            "subtitle_language": _text(payload.get("subtitle_language"), 16),
         })
     return result
 

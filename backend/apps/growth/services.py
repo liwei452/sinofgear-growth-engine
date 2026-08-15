@@ -106,7 +106,26 @@ def prepare_channel_package_from_platform_content(
         "verified_fact_evidence": facts,
         "asset_references": _safe_asset_references(content),
     }
-    if channel == "TIKTOK":
+    if content.payload.get("schema_version") == 2:
+        payload.update({
+            "language": content.payload["language"],
+            "landing_page_url": content.payload["landing_page_url"],
+            "hashtags": list(content.payload["hashtags"]),
+            "evidence_fact_ids": list(content.payload["evidence_fact_ids"]),
+        })
+    if channel == "TIKTOK" and content.payload.get("schema_version") == 2:
+        payload.update({
+            "duration_seconds": content.payload["duration_seconds"],
+            "aspect_ratio": content.payload["aspect_ratio"],
+            "script": content.payload["script"],
+            "shot_list": list(content.payload["shot_list"]),
+            "voiceover": content.payload["voiceover"],
+            "voiceover_language": content.payload["voiceover_language"],
+            "subtitles": content.payload["subtitles"],
+            "subtitle_language": content.payload["subtitle_language"],
+            "utm": "utm_source=tiktok&utm_medium=organic&utm_campaign=manual-review",
+        })
+    elif channel == "TIKTOK":
         payload.update({
             "duration_seconds": 30,
             "aspect_ratio": "9:16",

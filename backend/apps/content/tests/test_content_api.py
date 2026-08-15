@@ -3,8 +3,12 @@ from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.test import override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
+from apps.campaigns.models import ContentBriefPlatform
+from apps.campaigns.services import mark_content_brief_ready, revise_content_brief
 from apps.content.models import MasterContent, PlatformContent, content_writes
 from apps.content.services import (
     approve_content, create_generated_master, create_platform_content,
@@ -14,6 +18,8 @@ from apps.growth.models import ChannelPackage
 from apps.growth.services import prepare_channel_package_from_platform_content
 from apps.identity.models import Membership, Organization, Role
 from apps.jobs.services import JobService
+from apps.jobs.models import Job
+from apps.platforms.models import Platform
 
 
 def _client(organization, role_code):
@@ -30,6 +36,146 @@ def _client(organization, role_code):
     client = APIClient()
     assert client.login(username=user.username, password="password")
     return client
+
+
+def _version_two_master(content_provenance):
+    organization, actor, brief, source_job, _source_run = content_provenance
+    brief = revise_content_brief(brief.id, creator=actor)
+    selected = brief.platform_links.get().platform
+    selected.code = "LINKEDIN"
+    selected.name = "LinkedIn"
+    selected.save(update_fields=["code", "name"])
+    platforms = [selected]
+    for code in ("FACEBOOK", "INSTAGRAM", "TIKTOK"):
+        platform = Platform.objects.create(code=code, name=code.title())
+        ContentBriefPlatform.objects.create(
+            organization=organization, brief=brief, platform=platform,
+        )
+        platforms.append(platform)
+    brief = mark_content_brief_ready(brief.id, reviewer=actor)
+    fact_id = source_job.input_snapshot["verified_product_facts"][0]["fact_id"]
+    variants = []
+    for index, platform in enumerate(platforms, start=1):
+        variant = {
+            "platform_code": platform.code,
+            "language": "en",
+            "title": f"{platform.code} title",
+            "body": f"Distinct {platform.code} body {index}",
+            "cta": "Request a quote",
+            "landing_page_url": "https://example.com/gears",
+            "hashtags": [f"#{platform.code.title()}Gears"],
+            "evidence_fact_ids": [fact_id],
+        }
+        if platform.code == "TIKTOK":
+            variant.update({
+                "duration_seconds": 42,
+                "aspect_ratio": "9:16",
+                "script": "Target-language TikTok script",
+                "shot_list": [{
+                    "scene": "1",
+                    "visual": "Gear inspection close-up",
+                    "on_screen_text": "Verified precision process",
+                }],
+                "voiceover": "Target-language voiceover",
+                "voiceover_language": "en",
+                "subtitles": "Target-language subtitles",
+                "subtitle_language": "en",
+            })
+        variants.append(variant)
+    output = {
+        "schema_version": 2,
+        "language": "en",
+        "title": "Evidence-backed master",
+        "body": "Master body is not a platform body.",
+        "cta": "Request a quote",
+        "landing_page_url": "https://example.com/gears",
+        "concept_codes": [],
+        "evidence_fact_ids": [fact_id],
+        "internal_translation_zh": "仅供内部审核，不得发布。",
+        "platform_variants": variants,
+    }
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot={
+            "brief_id": str(brief.id),
+            "brief_version": brief.version,
+            "verified_product_facts": source_job.input_snapshot["verified_product_facts"],
+        },
+        created_by=actor,
+    )
+    claimed = JobService.claim(worker_id="v2-content-test", job_id=job.id)
+    prompt = PromptVersion.objects.get(purpose="CONTENT_GENERATE", version=2)
+    with ai_audit_writes():
+        run = AIRun.objects.create(
+            organization=organization,
+            job=job,
+            job_attempt=job.attempt,
+            prompt_version=prompt,
+            provider="fake",
+            model="fake-v1",
+            input_snapshot=job.input_snapshot,
+            status=AIRun.Status.SUCCEEDED,
+            output_json=output,
+            started_at=timezone.now(),
+            finished_at=timezone.now(),
+        )
+    master = create_generated_master(
+        brief=brief, job=claimed, ai_run=run, actor=actor,
+    )
+    JobService.succeed(
+        job.id,
+        claim_token=claimed.claim_token,
+        result_reference={
+            "type": "master_content", "id": str(master.id), "version": 1,
+        },
+    )
+    master.refresh_from_db()
+    return approve_content(master, actor=actor), actor, platforms
+
+
+def test_version_two_master_creates_distinct_reviewable_platform_variants(
+    content_provenance,
+):
+    master, actor, platforms = _version_two_master(content_provenance)
+
+    rows = [
+        create_platform_content(master, platform=platform, actor=actor)
+        for platform in platforms
+    ]
+
+    assert [row.payload["body"] for row in rows] == [
+        "Distinct LINKEDIN body 1",
+        "Distinct FACEBOOK body 2",
+        "Distinct INSTAGRAM body 3",
+        "Distinct TIKTOK body 4",
+    ]
+    assert all(row.payload["schema_version"] == 2 for row in rows)
+    assert all(row.payload["language"] == "en" for row in rows)
+    assert all("internal_translation_zh" not in row.payload for row in rows)
+
+
+def test_tiktok_package_copies_the_approved_target_language_structure(
+    content_provenance,
+):
+    master, actor, platforms = _version_two_master(content_provenance)
+    tiktok = next(platform for platform in platforms if platform.code == "TIKTOK")
+    content = approve_content(
+        create_platform_content(master, platform=tiktok, actor=actor), actor=actor,
+    )
+
+    package, created = prepare_channel_package_from_platform_content(content=content)
+
+    assert created is True
+    assert package.payload["language"] == "en"
+    assert package.payload["duration_seconds"] == 42
+    assert package.payload["shot_list"] == content.payload["shot_list"]
+    assert package.payload["voiceover"] == "Target-language voiceover"
+    assert package.payload["subtitles"] == "Target-language subtitles"
+    assert package.payload["hashtags"] == ["#TiktokGears"]
+    assert "english_voiceover" not in package.payload
+    assert "chinese_subtitles" not in package.payload
+    assert "internal_translation_zh" not in package.payload
 
 
 @pytest.mark.parametrize(

@@ -8,7 +8,11 @@ from apps.campaigns.models import ContentBrief
 from apps.jobs.models import Job
 
 from .models import MasterContent, PlatformContent, content_writes
-from .payloads import validate_content_payload, validate_generated_content_output
+from .payloads import (
+    platform_variant_payload,
+    validate_content_payload,
+    validate_generated_content_output,
+)
 
 
 class ContentStateError(ValueError):
@@ -267,13 +271,19 @@ def create_platform_content(master, *, platform, actor=None):
         if not content_is_consistent(existing):
             raise ContentStateError("Existing platform content provenance is inconsistent.")
         return existing
-    payload = {
-        "title": master.payload["title"],
-        "body": master.payload["body"],
-        "cta": master.payload["cta"],
-        "concept_codes": list(master.payload["concept_codes"]),
-        "platform_code": platform.code,
-    }
+    if master.payload.get("schema_version") == 2:
+        try:
+            payload = platform_variant_payload(master.payload, platform.code)
+        except ValueError as exc:
+            raise ContentStateError(str(exc)) from exc
+    else:
+        payload = {
+            "title": master.payload["title"],
+            "body": master.payload["body"],
+            "cta": master.payload["cta"],
+            "concept_codes": list(master.payload["concept_codes"]),
+            "platform_code": platform.code,
+        }
     content_id = uuid.uuid4()
     provenance_source = PlatformContent(
         id=content_id, lineage_id=content_id, organization=master.organization,

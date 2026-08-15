@@ -131,6 +131,16 @@ const channelReadiness = computed<ChannelReadiness[]>(() => publishChannelCodes.
 const pendingReadinessCount = computed(() => channelReadiness.value.filter(item => !item.ready).length)
 const allChannelsReady = computed(() => pendingReadinessCount.value === 0)
 const hasPublishingPackages = computed(() => channelReadiness.value.some(item => item.package))
+const publishingModeSummary = computed(() => {
+  const connections = publishChannelCodes.map(channel => connectionFor(channel))
+  if (connections.every(connection => connection?.status === "CONNECTED" && connection.mode === "OFFICIAL")) {
+    return "官方接口 · 人工确认后发布"
+  }
+  if (connections.every(connection => connection?.status === "CONNECTED" && connection.mode === "DEMO_FAKE")) {
+    return "Demo / Fake · 一键发布演示"
+  }
+  return "混合发布方式 · 以各渠道状态为准"
+})
 const reviewPackages = computed(() => publishChannelCodes
   .map(packageFor)
   .filter((channelPackage): channelPackage is ChannelPackage => Boolean(channelPackage)))
@@ -264,7 +274,23 @@ function connectionDisplay(channel: string): string {
 }
 
 function modeLabel(channel: string): string {
-  return connectionFor(channel)?.mode === "OFFICIAL" ? "官方连接" : "Demo / Fake"
+  const mode = connectionFor(channel)?.mode
+  if (mode === "OFFICIAL") return "官方连接"
+  if (mode === "DEMO_FAKE") return "Demo / Fake"
+  const channelPackage = packageFor(channel)
+  if (!channelPackage || channelPackage.is_demo) return "Demo / Fake"
+  return "仅发布包"
+}
+
+function publishingRouteLabel(channel: string): string {
+  const connection = connectionFor(channel)
+  if (connection?.status === "CONNECTED" && connection.mode === "OFFICIAL") {
+    return "发布方式：官方接口 · 仍需人工确认"
+  }
+  if (connection?.status === "CONNECTED" && connection.mode === "DEMO_FAKE") {
+    return "发布方式：Demo / Fake · 不会真实发布"
+  }
+  return "发布方式：手工发布包 · 不会调用平台"
 }
 
 function connectionActionLabel(channel: string, channelName: string): string {
@@ -486,7 +512,7 @@ const channels: Array<{
     </section>
 
     <section class="growth-card">
-      <div class="growth-heading"><div><h2>各渠道内容包</h2><p>先审核内容，再一次提交到所有可用渠道。</p></div><span class="connector-state">Fake Connector · 一键发布演示</span></div>
+      <div class="growth-heading"><div><h2>各渠道内容包</h2><p>先审核内容，再一次提交到所有可用渠道。</p></div><span class="connector-state">{{ publishingModeSummary }}</span></div>
       <div class="package-grid">
         <article v-for="channel in channels" :id="`channel-package-${channel.code}`" :key="channel.name" tabindex="-1" :aria-label="`${channel.name} 内容包`">
           <span class="fake-label">{{ modeLabel(channel.code) }}</span><h3>{{ channel.name }}</h3>
@@ -502,6 +528,7 @@ const channels: Array<{
               {{ connectionFor(channel.code)?.recovery_action || "连接账号" }}
             </button>
           </div>
+          <p class="publishing-route">{{ publishingRouteLabel(channel.code) }}</p>
           <p class="package-source">{{ String(packageFor(channel.code)?.payload.title ?? channel.format) }}</p>
           <p>{{ channel.format }}</p><strong>手工发布包</strong>
           <details v-if="packageFactEvidence(packageFor(channel.code)).length" class="package-evidence"><summary>查看已验证事实依据</summary><article v-for="fact in packageFactEvidence(packageFor(channel.code))" :key="fact.id"><strong>{{ fact.fieldName }}：{{ fact.value }}</strong><p>{{ fact.sourceFilename }}<template v-if="fact.sourcePage"> · 第 {{ fact.sourcePage }} 页</template><template v-if="fact.isDemo"> · Demo/Fake</template></p><blockquote>{{ fact.sourceExcerpt }}</blockquote></article></details>
@@ -537,6 +564,7 @@ const channels: Array<{
               {{ connectionFor('TIKTOK')?.recovery_action || "连接账号" }}
             </button>
           </div>
+          <p class="publishing-route">{{ publishingRouteLabel('TIKTOK') }}</p>
           <p v-if="packageTitle" class="package-source">{{ packageTitle }}</p>
           <p class="package-lead">30 秒 · 9:16 · 手工发布包 · {{ modeLabel('TIKTOK') }}</p>
           <dl>

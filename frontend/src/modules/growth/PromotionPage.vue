@@ -25,6 +25,7 @@ import {
 import PromotionPlanSummary from "./PromotionPlanSummary.vue"
 import PublishResultsPanel from "./PublishResultsPanel.vue"
 import SocialReadinessPanel, { type SocialChannelStatus } from "./SocialReadinessPanel.vue"
+import StandardChannelPackageCard from "./StandardChannelPackageCard.vue"
 import TikTokPackageReview from "./TikTokPackageReview.vue"
 import { packageFactEvidence, payloadList, payloadShots, payloadText } from "./packagePayload"
 
@@ -597,42 +598,29 @@ const socialChannelStatuses = computed<SocialChannelStatus[]>(() => socialChanne
     <section class="growth-card">
       <div class="growth-heading"><div><h2>各渠道内容包</h2><p>先审核内容，再一次提交到所有可用渠道。</p></div><span class="connector-state">{{ publishingModeSummary }}</span></div>
       <div v-if="hasPublishingPackages" class="package-grid">
-        <article v-for="channel in preparedStandardChannels" :id="`channel-package-${channel.code}`" :key="channel.name" tabindex="-1" :aria-label="`${channel.name} 内容包`">
-          <span class="fake-label">{{ modeLabel(channel.code) }}</span><h3>{{ channel.name }}</h3>
-          <div class="channel-connection">
-            <span>{{ connectionDisplay(channel.code) }}</span>
-            <button
-              v-if="connectionFor(channel.code)?.status !== 'CONNECTED'"
-              class="button button-secondary" type="button"
-              :disabled="connectionMutation.isPending.value"
-              :aria-label="connectionActionLabel(channel.code, channel.actionName)"
-              @click="connectChannel(channel.code)"
-            >
-              {{ connectionFor(channel.code)?.recovery_action || "连接账号" }}
-            </button>
-          </div>
-          <p class="publishing-route">{{ publishingRouteLabel(channel.code) }}</p>
-          <p class="package-source">{{ String(packageFor(channel.code)?.payload.title ?? channel.format) }}</p>
-          <p>{{ channel.format }}</p><strong>手工发布包</strong>
-          <details v-if="packageFactEvidence(packageFor(channel.code)).length" class="package-evidence"><summary>查看已验证事实依据</summary><article v-for="fact in packageFactEvidence(packageFor(channel.code))" :key="fact.id"><strong>{{ fact.fieldName }}：{{ fact.value }}</strong><p>{{ fact.sourceFilename }}<template v-if="fact.sourcePage"> · 第 {{ fact.sourcePage }} 页</template></p><blockquote>{{ fact.sourceExcerpt }}</blockquote></article></details>
-          <div v-if="packageFor(channel.code)" class="package-actions">
-            <button
-              class="button button-secondary" type="button"
-              :disabled="isApproved(packageFor(channel.code)) || approveMutation.isPending.value"
-              :aria-label="`批准 ${channel.actionName} 内容包`"
-              @click="approvePackage(packageFor(channel.code))"
-            >
-              {{ isApproved(packageFor(channel.code)) ? "已批准" : "批准" }}
-            </button>
-            <button
-              v-if="isApproved(packageFor(channel.code))" class="button button-secondary" type="button"
-              :disabled="exportMutation.isPending.value" :aria-label="`下载 ${channel.actionName} 发布包`"
-              @click="downloadPackage(packageFor(channel.code))"
-            >
-              下载
-            </button>
-          </div>
-        </article>
+        <StandardChannelPackageCard
+          v-for="channel in preparedStandardChannels"
+          :key="channel.name"
+          :code="channel.code"
+          :name="channel.name"
+          :action-name="channel.actionName"
+          :format="channel.format"
+          :mode-label="modeLabel(channel.code)"
+          :connection-display="connectionDisplay(channel.code)"
+          :connection-connected="connectionFor(channel.code)?.status === 'CONNECTED'"
+          :connection-action-label="connectionActionLabel(channel.code, channel.actionName)"
+          :recovery-action="connectionFor(channel.code)?.recovery_action || ''"
+          :publishing-route-label="publishingRouteLabel(channel.code)"
+          :package-title="String(packageFor(channel.code)?.payload.title ?? '')"
+          :facts="packageFactEvidence(packageFor(channel.code))"
+          :approved="isApproved(packageFor(channel.code))"
+          :approving="approveMutation.isPending.value"
+          :exporting="exportMutation.isPending.value"
+          :connecting="connectionMutation.isPending.value"
+          @approve="approvePackage(packageFor(channel.code))"
+          @download="downloadPackage(packageFor(channel.code))"
+          @connect="connectChannel(channel.code)"
+        />
         <TikTokPackageReview
           v-if="activePackage"
           :channel-package="activePackage"

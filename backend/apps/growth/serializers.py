@@ -139,7 +139,7 @@ class IntentSignalSerializer(serializers.ModelSerializer):
             "evidence_text", "confidence", "observed_at", "data_label",
             "collection_method", "collection_method_label", "content_hash",
             "score_breakdown", "scoring_rule_version", "uncertainty_notes",
-            "priority_label",
+            "evidence_envelope", "priority_label",
         ]
 
     def get_data_label(self, obj: IntentSignal) -> str:

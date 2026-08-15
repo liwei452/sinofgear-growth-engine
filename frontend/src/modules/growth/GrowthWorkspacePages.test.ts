@@ -385,6 +385,18 @@ it("explains evidence scoring and shows only safe source links with saved follow
           icp_fit: 20, intent_strength: 24, recency: 14,
           role_relevance: 12, evidence_coverage: 18, risk_penalty: 0,
         },
+        evidence_envelope: {
+          field_value: "Hiring a precision transmission buyer",
+          source_url: "https://example.invalid/evidence",
+          source_excerpt: "Hiring a precision transmission buyer",
+          confidence: 88,
+          observed_at: "2026-08-14T09:20:00Z",
+          source_cost_micros: 0,
+          license_contract: "TED_SEARCH_API_PUBLIC_DATA",
+          usage_rights: "INTERNAL_DISCOVERY_WITH_SOURCE_LINK",
+          review_status: "PENDING_REVIEW",
+          queue: "MONITORING",
+        },
         uncertainty_notes: ["采购时间仍需人工确认"], priority_label: "优先跟进",
       },
       {
@@ -428,6 +440,10 @@ it("explains evidence scoring and shows only safe source links with saved follow
   expect(screen.getByText("证据覆盖 18")).toBeInTheDocument()
   expect(screen.getByText("风险扣分 0")).toBeInTheDocument()
   expect(screen.getByText("本地演示样本")).toBeInTheDocument()
+  expect(screen.getByText("TED 官方公开数据")).toBeInTheDocument()
+  expect(screen.getByText("待人工审查")).toBeInTheDocument()
+  expect(screen.getByText("免费公开来源")).toBeInTheDocument()
+  expect(screen.queryByText("MONITORING")).not.toBeInTheDocument()
   expect(screen.getByText("采购时间仍需人工确认")).toBeInTheDocument()
   expect(screen.getByRole("link", { name: "打开原始来源" })).toHaveAttribute(
     "href", "https://example.invalid/evidence",

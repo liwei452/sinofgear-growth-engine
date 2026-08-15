@@ -2,7 +2,13 @@ import html
 from datetime import datetime, time, timezone
 from uuid import UUID
 
-from .base import DiscoveryQuery, SourceAdapterError, SourceBatch, SourceItem
+from .base import (
+    DiscoveryQuery,
+    SourceAdapterError,
+    SourceBatch,
+    SourceItem,
+    governance_for,
+)
 from .ted import JsonTransport, UrllibJsonTransport
 
 
@@ -69,6 +75,7 @@ class ContractsFinderSource:
                 "capture_method": "OFFICIAL_PUBLIC_API",
                 "authentication": "ANONYMOUS",
                 "result_limit": query.limit,
+                "governance": governance_for(self.source_code),
             },
             skipped_count=skipped_count,
             total_count=int(response.get("hitCount") or len(hits)),

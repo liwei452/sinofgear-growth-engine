@@ -7,7 +7,7 @@ from django.db.models import Q
 from django.utils.module_loading import import_string
 from django.utils import timezone
 
-from integrations.sources.base import DiscoveryQuery, SourceAdapterError
+from integrations.sources.base import DiscoveryQuery, SourceAdapterError, governance_for
 from integrations.sources.composite import CompositeDiscoverySource
 from integrations.sources.contracts_finder import ContractsFinderSource
 from integrations.sources.ted import TedSource
@@ -127,16 +127,26 @@ def _ingest_batch(*, profile_id, run_id, batch) -> DiscoveryRun:
             item.deadline_at.date().isoformat() if item.deadline_at else "not stated"
         )
         cpv_text = ", ".join(item.cpv_codes) or "not stated"
+        notice_source = {
+            "TED": "TED",
+            "UK_CONTRACTS_FINDER": "Contracts Finder",
+        }.get(item.source_code, "Official procurement")
+        evidence_text = (
+            f"{notice_source} notice {item.external_id}: {item.title}. "
+            f"CPV {cpv_text}. Tender deadline: {deadline_text}."
+        )
+        license_contract = (
+            "DEMO_FIXTURE"
+            if batch.is_demo
+            else governance_for(item.source_code)["license_contract"]
+        )
         signal = IntentSignal(
             organization=profile.organization,
             account=account,
             signal_type="PUBLIC_PROCUREMENT_NOTICE",
             source_label=_source_label(item.source_code, is_demo=batch.is_demo),
             source_url=item.source_url,
-            evidence_text=(
-                f"TED notice {item.external_id}: {item.title}. "
-                f"CPV {cpv_text}. Tender deadline: {deadline_text}."
-            ),
+            evidence_text=evidence_text,
             confidence=PUBLIC_PROCUREMENT_SCORE_TOTAL,
             is_demo=batch.is_demo,
             collection_method=(
@@ -149,6 +159,18 @@ def _ingest_batch(*, profile_id, run_id, batch) -> DiscoveryRun:
                 "采购方来自公开采购公告，但仍需人工核实供应商资格与采购范围",
                 "尚未核实个人联系人，也不会自动联系客户",
             ],
+            evidence_envelope={
+                "field_value": item.title,
+                "source_url": item.source_url,
+                "source_excerpt": evidence_text,
+                "confidence": PUBLIC_PROCUREMENT_SCORE_TOTAL,
+                "observed_at": item.published_at.isoformat(),
+                "source_cost_micros": 0,
+                "license_contract": license_contract,
+                "usage_rights": "INTERNAL_DISCOVERY_WITH_SOURCE_LINK",
+                "review_status": "PENDING_REVIEW",
+                "queue": "MONITORING",
+            },
         )
         signal.full_clean()
         signal.save()

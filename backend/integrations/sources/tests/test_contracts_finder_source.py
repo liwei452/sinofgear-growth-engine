@@ -124,6 +124,20 @@ def test_contracts_finder_normalizes_exact_gear_notice_and_uses_bounded_query():
         "capture_method": "OFFICIAL_PUBLIC_API",
         "authentication": "ANONYMOUS",
         "result_limit": 10,
+        "governance": {
+            "source_owner": "UK Cabinet Office",
+            "access_method": "OFFICIAL_PUBLIC_API",
+            "license_contract": "OPEN_GOVERNMENT_LICENCE_3.0",
+            "robots_policy": "API_NOT_WEB_SCRAPING",
+            "rate_limit": "MAX_20_RESULTS_PER_RUN_DAILY_SCHEDULE",
+            "allowed_fields": [
+                "buyer_identifier", "buyer_name", "buyer_country", "notice_title",
+                "publication_date", "deadline_date", "cpv_codes", "source_url",
+            ],
+            "retention_period": "365_DAYS_THEN_REVIEW",
+            "redistribution_restriction": "SOURCE_LINK_AND_SHORT_EXCERPT_ONLY",
+            "queue": "MONITORING",
+        },
     }
     search_call, detail_call = transport.calls
     assert search_call["url"] == (

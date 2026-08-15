@@ -103,13 +103,18 @@ def discovery_summary(profile):
     last_run = profile.runs.exclude(status=DiscoveryRun.Status.RUNNING).first()
     return {
         "enabled": profile.enabled,
-        "source_label": "欧盟官方采购数据",
+        "source_label": "欧盟与英国官方采购数据",
         "schedule_label": "每天自动查找" if profile.enabled else "已暂停自动查找",
         "product_scope_label": "齿轮、传动与驱动部件",
         "next_run_at": profile.next_run_at,
         "last_run": discovery_run_payload(last_run) if last_run else None,
         "available_sources": [
-            {"code": "TED", "label": "欧盟官方采购数据", "status": "ACTIVE"},
+            {"code": "TED", "label": "TED 欧盟采购公告", "status": "ACTIVE"},
+            {
+                "code": "UK_CONTRACTS_FINDER",
+                "label": "英国 Contracts Finder",
+                "status": "ACTIVE",
+            },
             {
                 "code": "GOOGLE_PLACES",
                 "label": "Google Maps 官方企业发现",

@@ -124,7 +124,9 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await expect(page.getByText("3 家目标公司")).toBeVisible()
   await expect(page.getByRole("heading", { name: "PackTech GmbH" })).toBeVisible()
   await expect(page.getByRole("heading", { name: "自动发现客户" })).toBeVisible()
-  await expect(page.getByText("欧盟官方采购数据", { exact: true }).first()).toBeVisible()
+  await expect(page.getByText("欧盟与英国官方采购数据", { exact: true }).first()).toBeVisible()
+  await expect(page.getByText("TED 欧盟采购公告")).toBeVisible()
+  await expect(page.getByText("英国 Contracts Finder")).toBeVisible()
   await expect(page.getByText("Google Maps 官方企业发现")).toBeVisible()
   await expect(page.getByText("接入密钥后可用")).toBeVisible()
   const discoveryResponse = page.waitForResponse(response =>

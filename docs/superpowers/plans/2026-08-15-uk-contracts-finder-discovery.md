@@ -16,6 +16,9 @@
 - Never send email, direct messages, forms, or social posts.
 - Keep every real source distinct from Demo / Fake fixtures.
 - Preserve the ordinary-user navigation and existing minimal opportunity page.
+- Treat TED and Contracts Finder as Monitoring sources; they must never create contacts or outbound delivery.
+- Persist source owner, access method, license/contract, robots policy, rate limit, allowed fields, retention, and redistribution rules in each run capability snapshot.
+- Persist an Open Enrich-style evidence envelope on every new official or manually imported intent signal.
 
 ---
 
@@ -66,9 +69,13 @@ git commit -m "feat: add uk procurement source"
 - Modify: `backend/apps/growth/discovery.py`
 - Modify: `backend/apps/growth/models.py`
 - Create: `backend/apps/growth/migrations/0007_official_procurement_source.py`
+- Create: `backend/apps/growth/migrations/0008_intentsignal_evidence_envelope.py`
 - Modify: `backend/apps/growth/e2e_sources.py`
 - Modify: `backend/apps/growth/tests/test_discovery_service.py`
 - Modify: `backend/apps/growth/tests/test_discovery_tasks.py`
+- Modify: `backend/apps/growth/manual_imports.py`
+- Modify: `backend/apps/growth/serializers.py`
+- Modify: `backend/apps/growth/tests/test_manual_opportunity_import.py`
 - Modify: `backend/config/settings.py`
 - Modify: `.env.example`
 
@@ -92,7 +99,7 @@ Fetch each source independently, retain successful batches, round-robin their it
 
 - [ ] **Step 4: Write failing source-aware ingestion tests**
 
-Test that `TED:X` and `UK_CONTRACTS_FINDER:X` never share evidence hashes, UK buyer IDs create stable `UK_CONTRACTS_FINDER:GBR:<id>` identities, no-ID records remain notice-specific, and UK signals display `英国 Contracts Finder 官方采购公告`.
+Test that `TED:X` and `UK_CONTRACTS_FINDER:X` never share evidence hashes, UK buyer IDs create stable `UK_CONTRACTS_FINDER:GBR:<id>` identities, no-ID records remain notice-specific, UK signals display `英国 Contracts Finder 官方采购公告`, and every source capability snapshot contains complete governance metadata.
 
 - [ ] **Step 5: Run ingestion tests and verify RED**
 
@@ -102,7 +109,7 @@ Expected: FAIL because ingestion still hardcodes TED.
 
 - [ ] **Step 6: Implement source-aware ingestion and factory**
 
-Include `source_code` in evidence hashes and account identities; map source labels without trusting source payload text. Configure `build_discovery_source()` to return the composite while retaining the injectable E2E factory. Migrate the profile source code to `OFFICIAL_PROCUREMENT`.
+Include `source_code` in evidence hashes and account identities; map source labels without trusting source payload text. Configure `build_discovery_source()` to return the composite while retaining the injectable E2E factory. Migrate the profile source code to `OFFICIAL_PROCUREMENT`. Add `IntentSignal.evidence_envelope` and populate it for official discovery and manual imports with source, excerpt, confidence, time, zero/known cost, permission basis, use boundary and `PENDING_REVIEW`; do not include personal contact fields.
 
 - [ ] **Step 7: Verify backend discovery GREEN**
 

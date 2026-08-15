@@ -13,6 +13,19 @@ export type TargetAccount = {
   data_label: string
 }
 
+export type EvidenceEnvelope = {
+  field_value: string
+  source_url: string
+  source_excerpt: string
+  confidence: number
+  observed_at: string
+  source_cost_micros: number
+  license_contract: string
+  usage_rights: string
+  review_status: string
+  queue: string
+}
+
 export type IntentSignal = {
   id: string
   account_id: string
@@ -29,6 +42,7 @@ export type IntentSignal = {
   score_breakdown: OpportunityScoreBreakdown
   scoring_rule_version: string
   uncertainty_notes: string[]
+  evidence_envelope?: EvidenceEnvelope
   priority_label: "优先跟进" | "继续观察"
 }
 

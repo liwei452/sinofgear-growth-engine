@@ -64,6 +64,28 @@ function isSafeSourceUrl(value: string | undefined): boolean {
   return Boolean(value?.startsWith("https://"))
 }
 
+function licenseLabel(value: string | undefined): string {
+  const labels: Record<string, string> = {
+    TED_SEARCH_API_PUBLIC_DATA: "TED 官方公开数据",
+    OPEN_GOVERNMENT_LICENCE_3_0: "英国开放政府许可 3.0",
+    USER_ASSERTED_PERMISSION: "用户确认有权使用",
+    DEMO_FIXTURE: "演示数据",
+  }
+  return value ? labels[value] ?? "许可信息待核实" : "许可信息未记录"
+}
+
+function reviewStatusLabel(value: string | undefined): string {
+  if (value === "PENDING_REVIEW") return "待人工审查"
+  if (value === "APPROVED") return "已人工审查"
+  return "审查状态未记录"
+}
+
+function sourceCostLabel(value: number | undefined): string {
+  if (value === 0) return "免费公开来源"
+  if (typeof value === "number") return `来源成本 ${(value / 1_000_000).toFixed(2)}`
+  return "来源成本未记录"
+}
+
 const sortedAccounts = computed(() => {
   const workspace = workspaceQuery.data.value
   if (!workspace?.target_accounts.length) return []
@@ -236,6 +258,9 @@ async function handleImported(accountId: string): Promise<void> {
           <div><dt>来源</dt><dd>{{ detail.source }}</dd></div>
           <div><dt>发现时间</dt><dd>{{ formatDate(activeSignal?.observed_at) }}</dd></div>
           <div><dt>采集方式</dt><dd>{{ activeSignal?.collection_method_label || "采集方式未说明" }}</dd></div>
+          <div v-if="activeSignal?.evidence_envelope"><dt>许可与使用</dt><dd>{{ licenseLabel(activeSignal.evidence_envelope.license_contract) }}</dd></div>
+          <div v-if="activeSignal?.evidence_envelope"><dt>审查状态</dt><dd>{{ reviewStatusLabel(activeSignal.evidence_envelope.review_status) }}</dd></div>
+          <div v-if="activeSignal?.evidence_envelope"><dt>来源成本</dt><dd>{{ sourceCostLabel(activeSignal.evidence_envelope.source_cost_micros) }}</dd></div>
           <div><dt>评分规则</dt><dd>{{ activeSignal?.scoring_rule_version || "规则版本未记录" }}</dd></div>
           <div><dt>证据哈希</dt><dd><code>{{ activeSignal?.content_hash ? `${activeSignal.content_hash.slice(0, 12)}…` : "未记录" }}</code></dd></div>
         </dl>

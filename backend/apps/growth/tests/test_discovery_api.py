@@ -56,13 +56,18 @@ def test_workspace_exposes_an_owner_friendly_discovery_summary(organization):
 
     assert summary == {
         "enabled": True,
-        "source_label": "欧盟官方采购数据",
+        "source_label": "欧盟与英国官方采购数据",
         "schedule_label": "每天自动查找",
         "product_scope_label": "齿轮、传动与驱动部件",
         "next_run_at": None,
         "last_run": None,
         "available_sources": [
-            {"code": "TED", "label": "欧盟官方采购数据", "status": "ACTIVE"},
+            {"code": "TED", "label": "TED 欧盟采购公告", "status": "ACTIVE"},
+            {
+                "code": "UK_CONTRACTS_FINDER",
+                "label": "英国 Contracts Finder",
+                "status": "ACTIVE",
+            },
             {"code": "GOOGLE_PLACES", "label": "Google Maps 官方企业发现", "status": "KEY_REQUIRED"},
         ],
     }

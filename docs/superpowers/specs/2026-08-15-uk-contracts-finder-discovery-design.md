@@ -6,6 +6,8 @@
 
 在现有 TED 自动客户发现基础上，接入英国 Contracts Finder 官方公开采购搜索，使一次“立即查找”同时返回欧盟与英国的证据化采购机会。系统仍只保存公开采购方和公告，不采集私人联系人，不自动发送消息。
 
+本设计同时吸收 `C:\Users\Administrator\Documents\网站\.research\open-source-target-account-discovery-2026\FINDINGS.md`：产品边界固定为 Discovery 候选公司、Enrichment 公司事实/公开联系路径、Monitoring 证据化意向信号、Outreach 人工待审草稿四个独立队列。本来源属于 Monitoring；它可以关联候选公司，但不能创建联系人或触发外发。
+
 ## 方案选择
 
 评估过三种方案：
@@ -40,6 +42,10 @@ Contracts Finder 会把父级 CPV 命中一并返回。适配器必须解析每�
 
 现有 `DiscoveryProfile.source_code` 迁移为 `OFFICIAL_PROCUREMENT`，表示官方采购来源组合，不让普通用户配置适配器细节。
 
+每个来源能力快照必须保存来源所有者、访问方式、许可/合同依据、robots策略、客户端速率上限、允许保存字段、保留期限、再分发限制和所属队列。该快照随不可删除的 `DiscoveryRun` 保存，不能只存在于代码常量中。
+
+每条 `IntentSignal` 新增 Open Enrich 风格的 `evidence_envelope`：字段值、来源URL、原文摘录、置信度、证据时间、来源成本、许可依据、使用边界和人工审查状态。旧的原文、哈希和评分字段继续保留，Envelope 不覆盖原证据。
+
 ## 合并与评分
 
 组合器对各来源返回结果做轮询交错，而不是先放完 TED 再放英国，避免单一来源占满 20 条上限。最终仍由现有入库服务执行组织隔离、证据哈希去重、买方身份匹配和 80 分 `public-procurement-v1` 可解释评分。
@@ -62,6 +68,7 @@ Contracts Finder 会把父级 CPV 命中一并返回。适配器必须解析每�
 - 响应体超限立即停止；
 - HTML实体只转为可读纯文本，不渲染来源HTML；
 - 不保存公告中可能出现的个人姓名、邮箱或电话；
+- 连接器只写入 Monitoring 队列；Outreach 草稿仍需用户主动生成并保持 `NEVER_SENT`；
 - 测试使用本地fixture；真实接口只做独立只读冒烟。
 
 ## 验收

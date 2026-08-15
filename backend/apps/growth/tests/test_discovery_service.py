@@ -77,6 +77,22 @@ def test_official_notice_creates_a_target_account_and_intent_signal(profile, sou
         "evidence_coverage": 18,
         "risk_penalty": 5,
     }
+    assert signal.evidence_envelope == {
+        "field_value": "Industrial gears and transmission parts",
+        "source_url": "https://ted.europa.eu/en/notice/-/detail/534032-2026",
+        "source_excerpt": (
+            "TED notice 534032-2026: Industrial gears and transmission parts. "
+            "CPV 42141300, 42142000. Tender deadline: 2026-09-08."
+        ),
+        "confidence": 80,
+        "observed_at": "2026-08-03T00:00:00+00:00",
+        "source_cost_micros": 0,
+        "license_contract": "TED_SEARCH_API_PUBLIC_DATA",
+        "usage_rights": "INTERNAL_DISCOVERY_WITH_SOURCE_LINK",
+        "review_status": "PENDING_REVIEW",
+        "queue": "MONITORING",
+    }
+    assert "email" not in str(signal.evidence_envelope).lower()
     assert "534032-2026" in signal.evidence_text
     assert run.status == DiscoveryRun.Status.SUCCEEDED
     assert run.created_account_count == 1

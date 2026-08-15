@@ -67,6 +67,17 @@ def test_operator_imports_permitted_evidence_as_a_conservative_real_opportunity(
         "公司身份仍需人工核实",
         "采购范围与时间仍需人工确认",
     ]
+    envelope = response.data["signal"]["evidence_envelope"]
+    assert envelope["field_value"] == "The company announced a new packaging line."
+    assert envelope["source_url"] == "https://example.invalid/news/expansion"
+    assert envelope["source_excerpt"] == "The company announced a new packaging line."
+    assert envelope["confidence"] == 50
+    assert envelope["source_cost_micros"] == 0
+    assert envelope["license_contract"] == "USER_ASSERTED_PERMISSION"
+    assert envelope["usage_rights"] == "INTERNAL_DISCOVERY_WITH_SOURCE_LINK"
+    assert envelope["review_status"] == "PENDING_REVIEW"
+    assert envelope["queue"] == "MONITORING"
+    assert envelope["observed_at"]
     assert TargetAccount.objects.filter(organization=organization, is_demo=False).count() == 1
     assert IntentSignal.objects.filter(organization=organization, is_demo=False).count() == 1
 

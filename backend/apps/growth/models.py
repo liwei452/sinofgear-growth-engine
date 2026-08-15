@@ -73,6 +73,7 @@ class IntentSignal(OrganizationOwnedModel):
     score_breakdown = models.JSONField(default=dict)
     scoring_rule_version = models.CharField(max_length=64, default="opportunity-v1")
     uncertainty_notes = models.JSONField(default=list)
+    evidence_envelope = models.JSONField(default=dict, blank=True)
 
     class Meta:
         constraints = [

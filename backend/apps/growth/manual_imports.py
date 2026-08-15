@@ -5,6 +5,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.utils import timezone
 
 from apps.identity.models import Organization
 
@@ -103,6 +104,18 @@ def import_manual_opportunity(
             score_breakdown=MANUAL_SCORE_BREAKDOWN,
             scoring_rule_version="manual-opportunity-v1",
             uncertainty_notes=MANUAL_UNCERTAINTIES,
+            evidence_envelope={
+                "field_value": evidence_text,
+                "source_url": source_url,
+                "source_excerpt": evidence_text,
+                "confidence": 50,
+                "observed_at": timezone.now().isoformat(),
+                "source_cost_micros": 0,
+                "license_contract": "USER_ASSERTED_PERMISSION",
+                "usage_rights": "INTERNAL_DISCOVERY_WITH_SOURCE_LINK",
+                "review_status": "PENDING_REVIEW",
+                "queue": "MONITORING",
+            },
         )
         signal.full_clean()
         signal.save()

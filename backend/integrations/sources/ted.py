@@ -6,7 +6,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from .base import DiscoveryQuery, SourceAdapterError, SourceBatch, SourceItem
+from .base import (
+    DiscoveryQuery,
+    SourceAdapterError,
+    SourceBatch,
+    SourceItem,
+    governance_for,
+)
 
 
 TED_SEARCH_URL = "https://api.ted.europa.eu/v3/notices/search"
@@ -153,6 +159,7 @@ class TedSource:
                 "capture_method": "OFFICIAL_PUBLIC_API",
                 "authentication": "ANONYMOUS",
                 "result_limit": query.limit,
+                "governance": governance_for(self.source_code),
             },
             skipped_count=skipped_count,
             total_count=int(decoded.get("totalNoticeCount") or len(notices)),

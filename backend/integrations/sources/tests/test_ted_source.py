@@ -62,6 +62,20 @@ def test_ted_source_normalizes_an_official_notice_and_uses_bounded_query():
         "capture_method": "OFFICIAL_PUBLIC_API",
         "authentication": "ANONYMOUS",
         "result_limit": 10,
+        "governance": {
+            "source_owner": "Publications Office of the European Union",
+            "access_method": "OFFICIAL_PUBLIC_API",
+            "license_contract": "TED_SEARCH_API_PUBLIC_DATA",
+            "robots_policy": "API_NOT_WEB_SCRAPING",
+            "rate_limit": "MAX_20_RESULTS_PER_RUN_DAILY_SCHEDULE",
+            "allowed_fields": [
+                "buyer_identifier", "buyer_name", "buyer_country", "notice_title",
+                "publication_date", "deadline_date", "cpv_codes", "source_url",
+            ],
+            "retention_period": "365_DAYS_THEN_REVIEW",
+            "redistribution_restriction": "SOURCE_LINK_AND_SHORT_EXCERPT_ONLY",
+            "queue": "MONITORING",
+        },
     }
     call = transport.calls[0]
     assert call["url"] == "https://api.ted.europa.eu/v3/notices/search"

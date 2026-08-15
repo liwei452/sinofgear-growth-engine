@@ -1,4 +1,5 @@
 import json
+import logging
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
@@ -17,6 +18,9 @@ from apps.content.recommendations import (
 from integrations.ai.providers import provider_registry
 
 from .models import AIRun, PromptVersion, ai_audit_writes
+
+
+logger = logging.getLogger(__name__)
 
 
 MAX_PROMPT_CHARS = 50_000
@@ -265,6 +269,7 @@ def execute_generation_job(
         output_validator_class.check_schema(prompt.output_schema)
         output_validator = output_validator_class(prompt.output_schema)
     except Exception as exc:
+        logger.exception("Prompt output schema is invalid.")
         raise GenerationPreflightError(
             "invalid_prompt_schema", "Prompt output schema is invalid."
         ) from exc
@@ -281,6 +286,7 @@ def execute_generation_job(
             job=claimed, prompt=prompt, provider=provider_name, model=provider_model,
         )
     except Exception as exc:
+        logger.exception("AI audit run could not start.")
         JobService.fail(
             claimed.id,
             claim_token=token,
@@ -306,7 +312,8 @@ def execute_generation_job(
             "code": "invalid_provider_output",
             "message": "Provider output did not match the required schema.",
         }
-    except Exception:
+    except Exception as exc:
+        logger.exception("AI provider generation failed.")
         error = {"code": "provider_error", "message": "AI provider generation failed."}
     else:
         try:
@@ -317,7 +324,8 @@ def execute_generation_job(
                 output=output,
                 result_writer=result_writer,
             )
-        except Exception:
+        except Exception as exc:
+            logger.exception("Generated content could not be finalized.")
             error = {
                 "code": "content_finalize_failed",
                 "message": "Generated content could not be finalized.",

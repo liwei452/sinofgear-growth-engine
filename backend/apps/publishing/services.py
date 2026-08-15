@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import uuid
 from datetime import timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -18,6 +19,9 @@ from apps.platforms.codes import AccountCapability
 from apps.platforms.models import ConnectorCredential, PlatformCapability, SocialAccount
 
 from integrations.platforms.base import PublishRequest, PublishResult
+
+
+logger = logging.getLogger(__name__)
 from integrations.platforms.registry import get_connector
 from integrations.platforms.registry import CONNECTOR_FACTORIES
 
@@ -680,7 +684,8 @@ def execute_publish_task(task_id):
     )
     try:
         result = get_connector(task.connector_code, task.social_account).publish(request)
-    except Exception:
+    except Exception as exc:
+        logger.exception("Provider rejected the publish request.")
         result = PublishResult(
             succeeded=False, error_code="PROVIDER_ERROR",
             error_message="Provider rejected the publish request.",
@@ -692,7 +697,8 @@ def execute_publish_task(task_id):
         return complete_publish_success(
             task.id, attempt.claim_token, result, actor=task.created_by
         )
-    except Exception:
+    except Exception as exc:
+        logger.exception("Publish finalization failed.")
         complete_publish_failure(
             task.id, attempt.claim_token,
             PublishResult(succeeded=False, error_code="PUBLISH_FINALIZE_ERROR"),

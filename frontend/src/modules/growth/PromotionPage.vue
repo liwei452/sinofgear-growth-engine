@@ -25,6 +25,7 @@ import {
 import PromotionPlanSummary from "./PromotionPlanSummary.vue"
 import PublishResultsPanel from "./PublishResultsPanel.vue"
 import SocialReadinessPanel, { type SocialChannelStatus } from "./SocialReadinessPanel.vue"
+import TikTokPackageReview from "./TikTokPackageReview.vue"
 import { packageFactEvidence, payloadList, payloadShots, payloadText } from "./packagePayload"
 
 const queryClient = useQueryClient()
@@ -632,50 +633,32 @@ const socialChannelStatuses = computed<SocialChannelStatus[]>(() => socialChanne
             </button>
           </div>
         </article>
-        <article v-if="activePackage" id="channel-package-TIKTOK" class="tiktok-package" tabindex="-1" aria-label="TikTok 内容包">
-          <span class="fake-label">{{ modeLabel('TIKTOK') }}</span><h3>TikTok</h3>
-          <div class="channel-connection">
-            <span>{{ connectionDisplay('TIKTOK') }}</span>
-            <button
-              v-if="connectionFor('TIKTOK')?.status !== 'CONNECTED'"
-              class="button button-secondary" type="button"
-              :disabled="connectionMutation.isPending.value"
-              :aria-label="connectionActionLabel('TIKTOK', 'TikTok')"
-              @click="connectChannel('TIKTOK')"
-            >
-              {{ connectionFor('TIKTOK')?.recovery_action || "连接账号" }}
-            </button>
-          </div>
-          <p class="publishing-route">{{ publishingRouteLabel('TIKTOK') }}</p>
-          <p v-if="packageTitle" class="package-source">{{ packageTitle }}</p>
-          <p class="package-lead">{{ tiktokFormatLabel }} · 手工发布包 · {{ modeLabel('TIKTOK') }}</p>
-          <dl>
-            <div><dt>脚本</dt><dd>{{ tiktokScript }}</dd></div>
-            <div><dt>分镜</dt><dd>{{ tiktokShots }}</dd></div>
-            <div><dt>目标语言口播</dt><dd>{{ tiktokVoiceover }}</dd></div>
-            <div><dt>目标语言字幕</dt><dd>{{ tiktokSubtitles }}</dd></div>
-            <div><dt>标题 / 标签 / CTA</dt><dd>{{ packageTitle || "待补全" }} · {{ tiktokHashtags }} · {{ tiktokCta }}</dd></div>
-            <div><dt>归因</dt><dd>UTM：{{ tiktokUtm }}</dd></div>
-            <div><dt>回填</dt><dd>发布结果、播放、完播、点击、回复、询盘可手工录入</dd></div>
-          </dl>
-          <details v-if="packageFactEvidence(activePackage).length" class="package-evidence"><summary>查看已验证事实依据</summary><article v-for="fact in packageFactEvidence(activePackage)" :key="fact.id"><strong>{{ fact.fieldName }}：{{ fact.value }}</strong><p>{{ fact.sourceFilename }}<template v-if="fact.sourcePage"> · 第 {{ fact.sourcePage }} 页</template></p><blockquote>{{ fact.sourceExcerpt }}</blockquote></article></details>
-          <div v-if="activePackage" class="package-actions">
-            <button
-              class="button button-secondary" type="button"
-              :disabled="approved || approveMutation.isPending.value" aria-label="批准 TikTok 内容包"
-              @click="approve"
-            >
-              {{ approved ? "已批准" : "批准" }}
-            </button>
-            <button
-              v-if="approved" class="button button-secondary" type="button"
-              :disabled="exportMutation.isPending.value" aria-label="下载 TikTok 发布包"
-              @click="download"
-            >
-              下载
-            </button>
-          </div>
-        </article>
+        <TikTokPackageReview
+          v-if="activePackage"
+          :channel-package="activePackage"
+          :approved="approved"
+          :mode-label="modeLabel('TIKTOK')"
+          :connection-display="connectionDisplay('TIKTOK')"
+          :connection-action-label="connectionActionLabel('TIKTOK', 'TikTok')"
+          :connection-connected="connectionFor('TIKTOK')?.status === 'CONNECTED'"
+          :publishing-route-label="publishingRouteLabel('TIKTOK')"
+          :package-title="packageTitle"
+          :format-label="tiktokFormatLabel"
+          :script="tiktokScript"
+          :shots="tiktokShots"
+          :voiceover="tiktokVoiceover"
+          :subtitles="tiktokSubtitles"
+          :hashtags="tiktokHashtags"
+          :cta="tiktokCta"
+          :utm="tiktokUtm"
+          :facts="packageFactEvidence(activePackage)"
+          :approving="approveMutation.isPending.value"
+          :exporting="exportMutation.isPending.value"
+          :connecting="connectionMutation.isPending.value"
+          @approve="approve"
+          @download="download"
+          @connect="connectChannel('TIKTOK')"
+        />
       </div>
       <div v-else class="promotion-empty">
         <h3>还没有可审核的渠道内容包</h3>

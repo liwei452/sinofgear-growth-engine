@@ -40,6 +40,21 @@ class ContentPagination(CursorPagination):
     ordering = ("-created_at", "-id")
 
 
+def _generation_job_response(job, provider_status):
+    latest_run = job.ai_runs.order_by("-job_attempt", "-created_at").first()
+    fake_mode = (
+        latest_run.provider == "fake"
+        if latest_run is not None
+        else provider_status["mode"] == "FAKE_OFFLINE"
+    )
+    return Response({
+        "job_id": job.id,
+        "status": job.status,
+        "generation_mode": "FAKE_OFFLINE" if fake_mode else "CONFIGURED_AI",
+        "generation_label": "Fake / 离线演示生成" if fake_mode else "已配置真实 AI 生成",
+    }, status=202)
+
+
 def _with_current_head(queryset, model):
     successors = model.objects.filter(
         organization_id=OuterRef("organization_id"),
@@ -345,21 +360,23 @@ class GenerateMasterView(APIView):
         ).order_by("-version").first()
         if prompt is None:
             return _error(ContentStateError("Published generation prompt is unavailable."))
+        idempotency_key = f"master:{brief.id}:{brief.version}:{prompt.id}"
+        existing_job = Job.objects.filter(
+            organization=request.organization,
+            type=Job.Type.CONTENT_GENERATE,
+            idempotency_key=idempotency_key,
+        ).first()
+        if existing_job is not None:
+            return _generation_job_response(existing_job, provider_status)
         snapshot = build_content_generation_input(brief.id).to_dict()
         job = JobService.create(
             organization=request.organization,
             job_type=Job.Type.CONTENT_GENERATE,
             input_snapshot=snapshot,
-            idempotency_key=f"master:{brief.id}:{brief.version}:{prompt.id}",
+            idempotency_key=idempotency_key,
             created_by=request.user,
         )
         transaction.on_commit(
             lambda: generate_master_content_job.delay(str(job.id), str(prompt.id))
         )
-        fake_mode = provider_status["mode"] == "FAKE_OFFLINE"
-        return Response({
-            "job_id": job.id,
-            "status": job.status,
-            "generation_mode": "FAKE_OFFLINE" if fake_mode else "CONFIGURED_AI",
-            "generation_label": "Fake / 离线演示生成" if fake_mode else "已配置真实 AI 生成",
-        }, status=202)
+        return _generation_job_response(job, provider_status)

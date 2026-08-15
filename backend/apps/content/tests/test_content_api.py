@@ -13,6 +13,7 @@ from apps.content.services import (
 from apps.growth.models import ChannelPackage
 from apps.growth.services import prepare_channel_package_from_platform_content
 from apps.identity.models import Membership, Organization, Role
+from apps.jobs.services import JobService
 
 
 def _client(organization, role_code):
@@ -93,6 +94,38 @@ def test_generation_discloses_fake_provider_before_work_starts(content_provenanc
     assert response.status_code == 202
     assert response.data["generation_mode"] == "FAKE_OFFLINE"
     assert response.data["generation_label"] == "Fake / 离线演示生成"
+
+
+def test_generation_does_not_reschedule_completed_idempotent_job(
+    content_provenance, monkeypatch,
+):
+    organization, _actor, brief, _fixture_job, _run = content_provenance
+    dispatched: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "apps.content.views.generate_master_content_job.delay",
+        lambda job_id, prompt_id: dispatched.append((job_id, prompt_id)),
+    )
+    client = _client(organization, Role.Code.ADMINISTRATOR)
+
+    first = client.post(
+        f"/api/v1/content-briefs/{brief.id}/generate-master-content", {}, format="json",
+    )
+    claimed = JobService.claim(
+        worker_id="content-idempotency-test", job_id=first.data["job_id"],
+    )
+    JobService.succeed(
+        claimed.id,
+        claim_token=claimed.claim_token,
+        result_reference={"type": "master_content", "id": "result-1"},
+    )
+
+    response = client.post(
+        f"/api/v1/content-briefs/{brief.id}/generate-master-content", {}, format="json",
+    )
+
+    assert response.status_code == 202
+    assert response.data["job_id"] == first.data["job_id"]
+    assert dispatched == []
 
 
 @override_settings(PRODUCT_AI_PROVIDER="deepseek", PRODUCT_AI_MODEL="deepseek-chat")

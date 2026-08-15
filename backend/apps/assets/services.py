@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 import tempfile
 from pathlib import Path
@@ -16,6 +17,9 @@ from .models import (
     validate_metadata_json,
     validate_tags,
 )
+
+
+logger = logging.getLogger(__name__)
 from .storage import get_object_storage
 
 
@@ -427,16 +431,16 @@ def upload_asset(
             ).first()
             try:
                 object_storage.delete(candidate.storage_key)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to delete duplicate candidate storage key: %s", exc)
             if winner is not None:
                 return _mark_upload_result(winner, created=False)
             raise
         except Exception:
             try:
                 object_storage.delete(candidate.storage_key)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to delete candidate storage key: %s", exc)
             raise
         return _mark_upload_result(created_asset, created=True)
     finally:

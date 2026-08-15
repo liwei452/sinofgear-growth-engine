@@ -5,6 +5,9 @@ from .views import (
     AssetDownloadURLView,
     AssetLinkProductView,
     AssetListView,
+    AssetUnderstandingRetryView,
+    AssetUnderstandingView,
+    ProductEvidenceFactReviewView,
 )
 
 
@@ -20,5 +23,20 @@ urlpatterns = [
         "assets/<uuid:asset_id>/download-url",
         AssetDownloadURLView.as_view(),
         name="asset-download-url",
+    ),
+    path(
+        "assets/<uuid:asset_id>/understanding",
+        AssetUnderstandingView.as_view(),
+        name="asset-understanding",
+    ),
+    path(
+        "assets/<uuid:asset_id>/understanding/retry",
+        AssetUnderstandingRetryView.as_view(),
+        name="asset-understanding-retry",
+    ),
+    path(
+        "assets/facts/<uuid:fact_id>/review",
+        ProductEvidenceFactReviewView.as_view(),
+        name="asset-fact-review",
     ),
 ]

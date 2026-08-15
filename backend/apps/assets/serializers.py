@@ -5,7 +5,13 @@ from rest_framework import serializers
 
 from apps.catalog.models import Product
 
-from .models import AssetProductLink, MaterialAsset, validate_metadata_json, validate_tags
+from .models import (
+    AssetProductLink,
+    MaterialAsset,
+    ProductEvidenceFact,
+    validate_metadata_json,
+    validate_tags,
+)
 from .services import upload_asset
 
 
@@ -122,3 +128,41 @@ class AssetErrorSerializer(serializers.Serializer):
 class AssetDownloadSerializer(serializers.Serializer):
     url = serializers.CharField()
     expires_in = serializers.IntegerField()
+
+
+class AssetUnderstandingStartSerializer(serializers.Serializer):
+    product_id = serializers.UUIDField()
+
+
+class AssetUnderstandingJobSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    status = serializers.CharField()
+    progress = serializers.IntegerField()
+    attempt = serializers.IntegerField()
+    max_attempts = serializers.IntegerField()
+    error = serializers.JSONField(allow_null=True)
+
+
+class ProductEvidenceFactSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductEvidenceFact
+        fields = [
+            "id", "product", "asset", "category", "field_name", "value",
+            "confidence", "source_page", "source_region", "source_excerpt",
+            "risk_level", "review_status", "provider_label", "is_demo",
+            "reviewed_by", "reviewed_at", "review_note", "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class AssetUnderstandingResultSerializer(serializers.Serializer):
+    job = AssetUnderstandingJobSerializer()
+    facts = ProductEvidenceFactSerializer(many=True)
+    warnings = serializers.ListField(child=serializers.CharField())
+    is_partial = serializers.BooleanField()
+    provider_label = serializers.CharField()
+
+
+class ProductEvidenceFactReviewSerializer(serializers.Serializer):
+    decision = serializers.ChoiceField(choices=["APPROVE", "REJECT"])
+    note = serializers.CharField(max_length=1000, allow_blank=True, default="")

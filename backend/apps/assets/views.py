@@ -12,6 +12,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.catalog.models import Product
+from apps.jobs.models import Job
+from apps.jobs.services import JobConflictError
 from apps.common.openapi import bounded_integer_query_parameter
 from apps.identity.permissions import CanManageAssets, CanReadAssets
 
@@ -25,9 +27,21 @@ from .serializers import (
     AssetUploadSerializer,
     AssetValidationErrorSerializer,
     MaterialAssetSerializer,
+    AssetUnderstandingResultSerializer,
+    AssetUnderstandingStartSerializer,
+    ProductEvidenceFactReviewSerializer,
+    ProductEvidenceFactSerializer,
 )
+from .models import ProductEvidenceFact
 from .services import AssetUploadError, link_asset_to_product
 from .storage import get_object_storage
+from .understanding import (
+    AssetUnderstandingError,
+    load_understanding_result,
+    retry_understanding,
+    review_fact,
+    start_understanding,
+)
 
 
 FILTER_PARAMETERS = [
@@ -266,3 +280,124 @@ class AssetDownloadURLView(APIView):
             expires_in,
         )
         return Response({"url": url, "expires_in": expires_in})
+
+
+def _serialize_understanding(result) -> dict:
+    return AssetUnderstandingResultSerializer(
+        {
+            "job": result.job,
+            "facts": result.facts,
+            "warnings": list(result.warnings),
+            "is_partial": result.is_partial,
+            "provider_label": result.provider_label,
+        }
+    ).data
+
+
+def _latest_understanding_job(organization, asset_id):
+    return (
+        Job.objects.filter(
+            organization=organization,
+            type=Job.Type.ASSET_UNDERSTAND,
+            input_snapshot__asset_id=str(asset_id),
+        )
+        .order_by("-created_at", "-id")
+        .first()
+    )
+
+
+@extend_schema(tags=["Assets"])
+class AssetUnderstandingView(APIView):
+    def get_permissions(self):
+        return [(CanReadAssets if self.request.method == "GET" else CanManageAssets)()]
+
+    @extend_schema(
+        operation_id="assets_understanding_retrieve",
+        responses={200: AssetUnderstandingResultSerializer, **ERROR_RESPONSES},
+    )
+    def get(self, request: Request, asset_id) -> Response:
+        _get_asset(request.organization, asset_id)
+        job = _latest_understanding_job(request.organization, asset_id)
+        if job is None:
+            raise Http404
+        return Response(_serialize_understanding(load_understanding_result(job)))
+
+    @extend_schema(
+        operation_id="assets_understanding_create",
+        request=AssetUnderstandingStartSerializer,
+        responses={
+            200: AssetUnderstandingResultSerializer,
+            400: AssetValidationErrorSerializer,
+            **ERROR_RESPONSES,
+        },
+    )
+    def post(self, request: Request, asset_id) -> Response:
+        asset = _get_asset(request.organization, asset_id)
+        serializer = AssetUnderstandingStartSerializer(data=request.data)
+        if not serializer.is_valid():
+            return _validation_response(serializer.errors)
+        try:
+            product = Product.objects.get(
+                pk=serializer.validated_data["product_id"],
+                organization=request.organization,
+            )
+        except Product.DoesNotExist as error:
+            raise Http404 from error
+        try:
+            result = start_understanding(asset=asset, product=product, actor=request.user)
+        except (AssetUnderstandingError, DjangoValidationError) as error:
+            return _validation_response({"non_field_errors": [str(error)]})
+        return Response(_serialize_understanding(result))
+
+
+@extend_schema(tags=["Assets"])
+class AssetUnderstandingRetryView(APIView):
+    permission_classes = [CanManageAssets]
+
+    @extend_schema(
+        operation_id="assets_understanding_retry",
+        request=None,
+        responses={200: AssetUnderstandingResultSerializer, 409: AssetErrorSerializer, **ERROR_RESPONSES},
+    )
+    def post(self, request: Request, asset_id) -> Response:
+        _get_asset(request.organization, asset_id)
+        job = _latest_understanding_job(request.organization, asset_id)
+        if job is None:
+            raise Http404
+        try:
+            result = retry_understanding(job=job, actor=request.user)
+        except JobConflictError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_409_CONFLICT)
+        return Response(_serialize_understanding(result))
+
+
+@extend_schema(tags=["Assets"])
+class ProductEvidenceFactReviewView(APIView):
+    permission_classes = [CanManageAssets]
+
+    @extend_schema(
+        operation_id="assets_fact_review",
+        request=ProductEvidenceFactReviewSerializer,
+        responses={200: ProductEvidenceFactSerializer, 400: AssetValidationErrorSerializer, **ERROR_RESPONSES},
+    )
+    def post(self, request: Request, fact_id) -> Response:
+        try:
+            fact = ProductEvidenceFact.objects.get(
+                pk=fact_id,
+                organization=request.organization,
+                asset__organization=request.organization,
+                product__organization=request.organization,
+                job__organization=request.organization,
+            )
+        except ProductEvidenceFact.DoesNotExist as error:
+            raise Http404 from error
+        serializer = ProductEvidenceFactReviewSerializer(data=request.data)
+        if not serializer.is_valid():
+            return _validation_response(serializer.errors)
+        reviewed = review_fact(
+            fact=fact,
+            decision=serializer.validated_data["decision"],
+            actor=request.user,
+            note=serializer.validated_data["note"],
+        )
+        return Response(ProductEvidenceFactSerializer(reviewed).data)

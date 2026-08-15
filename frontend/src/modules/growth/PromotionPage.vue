@@ -32,24 +32,6 @@ import { packageFactEvidence, payloadList, payloadShots, payloadText } from "./p
 
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
-const activeMarkets = computed(() => (workspaceQuery.data.value?.market_pilots?.markets ?? [])
-  .filter(market => market.status === "ACTIVE_MARKET" && !market.is_demo))
-const activeMarketLabel = computed(() => activeMarkets.value.length
-  ? `${activeMarkets.value.map(market => market.country_label).join(" + ")} · 当前试点`
-  : "尚未选择市场")
-const activeMarketIndustries = computed(() => {
-  const industries = [...new Set(activeMarkets.value.flatMap(market => market.suitable_industries ?? []))]
-  return industries.length ? `${industries.slice(0, 3).join("、")}相关企业` : "尚未形成客户画像"
-})
-const validationPeriodLabel = computed(() => {
-  if (!activeMarkets.value.length) return "尚未设置验证周期"
-  const weeks = workspaceQuery.data.value?.market_pilots?.validation_goals.weeks
-  return typeof weeks === "number" && weeks > 0 ? `${weeks} 周市场验证` : "尚未设置验证周期"
-})
-const contentSummary = computed(() => activeMarkets.value.length
-  ? "基于已验证产品事实，生成目标语言母版与四个平台版本"
-  : "先确认产品事实后再制定内容策略")
-const channelSummary = "LinkedIn · Facebook · Instagram · TikTok"
 const locallyApprovedIds = ref(new Set<string>())
 const approvalError = ref("")
 const batchReviewConfirmed = ref(false)
@@ -567,11 +549,7 @@ const socialChannelStatuses = computed<SocialChannelStatus[]>(() => socialChanne
     <p v-if="connectionMessage" role="status" class="approval-status connection-success">{{ connectionMessage }}</p>
 
     <PromotionPlanSummary
-      :active-market-label="activeMarketLabel"
-      :active-market-industries="activeMarketIndustries"
-      :validation-period-label="validationPeriodLabel"
-      :content-summary="contentSummary"
-      :channel-summary="channelSummary"
+      :plan="workspaceQuery.data.value?.promotion_plan"
     />
 
     <SocialReadinessPanel

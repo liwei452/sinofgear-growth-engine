@@ -1,25 +1,48 @@
 <script setup lang="ts">
-defineProps<{
-  activeMarketLabel: string
-  activeMarketIndustries: string
-  validationPeriodLabel: string
-  contentSummary: string
-  channelSummary: string
-}>()
+import { computed } from "vue"
+
+import type { PromotionPlan } from "./api"
+
+const props = defineProps<{ plan?: PromotionPlan }>()
+
+const marketsLabel = computed(() => (
+  props.plan?.target_markets.map(market => market.country_label).join("、") || "待 AI 生成"
+))
+const audiencesLabel = computed(() => (
+  props.plan?.audiences.map(audience => audience.industry).join("、") || "待 AI 生成"
+))
+const periodLabel = computed(() => (
+  props.plan?.period_weeks ? `${props.plan.period_weeks} 周市场验证` : "待 AI 生成"
+))
+const themesLabel = computed(() => (
+  props.plan?.content_themes.join("；") || "待 AI 生成"
+))
+const channelsLabel = computed(() => (
+  props.plan?.channels.map(channelLabel).join(" · ") || "待 AI 生成"
+))
+
+function channelLabel(code: string): string {
+  return ({
+    LINKEDIN: "LinkedIn",
+    FACEBOOK: "Facebook",
+    INSTAGRAM: "Instagram",
+    TIKTOK: "TikTok",
+  } as Record<string, string>)[code] ?? code
+}
 </script>
 
 <template>
   <section class="growth-card plan-summary">
     <div class="plan-summary-heading">
       <p class="eyebrow">推广计划 · 待人工审核</p>
-      <p>系统根据市场档案与产品事实给出建议；所有内容仍需人工批准。</p>
+      <p>{{ plan?.summary || "系统正在根据产品事实与市场档案生成推广计划。" }}</p>
     </div>
     <div class="plan-summary-grid">
-      <div><span>目标市场</span><strong>{{ activeMarketLabel }}</strong></div>
-      <div><span>目标人群</span><strong>{{ activeMarketIndustries }}</strong></div>
-      <div><span>验证周期</span><strong>{{ validationPeriodLabel }}</strong></div>
-      <div><span>内容策略</span><strong>{{ contentSummary }}</strong></div>
-      <div><span>发布渠道</span><strong>{{ channelSummary }}</strong></div>
+      <div><span>目标市场</span><strong>{{ marketsLabel }}</strong></div>
+      <div><span>目标人群</span><strong>{{ audiencesLabel }}</strong></div>
+      <div><span>验证周期</span><strong>{{ periodLabel }}</strong></div>
+      <div><span>内容策略</span><strong>{{ themesLabel }}</strong></div>
+      <div><span>发布渠道</span><strong>{{ channelsLabel }}</strong></div>
     </div>
   </section>
 </template>

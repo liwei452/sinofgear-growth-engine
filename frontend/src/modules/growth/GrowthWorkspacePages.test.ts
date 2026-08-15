@@ -13,7 +13,7 @@ it("shows real content actions without a fabricated channel package in an empty 
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
   expect(screen.getByRole("heading", { name: "推广计划与内容包" })).toBeInTheDocument()
-  expect(screen.getByText("尚未形成客户画像")).toBeInTheDocument()
+  expect(screen.getByText("目标市场")).toBeInTheDocument()
   expect(screen.getByText("还没有可审核的渠道内容包")).toBeInTheDocument()
   expect(screen.getByRole("link", { name: "创建内容" })).toHaveAttribute("href", "/content-factory")
   expect(screen.getByRole("link", { name: "进入审核中心" })).toHaveAttribute("href", "/reviews")
@@ -1006,9 +1006,8 @@ it("shows safe channel connection states and starts authorization without publis
   render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
   expect(await screen.findAllByText("LINKEDIN package")).not.toHaveLength(0)
-  expect(screen.getByText("尚未选择市场")).toBeInTheDocument()
-  expect(screen.getByText("尚未形成客户画像")).toBeInTheDocument()
-  expect(screen.getByText("尚未设置验证周期")).toBeInTheDocument()
+  expect(screen.getByText("目标市场")).toBeInTheDocument()
+  expect(screen.getAllByText("待 AI 生成").length).toBeGreaterThan(0)
   expect(screen.queryByText("德国 · 包装机械")).not.toBeInTheDocument()
   const linkedIn = screen.getByRole("article", { name: "LinkedIn Company Page 内容包" })
   expect(screen.queryByRole("article", { name: "Facebook Page 内容包" })).not.toBeInTheDocument()

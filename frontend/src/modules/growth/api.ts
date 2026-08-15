@@ -430,6 +430,16 @@ export type GrowthWorkspace = {
   connectors: PlatformConnection[]
   discovery?: DiscoverySummary
   market_pilots?: MarketPilotSummary
+  promotion_plan?: PromotionPlan
+}
+
+export type PromotionPlan = {
+  target_markets: Array<{ country_code: string; country_label: string; reason: string }>
+  audiences: Array<{ industry: string; reason: string }>
+  period_weeks: number
+  content_themes: string[]
+  channels: string[]
+  summary: string
 }
 
 export type DraftActionResponse = {

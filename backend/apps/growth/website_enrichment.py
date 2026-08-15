@@ -12,6 +12,7 @@ from django.utils.module_loading import import_string
 
 from .market_pilots import matched_gear_terms
 from .lead_judgment import judge_candidate
+from .buying_signals import detect_buying_signals
 
 
 WEBSITE_TIMEOUT_SECONDS = 15
@@ -105,6 +106,7 @@ def prepare_website_enrichment(candidate, *, transport=None):
     )
     facts = extract_website_facts(html, candidate.website)
     judgment = judge_candidate(candidate, website_facts=facts)
+    buying_signals = detect_buying_signals(facts.text_excerpt)
     public_contact_paths = (
         [{"label": email, "url": f"mailto:{email}"} for email in facts.emails]
         + [{"label": phone} for phone in facts.phones]
@@ -122,6 +124,7 @@ def prepare_website_enrichment(candidate, *, transport=None):
             {"field": "gear_terms", "value": list(facts.gear_terms), "source": "公司官网"},
             {"field": "text_excerpt", "value": facts.text_excerpt, "source": "公司官网"},
             {"field": "ai_judgment", "value": judgment["reason"], "source": "AI 判断"},
+            {"field": "buying_signals", "value": [signal["label"] for signal in buying_signals], "source": "官网采购信号检测"},
         ],
         "public_contact_paths": public_contact_paths,
         "uncertainties": uncertainties,
@@ -134,6 +137,7 @@ def prepare_website_enrichment(candidate, *, transport=None):
             "source_cost_micros": 0,
             "review_status": "PENDING_REVIEW",
             "observed_at": timezone.now().isoformat(),
+            "buying_signals": buying_signals,
         },
     }
     snapshot, created = CandidateEnrichmentSnapshot.objects.get_or_create(

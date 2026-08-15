@@ -205,22 +205,46 @@ SOCIAL_PROVIDER_CONFIG = {
     "META": {
         "enabled": _provider_enabled("META"),
         "client_id": os.environ.get("META_CLIENT_ID", ""),
+        "client_secret_reference": os.environ.get("META_CLIENT_SECRET_REFERENCE", ""),
         "authorization_url": "https://www.facebook.com/v23.0/dialog/oauth",
         "redirect_uri": os.environ.get("META_OAUTH_REDIRECT_URI", ""),
         "scopes": ("pages_show_list", "pages_manage_posts", "instagram_content_publish"),
+        "api_version": os.environ.get("META_API_VERSION", "v23.0"),
+        "audited": _provider_enabled("META_AUDITED"),
     },
     "TIKTOK": {
         "enabled": _provider_enabled("TIKTOK"),
         "client_id": os.environ.get("TIKTOK_CLIENT_KEY", ""),
+        "client_secret_reference": os.environ.get("TIKTOK_CLIENT_SECRET_REFERENCE", ""),
         "authorization_url": "https://www.tiktok.com/v2/auth/authorize/",
         "redirect_uri": os.environ.get("TIKTOK_OAUTH_REDIRECT_URI", ""),
         "scopes": ("user.info.basic", "video.publish", "video.upload"),
+        "api_version": "v2",
+        "audited": _provider_enabled("TIKTOK_AUDITED"),
     },
     "LINKEDIN": {
         "enabled": _provider_enabled("LINKEDIN"),
         "client_id": os.environ.get("LINKEDIN_CLIENT_ID", ""),
+        "client_secret_reference": os.environ.get("LINKEDIN_CLIENT_SECRET_REFERENCE", ""),
         "authorization_url": "https://www.linkedin.com/oauth/v2/authorization",
         "redirect_uri": os.environ.get("LINKEDIN_OAUTH_REDIRECT_URI", ""),
         "scopes": ("w_organization_social",),
+        "api_version": os.environ.get("LINKEDIN_API_VERSION", ""),
+        "audited": _provider_enabled("LINKEDIN_AUDITED"),
+    },
+    "YOUTUBE": {
+        "enabled": _provider_enabled("YOUTUBE"),
+        "client_id": os.environ.get("YOUTUBE_CLIENT_ID", ""),
+        "client_secret_reference": os.environ.get("YOUTUBE_CLIENT_SECRET_REFERENCE", ""),
+        "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "redirect_uri": os.environ.get("YOUTUBE_OAUTH_REDIRECT_URI", ""),
+        "scopes": ("https://www.googleapis.com/auth/youtube.upload",),
+        "api_version": "v3",
+        "audited": _provider_enabled("YOUTUBE_AUDITED"),
     },
 }
+SOCIAL_OAUTH_ALLOWED_ORIGINS = tuple(
+    value.strip()
+    for value in os.environ.get("SOCIAL_OAUTH_ALLOWED_ORIGINS", "").split(",")
+    if value.strip()
+)

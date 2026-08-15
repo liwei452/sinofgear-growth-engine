@@ -141,6 +141,17 @@ const publishingModeSummary = computed(() => {
   }
   return "混合发布方式 · 以各渠道状态为准"
 })
+const publishingRouteSummary = computed(() => {
+  const connections = publishChannelCodes.map(channel => connectionFor(channel))
+  const officialCount = connections.filter(connection => (
+    connection?.status === "CONNECTED" && connection.mode === "OFFICIAL"
+  )).length
+  const demoCount = connections.filter(connection => (
+    connection?.status === "CONNECTED" && connection.mode === "DEMO_FAKE"
+  )).length
+  const manualCount = publishChannelCodes.length - officialCount - demoCount
+  return `当前路径：官方连接 ${officialCount} 个 · Demo 演示 ${demoCount} 个 · 手工发布包 ${manualCount} 个`
+})
 const reviewPackages = computed(() => publishChannelCodes
   .map(packageFor)
   .filter((channelPackage): channelPackage is ChannelPackage => Boolean(channelPackage)))
@@ -636,6 +647,7 @@ const channels: Array<{
         <div>
           <p class="eyebrow">四渠道发布就绪检查</p>
           <h3>{{ allChannelsReady ? '四个渠道均可提交' : `还有 ${pendingReadinessCount} 个渠道需要处理` }}</h3>
+          <p>{{ publishingRouteSummary }}</p>
           <ul class="readiness-list">
             <li v-for="item in channelReadiness" :key="item.channel">
               <span>{{ channelLabel(item.channel) }} · {{ item.label }}</span>

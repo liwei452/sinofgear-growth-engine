@@ -185,3 +185,11 @@ export async function apiRequest<T>(
 ): Promise<T | undefined> {
   return (await apiRequestWithMeta<T>(path, options)).data
 }
+
+export async function apiBlobRequest(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<{ blob: Blob; response: Response }> {
+  const response = await request(path, options)
+  return { blob: await response.blob(), response }
+}

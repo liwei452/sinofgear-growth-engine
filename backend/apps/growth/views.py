@@ -1,5 +1,7 @@
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from django.db import transaction
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.response import Response
@@ -42,6 +44,7 @@ from .manual_imports import import_manual_opportunity
 from .market_pilots import market_pilot_summary, market_profiles_for
 from .serializers import (
     ChannelPackageBatchApproveSerializer,
+    FourChannelManualExportSerializer,
     ChannelPackageSerializer,
     CandidateListImportResultSerializer,
     CandidateListImportSerializer,
@@ -73,6 +76,7 @@ from .serializers import (
     PublishBatchCreateSerializer,
     TargetAccountSerializer,
 )
+from .manual_export import FourChannelExportNotReady, build_four_channel_export
 from .reactivation import (
     LegalRelationshipRequired,
     ReactivationBlocked,
@@ -720,6 +724,41 @@ class ChannelPackageManualExportView(APIView):
             "filename": f"{package.channel.lower()}-manual-package.json",
             "payload": receipt.payload,
         })
+
+
+class FourChannelManualExportView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=FourChannelManualExportSerializer,
+        responses={200: OpenApiTypes.BINARY, 409: GrowthErrorSerializer},
+    )
+    def post(self, request):
+        serializer = FourChannelManualExportSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                "code": "MANUAL_EXPORT_NOT_READY",
+                "message": "请选择 LinkedIn、Facebook、Instagram、TikTok 四个渠道内容包。",
+                "recovery_action": "返回推广页补齐并批准四渠道内容。",
+            }, status=409)
+        try:
+            exported = build_four_channel_export(
+                organization=request.organization,
+                package_ids=serializer.validated_data["package_ids"],
+            )
+        except FourChannelExportNotReady as error:
+            return Response({
+                "code": "MANUAL_EXPORT_NOT_READY",
+                "message": str(error),
+                "recovery_action": "返回推广页补齐或重新审核四渠道内容。",
+            }, status=409)
+        response = HttpResponse(exported.content, content_type="application/zip")
+        response["Content-Disposition"] = f'attachment; filename="{exported.filename}"'
+        response["X-Content-SHA256"] = exported.content_hash
+        response["ETag"] = f'"{exported.content_hash}"'
+        response["Cache-Control"] = "private, no-store"
+        return response
 
 
 class MetricReceiptCreateView(APIView):

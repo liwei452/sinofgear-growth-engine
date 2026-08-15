@@ -73,6 +73,25 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await expect(page.getByRole("status").filter({ hasText: "已批准，等待人工下载" })).toBeVisible()
   await page.reload()
   await expect(page.getByRole("button", { name: "已批准" })).toBeDisabled()
+  let publishRequestsDuringExport = 0
+  page.on("request", request => {
+    if (new URL(request.url()).pathname === "/api/v1/growth/publish-batches"
+      && request.method() === "POST") publishRequestsDuringExport += 1
+  })
+  const combinedExportResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith("/manual-export-all")
+      && response.request().method() === "POST",
+  )
+  const combinedDownload = page.waitForEvent("download")
+  await page.getByRole("button", { name: "下载四渠道手工发布包" }).click()
+  const combinedResponse = await combinedExportResponse
+  expect(combinedResponse.status(), await combinedResponse.text()).toBe(200)
+  expect((await combinedDownload).suggestedFilename()).toMatch(
+    /^four-channel-manual-package-[0-9a-f]{12}\.zip$/,
+  )
+  expect(publishRequestsDuringExport).toBe(0)
+  await expect(page.getByText("四渠道手工发布包已下载；请人工登录平台发布，未触发任何平台请求。"))
+    .toBeVisible()
   const exportResponse = page.waitForResponse(response =>
     new URL(response.url()).pathname.endsWith("/manual-export")
       && response.request().method() === "POST",

@@ -9,6 +9,7 @@ import {
   confirmPlatformConnection,
   createPublishBatch,
   exportChannelPackage,
+  exportFourChannelPackage,
   growthQueryKeys,
   growthWorkspaceQueryOptions,
   getPlatformConnectionSession,
@@ -136,6 +137,12 @@ const reviewPackages = computed(() => publishChannelCodes
 const hasFourReviewPackages = computed(() => reviewPackages.value.length === 4)
 const allPackagesApproved = computed(() => hasFourReviewPackages.value
   && reviewPackages.value.every(channelPackage => isApproved(channelPackage)))
+const manualExportIssues = computed(() => publishChannelCodes.flatMap(channel => {
+  const channelPackage = packageFor(channel)
+  if (!channelPackage) return [`${channelLabel(channel)}：缺少内容包`]
+  if (!isApproved(channelPackage)) return [`${channelLabel(channel)}：等待人工审核`]
+  return []
+}))
 const eligiblePackages = computed(() => channelReadiness.value
   .filter((item): item is ChannelReadiness & { package: ChannelPackage } => item.ready && Boolean(item.package))
   .map(item => item.package))
@@ -168,6 +175,9 @@ const approveAllMutation = useMutation({
   onError: () => { approvalError.value = "四渠道内容暂时无法一起批准，请检查内容包后重试。" },
 })
 const exportMutation = useMutation({ mutationFn: exportChannelPackage })
+const exportAllMutation = useMutation({
+  mutationFn: (packageIds: string[]) => exportFourChannelPackage(packageIds),
+})
 const publishMutation = useMutation({
   mutationFn: ({ packageIds, key }: { packageIds: string[], key: string }) => createPublishBatch(packageIds, key),
   onSuccess: result => { publishBatch.value = result },
@@ -297,6 +307,34 @@ function saveExport(exported: ManualPackageExport): void {
   anchor.download = exported.filename
   anchor.click()
   URL.revokeObjectURL(objectUrl)
+}
+
+function saveBlob(blob: Blob, filename: string): void {
+  if (typeof URL.createObjectURL !== "function") return
+  const objectUrl = URL.createObjectURL(blob)
+  const anchor = document.createElement("a")
+  anchor.href = objectUrl
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(objectUrl)
+}
+
+async function downloadAllPackages(): Promise<void> {
+  downloadMessage.value = ""
+  downloadError.value = ""
+  if (!allPackagesApproved.value) {
+    downloadError.value = "请先补齐并人工批准四个渠道内容。"
+    return
+  }
+  try {
+    const exported = await exportAllMutation.mutateAsync(
+      reviewPackages.value.map(channelPackage => channelPackage.id),
+    )
+    saveBlob(exported.blob, exported.filename)
+    downloadMessage.value = "四渠道手工发布包已下载；请人工登录平台发布，未触发任何平台请求。"
+  } catch {
+    downloadError.value = "四渠道发布包暂时无法下载，请检查内容是否仍为最新且已批准。"
+  }
 }
 
 async function download(): Promise<void> {
@@ -549,6 +587,22 @@ const channels: Array<{
           :disabled="!batchReviewConfirmed || approveAllMutation.isPending.value"
           aria-label="批准 4 个渠道内容" @click="approveAllPackages"
         >{{ approveAllMutation.isPending.value ? "正在批准…" : "批准 4 个渠道内容" }}</button>
+      </section>
+      <section v-if="hasPublishingPackages" class="batch-review-panel manual-export-panel" aria-label="四渠道手工发布包">
+        <div>
+          <p class="eyebrow">官方接口未就绪时的安全兜底</p>
+          <h3>{{ allPackagesApproved ? "四渠道手工发布包可以下载" : `还需处理 ${manualExportIssues.length} 项` }}</h3>
+          <ul v-if="manualExportIssues.length">
+            <li v-for="issue in manualExportIssues" :key="issue"><span>{{ issue }}</span></li>
+          </ul>
+          <p v-else>包含四个平台文案、素材引用、UTM 与事实证据；下载不会发布到任何平台。</p>
+        </div>
+        <button
+          class="button button-secondary" type="button"
+          :disabled="!allPackagesApproved || exportAllMutation.isPending.value"
+          aria-label="下载四渠道手工发布包"
+          @click="downloadAllPackages"
+        >{{ exportAllMutation.isPending.value ? "正在准备…" : "下载四渠道手工发布包" }}</button>
       </section>
       <section v-if="hasPublishingPackages" class="publish-panel" aria-label="四渠道发布就绪检查">
         <div>

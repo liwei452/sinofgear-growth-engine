@@ -56,6 +56,22 @@ def _verified_fact_evidence(content: PlatformContent) -> list[dict[str, object]]
     return evidence
 
 
+def _safe_asset_references(content: PlatformContent) -> list[dict[str, object]]:
+    references = []
+    links = content.master_content.brief.asset_links.select_related("asset").order_by("asset_id")
+    for link in links[:50]:
+        asset = link.asset
+        if asset.organization_id != content.organization_id or asset.status != "ACTIVE":
+            continue
+        references.append({
+            "original_filename": asset.original_filename,
+            "mime_type": asset.mime_type,
+            "size_bytes": asset.size_bytes,
+            "checksum": asset.checksum,
+        })
+    return references
+
+
 @transaction.atomic
 def prepare_channel_package_from_platform_content(
     *, content: PlatformContent,
@@ -88,6 +104,7 @@ def prepare_channel_package_from_platform_content(
         "source_platform_content_id": str(content.id),
         "source_platform_content_version": content.version,
         "verified_fact_evidence": facts,
+        "asset_references": _safe_asset_references(content),
     }
     if channel == "TIKTOK":
         payload.update({

@@ -1,3 +1,8 @@
+import hashlib
+import io
+import json
+import zipfile
+
 import pytest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
@@ -488,6 +493,129 @@ def test_only_approved_channel_package_can_be_exported_through_fake_connector(gr
             "utm": "tiktok / organic / din6-proof-demo",
         },
     }
+
+
+@pytest.mark.django_db
+def test_four_approved_channels_export_one_deterministic_safe_archive(growth_publish_ready):
+    client, _organization, packages = growth_publish_ready
+    for package in packages:
+        package.payload = {
+            "title": f"{package.channel} inspection proof",
+            "body": "Verified gear inspection evidence.",
+            "cta": "Review the capability summary",
+            "hashtags": ["gears", "inspection"],
+            "utm": f"utm_source={package.channel.lower()}&utm_medium=organic",
+            "verified_fact_evidence": [{
+                "fact_id": "11111111-1111-4111-8111-111111111111",
+                "field_name": "process",
+                "value": "Gear grinding",
+                "source_filename": "gear-catalog.pdf",
+                "source_page": 2,
+                "source_excerpt": "Process: Gear grinding",
+                "is_demo": True,
+                "storage_key": "organizations/secret/internal",
+            }],
+            "asset_references": [{
+                "original_filename": "../gear-photo.jpg",
+                "mime_type": "image/jpeg",
+                "size_bytes": 1024,
+                "checksum": "a" * 64,
+                "storage_key": "organizations/secret/internal",
+            }],
+            "contact_email": "private@example.com",
+            "api_key": "must-not-export",
+        }
+        if package.channel == "TIKTOK":
+            package.payload.update({
+                "duration_seconds": 30,
+                "aspect_ratio": "9:16",
+                "script": "Verified gear inspection evidence.",
+                "shot_list": ["Gear close-up", "Inspection report"],
+                "english_voiceover": "Verified gear inspection evidence.",
+                "chinese_subtitles": "齿轮检测证据。",
+            })
+        package.save(update_fields=["payload", "updated_at"])
+    payload = {"package_ids": [str(package.id) for package in packages]}
+
+    first = client.post(
+        "/api/v1/growth/channel-packages/manual-export-all", payload, format="json",
+    )
+    second = client.post(
+        "/api/v1/growth/channel-packages/manual-export-all", payload, format="json",
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert first.content == second.content
+    assert len(first.content) < 2 * 1024 * 1024
+    assert first["Content-Type"] == "application/zip"
+    assert first["X-Content-SHA256"] == second["X-Content-SHA256"]
+    assert first["ETag"] == f'"{first["X-Content-SHA256"]}"'
+    assert hashlib.sha256(first.content).hexdigest() == hashlib.sha256(second.content).hexdigest()
+    with zipfile.ZipFile(io.BytesIO(first.content)) as archive:
+        assert archive.namelist() == [
+            "manifest.json",
+            "facebook/assets.json", "facebook/content.json", "facebook/evidence.json",
+            "instagram/assets.json", "instagram/content.json", "instagram/evidence.json",
+            "linkedin/assets.json", "linkedin/content.json", "linkedin/evidence.json",
+            "tiktok/assets.json", "tiktok/content.json", "tiktok/evidence.json",
+        ]
+        manifest = json.loads(archive.read("manifest.json"))
+        content = json.loads(archive.read("tiktok/content.json"))
+        evidence = json.loads(archive.read("tiktok/evidence.json"))
+        assets = json.loads(archive.read("tiktok/assets.json"))
+    assert manifest["content_hash"] == first["X-Content-SHA256"]
+    assert manifest["delivery"] == "MANUAL_ONLY"
+    assert manifest["channels"] == ["FACEBOOK", "INSTAGRAM", "LINKEDIN", "TIKTOK"]
+    assert content["aspect_ratio"] == "9:16"
+    assert content["tags"] == ["gears", "inspection"]
+    assert evidence[0]["source_filename"] == "gear-catalog.pdf"
+    assert assets == [{
+        "checksum": "a" * 64,
+        "mime_type": "image/jpeg",
+        "original_filename": "gear-photo.jpg",
+        "size_bytes": 1024,
+    }]
+    serialized = first.content
+    assert b"organizations/secret/internal" not in serialized
+    assert b"private@example.com" not in serialized
+    assert b"must-not-export" not in serialized
+
+
+@pytest.mark.django_db
+def test_combined_manual_export_rejects_unapproved_missing_and_foreign_packages(
+    growth_publish_ready,
+):
+    client, organization, packages = growth_publish_ready
+    endpoint = "/api/v1/growth/channel-packages/manual-export-all"
+    package_ids = [str(package.id) for package in packages]
+    packages[0].status = "AWAITING_REVIEW"
+    packages[0].save(update_fields=["status", "updated_at"])
+
+    unapproved = client.post(endpoint, {"package_ids": package_ids}, format="json")
+    missing = client.post(endpoint, {"package_ids": package_ids[:3]}, format="json")
+
+    foreign = Organization.objects.create(name="Foreign Export", slug="foreign-export")
+    packages[0].status = "APPROVED"
+    packages[0].organization = foreign
+    packages[0].save(update_fields=["organization", "status", "updated_at"])
+    hidden = client.post(endpoint, {"package_ids": package_ids}, format="json")
+
+    read_only_role = Role.objects.create_read_only()
+    read_only_user = get_user_model().objects.create_user(username="export-read-only")
+    Membership.objects.create(
+        user=read_only_user, organization=organization, role=read_only_role,
+    )
+    read_only_client = APIClient()
+    read_only_client.force_authenticate(user=read_only_user)
+    forbidden = read_only_client.post(endpoint, {"package_ids": package_ids}, format="json")
+
+    assert unapproved.status_code == missing.status_code == hidden.status_code == 409
+    assert forbidden.status_code == 403
+    assert unapproved.data["code"] == "MANUAL_EXPORT_NOT_READY"
+    assert missing.data["code"] == "MANUAL_EXPORT_NOT_READY"
+    assert hidden.data["code"] == "MANUAL_EXPORT_NOT_READY"
+    assert "Foreign Export" not in str(hidden.data)
+    assert packages[1].organization_id == organization.id
 
 
 @pytest.mark.django_db

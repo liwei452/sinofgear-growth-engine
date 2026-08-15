@@ -9,6 +9,7 @@ from .views import (
     CandidateEnrichmentFollowUpView,
     DiscoveryCandidateReviewView,
     ChannelPackageManualExportView,
+    FourChannelManualExportView,
     CompanyFactVerifyView,
     DiscoveryProfileView,
     DiscoveryRunView,
@@ -87,6 +88,11 @@ urlpatterns = [
         "growth/channel-packages/<uuid:package_id>/approve",
         ChannelPackageApproveView.as_view(),
         name="growth-channel-package-approve",
+    ),
+    path(
+        "growth/channel-packages/manual-export-all",
+        FourChannelManualExportView.as_view(),
+        name="growth-channel-package-manual-export-all",
     ),
     path(
         "growth/channel-packages/<uuid:package_id>/manual-export",

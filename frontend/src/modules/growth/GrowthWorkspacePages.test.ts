@@ -250,6 +250,10 @@ it("keeps channel package review state independent", async () => {
 
   expect(await within(linkedIn).findByRole("button", { name: "下载 LinkedIn 发布包" })).toBeEnabled()
   expect(within(tiktok).getByRole("button", { name: "批准 TikTok 内容包" })).toBeEnabled()
+  const combined = screen.getByRole("region", { name: "四渠道手工发布包" })
+  expect(within(combined).getByRole("button", { name: "下载四渠道手工发布包" })).toBeDisabled()
+  expect(combined).toHaveTextContent("Facebook：缺少内容包")
+  expect(combined).toHaveTextContent("TikTok：等待人工审核")
 })
 
 it("requires one explicit confirmation before approving all four channel packages", async () => {
@@ -300,6 +304,63 @@ it("requires one explicit confirmation before approving all four channel package
 
   expect(capturedIds).toEqual(workspace.channel_packages.map(item => item.id))
   expect(await within(review).findByText("四个平台内容均已人工批准")).toBeInTheDocument()
+  expect(fetchMock.mock.calls.some(([path]) => String(path) === "/api/v1/growth/publish-batches")).toBe(false)
+})
+
+it("downloads one approved four-channel manual package without publishing", async () => {
+  document.cookie = "csrftoken=combined-export-test-token"
+  const channels = ["LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"]
+  const workspace = {
+    target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
+    outreach_drafts: [], field_provenance: [], metric_receipts: [], publish_batches: [], connectors: [],
+    channel_packages: channels.map((channel, index) => ({
+      id: `60000000-0000-4000-8000-00000000120${index + 1}`,
+      account_id: null, source_platform_content_id: `70000000-0000-4000-8000-00000000120${index + 1}`,
+      channel,
+      payload: channel === "TIKTOK"
+        ? { title: "TikTok approved", duration_seconds: 30, aspect_ratio: "9:16" }
+        : { title: `${channel} approved` },
+      status: "APPROVED", is_demo: true, data_label: "Demo / Fake", delivery: "MANUAL_ONLY",
+      created_at: "2026-08-15T10:00:00Z", updated_at: "2026-08-15T10:00:00Z",
+    })),
+  }
+  let exportedIds: string[] = []
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === "/api/v1/growth/workspace") {
+      return new Response(JSON.stringify(workspace), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })
+    }
+    if (path === "/api/v1/growth/channel-packages/manual-export-all") {
+      exportedIds = JSON.parse(String(init?.body)).package_ids
+      return new Response(new Blob(["safe-zip"]), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Disposition": 'attachment; filename="four-channel-manual-package-abc123.zip"',
+          "X-Content-SHA256": "abc123",
+        },
+      })
+    }
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const objectUrl = vi.fn(() => "blob:four-channel-export")
+  vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: objectUrl, revokeObjectURL: vi.fn() }))
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+  render(PromotionPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  const exportPanel = await screen.findByRole("region", { name: "四渠道手工发布包" })
+  const download = within(exportPanel).getByRole("button", { name: "下载四渠道手工发布包" })
+  expect(download).toBeEnabled()
+  await user.click(download)
+
+  expect(exportedIds).toEqual(workspace.channel_packages.map(item => item.id))
+  expect(objectUrl).toHaveBeenCalledOnce()
+  expect(await screen.findByText("四渠道手工发布包已下载；请人工登录平台发布，未触发任何平台请求。")).toBeInTheDocument()
   expect(fetchMock.mock.calls.some(([path]) => String(path) === "/api/v1/growth/publish-batches")).toBe(false)
 })
 

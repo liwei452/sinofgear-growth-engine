@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/vue-query"
 
-import { apiRequest } from "../../api/client"
+import { apiBlobRequest, apiRequest } from "../../api/client"
 
 export type TargetAccount = {
   id: string
@@ -741,6 +741,32 @@ export async function exportChannelPackage(packageId: string): Promise<ManualPac
   )
   if (!result) throw new Error("手工发布包响应为空。")
   return result
+}
+
+export type FourChannelManualExport = {
+  blob: Blob
+  filename: string
+  contentHash: string
+}
+
+export async function exportFourChannelPackage(
+  packageIds: string[],
+): Promise<FourChannelManualExport> {
+  const { blob, response } = await apiBlobRequest(
+    "/api/v1/growth/channel-packages/manual-export-all",
+    { method: "POST", body: { package_ids: packageIds } },
+  )
+  const disposition = response.headers.get("Content-Disposition") ?? ""
+  const match = /filename="?([^";]+)"?/i.exec(disposition)
+  const candidate = match?.[1]?.replaceAll("\\", "/").split("/").at(-1) ?? ""
+  const filename = /^[a-zA-Z0-9._-]+\.zip$/.test(candidate)
+    ? candidate
+    : "four-channel-manual-package.zip"
+  return {
+    blob,
+    filename,
+    contentHash: response.headers.get("X-Content-SHA256") ?? "",
+  }
 }
 
 export async function createMetricReceipt(input: {

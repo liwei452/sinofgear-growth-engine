@@ -4,12 +4,13 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 
-from apps.content.models import MasterContent, content_writes
+from apps.content.models import MasterContent, PlatformContent, content_writes
 from apps.content.services import (
     approve_content, create_generated_master, create_platform_content,
     create_master_revision, create_platform_revision,
 )
 from apps.growth.models import ChannelPackage
+from apps.growth.services import prepare_channel_package_from_platform_content
 from apps.identity.models import Membership, Organization, Role
 
 
@@ -132,6 +133,7 @@ def test_approved_platform_content_can_prepare_one_reviewable_publish_package(
             "source_excerpt": "Process: Gear grinding",
             "is_demo": True,
         }],
+        "asset_references": [],
     }
     if channel == "TIKTOK":
         expected_payload.update({
@@ -201,6 +203,56 @@ def test_channel_package_preparation_hides_cross_organization_content(
 
     assert response.status_code == 404
     assert not ChannelPackage.objects.exists()
+
+
+def test_combined_manual_export_rejects_a_superseded_platform_content(
+    content_provenance,
+):
+    organization, actor, brief, job, run = content_provenance
+    master = approve_content(
+        create_generated_master(brief=brief, job=job, ai_run=run, actor=actor),
+        actor=actor,
+    )
+    platform = brief.platform_links.get().platform
+    platform.code = "LINKEDIN"
+    platform.save(update_fields=["code"])
+    content = approve_content(
+        create_platform_content(master, platform=platform, actor=actor), actor=actor,
+    )
+    package, _ = prepare_channel_package_from_platform_content(content=content)
+    package.status = "APPROVED"
+    package.save(update_fields=["status", "updated_at"])
+    packages = [package]
+    for channel in ("FACEBOOK", "INSTAGRAM", "TIKTOK"):
+        packages.append(ChannelPackage.objects.create(
+            organization=organization,
+            channel=channel,
+            payload={"title": channel},
+            status="APPROVED",
+            is_demo=True,
+        ))
+    client = _client(organization, Role.Code.ADMINISTRATOR)
+    payload = {"package_ids": [str(item.id) for item in packages]}
+    with content_writes():
+        PlatformContent.objects.filter(pk=content.pk).update(
+            status=PlatformContent.Status.PUBLISHED,
+        )
+    published_export = client.post(
+        "/api/v1/growth/channel-packages/manual-export-all", payload, format="json",
+    )
+    assert published_export.status_code == 200
+
+    create_platform_revision(content, payload={**content.payload, "title": "New version"}, actor=actor)
+
+    response = client.post(
+        "/api/v1/growth/channel-packages/manual-export-all",
+        payload,
+        format="json",
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "MANUAL_EXPORT_NOT_READY"
+    assert "新版本" in response.json()["message"]
 
 
 def test_corrupt_provenance_is_omitted_and_detail_is_404(content_provenance):

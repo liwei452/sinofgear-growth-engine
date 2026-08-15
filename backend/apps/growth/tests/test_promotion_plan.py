@@ -1,7 +1,9 @@
 import pytest
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from rest_framework.test import APIClient
 
+from apps.identity.models import Membership, Role
 from apps.growth.models import MarketCountryProfile
 from apps.growth.promotion_plan import (
     approve_promotion_plan,
@@ -54,3 +56,16 @@ def test_plan_approval_persists_and_can_be_cleared(organization):
 
     clear_promotion_plan_approval(organization=organization)
     assert promotion_plan_status(organization)["approved"] is False
+
+
+def test_publish_endpoint_requires_approved_plan(organization):
+    role = Role.objects.create_operator()
+    user = get_user_model().objects.create_user(username="publish-gate", password="pw")
+    Membership.objects.create(user=user, organization=organization, role=role)
+    client = APIClient()
+    assert client.login(username=user.username, password="pw")
+
+    response = client.post("/api/v1/growth/publish-batches", {}, format="json")
+
+    assert response.status_code == 409
+    assert response.data["code"] == "PROMOTION_PLAN_NOT_APPROVED"

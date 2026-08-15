@@ -1237,6 +1237,12 @@ class PublishBatchCreateView(APIView):
 
     @extend_schema(tags=["Growth workspace"])
     def post(self, request):
+        if not promotion_plan_status(request.organization)["approved"]:
+            return Response({
+                "code": "PROMOTION_PLAN_NOT_APPROVED",
+                "message": "请先在推广页确认推广计划，再提交发布。",
+                "recovery_action": "前往推广页确认推广计划。",
+            }, status=409)
         key = request.headers.get("Idempotency-Key", "")
         if not key:
             return Response({

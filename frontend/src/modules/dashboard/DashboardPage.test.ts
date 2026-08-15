@@ -29,6 +29,8 @@ async function renderDashboard() {
 it("shows real next steps without fabricated dashboard content in an empty workspace", async () => {
   const { container } = await renderDashboard()
 
+  expect(screen.getByRole("heading", { name: "早上好" })).toBeInTheDocument()
+  expect(screen.queryByText(/SinofGear 团队/)).not.toBeInTheDocument()
   expect(screen.getByRole("heading", { name: "今天发现的采购机会" })).toBeInTheDocument()
   expect(screen.getByText("今天还没有已验证的采购机会")).toBeInTheDocument()
   expect(screen.getByRole("link", { name: "选择市场或导入合法名单" })).toHaveAttribute("href", "/opportunities")

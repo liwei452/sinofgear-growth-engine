@@ -148,7 +148,7 @@ function toggleEvidence(id: string) {
     <header class="today-intro">
       <div>
         <p class="eyebrow">今天</p>
-        <h1>早上好，SinofGear 团队</h1>
+        <h1>早上好</h1>
         <p>这里仅显示已保存并可追溯的采购机会、公司事实和渠道反馈。</p>
       </div>
     </header>
@@ -313,14 +313,6 @@ function toggleEvidence(id: string) {
 .evidence-button { min-height: 44px; border: 0; background: transparent; color: var(--sg-brand); font-weight: 750; cursor: pointer; }
 .evidence-box { margin-top: 14px; border-left: 3px solid var(--sg-brand); border-radius: 6px; background: #f6f9fc; padding: 12px 14px; }
 .evidence-box p { margin: 5px 0 0; font-size: .82rem; line-height: 1.55; }
-.visibility-score { display: grid; grid-template-columns: 150px 1fr; gap: 20px; align-items: center; padding: 20px 0; }
-.visibility-score > strong { color: #0c9b5e; font-size: 2.6rem; }
-.visibility-score > strong span { color: var(--sg-muted); font-size: 1rem; }
-.visibility-score p { margin: 6px 0 0; color: var(--sg-muted); line-height: 1.5; }
-.knowledge-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
-.knowledge-grid section { border: 1px solid var(--sg-line); border-radius: 10px; padding: 12px; }
-.knowledge-grid h3 { margin: 0; font-size: .9rem; }
-.knowledge-grid ul { margin: 10px 0 0; padding-left: 18px; color: var(--sg-muted); font-size: .8rem; line-height: 1.6; }
 .safe-note { margin: 9px 0 0; color: var(--sg-muted); font-size: .8rem; text-align: center; }
 .channel-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; margin-top: 16px; }
 .channel-grid article { min-width: 0; border: 1px solid var(--sg-line); border-radius: 10px; padding: 11px; }
@@ -328,9 +320,6 @@ function toggleEvidence(id: string) {
 .channel-grid p { margin: 10px 0 4px; color: var(--sg-muted); font-size: .72rem; }
 .channel-grid p b { display: block; margin-top: 3px; color: var(--sg-ink); font-size: 1rem; }
 .channel-grid article > span { color: #0c8a55; font-size: .75rem; font-weight: 800; }
-.sparkline { display: flex; height: 24px; align-items: end; gap: 3px; margin-top: 7px; }
-.sparkline i { flex: 1; border-radius: 2px 2px 0 0; background: #a9cdf1; }
-.sparkline i:nth-child(1) { height: 25%; } .sparkline i:nth-child(2) { height: 50%; } .sparkline i:nth-child(3) { height: 38%; } .sparkline i:nth-child(4) { height: 78%; } .sparkline i:nth-child(5) { height: 62%; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; background: rgb(17 31 47 / 48%); padding: 20px; }
 .draft-dialog { width: min(100%, 620px); max-height: 90vh; overflow-y: auto; border-radius: 14px; background: white; padding: 26px; box-shadow: var(--sg-shadow); }
 .draft-dialog h2 { margin: 10px 0 0; }.draft-dialog h3 { margin: 20px 0 6px; font-size: .95rem; }.draft-dialog p { line-height: 1.65; }.draft-dialog .safe-note { text-align: left; }

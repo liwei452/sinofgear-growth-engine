@@ -61,6 +61,17 @@ const jobs = computed(() => {
   return [...new Map(combined.map((job) => [job.job_id, job])).values()]
 })
 const activeJobStatuses = new Set(["QUEUED", "RUNNING", "RETRY_QUEUED"])
+const showAllJobs = ref(false)
+const visibleJobs = computed(() => {
+  if (showAllJobs.value) return jobs.value
+  const active = jobs.value.filter(job => activeJobStatuses.has(job.status))
+  const finished = jobs.value.filter(job => !activeJobStatuses.has(job.status))
+  return [...active, ...finished.slice(0, 3)]
+})
+const hiddenJobCount = computed(() => Math.max(0, jobs.value.length - visibleJobs.value.length))
+const generationModes = computed(() => (
+  [...new Set(jobs.value.map(job => job.generation_label || "生成方式尚未记录"))]
+))
 const currentStep = computed(() => {
   if (!briefs.value.length) return 1
   if (!jobs.value.length) return 2
@@ -318,12 +329,35 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
 
     <ContentTrashPanel v-if="has('campaigns.read') || has('content.read')" @restored="notice = '已恢复内容。'" />
 
-    <section aria-labelledby="jobs-title"><h2 id="jobs-title">生成任务</h2><div v-if="jobs.length" class="card-grid"><article v-for="job in jobs" :key="job.job_id" class="workflow-card"><div class="card-heading"><h3>任务详情</h3><span class="status-chip">{{ job.status }}</span></div><p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p><p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p><p v-else-if="job.status === 'FAILED'" role="alert">{{ job.error?.message || '生成未完成，可以重试。' }}</p><details><summary>任务 {{ job.job_id }}</summary></details><div class="card-actions"><button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">取消任务</button><button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">重新尝试</button></div></article></div><p v-else class="muted">提交生成后，进度会显示在这里。</p><p v-if="jobPages.error.value" role="alert">{{ jobPages.error.value }} <button type="button" @click="jobPages.loadMore">重试</button></p><button v-else-if="jobPages.next.value" type="button" @click="jobPages.loadMore">加载更多生成任务</button></section>
+    <section aria-labelledby="jobs-title">
+      <div class="card-heading">
+        <h2 id="jobs-title">生成任务</h2>
+        <button v-if="hiddenJobCount > 0" class="link-action" type="button" @click="showAllJobs = !showAllJobs">
+          {{ showAllJobs ? "收起任务" : `显示全部 ${jobs.length} 个任务` }}
+        </button>
+      </div>
+      <div v-if="visibleJobs.length" class="card-grid">
+        <article v-for="job in visibleJobs" :key="job.job_id" class="workflow-card">
+          <div class="card-heading"><h3>任务详情</h3><span class="status-chip">{{ job.status }}</span></div>
+          <p>进度 {{ job.progress }}% · 第 {{ job.attempt }}/{{ job.max_attempts }} 次</p>
+          <p v-if="job.status === 'SUCCEEDED'" class="success">生成完成</p>
+          <p v-else-if="job.status === 'FAILED'" role="alert">{{ job.error?.message || '生成未完成，可以重试。' }}</p>
+          <details><summary>任务 {{ job.job_id }}</summary></details>
+          <div class="card-actions">
+            <button v-if="has('jobs.manage') && activeJobStatuses.has(job.status)" type="button" @click="jobAction(job,'cancel')">取消任务</button>
+            <button v-if="has('jobs.manage') && job.status === 'FAILED'" type="button" @click="jobAction(job,'retry')">重新尝试</button>
+          </div>
+        </article>
+      </div>
+      <p v-else class="muted">提交生成后，进度会显示在这里。</p>
+      <p v-if="jobPages.error.value" role="alert">{{ jobPages.error.value }} <button type="button" @click="jobPages.loadMore">重试</button></p>
+      <button v-else-if="jobPages.next.value" type="button" @click="jobPages.loadMore">加载更多生成任务</button>
+    </section>
 
     <ContentBriefWizard v-if="wizardOpen || editingBrief" :brief="editingBrief" :campaigns="campaigns.items.value" :products="productPages.items.value" :platforms="platformPages.items.value" :assets="assetPages.items.value" :concepts="conceptsQuery.data.value?.results ?? []" :more="{ campaigns: Boolean(campaigns.next.value), products: Boolean(productPages.next.value), platforms: Boolean(platformPages.next.value), assets: Boolean(assetPages.next.value) }" :page-errors="{ campaigns: campaigns.error.value, products: productPages.error.value, platforms: platformPages.error.value, assets: assetPages.error.value }" @load-more="(kind) => ({ campaigns, products: productPages, platforms: platformPages, assets: assetPages })[kind].loadMore()" @close="wizardOpen = false; editingBrief = null" @saved="saved" />
-    <section v-if="jobs.length" class="state-panel generation-disclosure" aria-label="生成模式">
+    <section v-if="generationModes.length" class="state-panel generation-disclosure" aria-label="生成模式">
       <h2>生成模式</h2>
-      <p v-for="job in jobs" :key="`mode-${job.job_id}`">{{ job.generation_label || "生成方式尚未记录" }}</p>
+      <p v-for="mode in generationModes" :key="mode">{{ mode }}</p>
       <small v-if="jobs.some(job => job.generation_mode === 'FAKE_OFFLINE')">该结果必须人工审核，不能视为真实模型结论。</small>
     </section>
   </main>
@@ -331,4 +365,15 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
 
 <style scoped>
 .content-factory{display:grid;gap:1.5rem}.library-header,.card-heading,.card-actions{display:flex;justify-content:space-between;gap:1rem;align-items:flex-start}.summary-grid,.card-grid,.platform-previews{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}.summary-grid article,.workflow-card,.generated-result,.platform-previews article{padding:1rem;border:1px solid #d8dee8;border-radius:1rem;background:#fff}.generated-result{display:grid;gap:.8rem;border-color:#9dbce8;scroll-margin-top:1rem}.generated-body{white-space:pre-wrap;line-height:1.7}.internal-translation{padding:1rem;border-left:3px solid #7f8ea3;background:#f6f8fa}.internal-translation h3{margin-top:0}.advanced-create summary{cursor:pointer;font-weight:700}.summary-grid article{display:grid}.summary-grid strong{font-size:1.8rem}.status-chip{padding:.25rem .55rem;border-radius:999px;background:#edf4f1;font-weight:700}.notice,.form-alert{padding:.8rem 1rem;border-radius:.75rem}.notice{background:#edf8f2;color:#225c42}.form-alert{background:#fff0ed;color:#79291d}.muted{color:#667085}.success{color:#187249;font-weight:700}.card-actions{justify-content:flex-end;flex-wrap:wrap}.dialog-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:1rem;background:rgba(20,31,45,.55)}.brief-editor{display:grid;gap:.8rem;width:min(560px,100%);max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:1rem;background:#fff}.brief-editor label{display:grid;gap:.35rem}@media(max-width:600px){.library-header{display:grid}.card-actions{justify-content:stretch}.card-actions button{width:100%}}
+</style>
+
+<style scoped>
+.link-action {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--sg-brand);
+  font-weight: 750;
+  cursor: pointer;
+}
 </style>

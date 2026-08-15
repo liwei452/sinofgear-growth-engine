@@ -799,7 +799,7 @@ const socialChannelStatuses = computed<SocialChannelStatus[]>(() => socialChanne
                 target="_blank" rel="noreferrer"
                 :aria-label="`查看 ${channelLabel(item.channel)} 平台帖子`"
               >发布成功 · 查看平台帖子</a>
-              <span v-else>{{ item.recovery_action || "等待发布" }}</span>
+              <span v-else>{{ item.recovery_action || (item.status === "FAILED" ? "发布失败，请重试。" : "等待发布") }}</span>
               <small>
                 <span>结果记录时间：</span>
                 <time :datetime="item.updated_at">{{ formatResultTime(item.updated_at) }}</time>

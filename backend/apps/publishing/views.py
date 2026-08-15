@@ -60,7 +60,7 @@ def _conflict(exc):
     return Response(
         {
             "code": "publishing_conflict", "message": str(exc),
-            "recovery_action": "Refresh the task or reconnect the account, then retry.",
+            "recovery_action": "请刷新任务或重新连接账号后重试。",
         },
         status=status.HTTP_409_CONFLICT,
     )

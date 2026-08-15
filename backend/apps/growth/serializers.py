@@ -311,7 +311,7 @@ class GrowthPublishItemSerializer(serializers.ModelSerializer):
         return str((obj.last_error or {}).get("code", ""))
 
     def get_recovery_action(self, obj: GrowthPublishItem) -> str:
-        return {
+        mapped = {
             "CONFIGURATION_REQUIRED": "完成官方平台配置后再发布。",
             "CONNECTOR_MODE_MISMATCH": "请选择与内容类型匹配的发布连接。",
             "PROVIDER_UNAVAILABLE": "平台暂时不可用，请稍后重试。",
@@ -323,7 +323,13 @@ class GrowthPublishItemSerializer(serializers.ModelSerializer):
             "PROVIDER_ERROR": "可重试该失败渠道。",
             "RATE_LIMITED": "平台繁忙，请稍后重试。",
             "TOKEN_EXPIRED": "请重新连接账号。",
+            "PUBLISH_FINALIZE_ERROR": "发布结果尚未确认，请稍后重试。",
         }.get(self.get_error_code(obj), "")
+        if mapped:
+            return mapped
+        if obj.status == GrowthPublishItem.Status.FAILED:
+            return "发布失败，请检查后重试。"
+        return ""
 
 
 class GrowthPublishBatchSerializer(serializers.ModelSerializer):

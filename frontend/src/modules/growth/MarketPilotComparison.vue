@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/vue-query"
 import { computed, ref } from "vue"
 
 import { createWatchMarket, growthQueryKeys, watchMarket, type MarketPilotSummary } from "./api"
+import TradeMarketEvidencePanel from "./TradeMarketEvidencePanel.vue"
 
 const props = defineProps<{ summary: MarketPilotSummary }>()
 const emit = defineEmits<{ selectMarket: [payload: { countryCode: string; countryName: string }] }>()
@@ -132,6 +133,7 @@ function regionLabel(value?: string): string {
       <p><strong>发现更多适合的海外市场。</strong> 海关强数据走许可交易数据/名单；混合获客使用贸易背景、企业目录/官网和公开招投标。</p>
       <p v-if="hasScoredMarkets">数据可获得性 25% · 需求强度 25% · 采购意图 20% · 企业可触达性 15% · 商业可执行性 15%</p>
     </div>
+    <TradeMarketEvidencePanel :markets="formalMarkets" />
     <form v-if="!formalMarkets.length" class="market-create-form" @submit.prevent="createUserMarket">
       <div>
         <h4>加入真实观察市场</h4>

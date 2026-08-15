@@ -372,6 +372,45 @@ export type MarketPilotSummary = {
   }
 }
 
+export type TradeIndicator = {
+  formula: string
+  value_usd?: string | null
+  value_percent?: string | null
+  value_days?: number | null
+  reason?: string
+  inputs: Record<string, unknown>
+}
+
+export type TradeIndicatorResponse = {
+  status: "NO_DATA" | "READY"
+  is_demo: boolean
+  scope_warning: string
+  indicators: Record<string, TradeIndicator>
+  evidence: Array<{
+    id: string
+    reporter_code: string
+    partner_code: string
+    hs_code: string
+    period: string
+    trade_value_usd: string
+    source_url: string
+    source_dataset: string
+    dataset_version: string
+    fetched_at: string
+    is_demo: boolean
+  }>
+}
+
+export type TradeSyncResponse = {
+  mode: "FIXTURE" | "OFFICIAL_PUBLIC"
+  is_demo: boolean
+  run_ids: string[]
+  snapshot_ids: string[]
+  created_snapshot_count: number
+  reused_snapshot_count: number
+  scope_warning: string
+}
+
 export type GrowthWorkspace = {
   target_accounts: TargetAccount[]
   contacts: Array<Record<string, unknown>>
@@ -601,6 +640,38 @@ export async function createWatchMarket(input: {
     },
   })
   if (!result) throw new Error("观察市场响应为空。")
+  return result
+}
+
+export async function loadTradeIndicators(input: {
+  countryCode: string
+  hsCodes: string[]
+  periods: string[]
+}): Promise<TradeIndicatorResponse> {
+  const query = new URLSearchParams({ country_code: input.countryCode })
+  input.hsCodes.forEach(value => query.append("hs_code", value))
+  input.periods.forEach(value => query.append("period", value))
+  const result = await apiRequest<TradeIndicatorResponse>(
+    `/api/v1/growth/trade-indicators?${query.toString()}`,
+  )
+  if (!result) throw new Error("公开贸易指标响应为空。")
+  return result
+}
+
+export async function syncPublicTradeData(input: {
+  countryCode: string
+  hsCodes: string[]
+  periods: string[]
+}): Promise<TradeSyncResponse> {
+  const result = await apiRequest<TradeSyncResponse>("/api/v1/growth/trade-syncs", {
+    method: "POST",
+    body: {
+      country_code: input.countryCode,
+      hs_codes: input.hsCodes,
+      periods: input.periods,
+    },
+  })
+  if (!result) throw new Error("公开贸易同步响应为空。")
   return result
 }
 

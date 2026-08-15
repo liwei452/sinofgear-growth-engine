@@ -7,6 +7,7 @@ import {
   createOpportunityDraft,
   growthQueryKeys,
   prepareCandidateEnrichment,
+  prepareWebsiteEnrichment,
   type CandidateEnrichmentPreview,
   type EnrichmentCandidate,
   type OutreachDraft,
@@ -34,6 +35,18 @@ const prepareMutation = useMutation({
   },
   onError: () => {
     actionError.value = "暂时无法准备公司资料，请刷新后重试。"
+  },
+})
+
+const websiteMutation = useMutation({
+  mutationFn: prepareWebsiteEnrichment,
+  onSuccess: async (preview) => {
+    previews.value = { ...previews.value, [preview.candidate_id]: preview }
+    actionError.value = ""
+    await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+  },
+  onError: () => {
+    actionError.value = "暂时无法读取官网，请确认这家公司有可访问的官网后重试。"
   },
 })
 
@@ -83,6 +96,12 @@ function prepare(candidateId: string): void {
   prepareMutation.mutate(candidateId)
 }
 
+function prepareWebsite(candidateId: string): void {
+  activeCandidateId.value = candidateId
+  actionError.value = ""
+  websiteMutation.mutate(candidateId)
+}
+
 function addToFollowUp(candidateId: string): void {
   activeCandidateId.value = candidateId
   actionError.value = ""
@@ -102,6 +121,9 @@ const factLabels: Record<string, string> = {
   country: "国家 / 地区",
   industry: "行业",
   website: "公司官网",
+  title: "官网标题",
+  gear_terms: "齿轮 / 传动相关词",
+  text_excerpt: "官网摘要",
 }
 </script>
 
@@ -166,6 +188,15 @@ const factLabels: Record<string, string> = {
         <p><strong>{{ allowDemo ? "尚未准备资料" : candidate.is_demo ? "资料理解服务尚未配置" : "待确认已导入事实" }}</strong> · {{ allowDemo ? "只会整理许可名单中的事实，不会编造联系人、邮箱或采购意向。" : candidate.is_demo ? "当前不会生成模拟公司事实；请上传真实资料或手工补充已核实信息。" : "系统只整理许可名单中已有字段，不联网核实，也不生成联系人或采购意向。" }}</p>
         <button v-if="allowDemo || !candidate.is_demo" class="button button-primary" type="button" :disabled="prepareMutation.isPending.value" @click="prepare(candidate.id)">
           {{ prepareMutation.isPending.value && activeCandidateId === candidate.id ? "正在准备…" : "准备公司资料" }}
+        </button>
+        <button
+          v-if="candidate.website"
+          class="button button-secondary"
+          type="button"
+          :disabled="websiteMutation.isPending.value"
+          @click="prepareWebsite(candidate.id)"
+        >
+          {{ websiteMutation.isPending.value && activeCandidateId === candidate.id ? "正在读官网…" : "读官网补全" }}
         </button>
         <div v-if="!allowDemo" class="enrichment-actions">
           <a class="button button-primary" href="/assets">上传真实资料</a>

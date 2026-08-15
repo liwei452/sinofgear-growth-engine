@@ -259,7 +259,7 @@ export type DiscoverySummary = {
 
 export type CandidateEnrichmentPreview = {
   candidate_id: string
-  mode: "FAKE_PREVIEW" | "IMPORTED_FACTS_REVIEW" | "OFFICIAL" | "VERIFIED_MANUAL"
+  mode: "FAKE_PREVIEW" | "IMPORTED_FACTS_REVIEW" | "OFFICIAL" | "VERIFIED_MANUAL" | "WEBSITE_PUBLIC"
   data_label: string
   facts: Array<{ field: string; value: string; source: string }>
   public_contact_paths: Array<{ label?: string; url?: string }>
@@ -589,6 +589,19 @@ export async function prepareCandidateEnrichment(
   if (!result) throw new Error("公司资料补全响应为空。")
   return result
 }
+
+
+export async function prepareWebsiteEnrichment(
+  candidateId: string,
+): Promise<CandidateEnrichmentPreview> {
+  const result = await apiRequest<CandidateEnrichmentPreview>(
+    `/api/v1/growth/enrichment/candidates/${candidateId}/website`,
+    { method: "POST", body: {} },
+  )
+  if (!result) throw new Error("官网补全响应为空。")
+  return result
+}
+
 
 export async function addCandidateToFollowUp(
   candidateId: string,

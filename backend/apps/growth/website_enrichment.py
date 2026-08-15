@@ -104,9 +104,9 @@ def prepare_website_enrichment(candidate, *, transport=None):
     )
     facts = extract_website_facts(html, candidate.website)
     public_contact_paths = (
-        [{"kind": "email", "value": email} for email in facts.emails]
-        + [{"kind": "phone", "value": phone} for phone in facts.phones]
-        + [{"kind": "link", "value": link} for link in facts.contact_links]
+        [{"label": email, "url": f"mailto:{email}"} for email in facts.emails]
+        + [{"label": phone} for phone in facts.phones]
+        + [{"label": link, "url": link} for link in facts.contact_links]
     )
     uncertainties = (
         []

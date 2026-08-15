@@ -62,6 +62,5 @@ def test_prepare_website_enrichment_persists_public_contacts():
 
     assert created is True
     assert snapshot.mode == "WEBSITE_PUBLIC"
-    assert any(path["kind"] == "email" and path["value"] == "sales@abc.example"
-               for path in snapshot.public_contact_paths)
+    assert any(path.get("url") == "mailto:sales@abc.example" for path in snapshot.public_contact_paths)
     assert snapshot.uncertainties == []

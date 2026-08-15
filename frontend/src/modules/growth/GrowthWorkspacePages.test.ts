@@ -44,6 +44,33 @@ it("keeps growth objects distinct and does not invent an opportunity for an empt
   expect(screen.queryByRole("button", { name: "查看证据" })).not.toBeInTheDocument()
 })
 
+it("shows missing evidence honestly and blocks outreach drafts for an observation account", async () => {
+  const workspace = {
+    target_accounts: [{
+      id: "account-no-signal", name: "Verified Directory Company", country: "Chile",
+      industry: "Industrial machinery", employee_range: "11-50", website: "",
+      is_demo: false, data_label: "Licensed / permitted source",
+    }],
+    contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [], outreach_drafts: [],
+    opportunity_reviews: [], crm_handoffs: [], reactivations: [], channel_packages: [],
+    publish_batches: [], metric_receipts: [], field_provenance: [], connectors: [],
+  }
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(workspace), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })))
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+  render(OpportunitiesPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  expect(await screen.findByRole("heading", { name: "Verified Directory Company" })).toBeInTheDocument()
+  expect(screen.getByText("尚未记录需求信号")).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "证据不足，不能生成草稿" })).toBeDisabled()
+  expect(screen.queryByText(/公开采购岗位/)).not.toBeInTheDocument()
+  expect(screen.queryByText(/91/)).not.toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "查看证据" }))
+  expect(screen.getByText("来源未记录")).toBeInTheDocument()
+})
+
 it("shows no channel success metrics until a result has actually been recorded", async () => {
   const workspace = {
     target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],

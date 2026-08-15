@@ -189,24 +189,25 @@ const followed = computed(() => Boolean(activeAccount.value && (
   locallyFollowed.value.has(activeAccount.value.id) ||
   workspaceQuery.data.value?.follow_ups.some((item) => item.account_id === activeAccount.value?.id)
 )))
+const canGenerateDraft = computed(() => Boolean(activeSignal.value))
 
 const detail = computed(() => ({
-  id: activeAccount.value?.id ?? "packtech-demo",
-  name: activeAccount.value?.name ?? "PackTech GmbH",
-  country: activeAccount.value?.country === "Germany" ? "德国" : activeAccount.value?.country ?? "德国",
-  industry: activeAccount.value?.industry ?? "包装机械",
-  size: activeAccount.value?.employee_range ?? "51–200",
+  id: activeAccount.value?.id ?? "",
+  name: activeAccount.value?.name ?? "",
+  country: activeAccount.value?.country === "Germany" ? "德国" : activeAccount.value?.country ?? "国家未记录",
+  industry: activeAccount.value?.industry ?? "行业未记录",
+  size: activeAccount.value?.employee_range ?? "规模未记录",
   label: activeAccount.value?.is_demo === false
     ? "许可 / 用户提供来源"
     : activeAccount.value?.data_label ?? "Demo / Fake",
-  confidence: activeSignal.value?.confidence ?? 91,
+  confidence: activeSignal.value?.confidence ?? "未评分",
   priority: activeSignal.value?.priority_label ?? "继续观察",
-  signal: activeSignal.value?.evidence_text ?? "公开采购岗位：精密传动采购；发现于 2026-08-14 09:20。",
-  source: activeSignal.value?.source_label ?? "公开招聘页与公司新闻页",
-  evidence: activeSignal.value?.evidence_text ?? "公开招聘页与公司新闻页 · 人工导入网页快照 · 内部演示许可。",
+  signal: activeSignal.value?.evidence_text ?? "尚未记录需求信号",
+  source: activeSignal.value?.source_label ?? "来源未记录",
+  evidence: activeSignal.value?.evidence_text ?? "尚无可审核的原始证据，请先补全并核实来源。",
   contact: activeContact.value
     ? `${String(activeContact.value.full_name)} · ${String(activeContact.value.role_title)}`
-    : "公司官网采购联系页；未抓取 LinkedIn，未保存个人邮箱。",
+    : "尚未记录公开联系路径",
 }))
 
 const followMutation = useMutation({
@@ -251,10 +252,7 @@ function selectAccount(accountId: string): void {
 
 async function generateDraft(): Promise<void> {
   actionError.value = ""
-  if (!activeAccount.value) {
-    draftOpen.value = true
-    return
-  }
+  if (!activeAccount.value || !activeSignal.value) return
   try {
     const draft = await draftMutation.mutateAsync(activeAccount.value.id)
     generatedDraftId.value = draft.id
@@ -384,7 +382,7 @@ async function handleImported(accountId: string): Promise<void> {
       </section>
       <div class="page-actions">
         <button class="button button-primary" type="button" :disabled="followed || followMutation.isPending.value" @click="addFollowUp">{{ followed ? "已加入跟进" : "加入跟进" }}</button>
-        <button class="button button-secondary" type="button" :disabled="draftMutation.isPending.value" @click="generateDraft">{{ draftMutation.isPending.value ? "正在生成…" : "生成联系草稿" }}</button>
+        <button class="button button-secondary" type="button" :disabled="!canGenerateDraft || draftMutation.isPending.value" @click="generateDraft">{{ !canGenerateDraft ? "证据不足，不能生成草稿" : draftMutation.isPending.value ? "正在生成…" : "生成联系草稿" }}</button>
         <button class="button button-secondary" type="button" @click="evidenceOpen = !evidenceOpen">查看证据</button>
       </div>
       <p v-if="actionError" role="alert" class="approval-status">{{ actionError }}</p>

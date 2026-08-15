@@ -108,15 +108,15 @@ def prepare_website_enrichment(candidate, *, transport=None):
     judgment = judge_candidate(candidate, website_facts=facts)
     buying_signals = detect_buying_signals(facts.text_excerpt)
     public_contact_paths = (
-        [{"label": email, "url": f"mailto:{email}"} for email in facts.emails]
-        + [{"label": phone} for phone in facts.phones]
-        + [{"label": link, "url": link} for link in facts.contact_links]
+        [{"label": email, "url": f"mailto:{email}", "verification_status": "UNVERIFIED"} for email in facts.emails]
+        + [{"label": phone, "verification_status": "PUBLIC_PATH"} for phone in facts.phones]
+        + [{"label": link, "url": link, "verification_status": "PUBLIC_PATH"} for link in facts.contact_links]
     )
-    uncertainties = (
-        []
-        if public_contact_paths
-        else ["官网已读取，但未发现公开邮箱或明显联系方式。"]
-    )
+    uncertainties = []
+    if not public_contact_paths:
+        uncertainties.append("官网已读取，但未发现公开邮箱或明显联系方式。")
+    elif facts.emails:
+        uncertainties.append("邮箱来自公开网页，尚未验证有效性。")
     defaults = {
         "mode": "WEBSITE_PUBLIC",
         "facts": [

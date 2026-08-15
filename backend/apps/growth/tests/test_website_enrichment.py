@@ -62,5 +62,6 @@ def test_prepare_website_enrichment_persists_public_contacts():
 
     assert created is True
     assert snapshot.mode == "WEBSITE_PUBLIC"
-    assert any(path.get("url") == "mailto:sales@abc.example" for path in snapshot.public_contact_paths)
-    assert snapshot.uncertainties == []
+    email_path = next(path for path in snapshot.public_contact_paths if path.get("url") == "mailto:sales@abc.example")
+    assert email_path["verification_status"] == "UNVERIFIED"
+    assert snapshot.uncertainties == ["邮箱来自公开网页，尚未验证有效性。"]

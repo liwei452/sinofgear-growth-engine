@@ -71,7 +71,7 @@ PLATFORM_VARIANT_V2_SCHEMA = {
         },
         "hashtags": {**STRING_LIST_SCHEMA, "maxItems": MAX_HASHTAGS},
         "evidence_fact_ids": {
-            **STRING_LIST_SCHEMA, "maxItems": MAX_EVIDENCE_FACT_IDS,
+            **STRING_LIST_SCHEMA, "minItems": 1, "maxItems": MAX_EVIDENCE_FACT_IDS,
         },
     },
 }
@@ -125,7 +125,7 @@ CONTENT_OUTPUT_SCHEMA_V2 = {
             **STRING_LIST_SCHEMA, "maxItems": MAX_CONCEPT_CODES,
         },
         "evidence_fact_ids": {
-            **STRING_LIST_SCHEMA, "maxItems": MAX_EVIDENCE_FACT_IDS,
+            **STRING_LIST_SCHEMA, "minItems": 1, "maxItems": MAX_EVIDENCE_FACT_IDS,
         },
         "internal_translation_zh": {"type": "string", "minLength": 1, "maxLength": 50_000},
         "platform_variants": {
@@ -294,8 +294,13 @@ def validate_generated_content_output(payload, snapshot):
         str(row.get("fact_id")) for row in snapshot.get("verified_product_facts", [])
         if row.get("fact_id")
     }
+    if not cleaned["evidence_fact_ids"]:
+        raise ValueError("Generated evidence references must contain at least one fact.")
     if not set(cleaned["evidence_fact_ids"]) <= allowed_facts:
         raise ValueError("Generated evidence references contain an unknown fact.")
+    expected_landing_page = snapshot.get("landing_page_url")
+    if cleaned["landing_page_url"] != expected_landing_page:
+        raise ValueError("Generated landing page does not match the frozen brief.")
     allowed_concepts = {
         str(row.get("code"))
         for row in snapshot.get("ontology_snapshot", {}).get("concept_versions", [])
@@ -309,6 +314,8 @@ def validate_generated_content_output(payload, snapshot):
             raise ValueError("Generated platform language does not match the brief language.")
         if variant["evidence_fact_ids"] != cleaned["evidence_fact_ids"]:
             raise ValueError("Generated platform evidence must inherit the master evidence.")
+        if variant["landing_page_url"] != expected_landing_page:
+            raise ValueError("Generated platform landing page does not match the frozen brief.")
         normalized_body = variant["body"].casefold()
         if normalized_body in bodies:
             raise ValueError("Generated platform variants must contain adapted platform copy.")

@@ -129,9 +129,9 @@ def test_seed_phase_a_is_stable_idempotent_and_repairs_owned_drift():
         status=PromptVersion.Status.PUBLISHED,
     ).exists()
     current_content_prompt = PromptVersion.objects.get(
-        purpose="CONTENT_GENERATE", version=2,
+        purpose="CONTENT_GENERATE", version=3,
     )
-    assert current_content_prompt.code == "evidence-multichannel-v2"
+    assert current_content_prompt.code == "evidence-multichannel-v3"
     assert current_content_prompt.status == PromptVersion.Status.PUBLISHED
     assert current_content_prompt.output_schema == CONTENT_OUTPUT_SCHEMA_V2
     assert PromptVersion.objects.filter(

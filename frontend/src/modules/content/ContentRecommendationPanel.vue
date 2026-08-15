@@ -112,7 +112,9 @@ onBeforeUnmount(() => {
         type="button"
         :disabled="busy"
         @click="recommend"
-      >{{ busy && !recommendation ? "AI 正在分析…" : "让 AI 推荐推广方向" }}</button>
+      >
+        {{ busy && !recommendation ? "AI 正在分析…" : "让 AI 推荐推广方向" }}
+      </button>
     </div>
     <p v-if="providerLabel" class="provider-label">{{ providerLabel }}</p>
     <p v-if="error" role="alert" class="form-alert">{{ error }}</p>

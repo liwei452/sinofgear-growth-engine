@@ -248,7 +248,7 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   await page.getByRole("button", { name: "查看AI生成记录" }).click()
   const audit = page.locator(".audit-panel")
   await expect(audit.getByText("SUCCEEDED", { exact: true })).toBeVisible()
-  await expect(audit.getByText(/evidence-multichannel-v2/)).toBeVisible()
+  await expect(audit.getByText(/evidence-multichannel-v3/)).toBeVisible()
   await expect(audit.getByText("HELICAL_GEAR", { exact: true })).toBeVisible()
   await expect(audit.getByText("GRINDING", { exact: true })).toBeVisible()
   await expect(audit.getByText("DIN", { exact: true })).toBeVisible()

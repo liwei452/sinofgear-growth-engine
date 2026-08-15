@@ -6,6 +6,7 @@ from apps.content import payloads
 def _snapshot():
     return {
         "language": "id",
+        "landing_page_url": "https://example.com/id/gears",
         "target_platforms": [
             {"code": "LINKEDIN"},
             {"code": "FACEBOOK"},
@@ -83,7 +84,11 @@ def test_version_two_payload_accepts_one_language_and_exact_platform_variants():
     [
         (lambda output: output["platform_variants"][0].update(language="en"), "language"),
         (lambda output: output["platform_variants"].pop(), "platform"),
+        (lambda output: output["evidence_fact_ids"].clear(), "evidence"),
         (lambda output: output["evidence_fact_ids"].append("unknown"), "evidence"),
+        (lambda output: output["platform_variants"][0]["evidence_fact_ids"].clear(), "evidence"),
+        (lambda output: output.update(landing_page_url="https://evil.example/redirect"), "landing"),
+        (lambda output: output["platform_variants"][0].update(landing_page_url="https://evil.example/redirect"), "landing"),
         (lambda output: output["platform_variants"][3].update(duration_seconds=61), "payload"),
         (lambda output: output["platform_variants"][3].update(shot_list=[]), "payload"),
     ],
@@ -104,3 +109,8 @@ def test_platform_payload_never_contains_internal_chinese_reference():
     assert platform["language"] == "id"
     assert "internal_translation_zh" not in platform
     assert platform["voiceover_language"] == platform["subtitle_language"] == "id"
+
+
+def test_version_two_schema_requires_evidence_for_master_and_platforms():
+    assert payloads.CONTENT_OUTPUT_SCHEMA_V2["properties"]["evidence_fact_ids"]["minItems"] == 1
+    assert payloads.PLATFORM_VARIANT_V2_SCHEMA["properties"]["evidence_fact_ids"]["minItems"] == 1

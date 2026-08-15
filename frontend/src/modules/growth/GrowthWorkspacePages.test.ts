@@ -926,7 +926,13 @@ it("shows safe channel connection states and starts authorization without publis
     ],
     channel_packages: channels.map((channel, index) => ({
       id: `20000000-0000-4000-8000-00000000120${index + 1}`,
-      account_id: null, channel, payload: { title: `${channel} package` },
+      account_id: null, channel, payload: channel === "TIKTOK" ? {
+        title: "TIKTOK package", duration_seconds: 30, aspect_ratio: "9:16",
+        script: "Verified TikTok script", shot_list: ["Gear inspection close-up", "Measurement result"],
+        english_voiceover: "Verified English voiceover", chinese_subtitles: "已核对中文字幕",
+        hashtags: ["#customgear", "#manufacturing"], cta: "View verified capabilities",
+        utm: "utm_source=tiktok&utm_medium=organic&utm_campaign=verified-package",
+      } : { title: `${channel} package` },
       status: "APPROVED", is_demo: channel === "FACEBOOK",
       data_label: channel === "FACEBOOK" ? "Demo / Fake" : "Reviewed content package",
       delivery: "MANUAL_ONLY", created_at: "2026-08-14T08:00:00Z", updated_at: "2026-08-14T08:00:00Z",
@@ -966,6 +972,14 @@ it("shows safe channel connection states and starts authorization without publis
   expect(instagram).toHaveTextContent("发布方式：手工发布包 · 不会调用平台")
   expect(tiktok).toHaveTextContent("需要重新授权")
   expect(tiktok).toHaveTextContent("发布方式：手工发布包 · 不会调用平台")
+  expect(tiktok).toHaveTextContent("Verified TikTok script")
+  expect(tiktok).toHaveTextContent("Gear inspection close-up · Measurement result")
+  expect(tiktok).toHaveTextContent("Verified English voiceover")
+  expect(tiktok).toHaveTextContent("已核对中文字幕")
+  expect(tiktok).toHaveTextContent("#customgear #manufacturing")
+  expect(tiktok).toHaveTextContent("View verified capabilities")
+  expect(tiktok).toHaveTextContent("utm_campaign=verified-package")
+  expect(tiktok).not.toHaveTextContent("痛点 4 秒")
   expect(screen.getByText("混合发布方式 · 以各渠道状态为准")).toBeInTheDocument()
   expect(screen.queryByText("Fake Connector · 一键发布演示")).not.toBeInTheDocument()
   expect(screen.getByText("当前路径：官方连接 1 个 · Demo 演示 1 个 · 手工发布包 2 个")).toBeInTheDocument()

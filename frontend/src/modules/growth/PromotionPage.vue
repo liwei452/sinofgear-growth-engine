@@ -68,6 +68,44 @@ const connectionSessionQuery = useQuery({
 })
 const activePackage = computed(() => packageFor("TIKTOK"))
 const packageTitle = computed(() => String(activePackage.value?.payload.title ?? ""))
+function payloadText(channelPackage: ChannelPackage | undefined, field: string, maxLength = 2_000): string {
+  const value = channelPackage?.payload[field]
+  return typeof value === "string" ? value.trim().slice(0, maxLength) : ""
+}
+function payloadList(channelPackage: ChannelPackage | undefined, field: string): string[] {
+  const value = channelPackage?.payload[field]
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 50).flatMap(item => (
+    typeof item === "string" && item.trim() ? [item.trim().slice(0, 500)] : []
+  ))
+}
+const tiktokFormatLabel = computed(() => {
+  if (!activePackage.value) return "30 秒 · 9:16"
+  const duration = activePackage.value.payload.duration_seconds
+  const aspectRatio = payloadText(activePackage.value, "aspect_ratio", 16)
+  return `${typeof duration === "number" ? `${duration} 秒` : "时长待补全"} · ${aspectRatio || "画幅待补全"}`
+})
+const tiktokScript = computed(() => activePackage.value
+  ? payloadText(activePackage.value, "script") || "待补全"
+  : "15–60 秒结构：痛点 4 秒 → 检测过程 18 秒 → 证据与 CTA 8 秒")
+const tiktokShots = computed(() => activePackage.value
+  ? payloadList(activePackage.value, "shot_list").join(" · ") || "待补全"
+  : "1. 齿面特写 2. 测量仪读数 3. 检测报告 4. 包装线应用")
+const tiktokVoiceover = computed(() => activePackage.value
+  ? payloadText(activePackage.value, "english_voiceover") || "待补全"
+  : "英文口播，术语由人工核对")
+const tiktokSubtitles = computed(() => activePackage.value
+  ? payloadText(activePackage.value, "chinese_subtitles") || "待补全"
+  : "完整中文字幕，术语由人工核对")
+const tiktokHashtags = computed(() => activePackage.value
+  ? payloadList(activePackage.value, "hashtags").join(" ") || "待补全"
+  : "待人工补充")
+const tiktokCta = computed(() => activePackage.value
+  ? payloadText(activePackage.value, "cta") || "待补全"
+  : "查看检测能力摘要")
+const tiktokUtm = computed(() => activePackage.value
+  ? payloadText(activePackage.value, "utm") || "待补全"
+  : "tiktok / organic / din6-proof-demo")
 function packageFor(channel: string): ChannelPackage | undefined {
   return [...(workspaceQuery.data.value?.channel_packages ?? [])]
     .filter(item => item.channel === channel)
@@ -600,13 +638,14 @@ const channels: Array<{
           </div>
           <p class="publishing-route">{{ publishingRouteLabel('TIKTOK') }}</p>
           <p v-if="packageTitle" class="package-source">{{ packageTitle }}</p>
-          <p class="package-lead">30 秒 · 9:16 · 手工发布包 · {{ modeLabel('TIKTOK') }}</p>
+          <p class="package-lead">{{ tiktokFormatLabel }} · 手工发布包 · {{ modeLabel('TIKTOK') }}</p>
           <dl>
-            <div><dt>脚本</dt><dd>15–60 秒结构：痛点 4 秒 → 检测过程 18 秒 → 证据与 CTA 8 秒</dd></div>
-            <div><dt>分镜</dt><dd>1. 齿面特写 2. 测量仪读数 3. 检测报告 4. 包装线应用</dd></div>
-            <div><dt>声音</dt><dd>英文口播 + 完整中文字幕，术语由人工核对</dd></div>
-            <div><dt>发布信息</dt><dd>标题 / 标签 / CTA：查看检测能力摘要</dd></div>
-            <div><dt>归因</dt><dd>UTM：tiktok / organic / din6-proof-demo</dd></div>
+            <div><dt>脚本</dt><dd>{{ tiktokScript }}</dd></div>
+            <div><dt>分镜</dt><dd>{{ tiktokShots }}</dd></div>
+            <div><dt>英文口播</dt><dd>{{ tiktokVoiceover }}</dd></div>
+            <div><dt>中文字幕</dt><dd>{{ tiktokSubtitles }}</dd></div>
+            <div><dt>标题 / 标签 / CTA</dt><dd>{{ packageTitle || "待补全" }} · {{ tiktokHashtags }} · {{ tiktokCta }}</dd></div>
+            <div><dt>归因</dt><dd>UTM：{{ tiktokUtm }}</dd></div>
             <div><dt>回填</dt><dd>发布结果、播放、完播、点击、回复、询盘可手工录入</dd></div>
           </dl>
           <details v-if="packageFactEvidence(activePackage).length" class="package-evidence"><summary>查看已验证事实依据</summary><article v-for="fact in packageFactEvidence(activePackage)" :key="fact.id"><strong>{{ fact.fieldName }}：{{ fact.value }}</strong><p>{{ fact.sourceFilename }}<template v-if="fact.sourcePage"> · 第 {{ fact.sourcePage }} 页</template><template v-if="fact.isDemo"> · Demo/Fake</template></p><blockquote>{{ fact.sourceExcerpt }}</blockquote></article></details>

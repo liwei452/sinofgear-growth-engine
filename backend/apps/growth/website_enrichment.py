@@ -11,6 +11,7 @@ from django.utils import timezone
 from django.utils.module_loading import import_string
 
 from .market_pilots import matched_gear_terms
+from .lead_judgment import judge_candidate
 
 
 WEBSITE_TIMEOUT_SECONDS = 15
@@ -103,6 +104,7 @@ def prepare_website_enrichment(candidate, *, transport=None):
         max_bytes=WEBSITE_MAX_BYTES,
     )
     facts = extract_website_facts(html, candidate.website)
+    judgment = judge_candidate(candidate, website_facts=facts)
     public_contact_paths = (
         [{"label": email, "url": f"mailto:{email}"} for email in facts.emails]
         + [{"label": phone} for phone in facts.phones]
@@ -119,6 +121,7 @@ def prepare_website_enrichment(candidate, *, transport=None):
             {"field": "title", "value": facts.title, "source": "公司官网"},
             {"field": "gear_terms", "value": list(facts.gear_terms), "source": "公司官网"},
             {"field": "text_excerpt", "value": facts.text_excerpt, "source": "公司官网"},
+            {"field": "ai_judgment", "value": judgment["reason"], "source": "AI 判断"},
         ],
         "public_contact_paths": public_contact_paths,
         "uncertainties": uncertainties,
@@ -142,6 +145,12 @@ def prepare_website_enrichment(candidate, *, transport=None):
         for field, value in defaults.items():
             setattr(snapshot, field, value)
         snapshot.save(update_fields=[*defaults.keys(), "updated_at"])
+    breakdown = dict(candidate.score_breakdown or {})
+    breakdown["ai"] = judgment
+    candidate.score = judgment["score"]
+    candidate.grade = judgment["grade"]
+    candidate.score_breakdown = breakdown
+    candidate.save(update_fields=["score", "grade", "score_breakdown", "updated_at"])
     return snapshot, created
 
 

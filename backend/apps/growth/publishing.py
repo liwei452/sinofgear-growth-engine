@@ -9,6 +9,7 @@ from apps.platforms.models import SocialAccount
 from integrations.platforms.base import ConnectorConfigurationRequired, OfficialPublishRequest
 from integrations.platforms.manual_fake import simulate_publish
 from integrations.platforms.registry import ConnectorRegistry
+from integrations.platforms.runtime import get_social_provider_runtime
 
 from .models import ChannelPackage, GrowthPublishBatch, GrowthPublishItem
 
@@ -61,7 +62,7 @@ def _account_for_package(package: ChannelPackage):
 
 
 def get_connector_registry() -> ConnectorRegistry:
-    return ConnectorRegistry()
+    return get_social_provider_runtime().connector_registry
 
 
 def _preflight_error(account: SocialAccount, package: ChannelPackage) -> dict | None:

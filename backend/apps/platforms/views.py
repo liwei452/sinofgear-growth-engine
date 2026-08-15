@@ -13,9 +13,9 @@ from integrations.platforms.authorization import (
     AuthorizationCompletion,
     ProviderAuthorizationError,
 )
-from integrations.platforms.authorization_registry import AuthorizationAdapterRegistry
 from integrations.platforms.base import ConnectorConfigurationRequired
-from integrations.platforms.token_store import DisabledTokenStore, TokenStoreContext
+from integrations.platforms.runtime import get_social_provider_runtime
+from integrations.platforms.token_store import TokenStoreContext
 
 from .models import AccountConnectionSession, ConnectorCredential, Platform, SocialAccount
 from .connection_status import connection_summary
@@ -45,8 +45,9 @@ from .serializers import (
 )
 
 
-authorization_registry = AuthorizationAdapterRegistry()
-connection_token_store = DisabledTokenStore()
+_social_runtime = get_social_provider_runtime()
+authorization_registry = _social_runtime.authorization_registry
+connection_token_store = _social_runtime.token_store
 
 
 def _account(organization, account_id):

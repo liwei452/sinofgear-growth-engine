@@ -69,3 +69,5 @@ const emit = defineEmits<{
     </div>
   </section>
 </template>
+
+<style scoped src="./growth-pages.css"></style>

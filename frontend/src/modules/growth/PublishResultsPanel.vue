@@ -80,3 +80,5 @@ function formatResultTime(value: string): string {
     </button>
   </section>
 </template>
+
+<style scoped src="./growth-pages.css"></style>

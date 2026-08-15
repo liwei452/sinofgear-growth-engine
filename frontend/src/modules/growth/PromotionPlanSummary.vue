@@ -14,3 +14,5 @@ defineProps<{
     <div><span>审核边界</span><strong>所有内容人工批准后导出</strong></div>
   </section>
 </template>
+
+<style scoped src="./growth-pages.css"></style>

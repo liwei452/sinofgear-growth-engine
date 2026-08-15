@@ -53,7 +53,12 @@ from .maps_discovery import (
     run_maps_discovery,
 )
 from .website_enrichment import build_website_transport, prepare_website_enrichment
-from .promotion_plan import generate_promotion_plan
+from .promotion_plan import (
+    approve_promotion_plan,
+    clear_promotion_plan_approval,
+    generate_promotion_plan,
+    promotion_plan_status,
+)
 from .manual_imports import import_manual_opportunity
 from .market_pilots import market_pilot_summary, market_profiles_for
 from .serializers import (
@@ -322,7 +327,34 @@ class GrowthWorkspaceView(APIView):
                 profiles=market_profiles_for(organization),
             ),
             "promotion_plan": generate_promotion_plan(organization),
+            "promotion_plan_approval": promotion_plan_status(organization),
         }
+
+
+class PromotionPlanApproveView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=None,
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    def post(self, request):
+        approve_promotion_plan(organization=request.organization, actor=request.user)
+        return Response(promotion_plan_status(request.organization))
+
+
+class PromotionPlanRegenerateView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=None,
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    def post(self, request):
+        clear_promotion_plan_approval(organization=request.organization)
+        return Response(promotion_plan_status(request.organization))
 
 
 class DiscoveryRunView(APIView):

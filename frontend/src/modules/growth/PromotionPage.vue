@@ -5,6 +5,7 @@ import { computed, nextTick, ref, watchEffect } from "vue"
 import {
   approveChannelPackage,
   approveAllChannelPackages,
+  approvePromotionPlan,
   authorizePlatformConnection,
   confirmPlatformConnection,
   createPublishBatch,
@@ -14,6 +15,7 @@ import {
   growthQueryKeys,
   growthWorkspaceQueryOptions,
   getPlatformConnectionSession,
+  regeneratePromotionPlan,
   retryFailedPublishBatch,
   type ChannelPackage,
   type ManualPackageExport,
@@ -33,7 +35,18 @@ import { packageFactEvidence, payloadList, payloadShots, payloadText } from "./p
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
 async function regeneratePlan(): Promise<void> {
-  await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+  try {
+    await regeneratePromotionPlan()
+  } finally {
+    await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+  }
+}
+async function approvePlan(): Promise<void> {
+  try {
+    await approvePromotionPlan()
+  } finally {
+    await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+  }
 }
 const locallyApprovedIds = ref(new Set<string>())
 const approvalError = ref("")
@@ -553,6 +566,8 @@ const socialChannelStatuses = computed<SocialChannelStatus[]>(() => socialChanne
 
     <PromotionPlanSummary
       :plan="workspaceQuery.data.value?.promotion_plan"
+      :approved="workspaceQuery.data.value?.promotion_plan_approval?.approved"
+      @approve="approvePlan"
       @regenerate="regeneratePlan"
     />
 

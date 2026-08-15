@@ -431,6 +431,7 @@ export type GrowthWorkspace = {
   discovery?: DiscoverySummary
   market_pilots?: MarketPilotSummary
   promotion_plan?: PromotionPlan
+  promotion_plan_approval?: PromotionPlanApproval
 }
 
 export type PromotionPlan = {
@@ -440,6 +441,12 @@ export type PromotionPlan = {
   content_themes: string[]
   channels: string[]
   summary: string
+}
+
+export type PromotionPlanApproval = {
+  approved: boolean
+  approved_at: string | null
+  version: number
 }
 
 export type DraftActionResponse = {
@@ -927,5 +934,23 @@ export async function verifyCompanyFact(factId: string): Promise<{
     `/api/v1/growth/company-facts/${factId}/verify`, { method: "POST", body: {} },
   )
   if (!result) throw new Error("公司事实确认响应为空。")
+  return result
+}
+
+export async function approvePromotionPlan(): Promise<PromotionPlanApproval> {
+  const result = await apiRequest<PromotionPlanApproval>(
+    "/api/v1/growth/promotion-plan/approve",
+    { method: "POST", body: {} },
+  )
+  if (!result) throw new Error("确认推广计划失败。")
+  return result
+}
+
+export async function regeneratePromotionPlan(): Promise<PromotionPlanApproval> {
+  const result = await apiRequest<PromotionPlanApproval>(
+    "/api/v1/growth/promotion-plan/regenerate",
+    { method: "POST", body: {} },
+  )
+  if (!result) throw new Error("重新生成推广计划失败。")
   return result
 }

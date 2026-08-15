@@ -1,8 +1,14 @@
 import pytest
+from django.contrib.auth import get_user_model
 from django.utils import timezone
 
 from apps.growth.models import MarketCountryProfile
-from apps.growth.promotion_plan import generate_promotion_plan
+from apps.growth.promotion_plan import (
+    approve_promotion_plan,
+    clear_promotion_plan_approval,
+    generate_promotion_plan,
+    promotion_plan_status,
+)
 from apps.identity.models import Organization
 
 
@@ -34,3 +40,17 @@ def test_deterministic_plan_is_built_from_active_market(organization):
     assert set(plan["channels"]) == {"LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"}
     assert plan["period_weeks"] == 8
     assert plan["content_themes"]
+
+
+def test_plan_approval_persists_and_can_be_cleared(organization):
+    user = get_user_model().objects.create_user(username="plan-approver", password="pw")
+    assert promotion_plan_status(organization)["approved"] is False
+
+    approval = approve_promotion_plan(organization=organization, actor=user)
+
+    assert promotion_plan_status(organization)["approved"] is True
+    assert approval.plan_snapshot
+    assert approval.version == 1
+
+    clear_promotion_plan_approval(organization=organization)
+    assert promotion_plan_status(organization)["approved"] is False

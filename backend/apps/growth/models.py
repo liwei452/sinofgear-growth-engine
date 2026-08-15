@@ -683,3 +683,24 @@ class GoogleMapsDiscoveryConfig(OrganizationOwnedModel):
 
     def delete(self, *args, **kwargs):
         raise ValueError("Google Maps discovery config cannot be deleted.")
+
+
+class PromotionPlanApproval(OrganizationOwnedModel):
+    organization = models.OneToOneField(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name="promotion_plan_approval",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="growth_promotion_plan_approvals",
+    )
+    plan_snapshot = models.JSONField(default=dict)
+    version = models.PositiveSmallIntegerField(default=0)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Promotion plan approval history cannot be deleted.")

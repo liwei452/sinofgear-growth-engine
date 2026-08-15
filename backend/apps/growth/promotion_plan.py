@@ -1,10 +1,12 @@
 import json
 
 from django.conf import settings
+from django.db import transaction
+from django.utils import timezone
 
 from integrations.ai.providers import provider_registry
 
-from .models import MarketCountryProfile
+from .models import MarketCountryProfile, PromotionPlanApproval
 
 
 PUBLISH_CHANNELS = ("LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK")
@@ -140,3 +142,34 @@ def _verified_facts(organization):
         organization=organization,
         review_status=ProductEvidenceFact.ReviewStatus.VERIFIED,
     ).order_by("created_at")
+
+
+@transaction.atomic
+def approve_promotion_plan(*, organization, actor) -> PromotionPlanApproval:
+    plan = generate_promotion_plan(organization)
+    approval, _ = PromotionPlanApproval.objects.get_or_create(organization=organization)
+    approval.approved_at = timezone.now()
+    approval.approved_by = actor
+    approval.plan_snapshot = plan
+    approval.version += 1
+    approval.save(update_fields=[
+        "approved_at", "approved_by", "plan_snapshot", "version", "updated_at",
+    ])
+    return approval
+
+
+@transaction.atomic
+def clear_promotion_plan_approval(*, organization) -> None:
+    PromotionPlanApproval.objects.filter(organization=organization).update(
+        approved_at=None,
+        approved_by=None,
+    )
+
+
+def promotion_plan_status(organization) -> dict:
+    approval = PromotionPlanApproval.objects.filter(organization=organization).first()
+    return {
+        "approved": bool(approval and approval.approved_at),
+        "approved_at": approval.approved_at if approval else None,
+        "version": approval.version if approval else 0,
+    }

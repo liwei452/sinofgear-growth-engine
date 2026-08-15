@@ -28,6 +28,8 @@ from .views import (
     PublishBatchCreateView,
     PublishBatchDetailView,
     PublishBatchRetryFailedView,
+    PromotionPlanApproveView,
+    PromotionPlanRegenerateView,
     ReactivationApproveView,
     ReactivationCreateView,
     ReactivationDraftView,
@@ -55,6 +57,16 @@ urlpatterns = [
         name="growth-reactivation-approve",
     ),
     path("growth/discovery/run", DiscoveryRunView.as_view(), name="growth-discovery-run"),
+    path(
+        "growth/promotion-plan/approve",
+        PromotionPlanApproveView.as_view(),
+        name="growth-promotion-plan-approve",
+    ),
+    path(
+        "growth/promotion-plan/regenerate",
+        PromotionPlanRegenerateView.as_view(),
+        name="growth-promotion-plan-regenerate",
+    ),
     path(
         "growth/maps-discovery/config",
         GoogleMapsDiscoveryConfigView.as_view(),

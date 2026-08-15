@@ -221,16 +221,33 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
     .toHaveAttribute("href", "https://example.invalid/demo-evidence/1001")
   await expect(page.getByRole("heading", { name: "跟进记录" })).toBeVisible()
   await expect(page.getByText("从未发送")).toBeVisible()
+  await expect(page.getByText("AI 建议：优先跟进")).toBeVisible()
+  const reviewResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith("/review")
+      && response.request().method() === "POST",
+  )
+  await page.getByRole("button", { name: "确认优先跟进" }).click()
+  expect((await reviewResponse).status()).toBe(201)
+  await expect(page.getByText("人工判断：优先跟进")).toBeVisible()
   const opportunityDraftResponse = page.waitForResponse(response =>
     new URL(response.url()).pathname.endsWith("/draft") && response.request().method() === "POST",
   )
   await page.getByRole("button", { name: "生成联系草稿" }).click()
   expect((await opportunityDraftResponse).status()).toBe(201)
   await expect(page.getByText(/Hello PackTech GmbH team/)).toBeVisible()
+  const handoffResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith("/crm-handoff")
+      && response.request().method() === "POST",
+  )
+  await page.getByRole("button", { name: "确认草稿并交给 Mock CRM" }).click()
+  expect((await handoffResponse).status()).toBe(201)
+  await expect(page.getByRole("status")).toContainText("已保存到 Mock CRM，未发送任何消息")
   await page.reload()
   await expect(page.getByRole("button", { name: "已加入跟进" })).toBeDisabled()
   await expect(page.getByRole("heading", { name: "跟进记录" })).toBeVisible()
   await expect(page.getByText("从未发送")).toBeVisible()
+  await expect(page.getByText("人工判断：优先跟进")).toBeVisible()
+  await expect(page.getByRole("status")).toContainText("已保存到 Mock CRM，未发送任何消息")
 
   await page.goto("/company")
   await expect(page.getByRole("heading", { name: "我的公司" })).toBeVisible()

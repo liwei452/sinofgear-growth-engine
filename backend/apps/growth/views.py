@@ -19,7 +19,9 @@ from .models import (
     InboundLead,
     IntentSignal,
     MetricReceipt,
+    OpportunityReview,
     OutreachDraft,
+    CRMHandoff,
     TargetAccount,
 )
 from .manual_imports import import_manual_opportunity
@@ -40,7 +42,11 @@ from .serializers import (
     ManualOpportunityImportResponseSerializer,
     ManualOpportunityImportSerializer,
     MetricReceiptSerializer,
+    OpportunityReviewCreateSerializer,
+    OpportunityReviewSerializer,
     OutreachDraftSerializer,
+    CRMHandoffCreateSerializer,
+    CRMHandoffSerializer,
     PublishBatchCreateSerializer,
     TargetAccountSerializer,
 )
@@ -52,11 +58,14 @@ from .publishing import (
 )
 from .services import (
     PackageReviewRequired,
+    OpportunityHandoffBlocked,
     add_to_follow_up,
     approve_channel_package,
     create_outreach_draft,
+    create_mock_crm_handoff,
     export_manual_channel_package,
     verify_company_fact,
+    record_opportunity_review,
 )
 
 
@@ -141,6 +150,12 @@ class GrowthWorkspaceView(APIView):
             "follow_ups": FollowUpSerializer(FollowUp.objects.filter(organization=organization), many=True).data,
             "outreach_drafts": OutreachDraftSerializer(
                 OutreachDraft.objects.filter(organization=organization).order_by("-created_at", "-id"), many=True,
+            ).data,
+            "opportunity_reviews": OpportunityReviewSerializer(
+                OpportunityReview.objects.filter(organization=organization), many=True,
+            ).data,
+            "crm_handoffs": CRMHandoffSerializer(
+                CRMHandoff.objects.filter(organization=organization), many=True,
             ).data,
             "channel_packages": ChannelPackageSerializer(
                 ChannelPackage.objects.filter(organization=organization).order_by("channel", "id"), many=True,
@@ -273,6 +288,63 @@ class OutreachDraftView(APIView):
             "Chinese explanation": draft.chinese_explanation,
             "delivery": "NEVER_SENT",
         }, status=201)
+
+
+class OpportunityReviewView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=OpportunityReviewCreateSerializer,
+        responses={201: OpportunityReviewSerializer},
+    )
+    def post(self, request, account_id):
+        account = get_object_or_404(
+            TargetAccount, id=account_id, organization=request.organization,
+        )
+        serializer = OpportunityReviewCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            review = record_opportunity_review(
+                account=account,
+                reviewer=request.user,
+                decision=serializer.validated_data["decision"],
+            )
+        except OpportunityHandoffBlocked as error:
+            return Response({"message": str(error)}, status=409)
+        return Response(OpportunityReviewSerializer(review).data, status=201)
+
+
+class CRMHandoffView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=CRMHandoffCreateSerializer,
+        responses={200: CRMHandoffSerializer, 201: CRMHandoffSerializer},
+    )
+    def post(self, request, account_id):
+        account = get_object_or_404(
+            TargetAccount, id=account_id, organization=request.organization,
+        )
+        serializer = CRMHandoffCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        draft = get_object_or_404(
+            OutreachDraft,
+            id=serializer.validated_data["draft_id"],
+            account=account,
+            organization=request.organization,
+        )
+        try:
+            handoff, created = create_mock_crm_handoff(
+                account=account, draft=draft, reviewer=request.user,
+            )
+        except OpportunityHandoffBlocked as error:
+            return Response({"message": str(error)}, status=409)
+        return Response(
+            CRMHandoffSerializer(handoff).data,
+            status=201 if created else 200,
+        )
 
 
 class ChannelPackageApproveView(APIView):

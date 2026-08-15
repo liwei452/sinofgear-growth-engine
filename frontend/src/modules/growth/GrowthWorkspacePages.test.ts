@@ -499,6 +499,89 @@ it("keeps legacy opportunity evidence usable when score details are missing", as
   expect(screen.getByText("暂未记录不确定项，仍需人工复核原始来源。")).toBeInTheDocument()
 })
 
+it("records plain-language human review before an optional Mock CRM handoff", async () => {
+  document.cookie = "csrftoken=opportunity-review-test-token"
+  const accountId = "10000000-0000-4000-8000-000000009001"
+  const workspace = {
+    target_accounts: [{
+      id: accountId, name: "Jakarta Drive Systems", country: "Indonesia",
+      industry: "Industrial equipment", employee_range: "51-200", website: "",
+      is_demo: false, data_label: "Licensed / permitted source",
+    }],
+    contacts: [],
+    intent_signals: [{
+      id: "signal-review", account_id: accountId, signal_type: "PROCUREMENT_NOTICE",
+      source_label: "Official tender", source_url: "https://example.invalid/tender/1",
+      evidence_text: "Tender requests custom helical gear components.", confidence: 82,
+      observed_at: "2026-08-15T09:00:00Z", data_label: "Licensed / permitted source",
+      collection_method: "OFFICIAL_PUBLIC_API", collection_method_label: "官方公开数据接口",
+      content_hash: "a".repeat(64), scoring_rule_version: "opportunity-v1",
+      score_breakdown: {
+        icp_fit: 20, intent_strength: 23, recency: 14,
+        role_relevance: 10, evidence_coverage: 17, risk_penalty: 2,
+      },
+      uncertainty_notes: ["采购数量仍需确认"], priority_label: "优先跟进",
+    }],
+    inbound_leads: [], follow_ups: [], outreach_drafts: [], opportunity_reviews: [],
+    crm_handoffs: [], channel_packages: [], publish_batches: [], metric_receipts: [],
+    field_provenance: [], connectors: [],
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === "/api/v1/growth/workspace") {
+      return new Response(JSON.stringify(workspace), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path.endsWith("/review")) {
+      const review = {
+        id: "review-1", account_id: accountId, signal_id: "signal-review",
+        decision: "PRIORITIZE", status_label: "优先跟进", reason: "人工确认为优先跟进",
+        original_confidence: 82, original_score_breakdown: workspace.intent_signals[0].score_breakdown,
+        created_at: "2026-08-15T10:00:00Z",
+      }
+      workspace.opportunity_reviews.unshift(review)
+      return new Response(JSON.stringify(review), { status: 201, headers: { "Content-Type": "application/json" } })
+    }
+    if (path.endsWith("/draft")) {
+      workspace.outreach_drafts.unshift({
+        id: "draft-review", account_id: accountId,
+        english_draft: "May I confirm your gear component requirements?",
+        chinese_explanation: "仅作为人工审核后的联系建议，不会自动发送。",
+        status: "DRAFT", delivery: "NEVER_SENT",
+        created_at: "2026-08-15T10:01:00Z", updated_at: "2026-08-15T10:01:00Z",
+      })
+      return new Response(JSON.stringify({
+        id: "draft-review", status: "DRAFT",
+        "English draft": "May I confirm your gear component requirements?",
+        "Chinese explanation": "仅作为人工审核后的联系建议，不会自动发送。",
+        delivery: "NEVER_SENT",
+      }), { status: 201, headers: { "Content-Type": "application/json" } })
+    }
+    if (path.endsWith("/crm-handoff")) {
+      const handoff = {
+        id: "handoff-1", account_id: accountId, review_id: "review-1", draft_id: "draft-review",
+        connector: "MOCK_CRM", status: "RECORDED", payload_snapshot: {},
+        delivery: "NEVER_SENT", created_at: "2026-08-15T10:02:00Z",
+      }
+      workspace.crm_handoffs.unshift(handoff)
+      return new Response(JSON.stringify(handoff), { status: 201, headers: { "Content-Type": "application/json" } })
+    }
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+  render(OpportunitiesPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  expect(await screen.findByRole("heading", { name: "Jakarta Drive Systems" })).toBeInTheDocument()
+  expect(screen.getByText("AI 建议：优先跟进")).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "确认优先跟进" }))
+  expect(await screen.findByText("人工判断：优先跟进")).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "生成联系草稿" }))
+  expect(await screen.findByText("May I confirm your gear component requirements?")).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "确认草稿并交给 Mock CRM" }))
+  expect(await screen.findByText("已保存到 Mock CRM，未发送任何消息。")).toBeInTheDocument()
+})
+
 it("loads company provenance and persists human verification", async () => {
   document.cookie = "csrftoken=company-page-test-token"
   const factId = "10000000-0000-4000-8000-000000001403"

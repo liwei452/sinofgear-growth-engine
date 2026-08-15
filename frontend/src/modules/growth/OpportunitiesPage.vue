@@ -7,6 +7,8 @@ import {
   createOpportunityDraft,
   growthQueryKeys,
   growthWorkspaceQueryOptions,
+  handoffOpportunityToMockCRM,
+  reviewOpportunity,
 } from "./api"
 import ManualOpportunityImportForm from "./ManualOpportunityImportForm.vue"
 import AutomaticDiscoveryCard from "./AutomaticDiscoveryCard.vue"
@@ -20,7 +22,9 @@ const evidenceOpen = ref(false)
 const draftOpen = ref(false)
 const generatedDraftEnglish = ref("")
 const generatedDraftChinese = ref("")
+const generatedDraftId = ref("")
 const actionError = ref("")
+const handoffStatus = ref("")
 const importOpen = ref(false)
 const importStatus = ref("")
 
@@ -120,6 +124,11 @@ const activeFollowUp = computed(() => workspaceQuery.data.value?.follow_ups
 const activeSavedDraft = computed(() => workspaceQuery.data.value?.outreach_drafts
   .filter((item) => item.account_id === activeAccount.value?.id)
   .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0])
+const activeReview = computed(() => workspaceQuery.data.value?.opportunity_reviews
+  ?.filter((item) => item.account_id === activeAccount.value?.id)
+  .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0])
+const activeHandoff = computed(() => workspaceQuery.data.value?.crm_handoffs
+  ?.find((item) => item.account_id === activeAccount.value?.id))
 const scoreItems = computed(() => {
   const breakdown = activeSignal.value?.score_breakdown
   if (!breakdown) return []
@@ -131,10 +140,16 @@ const scoreItems = computed(() => {
 })
 const displayedDraft = computed(() => {
   if (draftOpen.value && generatedDraftEnglish.value) {
-    return { english: generatedDraftEnglish.value, chinese: generatedDraftChinese.value, createdAt: undefined }
+    return {
+      id: generatedDraftId.value,
+      english: generatedDraftEnglish.value,
+      chinese: generatedDraftChinese.value,
+      createdAt: undefined,
+    }
   }
   if (!activeSavedDraft.value) return null
   return {
+    id: activeSavedDraft.value.id,
     english: activeSavedDraft.value.english_draft,
     chinese: activeSavedDraft.value.chinese_explanation,
     createdAt: activeSavedDraft.value.created_at,
@@ -173,6 +188,19 @@ const followMutation = useMutation({
   onError: () => { actionError.value = "暂时无法加入跟进，请稍后重试。" },
 })
 const draftMutation = useMutation({ mutationFn: createOpportunityDraft })
+const reviewMutation = useMutation({
+  mutationFn: reviewOpportunity,
+  onSuccess: async () => {
+    await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+  },
+})
+const handoffMutation = useMutation({
+  mutationFn: handoffOpportunityToMockCRM,
+  onSuccess: async () => {
+    handoffStatus.value = "已保存到 Mock CRM，未发送任何消息。"
+    await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+  },
+})
 
 async function addFollowUp(): Promise<void> {
   actionError.value = ""
@@ -186,6 +214,8 @@ function selectAccount(accountId: string): void {
   selectedAccountId.value = accountId
   evidenceOpen.value = false
   draftOpen.value = false
+  generatedDraftId.value = ""
+  handoffStatus.value = ""
   actionError.value = ""
 }
 
@@ -197,6 +227,7 @@ async function generateDraft(): Promise<void> {
   }
   try {
     const draft = await draftMutation.mutateAsync(activeAccount.value.id)
+    generatedDraftId.value = draft.id
     generatedDraftEnglish.value = draft["English draft"]
     generatedDraftChinese.value = draft["Chinese explanation"]
     draftOpen.value = true
@@ -205,10 +236,36 @@ async function generateDraft(): Promise<void> {
   }
 }
 
+async function saveReview(decision: "PRIORITIZE" | "OBSERVE" | "PROCESSED"): Promise<void> {
+  actionError.value = ""
+  handoffStatus.value = ""
+  if (!activeAccount.value) return
+  try {
+    await reviewMutation.mutateAsync({ accountId: activeAccount.value.id, decision })
+  } catch {
+    actionError.value = "暂时无法保存人工判断，请稍后重试。"
+  }
+}
+
+async function handoffToCRM(): Promise<void> {
+  actionError.value = ""
+  if (!activeAccount.value || !displayedDraft.value?.id) return
+  try {
+    await handoffMutation.mutateAsync({
+      accountId: activeAccount.value.id,
+      draftId: displayedDraft.value.id,
+    })
+  } catch {
+    actionError.value = "交接条件尚未满足，请先确认机会与证据。"
+  }
+}
+
 async function handleImported(accountId: string): Promise<void> {
   selectedAccountId.value = accountId
   evidenceOpen.value = false
   draftOpen.value = false
+  generatedDraftId.value = ""
+  handoffStatus.value = ""
   importOpen.value = false
   importStatus.value = ""
   await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
@@ -259,6 +316,19 @@ async function handleImported(accountId: string): Promise<void> {
         <section><h3>需求信号</h3><p>{{ detail.signal }}</p></section>
         <section><h3>公开联系路径</h3><p>{{ detail.contact }}</p></section>
       </div>
+      <section class="opportunity-human-review" aria-labelledby="opportunity-review-title">
+        <div>
+          <h3 id="opportunity-review-title">人工判断</h3>
+          <p v-if="activeReview">人工判断：{{ activeReview.status_label }}</p>
+          <p v-else>AI 建议：{{ detail.priority }}</p>
+          <small>每次选择都会追加记录，不会修改原始证据或 AI 评分。</small>
+        </div>
+        <div class="opportunity-review-actions">
+          <button class="button button-secondary" type="button" :disabled="reviewMutation.isPending.value" @click="saveReview('PRIORITIZE')">确认优先跟进</button>
+          <button class="button button-secondary" type="button" :disabled="reviewMutation.isPending.value" @click="saveReview('OBSERVE')">继续观察</button>
+          <button class="button button-secondary" type="button" :disabled="reviewMutation.isPending.value" @click="saveReview('PROCESSED')">标记已处理</button>
+        </div>
+      </section>
       <div class="page-actions">
         <button class="button button-primary" type="button" :disabled="followed || followMutation.isPending.value" @click="addFollowUp">{{ followed ? "已加入跟进" : "加入跟进" }}</button>
         <button class="button button-secondary" type="button" :disabled="draftMutation.isPending.value" @click="generateDraft">{{ draftMutation.isPending.value ? "正在生成…" : "生成联系草稿" }}</button>
@@ -307,8 +377,18 @@ async function handleImported(accountId: string): Promise<void> {
           <div><span class="fake-label">从未发送</span><small>{{ displayedDraft.createdAt ? formatDate(displayedDraft.createdAt) : "刚刚生成" }}</small></div>
           <h4>英文建议</h4><p>{{ displayedDraft.english }}</p>
           <h4>中文解释</h4><p>{{ displayedDraft.chinese }}</p>
+          <button
+            v-if="activeReview?.decision === 'PRIORITIZE' && !activeHandoff"
+            class="button button-secondary"
+            type="button"
+            :disabled="handoffMutation.isPending.value"
+            @click="handoffToCRM"
+          >
+            {{ handoffMutation.isPending.value ? "正在保存…" : "确认草稿并交给 Mock CRM" }}
+          </button>
         </div>
       </section>
+      <p v-if="handoffStatus || activeHandoff" class="approval-status" role="status">{{ handoffStatus || "已保存到 Mock CRM，未发送任何消息。" }}</p>
       <p class="crm-note">CRM 是人工确认后的可选出口，不是本页主操作。</p>
     </article>
   </div>

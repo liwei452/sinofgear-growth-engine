@@ -136,6 +136,64 @@ class OutreachDraft(OrganizationOwnedModel):
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
 
 
+class OpportunityReview(OrganizationOwnedModel):
+    class Decision(models.TextChoices):
+        PRIORITIZE = "PRIORITIZE", "Prioritize"
+        OBSERVE = "OBSERVE", "Observe"
+        PROCESSED = "PROCESSED", "Processed"
+
+    account = models.ForeignKey(
+        TargetAccount, on_delete=models.PROTECT, related_name="opportunity_reviews",
+    )
+    signal = models.ForeignKey(
+        IntentSignal, on_delete=models.PROTECT, related_name="opportunity_reviews",
+    )
+    decision = models.CharField(max_length=16, choices=Decision.choices)
+    reason = models.CharField(max_length=255)
+    original_confidence = models.PositiveSmallIntegerField()
+    original_score_breakdown = models.JSONField(default=dict)
+    reviewer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="growth_opportunity_reviews",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Opportunity review history cannot be deleted.")
+
+
+class CRMHandoff(OrganizationOwnedModel):
+    review = models.ForeignKey(
+        OpportunityReview, on_delete=models.PROTECT, related_name="crm_handoffs",
+    )
+    draft = models.ForeignKey(
+        OutreachDraft, on_delete=models.PROTECT, related_name="crm_handoffs",
+    )
+    connector = models.CharField(max_length=32, default="MOCK_CRM")
+    status = models.CharField(max_length=24, default="RECORDED")
+    payload_snapshot = models.JSONField(default=dict)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="growth_crm_handoffs",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "review"],
+                name="growth_one_crm_handoff_per_review",
+            ),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("CRM handoff history cannot be deleted.")
+
+
 class ChannelPackage(OrganizationOwnedModel):
     account = models.ForeignKey(TargetAccount, null=True, blank=True, on_delete=models.PROTECT)
     channel = models.CharField(max_length=32)

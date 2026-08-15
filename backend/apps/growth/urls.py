@@ -11,6 +11,8 @@ from .views import (
     MetricReceiptCreateView,
     ManualOpportunityImportView,
     OutreachDraftView,
+    OpportunityReviewView,
+    CRMHandoffView,
     PublishBatchCreateView,
     PublishBatchDetailView,
     PublishBatchRetryFailedView,
@@ -31,6 +33,8 @@ urlpatterns = [
     ),
     path("growth/opportunities/<uuid:account_id>/follow-up", FollowUpView.as_view(), name="growth-follow-up"),
     path("growth/opportunities/<uuid:account_id>/draft", OutreachDraftView.as_view(), name="growth-draft"),
+    path("growth/opportunities/<uuid:account_id>/review", OpportunityReviewView.as_view(), name="growth-opportunity-review"),
+    path("growth/opportunities/<uuid:account_id>/crm-handoff", CRMHandoffView.as_view(), name="growth-crm-handoff"),
     path(
         "growth/channel-packages/<uuid:package_id>/approve",
         ChannelPackageApproveView.as_view(),

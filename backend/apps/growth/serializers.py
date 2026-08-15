@@ -2,6 +2,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from .models import (
+    CRMHandoff,
     ChannelPackage,
     Contact,
     FieldProvenance,
@@ -11,6 +12,7 @@ from .models import (
     InboundLead,
     IntentSignal,
     MetricReceipt,
+    OpportunityReview,
     OutreachDraft,
     TargetAccount,
 )
@@ -214,6 +216,47 @@ class OutreachDraftSerializer(serializers.ModelSerializer):
         return "NEVER_SENT"
 
 
+class OpportunityReviewCreateSerializer(serializers.Serializer):
+    decision = serializers.ChoiceField(choices=OpportunityReview.Decision.values)
+
+
+class OpportunityReviewSerializer(serializers.ModelSerializer):
+    status_label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OpportunityReview
+        fields = [
+            "id", "account_id", "signal_id", "decision", "status_label", "reason",
+            "original_confidence", "original_score_breakdown", "created_at",
+        ]
+
+    def get_status_label(self, obj: OpportunityReview) -> str:
+        return {
+            OpportunityReview.Decision.PRIORITIZE: "优先跟进",
+            OpportunityReview.Decision.OBSERVE: "继续观察",
+            OpportunityReview.Decision.PROCESSED: "已处理",
+        }[obj.decision]
+
+
+class CRMHandoffCreateSerializer(serializers.Serializer):
+    draft_id = serializers.UUIDField()
+
+
+class CRMHandoffSerializer(serializers.ModelSerializer):
+    account_id = serializers.UUIDField(source="review.account_id", read_only=True)
+    delivery = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CRMHandoff
+        fields = [
+            "id", "account_id", "review_id", "draft_id", "connector", "status",
+            "payload_snapshot", "delivery", "created_at",
+        ]
+
+    def get_delivery(self, _obj: CRMHandoff) -> str:
+        return "NEVER_SENT"
+
+
 class ChannelPackageSerializer(serializers.ModelSerializer):
     data_label = serializers.SerializerMethodField()
     delivery = serializers.SerializerMethodField()
@@ -251,3 +294,4 @@ class FieldProvenanceSerializer(serializers.ModelSerializer):
             "id", "field_name", "field_value", "source_label", "verification_status",
             "source_cost_micros", "created_at", "updated_at",
         ]
+    OpportunityReview,

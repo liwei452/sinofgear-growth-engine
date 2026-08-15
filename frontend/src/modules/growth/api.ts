@@ -93,6 +93,30 @@ export type OutreachDraft = {
   updated_at: string
 }
 
+export type OpportunityReview = {
+  id: string
+  account_id: string
+  signal_id: string
+  decision: "PRIORITIZE" | "OBSERVE" | "PROCESSED"
+  status_label: "优先跟进" | "继续观察" | "已处理"
+  reason: string
+  original_confidence: number
+  original_score_breakdown: OpportunityScoreBreakdown
+  created_at: string
+}
+
+export type CRMHandoff = {
+  id: string
+  account_id: string
+  review_id: string
+  draft_id: string
+  connector: "MOCK_CRM"
+  status: "RECORDED"
+  payload_snapshot: Record<string, unknown>
+  delivery: "NEVER_SENT"
+  created_at: string
+}
+
 export type ChannelPackage = {
   id: string
   account_id: string | null
@@ -221,6 +245,8 @@ export type GrowthWorkspace = {
   inbound_leads: Array<Record<string, unknown>>
   follow_ups: FollowUp[]
   outreach_drafts: OutreachDraft[]
+  opportunity_reviews?: OpportunityReview[]
+  crm_handoffs?: CRMHandoff[]
   channel_packages: ChannelPackage[]
   publish_batches: PublishBatch[]
   metric_receipts: MetricReceipt[]
@@ -267,6 +293,30 @@ export async function createOpportunityDraft(accountId: string): Promise<DraftAc
     `/api/v1/growth/opportunities/${accountId}/draft`, { method: "POST", body: {} },
   )
   if (!result) throw new Error("草稿响应为空。")
+  return result
+}
+
+export async function reviewOpportunity(input: {
+  accountId: string
+  decision: OpportunityReview["decision"]
+}): Promise<OpportunityReview> {
+  const result = await apiRequest<OpportunityReview>(
+    `/api/v1/growth/opportunities/${input.accountId}/review`,
+    { method: "POST", body: { decision: input.decision } },
+  )
+  if (!result) throw new Error("人工判断响应为空。")
+  return result
+}
+
+export async function handoffOpportunityToMockCRM(input: {
+  accountId: string
+  draftId: string
+}): Promise<CRMHandoff> {
+  const result = await apiRequest<CRMHandoff>(
+    `/api/v1/growth/opportunities/${input.accountId}/crm-handoff`,
+    { method: "POST", body: { draft_id: input.draftId } },
+  )
+  if (!result) throw new Error("CRM 交接响应为空。")
   return result
 }
 

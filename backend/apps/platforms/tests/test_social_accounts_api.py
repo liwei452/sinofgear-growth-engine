@@ -107,6 +107,9 @@ def test_administrator_can_create_social_account_without_exposing_credential_sec
         "display_name": "Acme LinkedIn", "publish_mode": "EXPORT_PACKAGE",
         "status": "ACTIVE", "effective_capabilities": [],
         "credential_configured": True,
+        "connection_state": "CONFIGURATION_REQUIRED", "last_probe_at": None,
+        "last_refresh_at": None, "reauthorization_required_at": None,
+        "disconnected_at": None, "lifecycle_error_code": "",
     }
     assert "secret_reference" not in response.json()
     assert "vault://linkedin/acme" not in response.content.decode()
@@ -158,6 +161,9 @@ def test_publishing_reader_gets_safe_account_list_and_detail(
         "display_name": "Reader LinkedIn", "publish_mode": "API_AUTO",
         "status": "ACTIVE", "effective_capabilities": ["PUBLISH"],
         "credential_configured": True,
+        "connection_state": "CONFIGURATION_REQUIRED", "last_probe_at": None,
+        "last_refresh_at": None, "reauthorization_required_at": None,
+        "disconnected_at": None, "lifecycle_error_code": "",
     }
     assert listing.status_code == detail.status_code == 200
     assert listing.json() == {"results": [expected]}

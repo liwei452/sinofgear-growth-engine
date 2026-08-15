@@ -42,7 +42,9 @@ class SocialAccountReadSerializer(serializers.ModelSerializer):
         model = SocialAccount
         fields = [
             "id", "platform_id", "display_name", "publish_mode", "status",
-            "effective_capabilities", "credential_configured",
+            "effective_capabilities", "credential_configured", "connection_state",
+            "last_probe_at", "last_refresh_at", "reauthorization_required_at",
+            "disconnected_at", "lifecycle_error_code",
         ]
         read_only_fields = fields
 
@@ -309,3 +311,17 @@ class AccountConnectionConfirmationResponseSerializer(serializers.Serializer):
     connection_label = serializers.CharField()
     recovery_action = serializers.CharField(allow_blank=True)
     mode = serializers.CharField()
+
+
+class SocialAccountDisconnectSerializer(StrictMixin, serializers.Serializer):
+    confirm = serializers.BooleanField()
+
+
+class SocialAccountLifecycleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SocialAccount
+        fields = [
+            "id", "status", "connection_state", "last_probe_at", "last_refresh_at",
+            "reauthorization_required_at", "disconnected_at", "lifecycle_error_code",
+        ]
+        read_only_fields = fields

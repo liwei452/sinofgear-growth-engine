@@ -129,6 +129,15 @@ class SocialAccount(OrganizationScopedModel):
         EXPORT_PACKAGE = "EXPORT_PACKAGE", "Export package"
         MANUAL = "MANUAL", "Manual"
 
+    class ConnectionState(models.TextChoices):
+        CONFIGURATION_REQUIRED = "CONFIGURATION_REQUIRED", "Configuration required"
+        CONNECTED = "CONNECTED", "Connected"
+        REFRESH_DUE = "REFRESH_DUE", "Refresh due"
+        REAUTHORIZATION_REQUIRED = "REAUTHORIZATION_REQUIRED", "Reauthorization required"
+        INSUFFICIENT_CAPABILITY = "INSUFFICIENT_CAPABILITY", "Insufficient capability"
+        PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE", "Provider unavailable"
+        DISCONNECTED = "DISCONNECTED", "Disconnected"
+
     platform = models.ForeignKey(Platform, on_delete=models.PROTECT, related_name="social_accounts")
     credential = models.ForeignKey(
         ConnectorCredential, on_delete=models.SET_NULL, null=True, blank=True, related_name="social_accounts"
@@ -138,6 +147,16 @@ class SocialAccount(OrganizationScopedModel):
     publish_mode = models.CharField(max_length=32, choices=PublishMode.choices, default=PublishMode.MANUAL)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
     connector_metadata = models.JSONField(default=dict, blank=True)
+    connection_state = models.CharField(
+        max_length=32,
+        choices=ConnectionState.choices,
+        default=ConnectionState.CONFIGURATION_REQUIRED,
+    )
+    last_probe_at = models.DateTimeField(null=True, blank=True)
+    last_refresh_at = models.DateTimeField(null=True, blank=True)
+    reauthorization_required_at = models.DateTimeField(null=True, blank=True)
+    disconnected_at = models.DateTimeField(null=True, blank=True)
+    lifecycle_error_code = models.CharField(max_length=64, blank=True, default="")
 
     class Meta:
         constraints = [

@@ -18,6 +18,13 @@ from integrations.platforms.runtime import get_social_provider_runtime
 from integrations.platforms.token_store import TokenStoreContext
 
 from .models import AccountConnectionSession, ConnectorCredential, Platform, SocialAccount
+from .lifecycle import (
+    LifecycleAdapterRegistry,
+    ProviderLifecycleError,
+    disconnect_social_account,
+    probe_social_account,
+    start_reauthorization,
+)
 from .connection_status import connection_summary
 from .connection_sessions import (
     ConnectionCandidate,
@@ -42,12 +49,15 @@ from .serializers import (
     AccountConnectionConfirmationResponseSerializer,
     AccountConnectionConfirmationSerializer, AccountConnectionSessionSerializer,
     PlatformAuthorizationCallbackSerializer,
+    SocialAccountDisconnectSerializer, SocialAccountLifecycleSerializer,
 )
 
 
 _social_runtime = get_social_provider_runtime()
 authorization_registry = _social_runtime.authorization_registry
 connection_token_store = _social_runtime.token_store
+lifecycle_registry = LifecycleAdapterRegistry()
+lifecycle_token_store = _social_runtime.token_store
 
 
 def _account(organization, account_id):
@@ -124,6 +134,83 @@ class SocialAccountDetailView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         return Response(SocialAccountReadSerializer(serializer.save()).data)
+
+
+def _lifecycle_error(error: Exception) -> Response:
+    return Response({
+        "code": getattr(error, "code", "PROVIDER_UNAVAILABLE"),
+        "message": "官方渠道暂时不可用，请稍后重试或重新授权。",
+    }, status=status.HTTP_409_CONFLICT)
+
+
+@extend_schema(tags=["SocialAccounts"])
+class SocialAccountProbeView(APIView):
+    permission_classes = [CanManageCredentials]
+
+    @extend_schema(responses={200: SocialAccountLifecycleSerializer})
+    def post(self, request: Request, account_id) -> Response:
+        account = _account(request.organization, account_id)
+        try:
+            adapter = lifecycle_registry.resolve(account.platform.code)
+            account = probe_social_account(
+                account=account, adapter=adapter, token_store=lifecycle_token_store,
+                actor=request.user,
+            )
+        except (ProviderLifecycleError, ConnectorConfigurationRequired) as error:
+            return _lifecycle_error(error)
+        return Response(SocialAccountLifecycleSerializer(account).data)
+
+
+@extend_schema(tags=["SocialAccounts"])
+class SocialAccountReauthorizationView(APIView):
+    permission_classes = [CanManageCredentials]
+
+    @extend_schema(responses={200: SocialAccountLifecycleSerializer})
+    def post(self, request: Request, account_id) -> Response:
+        account = _account(request.organization, account_id)
+        try:
+            account = start_reauthorization(account=account, actor=request.user)
+        except ProviderLifecycleError as error:
+            return _lifecycle_error(error)
+        data = SocialAccountLifecycleSerializer(account).data
+        data["authorization_path"] = (
+            f"/api/v1/platform-connections/{account.platform.code}/authorize"
+        )
+        return Response(data)
+
+
+class _UnavailableLifecycleAdapter:
+    def revoke(self, token):
+        del token
+        raise ProviderLifecycleError("CONFIGURATION_REQUIRED")
+
+
+@extend_schema(tags=["SocialAccounts"])
+class SocialAccountDisconnectView(APIView):
+    permission_classes = [CanManageCredentials]
+
+    @extend_schema(
+        request=SocialAccountDisconnectSerializer,
+        responses={200: SocialAccountLifecycleSerializer},
+    )
+    def post(self, request: Request, account_id) -> Response:
+        serializer = SocialAccountDisconnectSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not serializer.validated_data["confirm"]:
+            return Response({
+                "code": "DISCONNECT_CONFIRMATION_REQUIRED",
+                "message": "请明确确认后再断开连接。",
+            }, status=status.HTTP_400_BAD_REQUEST)
+        account = _account(request.organization, account_id)
+        try:
+            adapter = lifecycle_registry.resolve(account.platform.code)
+        except ProviderLifecycleError:
+            adapter = _UnavailableLifecycleAdapter()
+        account = disconnect_social_account(
+            account=account, adapter=adapter, token_store=lifecycle_token_store,
+            actor=request.user, confirmed=True,
+        )
+        return Response(SocialAccountLifecycleSerializer(account).data)
 
 
 @extend_schema(tags=["SocialAccounts"])

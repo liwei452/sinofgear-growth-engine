@@ -185,6 +185,31 @@ class EncryptedDatabaseTokenStore:
         return bound.reference
 
     @transaction.atomic
+    def replace(self, reference: str, token: OAuthTokenSet) -> str:
+        try:
+            row = EncryptedOAuthCredential.objects.select_for_update().get(reference=reference)
+        except EncryptedOAuthCredential.DoesNotExist as error:
+            raise ConnectorConfigurationRequired("Social credential is unavailable.") from error
+        self._decrypt_row(row)
+        context = TokenStoreContext(
+            organization_id=row.organization_id,
+            actor_id=row.actor_identifier,
+            platform_code=row.platform_code,
+            attempt_id=row.connection_attempt_id,
+        )
+        replacement = self._create(
+            payload={"kind": "token", "token": self._token_payload(token)},
+            context=context,
+            expires_at=token.expires_at,
+            account_binding=row.account_binding,
+        )
+        row.status = EncryptedOAuthCredential.Status.ROTATED
+        row.ciphertext = b""
+        row.nonce = b""
+        row.save(update_fields=["status", "ciphertext", "nonce", "updated_at"])
+        return replacement.reference
+
+    @transaction.atomic
     def delete(self, reference: str) -> None:
         try:
             row = EncryptedOAuthCredential.objects.select_for_update().get(reference=reference)

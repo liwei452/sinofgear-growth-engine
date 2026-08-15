@@ -177,6 +177,10 @@ def confirm_connection_session(
                 "display_name": candidate["display_name"],
                 "publish_mode": SocialAccount.PublishMode.API_CONFIRM,
                 "status": SocialAccount.Status.ACTIVE,
+                "connection_state": SocialAccount.ConnectionState.CONNECTED,
+                "reauthorization_required_at": None,
+                "disconnected_at": None,
+                "lifecycle_error_code": "",
                 "connector_metadata": {"connection_kind": "official_oauth"},
             },
         )

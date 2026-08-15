@@ -37,6 +37,8 @@ class TokenStore(Protocol):
 
     def bind(self, reference: str, candidate_id: str) -> str: ...
 
+    def replace(self, reference: str, token: OAuthTokenSet) -> str: ...
+
     def delete(self, reference: str) -> None: ...
 
 
@@ -51,6 +53,10 @@ class DisabledTokenStore:
 
     def bind(self, reference: str, candidate_id: str) -> str:
         del reference, candidate_id
+        raise ConnectorConfigurationRequired("Official token storage is not configured.")
+
+    def replace(self, reference: str, token: OAuthTokenSet) -> str:
+        del reference, token
         raise ConnectorConfigurationRequired("Official token storage is not configured.")
 
     def delete(self, reference: str) -> None:

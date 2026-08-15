@@ -30,18 +30,18 @@ it("reviews an ICP and a complete TikTok manual publishing package", async () =>
   expect(screen.getByRole("status")).toHaveTextContent("已批准，等待人工下载或手工发布")
 })
 
-it("keeps accounts, contacts, signals, and inbound leads visibly distinct", () => {
+it("keeps growth objects distinct and does not invent an opportunity for an empty workspace", () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(OpportunitiesPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
   for (const objectName of ["目标公司", "联系人", "需求信号", "入站线索"]) {
     expect(screen.getByText(objectName, { selector: "dt" })).toBeInTheDocument()
   }
-  expect(screen.getByText("PackTech GmbH", { selector: "h2" })).toBeInTheDocument()
-  expect(screen.getAllByText("公开采购岗位", { exact: false }).length).toBeGreaterThan(0)
-  expect(screen.getByRole("button", { name: "加入跟进" })).toBeInTheDocument()
-  expect(screen.getByRole("button", { name: "生成联系草稿" })).toBeInTheDocument()
-  expect(screen.getByRole("button", { name: "查看证据" })).toBeInTheDocument()
+  expect(screen.getByText("还没有可审核的客户机会")).toBeInTheDocument()
+  expect(screen.queryByText("PackTech GmbH", { selector: "h2" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "加入跟进" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "生成联系草稿" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "查看证据" })).not.toBeInTheDocument()
 })
 
 it("shows no channel success metrics until a result has actually been recorded", async () => {

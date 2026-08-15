@@ -357,7 +357,7 @@ async function handleImported(accountId: string): Promise<void> {
         </button>
       </div>
     </section>
-    <article class="growth-card opportunity-detail">
+    <article v-if="activeAccount" class="growth-card opportunity-detail">
       <div class="opportunity-title"><div><span class="fake-label">{{ detail.label }}</span><h2>{{ detail.name }}</h2><p>{{ detail.country }} · {{ detail.industry }} · {{ detail.size }} 人</p></div><strong>{{ detail.priority }} · {{ detail.confidence }}</strong></div>
       <div class="evidence-columns">
         <section><h3>为什么现在值得跟进</h3><p>{{ detail.priority === "优先跟进" ? "公开信号与证据覆盖达到当前规则门槛，适合人工核实采购范围与时间。" : "当前证据仍有缺口，建议继续观察并补充核实。" }}</p></section>
@@ -448,6 +448,10 @@ async function handleImported(accountId: string): Promise<void> {
       <p v-if="handoffStatus || activeHandoff" class="approval-status" role="status">{{ handoffStatus || "已保存到 Mock CRM，未发送任何消息。" }}</p>
       <p class="crm-note">CRM 是人工确认后的可选出口，不是本页主操作。</p>
     </article>
+    <section v-else class="growth-card opportunity-empty" aria-labelledby="opportunity-empty-title">
+      <h2 id="opportunity-empty-title">还没有可审核的客户机会</h2>
+      <p>请先从市场推荐选择数据路径，或导入有许可的客户名单与公开线索。候选公司经过人工核实后才会出现在这里。</p>
+    </section>
   </div>
 </template>
 <style scoped src="./growth-pages.css"></style>

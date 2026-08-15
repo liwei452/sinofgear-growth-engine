@@ -63,6 +63,7 @@ def test_workspace_exposes_an_owner_friendly_discovery_summary(organization):
         "next_run_at": None,
         "last_run": None,
         "candidate_count": 0,
+        "candidates": [],
         "available_sources": [
             {"code": "TED", "label": "TED 欧盟采购公告", "status": "ACTIVE"},
             {

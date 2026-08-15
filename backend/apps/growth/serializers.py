@@ -5,6 +5,7 @@ from .models import (
     CRMHandoff,
     ChannelPackage,
     Contact,
+    DiscoveryCandidate,
     FieldProvenance,
     FollowUp,
     GrowthPublishBatch,
@@ -67,6 +68,45 @@ class CandidateListImportResultSerializer(serializers.Serializer):
     queue_label = serializers.CharField()
 
 
+class DiscoveryCandidateSerializer(serializers.ModelSerializer):
+    status_label = serializers.SerializerMethodField()
+    source_owner = serializers.SerializerMethodField()
+    license_contract = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DiscoveryCandidate
+        fields = [
+            "id", "company_name", "country", "website", "industry", "status",
+            "status_label", "source_owner", "license_contract", "import_format",
+            "is_demo", "created_at",
+        ]
+
+    def get_status_label(self, obj):
+        return {
+            DiscoveryCandidate.Status.PENDING_REVIEW: "待核实",
+            DiscoveryCandidate.Status.ACCEPTED: "待补全公司资料",
+            DiscoveryCandidate.Status.DISMISSED: "已忽略",
+        }[obj.status]
+
+    def get_source_owner(self, obj):
+        return str(obj.source_governance.get("source_owner", ""))
+
+    def get_license_contract(self, obj):
+        return str(obj.source_governance.get("license_contract", ""))
+
+
+class DiscoveryCandidateReviewSerializer(serializers.Serializer):
+    decision = serializers.ChoiceField(choices=["ACCEPT", "DISMISS"])
+    note = serializers.CharField(min_length=2, max_length=255)
+
+
+class DiscoveryCandidateReviewResultSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    status = serializers.CharField()
+    status_label = serializers.CharField()
+    message = serializers.CharField()
+
+
 class DiscoverySummarySerializer(serializers.Serializer):
     enabled = serializers.BooleanField()
     source_label = serializers.CharField()
@@ -74,6 +114,8 @@ class DiscoverySummarySerializer(serializers.Serializer):
     product_scope_label = serializers.CharField()
     next_run_at = serializers.DateTimeField(allow_null=True)
     last_run = DiscoveryRunResultSerializer(allow_null=True)
+    candidate_count = serializers.IntegerField()
+    candidates = DiscoveryCandidateSerializer(many=True)
     available_sources = serializers.ListField(child=serializers.DictField())
 
 

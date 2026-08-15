@@ -13,6 +13,7 @@ import {
 import ManualOpportunityImportForm from "./ManualOpportunityImportForm.vue"
 import AutomaticDiscoveryCard from "./AutomaticDiscoveryCard.vue"
 import CandidateListImportForm from "./CandidateListImportForm.vue"
+import DiscoveryCandidateQueue from "./DiscoveryCandidateQueue.vue"
 import MarketPilotComparison from "./MarketPilotComparison.vue"
 
 const queryClient = useQueryClient()
@@ -288,6 +289,10 @@ async function handleImported(accountId: string): Promise<void> {
       :discovery="workspaceQuery.data.value.discovery"
     />
     <CandidateListImportForm />
+    <DiscoveryCandidateQueue
+      v-if="workspaceQuery.data.value?.discovery?.candidates?.length"
+      :candidates="workspaceQuery.data.value.discovery.candidates"
+    />
     <MarketPilotComparison
       v-if="workspaceQuery.data.value?.market_pilots"
       :summary="workspaceQuery.data.value.market_pilots"

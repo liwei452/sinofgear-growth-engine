@@ -148,6 +148,19 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await expect(page.getByRole("status")).toContainText("已加入 2 家待核实候选")
   await expect(page.getByText(/待核实候选：2 家/)).toBeVisible()
   await expect(page.getByText("3 家目标公司")).toBeVisible()
+  const jakartaCandidate = page.getByRole("article").filter({ hasText: "Jakarta Drives" })
+  await expect(jakartaCandidate).toContainText("E2E licensed supplier")
+  await expect(jakartaCandidate).toContainText("尚未发现采购意向，不会自动联系")
+  const candidateReviewResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.includes("/api/v1/growth/discovery/candidates/")
+      && new URL(response.url()).pathname.endsWith("/review")
+      && response.request().method() === "POST",
+  )
+  await jakartaCandidate.getByRole("button", { name: "加入资料补全" }).click()
+  expect((await candidateReviewResponse).status()).toBe(200)
+  await expect(page.getByRole("status").filter({ hasText: "不会自动联系客户" })).toBeVisible()
+  await expect(page.getByText(/待核实候选：1 家/)).toBeVisible()
+  await expect(page.getByText("3 家目标公司")).toBeVisible()
   const discoveryResponse = page.waitForResponse(response =>
     new URL(response.url()).pathname === "/api/v1/growth/discovery/run"
       && response.request().method() === "POST",

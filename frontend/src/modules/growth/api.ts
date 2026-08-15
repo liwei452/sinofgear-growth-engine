@@ -183,7 +183,30 @@ export type DiscoverySummary = {
   next_run_at: string | null
   last_run: DiscoveryRunResult | null
   candidate_count?: number
+  candidates?: DiscoveryCandidate[]
   available_sources: DiscoverySourceSummary[]
+}
+
+export type DiscoveryCandidate = {
+  id: string
+  company_name: string
+  country: string
+  website: string
+  industry: string
+  status: "PENDING_REVIEW" | "ACCEPTED" | "DISMISSED"
+  status_label: string
+  source_owner: string
+  license_contract: string
+  import_format: "CSV" | "JSON"
+  is_demo: boolean
+  created_at: string
+}
+
+export type DiscoveryCandidateReviewResult = {
+  id: string
+  status: "ACCEPTED" | "DISMISSED"
+  status_label: string
+  message: string
 }
 
 export type CandidateListImportInput = {
@@ -366,6 +389,26 @@ export async function importCandidateList(
     { method: "POST", body: input },
   )
   if (!result) throw new Error("候选名单导入响应为空。")
+  return result
+}
+
+export async function reviewDiscoveryCandidate(
+  candidateId: string,
+  decision: "ACCEPT" | "DISMISS",
+): Promise<DiscoveryCandidateReviewResult> {
+  const result = await apiRequest<DiscoveryCandidateReviewResult>(
+    `/api/v1/growth/discovery/candidates/${candidateId}/review`,
+    {
+      method: "POST",
+      body: {
+        decision,
+        note: decision === "ACCEPT"
+          ? "人工确认公司资料可继续补全"
+          : "人工判断暂不符合目标客户",
+      },
+    },
+  )
+  if (!result) throw new Error("候选公司审核响应为空。")
   return result
 }
 

@@ -345,6 +345,15 @@ class DiscoveryCandidate(OrganizationOwnedModel):
     raw_record = models.JSONField(default=dict)
     record_hash = models.CharField(max_length=64)
     is_demo = models.BooleanField(default=False)
+    review_note = models.CharField(max_length=255, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="growth_discovery_candidate_reviews",
+    )
 
     class Meta:
         ordering = ["-created_at", "-id"]

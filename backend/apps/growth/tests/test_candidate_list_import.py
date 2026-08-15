@@ -127,3 +127,87 @@ def test_candidate_import_is_bounded_permissioned_and_documented(organization):
     assert "最多 200" in bounded.data["message"]
     assert forbidden.status_code == 403
     assert "post" in schema["paths"][IMPORT_URL]
+
+
+def test_pending_candidate_can_be_reviewed_into_enrichment_without_creating_an_opportunity(organization):
+    client = _client(organization, suffix="review")
+    imported = client.post(
+        IMPORT_URL,
+        {
+            "format": "CSV",
+            "content": (
+                "company_name,country,website,industry\n"
+                "Jakarta Drives,Indonesia,https://jakarta.example.invalid,Industrial equipment\n"
+            ),
+            **_governance(),
+        },
+        format="json",
+    )
+    assert imported.status_code == 201
+    candidate = DiscoveryCandidate.objects.get(organization=organization)
+
+    workspace = client.get("/api/v1/growth/workspace")
+    reviewed = client.post(
+        f"/api/v1/growth/discovery/candidates/{candidate.id}/review",
+        {"decision": "ACCEPT", "note": "官网与公司名称一致"},
+        format="json",
+    )
+
+    assert workspace.status_code == 200
+    assert workspace.data["discovery"]["candidates"] == [{
+        "id": str(candidate.id),
+        "company_name": "Jakarta Drives",
+        "country": "Indonesia",
+        "website": "https://jakarta.example.invalid/",
+        "industry": "Industrial equipment",
+        "status": "PENDING_REVIEW",
+        "status_label": "待核实",
+        "source_owner": "Licensed customer list supplier",
+        "license_contract": "Internal prospecting licence 2026",
+        "import_format": "CSV",
+        "is_demo": False,
+        "created_at": candidate.created_at.isoformat().replace("+00:00", "Z"),
+    }]
+    assert reviewed.status_code == 200
+    assert reviewed.data == {
+        "id": str(candidate.id),
+        "status": "ACCEPTED",
+        "status_label": "待补全公司资料",
+        "message": "已加入公司资料补全，不会自动联系客户。",
+    }
+    candidate.refresh_from_db()
+    assert candidate.status == DiscoveryCandidate.Status.ACCEPTED
+    assert candidate.review_note == "官网与公司名称一致"
+    assert candidate.reviewed_at is not None
+    assert candidate.reviewed_by.username == "candidate-import-review"
+    assert TargetAccount.objects.filter(organization=organization).count() == 0
+
+
+def test_candidate_review_is_single_decision_tenant_scoped_and_permissioned(organization):
+    candidate = DiscoveryCandidate.objects.create(
+        organization=organization,
+        company_name="Cape Motion",
+        country="South Africa",
+        website="https://cape.example.invalid",
+        import_format="CSV",
+        source_governance=_governance(),
+        raw_record={},
+        record_hash="a" * 64,
+    )
+    operator = _client(organization, suffix="single")
+    reader = _client(organization, reader=True, suffix="read-review")
+    other = Organization.objects.create(name="Other tenant", slug="other-candidate-tenant")
+    other_operator = _client(other, suffix="other-review")
+    url = f"/api/v1/growth/discovery/candidates/{candidate.id}/review"
+
+    forbidden = reader.post(url, {"decision": "DISMISS", "note": "不相关"}, format="json")
+    hidden = other_operator.post(url, {"decision": "DISMISS", "note": "不相关"}, format="json")
+    first = operator.post(url, {"decision": "DISMISS", "note": "整机厂，不采购齿轮"}, format="json")
+    repeated = operator.post(url, {"decision": "ACCEPT", "note": "改变决定"}, format="json")
+
+    assert forbidden.status_code == 403
+    assert hidden.status_code == 404
+    assert first.status_code == 200
+    assert first.data["status_label"] == "已忽略"
+    assert repeated.status_code == 409
+    assert repeated.data["code"] == "CANDIDATE_ALREADY_REVIEWED"

@@ -1,5 +1,7 @@
 from drf_spectacular.utils import extend_schema
+from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -12,6 +14,7 @@ from .discovery import DiscoveryAlreadyRunning, run_discovery
 from .models import (
     ChannelPackage,
     Contact,
+    DiscoveryCandidate,
     DiscoveryProfile,
     DiscoveryRun,
     FieldProvenance,
@@ -31,6 +34,9 @@ from .serializers import (
     ChannelPackageSerializer,
     CandidateListImportResultSerializer,
     CandidateListImportSerializer,
+    DiscoveryCandidateReviewResultSerializer,
+    DiscoveryCandidateReviewSerializer,
+    DiscoveryCandidateSerializer,
     ContactSerializer,
     DiscoveryProfileUpdateSerializer,
     DiscoveryRunResultSerializer,
@@ -114,6 +120,9 @@ def discovery_run_payload(run):
 
 def discovery_summary(profile):
     last_run = profile.runs.exclude(status=DiscoveryRun.Status.RUNNING).first()
+    candidates = profile.organization.discoverycandidate_set.filter(
+        status=DiscoveryCandidate.Status.PENDING_REVIEW,
+    )[:20]
     return {
         "enabled": profile.enabled,
         "source_label": "欧盟与英国官方采购数据",
@@ -122,8 +131,9 @@ def discovery_summary(profile):
         "next_run_at": profile.next_run_at,
         "last_run": discovery_run_payload(last_run) if last_run else None,
         "candidate_count": profile.organization.discoverycandidate_set.filter(
-            status="PENDING_REVIEW",
+            status=DiscoveryCandidate.Status.PENDING_REVIEW,
         ).count(),
+        "candidates": DiscoveryCandidateSerializer(candidates, many=True).data,
         "available_sources": [
             {"code": "TED", "label": "TED 欧盟采购公告", "status": "ACTIVE"},
             {
@@ -242,6 +252,51 @@ class CandidateListImportView(APIView):
         except CandidateImportInvalid as error:
             return Response({"message": str(error)}, status=400)
         return Response(result, status=201 if result["created_count"] else 200)
+
+
+class DiscoveryCandidateReviewView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=DiscoveryCandidateReviewSerializer,
+        responses={200: DiscoveryCandidateReviewResultSerializer},
+    )
+    def post(self, request, candidate_id):
+        serializer = DiscoveryCandidateReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            candidate = get_object_or_404(
+                DiscoveryCandidate.objects.select_for_update(),
+                id=candidate_id,
+                organization=request.organization,
+            )
+            if candidate.status != DiscoveryCandidate.Status.PENDING_REVIEW:
+                return Response({
+                    "code": "CANDIDATE_ALREADY_REVIEWED",
+                    "message": "这家公司已经完成核实。",
+                    "recovery_action": "刷新候选列表查看最新状态。",
+                }, status=409)
+            accepted = serializer.validated_data["decision"] == "ACCEPT"
+            candidate.status = (
+                DiscoveryCandidate.Status.ACCEPTED
+                if accepted else DiscoveryCandidate.Status.DISMISSED
+            )
+            candidate.review_note = serializer.validated_data["note"]
+            candidate.reviewed_at = timezone.now()
+            candidate.reviewed_by = request.user
+            candidate.save(update_fields=[
+                "status", "review_note", "reviewed_at", "reviewed_by", "updated_at",
+            ])
+        return Response({
+            "id": str(candidate.id),
+            "status": candidate.status,
+            "status_label": "待补全公司资料" if accepted else "已忽略",
+            "message": (
+                "已加入公司资料补全，不会自动联系客户。"
+                if accepted else "已忽略这家公司，不会进入后续处理。"
+            ),
+        })
 
 
 class DiscoveryProfileView(APIView):

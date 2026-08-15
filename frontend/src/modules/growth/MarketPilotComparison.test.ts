@@ -1,5 +1,6 @@
 import { render, screen, within } from "@testing-library/vue"
-import { describe, expect, it } from "vitest"
+import userEvent from "@testing-library/user-event"
+import { describe, expect, it, vi } from "vitest"
 
 import MarketPilotComparison from "./MarketPilotComparison.vue"
 
@@ -37,5 +38,16 @@ describe("MarketPilotComparison", () => {
     expect(screen.getByText("数据可获得性 25% · 需求强度 25% · 采购意图 20% · 企业可触达性 15% · 商业可执行性 15%" )).toBeInTheDocument()
     expect(screen.getByText("主体报关数据需要可核验授权与合同许可")).toBeInTheDocument()
     expect(screen.queryByText("INDIA DIRECT_CUSTOMS")).not.toBeInTheDocument()
+  })
+
+  it("opens the candidate entry for any selected market", async () => {
+    const user = userEvent.setup()
+    const onSelectMarket = vi.fn()
+    render(MarketPilotComparison, { props: { summary, onSelectMarket } })
+
+    const indonesia = screen.getByRole("article", { name: "印度尼西亚 强海关数据路线" })
+    await user.click(within(indonesia).getByRole("button", { name: "查看该市场候选公司" }))
+
+    expect(onSelectMarket).toHaveBeenCalledWith({ countryCode: "IDN", countryName: "印度尼西亚" })
   })
 })

@@ -128,6 +128,8 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await expect(page.getByRole("article", { name: "印度尼西亚 强海关数据路线" })).toContainText("待采样")
   await expect(page.getByRole("article", { name: "南非 混合信号路线" })).toContainText("待采样")
   await expect(page.getByText("市场雷达")).toBeVisible()
+  await page.getByRole("article", { name: "印度尼西亚 强海关数据路线" }).getByRole("button", { name: "查看该市场候选公司" }).click()
+  await expect(page.getByText(/印度尼西亚 · 先导入许可名单或公开线索/)).toBeVisible()
   await expect(page.getByText("智利 · 下一优先")).toBeVisible()
   await expect(page.getByText("印度 · 条件观察")).toBeVisible()
   await expect(page.getByText("欧盟与英国官方采购数据", { exact: true }).first()).toBeVisible()
@@ -135,7 +137,6 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await expect(page.getByText("英国 Contracts Finder")).toBeVisible()
   await expect(page.getByText("Google Maps 官方企业发现")).toBeVisible()
   await expect(page.getByText("接入密钥后可用")).toBeVisible()
-  await page.getByText("导入许可客户名单").click()
   await page.getByLabel("CSV 或 JSON 文件").setInputFiles("e2e/fixtures/licensed-candidate-sample.csv")
   await page.getByLabel("数据来源方").fill("E2E licensed supplier")
   await page.getByLabel("许可或合同名称").fill("E2E internal prospecting licence")
@@ -161,6 +162,20 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   await expect(page.getByRole("status").filter({ hasText: "不会自动联系客户" })).toBeVisible()
   await expect(page.getByText(/待核实候选：1 家/)).toBeVisible()
   await expect(page.getByText("3 家目标公司")).toBeVisible()
+  const enrichmentCard = page.getByRole("article").filter({ hasText: "Jakarta Drives" })
+  await expect(page.getByRole("heading", { name: "待补全公司资料" })).toBeVisible()
+  const enrichmentResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.includes("/api/v1/growth/enrichment/candidates/")
+      && new URL(response.url()).pathname.endsWith("/prepare")
+      && response.request().method() === "POST",
+  )
+  await enrichmentCard.getByRole("button", { name: "准备公司资料" }).click()
+  expect((await enrichmentResponse).status()).toBe(201)
+  await expect(enrichmentCard).toContainText("Demo / Fake 资料补全预演")
+  await expect(enrichmentCard).toContainText("已有事实与来源")
+  await expect(enrichmentCard).toContainText("尚未发现可验证的公开联系路径")
+  await expect(enrichmentCard).toContainText("没有采购意向证据")
+  await expect(page.getByText("3 家目标公司")).toBeVisible()
   const discoveryResponse = page.waitForResponse(response =>
     new URL(response.url()).pathname === "/api/v1/growth/discovery/run"
       && response.request().method() === "POST",
@@ -182,7 +197,6 @@ test("growth workspace persists follow-up, draft, approval, and manual metrics",
   expect((await duplicateDiscoveryResponse).status()).toBe(200)
   await expect(page.getByRole("status").filter({ hasText: "发现 0 条新采购信号" })).toBeVisible()
   await expect(page.getByText("4 家目标公司")).toBeVisible()
-  await page.getByRole("button", { name: "导入公开线索" }).click()
   await page.getByLabel("公司名称").fill("Browser Import Drives Ltd")
   await page.getByLabel("国家或地区").fill("United Kingdom")
   await page.getByLabel("行业（选填）").fill("Packaging machinery")

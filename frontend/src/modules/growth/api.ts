@@ -192,7 +192,23 @@ export type DiscoverySummary = {
   last_run: DiscoveryRunResult | null
   candidate_count?: number
   candidates?: DiscoveryCandidate[]
+  enrichment_candidates?: EnrichmentCandidate[]
   available_sources: DiscoverySourceSummary[]
+}
+
+export type CandidateEnrichmentPreview = {
+  candidate_id: string
+  mode: "FAKE_PREVIEW"
+  data_label: string
+  facts: Array<{ field: string; value: string; source: string }>
+  public_contact_paths: Array<{ label?: string; url?: string }>
+  uncertainties: string[]
+  message: string
+  created: boolean
+}
+
+export type EnrichmentCandidate = DiscoveryCandidate & {
+  latest_preview: CandidateEnrichmentPreview | null
 }
 
 export type DiscoveryCandidate = {
@@ -417,6 +433,17 @@ export async function reviewDiscoveryCandidate(
     },
   )
   if (!result) throw new Error("候选公司审核响应为空。")
+  return result
+}
+
+export async function prepareCandidateEnrichment(
+  candidateId: string,
+): Promise<CandidateEnrichmentPreview> {
+  const result = await apiRequest<CandidateEnrichmentPreview>(
+    `/api/v1/growth/enrichment/candidates/${candidateId}/prepare`,
+    { method: "POST", body: {} },
+  )
+  if (!result) throw new Error("公司资料补全响应为空。")
   return result
 }
 

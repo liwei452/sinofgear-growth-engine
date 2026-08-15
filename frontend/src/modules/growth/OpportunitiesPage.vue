@@ -13,6 +13,7 @@ import {
 import ManualOpportunityImportForm from "./ManualOpportunityImportForm.vue"
 import AutomaticDiscoveryCard from "./AutomaticDiscoveryCard.vue"
 import CandidateListImportForm from "./CandidateListImportForm.vue"
+import CandidateEnrichmentQueue from "./CandidateEnrichmentQueue.vue"
 import DiscoveryCandidateQueue from "./DiscoveryCandidateQueue.vue"
 import MarketPilotComparison from "./MarketPilotComparison.vue"
 
@@ -29,6 +30,15 @@ const actionError = ref("")
 const handoffStatus = ref("")
 const importOpen = ref(false)
 const importStatus = ref("")
+const selectedMarketName = ref("")
+const marketImportOpen = ref(false)
+
+function selectMarket(payload: { countryCode: string; countryName: string }): void {
+  selectedMarketName.value = payload.countryName
+  marketImportOpen.value = true
+  importOpen.value = true
+  window.requestAnimationFrame(() => document.getElementById("candidate-discovery-entry")?.scrollIntoView({ behavior: "smooth", block: "start" }))
+}
 
 const scoreLabels = {
   icp_fit: "ICP 匹配",
@@ -56,6 +66,23 @@ function confidenceFor(accountId: string): number {
 
 function priorityFor(accountId: string): "优先跟进" | "继续观察" {
   return latestSignalFor(accountId)?.priority_label ?? "继续观察"
+}
+
+function accountTierFor(accountId: string): "战略账户" | "培育账户" | "观察账户" {
+  const signal = latestSignalFor(accountId)
+  if (!signal) return "观察账户"
+  const score = signal.score_breakdown
+  if (!score) return "观察账户"
+  if (score.icp_fit >= 70 && score.evidence_coverage >= 60 && score.intent_strength >= 60) return "战略账户"
+  if (score.icp_fit >= 55 && signal.confidence >= 50) return "培育账户"
+  return "观察账户"
+}
+
+function nextActionFor(accountId: string): { action: string; reason: string } {
+  const tier = accountTierFor(accountId)
+  if (tier === "战略账户") return { action: "人工深度跟进", reason: "ICP、证据覆盖与意向同时达到当前门槛" }
+  if (tier === "培育账户") return { action: "进入内容培育与信号监测", reason: "客户匹配，但当前意向证据不足" }
+  return { action: "AI 继续补全，暂不触达", reason: "现有数据或证据置信度不足" }
 }
 
 function formatDate(value: string | undefined): string {
@@ -288,14 +315,22 @@ async function handleImported(accountId: string): Promise<void> {
       v-if="workspaceQuery.data.value?.discovery"
       :discovery="workspaceQuery.data.value.discovery"
     />
-    <CandidateListImportForm />
+    <section id="candidate-discovery-entry" class="market-candidate-entry">
+      <p v-if="selectedMarketName" class="market-selection-note"><strong>{{ selectedMarketName }}</strong> · 先导入许可名单或公开线索，再进入人工核实。</p>
+      <CandidateListImportForm :open="marketImportOpen" :market-name="selectedMarketName" />
+    </section>
     <DiscoveryCandidateQueue
       v-if="workspaceQuery.data.value?.discovery?.candidates?.length"
       :candidates="workspaceQuery.data.value.discovery.candidates"
     />
+    <CandidateEnrichmentQueue
+      v-if="workspaceQuery.data.value?.discovery?.enrichment_candidates?.length"
+      :candidates="workspaceQuery.data.value.discovery.enrichment_candidates"
+    />
     <MarketPilotComparison
       v-if="workspaceQuery.data.value?.market_pilots"
       :summary="workspaceQuery.data.value.market_pilots"
+      @select-market="selectMarket"
     />
     <div class="opportunity-import-bar">
       <div><strong>已有公开采购线索？</strong><span>保存证据后由你决定是否跟进。</span></div>
@@ -311,7 +346,7 @@ async function handleImported(accountId: string): Promise<void> {
           class="opportunity-choice" :class="{ active: account.id === activeAccount?.id }"
           :aria-pressed="account.id === activeAccount?.id" @click="selectAccount(account.id)"
         >
-          <span><strong>{{ account.name }}</strong><small>{{ account.country }} · {{ account.industry }}</small></span>
+          <span><strong>{{ account.name }}</strong><small>{{ account.country }} · {{ account.industry }} · {{ accountTierFor(account.id) }}</small></span>
           <b>{{ priorityFor(account.id) }} · {{ confidenceFor(account.id) }}</b>
         </button>
       </div>
@@ -335,6 +370,11 @@ async function handleImported(accountId: string): Promise<void> {
           <button class="button button-secondary" type="button" :disabled="reviewMutation.isPending.value" @click="saveReview('OBSERVE')">继续观察</button>
           <button class="button button-secondary" type="button" :disabled="reviewMutation.isPending.value" @click="saveReview('PROCESSED')">标记已处理</button>
         </div>
+      </section>
+      <section class="account-next-action">
+        <h3>AI 建议下一动作</h3>
+        <p><strong>{{ accountTierFor(detail.id) }} · {{ nextActionFor(detail.id).action }}</strong> · {{ nextActionFor(detail.id).reason }}</p>
+        <small>账户分层综合现有价值匹配、证据覆盖和意向强度；发送仍需人工批准。</small>
       </section>
       <div class="page-actions">
         <button class="button button-primary" type="button" :disabled="followed || followMutation.isPending.value" @click="addFollowUp">{{ followed ? "已加入跟进" : "加入跟进" }}</button>
@@ -405,3 +445,7 @@ async function handleImported(accountId: string): Promise<void> {
   </div>
 </template>
 <style scoped src="./growth-pages.css"></style>
+<style scoped>
+.market-selection-note { margin: 0 0 10px; border-radius: 10px; background: #edf6fd; padding: 10px 12px; color: #24516f; font-size: .8rem; }
+.account-next-action { margin-top: 14px; border-radius: 10px; background: #f1f6fa; padding: 12px; }.account-next-action h3 { margin: 0 0 6px; }.account-next-action p { margin: 0; color: #304a61; }.account-next-action small { display: block; margin-top: 6px; color: var(--sg-muted); }
+</style>

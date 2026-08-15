@@ -4,6 +4,7 @@ import { computed } from "vue"
 import type { MarketPilotSummary } from "./api"
 
 const props = defineProps<{ summary: MarketPilotSummary }>()
+const emit = defineEmits<{ selectMarket: [payload: { countryCode: string; countryName: string }] }>()
 const activeMarkets = computed(() => props.summary.markets.filter((market) => market.status === "ACTIVE_MARKET"))
 const candidateMarkets = computed(() => props.summary.markets.filter((market) => market.status !== "ACTIVE_MARKET"))
 
@@ -31,6 +32,7 @@ function costLabel(value: number): string {
           <div><dt>来源成本</dt><dd>{{ costLabel(market.metrics.source_cost_micros) }}</dd></div>
         </dl>
         <small>{{ market.metrics.raw_sample_count }}/{{ summary.quality_gate.minimum_raw_samples }} 条准入样本</small>
+        <button class="market-candidate-link" type="button" @click="emit('selectMarket', { countryCode: market.country_code, countryName: market.country_label })">查看该市场候选公司</button>
       </article>
     </div>
     <div class="market-radar-head">
@@ -47,8 +49,10 @@ function costLabel(value: number): string {
           <p><b>证据客户门槛</b> {{ market.sample_quality.evidence_company_count }}/{{ market.sample_quality.evidence_company_threshold }} 家</p>
           <p><b>为什么推荐这个市场</b> {{ market.recommendation_reasons.join("；") }}</p>
           <p><b>为什么暂缓</b> {{ market.hold_reasons.join("；") }}</p>
+          <button class="market-candidate-link" type="button" @click="emit('selectMarket', { countryCode: market.country_code, countryName: market.country_label })">查看该市场候选公司</button>
         </div>
       </details>
     </div>
   </section>
 </template>
+<style scoped>.market-candidate-link { margin-top: 10px; border: 0; background: transparent; padding: 0; color: #17699d; font: inherit; font-size: .76rem; font-weight: 850; cursor: pointer; }</style>

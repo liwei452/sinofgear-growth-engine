@@ -1,0 +1,64 @@
+import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
+import { render, screen, waitFor } from "@testing-library/vue"
+import userEvent from "@testing-library/user-event"
+import { expect, it, vi } from "vitest"
+
+import CandidateEnrichmentQueue from "./CandidateEnrichmentQueue.vue"
+
+
+it("prepares a clearly fake company profile without inventing contacts or intent", async () => {
+  document.cookie = "csrftoken=enrichment-token"
+  const preview = {
+    candidate_id: "candidate-1",
+    mode: "FAKE_PREVIEW",
+    data_label: "Demo / Fake 资料补全预演",
+    facts: [
+      { field: "company_name", value: "Jakarta Drives", source: "许可名单导入" },
+      { field: "country", value: "Indonesia", source: "许可名单导入" },
+    ],
+    public_contact_paths: [],
+    uncertainties: ["尚未联网核实公司官网", "尚未发现可验证的公开联系页面", "没有采购意向证据"],
+    message: "未联网抓取，不会生成联系人、邮箱或采购意向，也不会联系客户。",
+    created: true,
+  }
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify(preview), {
+    status: 201,
+    headers: { "Content-Type": "application/json" },
+  }))
+  vi.stubGlobal("fetch", fetchMock)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const user = userEvent.setup()
+
+  render(CandidateEnrichmentQueue, {
+    props: {
+      candidates: [{
+        id: "candidate-1",
+        company_name: "Jakarta Drives",
+        country: "Indonesia",
+        website: "",
+        industry: "Industrial equipment",
+        status: "ACCEPTED",
+        status_label: "待补全公司资料",
+        source_owner: "Licensed supplier",
+        license_contract: "Prospecting licence 2026",
+        import_format: "CSV",
+        is_demo: false,
+        created_at: "2026-08-15T06:00:00Z",
+        latest_preview: null,
+      }],
+    },
+    global: { plugins: [[VueQueryPlugin, { queryClient }]] },
+  })
+
+  expect(screen.getByRole("heading", { name: "待补全公司资料" })).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "准备公司资料" }))
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+  expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/v1/growth/enrichment/candidates/candidate-1/prepare")
+  expect(await screen.findByText("Demo / Fake 资料补全预演")).toBeInTheDocument()
+  expect(screen.getByText("Jakarta Drives", { selector: "dd" })).toBeInTheDocument()
+  expect(screen.getAllByText(/许可名单导入/).length).toBeGreaterThan(0)
+  expect(screen.getByText("尚未发现可验证的公开联系路径")).toBeInTheDocument()
+  expect(screen.getByText("没有采购意向证据")).toBeInTheDocument()
+  expect(screen.getByText("未联网抓取，不会生成联系人、邮箱或采购意向，也不会联系客户。")).toBeInTheDocument()
+})

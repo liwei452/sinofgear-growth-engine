@@ -4,6 +4,11 @@ import { ref } from "vue"
 
 import { growthQueryKeys, importCandidateList } from "./api"
 
+const props = withDefaults(defineProps<{ open?: boolean; marketName?: string }>(), {
+  open: false,
+  marketName: "",
+})
+
 const queryClient = useQueryClient()
 const content = ref("")
 const importFormat = ref<"CSV" | "JSON">("CSV")
@@ -73,9 +78,10 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <details class="growth-card candidate-list-import">
+  <details class="growth-card candidate-list-import" :open="props.open">
     <summary>导入许可客户名单</summary>
     <p>CSV/JSON 最多 200 家。先进入候选区，核实公司与来源后才会成为客户机会。</p>
+    <p v-if="props.marketName" class="market-import-context">正在准备 {{ props.marketName }} 市场候选公司；当前没有真实连接器时，请导入有许可的名单。</p>
     <form @submit.prevent="submit">
       <label>
         CSV 或 JSON 文件
@@ -109,3 +115,4 @@ async function submit(): Promise<void> {
 </template>
 
 <style scoped src="./growth-pages.css"></style>
+<style scoped>.market-import-context { color: #24516f !important; font-weight: 700; }</style>

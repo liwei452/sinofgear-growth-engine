@@ -23,6 +23,7 @@ const router = createAppRouter(queryClient, {
     Promotion: PromotionPage,
     Opportunities: OpportunitiesPage,
     Company: CompanyPage,
+    Settings: defineAsyncComponent(() => import("./modules/settings/SettingsCenterPage.vue")),
     Products: defineAsyncComponent(() => import("./modules/products/ProductLibraryPage.vue")),
     Knowledge: defineAsyncComponent(() => import("./modules/knowledge/KnowledgeLibraryPage.vue")),
     ContentFactory: defineAsyncComponent(() => import("./modules/content/ContentFactoryPage.vue")),

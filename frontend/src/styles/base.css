@@ -214,6 +214,44 @@ a {
   gap: 14px;
 }
 
+.user-area {
+  position: relative;
+}
+
+.user-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 168px;
+  overflow: hidden;
+  border: 1px solid var(--sg-line);
+  border-radius: var(--sg-radius-sm);
+  background: white;
+  box-shadow: var(--sg-shadow);
+}
+
+.user-menu a,
+.user-menu button {
+  border: 0;
+  background: white;
+  padding: 11px 14px;
+  color: var(--sg-ink);
+  font: inherit;
+  font-size: .82rem;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.user-menu a:hover,
+.user-menu a:focus-visible,
+.user-menu button:hover,
+.user-menu button:focus-visible {
+  background: var(--sg-brand-soft);
+}
+
 .user-session {
   display: grid;
   justify-items: end;

@@ -11,7 +11,7 @@ function localDateTime(minutesAhead: number): string {
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}T${two(date.getHours())}:${two(date.getMinutes())}`
 }
 
-async function login(page: Page, username: "phasea_e2e_operator" | "phasea_e2e_reviewer") {
+async function login(page: Page, username: "phasea_e2e_admin" | "phasea_e2e_operator" | "phasea_e2e_reviewer") {
   await page.goto("/login")
   await page.getByLabel("用户名").fill(username)
   await page.getByLabel("密码").fill("PhaseA-E2E-Only!")
@@ -20,7 +20,8 @@ async function login(page: Page, username: "phasea_e2e_operator" | "phasea_e2e_r
 }
 
 async function logout(page: Page) {
-  await page.getByRole("button", { name: "退出登录" }).click()
+  await page.getByRole("button", { name: "打开用户菜单" }).click()
+  await page.getByRole("menuitem", { name: "退出登录" }).click()
   await expect(page).toHaveURL(/\/login$/)
 }
 
@@ -365,6 +366,8 @@ test("Phase A active-growth loop is role-correct and provenance-exact", async ({
   )
   await expect(page.locator(".task").filter({ hasText: "SUCCEEDED" })).toHaveCount(3)
 
+  await logout(page)
+  await login(page, "phasea_e2e_admin")
   await page.goto("/admin/analytics")
   const origin = new URL(page.url()).origin
   const facebookShortPath = await createTrackingAndShort(

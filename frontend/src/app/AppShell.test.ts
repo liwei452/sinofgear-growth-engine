@@ -15,7 +15,7 @@ const Root = defineComponent({ setup: () => () => h(RouterView) })
 const currentUser = {
   user: { id: 1, username: "operator" },
   organization: { id: "org-1", name: "示例组织", slug: "demo" },
-  membership: { id: "member-1", role: "OPERATOR", status: "ACTIVE" },
+  membership: { id: "member-1", role: "OPERATOR", status: "ACTIVE", permissions: ["products.read"] },
 }
 
 function useViewport(narrow: boolean) {
@@ -80,6 +80,25 @@ it("shows only the five factory-owner navigation choices", async () => {
   expect(screen.getByRole("link", { name: "推广" })).toHaveAttribute("aria-current", "page")
 })
 
+it("opens a keyboard-accessible user menu with the settings entry", async () => {
+  const user = userEvent.setup()
+  await renderShell()
+
+  const trigger = screen.getByRole("button", { name: "打开用户菜单" })
+  expect(trigger).toHaveAttribute("aria-expanded", "false")
+  expect(screen.queryByRole("menuitem", { name: "设置" })).not.toBeInTheDocument()
+
+  await user.click(trigger)
+  expect(trigger).toHaveAttribute("aria-expanded", "true")
+  expect(screen.getByRole("menu")).toBeInTheDocument()
+  expect(screen.getByRole("menuitem", { name: "设置" })).toHaveAttribute("href", "/settings?from=/")
+  expect(screen.getByRole("menuitem", { name: "退出登录" })).toBeInTheDocument()
+
+  await user.keyboard("{Escape}")
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument()
+  expect(trigger).toHaveFocus()
+})
+
 it("opens and closes the narrow-screen navigation with button and Escape", async () => {
   const user = userEvent.setup()
   const { mediaQuery, unmount } = await renderShell("/", { narrow: true })
@@ -90,7 +109,7 @@ it("opens and closes the narrow-screen navigation with button and Escape", async
   expect(sidebar).toHaveAttribute("inert")
   menuButton.focus()
   await user.tab()
-  expect(screen.getByRole("button", { name: "退出登录" })).toHaveFocus()
+  expect(screen.getByRole("button", { name: "打开用户菜单" })).toHaveFocus()
 
   await user.click(menuButton)
   expect(screen.getByRole("button", { name: "关闭导航" })).toHaveAttribute("aria-expanded", "true")
@@ -157,14 +176,14 @@ it("closes an open narrow drawer and focuses routed content after programmatic n
 
 it("does not move focus for desktop or duplicate navigation", async () => {
   const { router } = await renderShell()
-  const logoutButton = screen.getByRole("button", { name: "退出登录" })
-  logoutButton.focus()
+  const userMenuButton = screen.getByRole("button", { name: "打开用户菜单" })
+  userMenuButton.focus()
 
   await router.push("/promotion")
-  expect(logoutButton).toHaveFocus()
+  expect(userMenuButton).toHaveFocus()
 
   await router.push("/promotion")
-  expect(logoutButton).toHaveFocus()
+  expect(userMenuButton).toHaveFocus()
 })
 
 it("logs out through the API, clears the session, and returns to login", async () => {
@@ -176,7 +195,8 @@ it("logs out through the API, clears the session, and returns to login", async (
   queryClient.setQueryData(["products", "org-1", "list"], { results: [{ id: "secret" }] })
   queryClient.setQueryData(["knowledge", "org-1", "concepts"], [{ id: "secret" }])
 
-  await user.click(screen.getByRole("button", { name: "退出登录" }))
+  await user.click(screen.getByRole("button", { name: "打开用户菜单" }))
+  await user.click(screen.getByRole("menuitem", { name: "退出登录" }))
 
   expect(await screen.findByText("登录页面")).toBeInTheDocument()
   expect(queryClient.getQueryData(["auth", "me"])).toBeUndefined()
@@ -202,7 +222,8 @@ it("shows a safe logout failure with recovery guidance and clears it before retr
   const user = userEvent.setup()
   await renderShell()
 
-  await user.click(screen.getByRole("button", { name: "退出登录" }))
+  await user.click(screen.getByRole("button", { name: "打开用户菜单" }))
+  await user.click(screen.getByRole("menuitem", { name: "退出登录" }))
 
   const alert = await screen.findByRole("alert")
   expect(alert).toHaveAttribute("aria-live", "assertive")
@@ -211,9 +232,10 @@ it("shows a safe logout failure with recovery guidance and clears it before retr
   expect(alert).not.toHaveTextContent("Traceback")
   expect(alert).not.toHaveTextContent("DROP TABLE")
 
-  await user.click(screen.getByRole("button", { name: "重新退出" }))
+  await user.click(screen.getByRole("button", { name: "打开用户菜单" }))
+  await user.click(screen.getByRole("menuitem", { name: "重新退出" }))
   await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument())
-  expect(screen.getByRole("button", { name: "正在退出…" })).toBeDisabled()
+  expect(screen.getByRole("button", { name: "打开用户菜单" })).toBeDisabled()
   finishRetry?.(new Response(null, { status: 204 }))
   expect(await screen.findByText("登录页面")).toBeInTheDocument()
 })

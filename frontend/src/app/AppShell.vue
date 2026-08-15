@@ -22,9 +22,11 @@ const router = useRouter()
 const queryClient = useQueryClient()
 const currentUser = useQuery(currentUserQueryOptions())
 const navOpen = ref(false)
+const userMenuOpen = ref(false)
 const isNarrowViewport = ref(false)
 const sidebarElement = ref<HTMLElement | null>(null)
 const menuButtonElement = ref<HTMLButtonElement | null>(null)
+const userMenuButtonElement = ref<HTMLButtonElement | null>(null)
 const contentElement = ref<HTMLElement | null>(null)
 const drawerClosed = computed(() => isNarrowViewport.value && !navOpen.value)
 const pageTitle = computed(() => String(route.meta.title ?? "工作台"))
@@ -84,11 +86,27 @@ function toggleNavigation() {
 }
 
 function startLogout() {
+  userMenuOpen.value = false
   logoutMutation.reset()
   logoutMutation.mutate()
 }
 
+function toggleUserMenu() {
+  userMenuOpen.value = !userMenuOpen.value
+}
+
+function closeUserMenu({ restoreFocus = false } = {}) {
+  if (!userMenuOpen.value) return
+  userMenuOpen.value = false
+  if (restoreFocus) void nextTick(() => userMenuButtonElement.value?.focus())
+}
+
 function onKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape" && userMenuOpen.value) {
+    event.preventDefault()
+    closeUserMenu({ restoreFocus: true })
+    return
+  }
   if (!isNarrowViewport.value || !navOpen.value) return
   if (event.key === "Escape") {
     event.preventDefault()
@@ -110,6 +128,12 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 watch(() => route.fullPath, async () => {
+  const userMenuWasOpen = userMenuOpen.value
+  closeUserMenu()
+  if (userMenuWasOpen) {
+    await nextTick()
+    contentElement.value?.focus()
+  }
   if (!isNarrowViewport.value || !navOpen.value) return
   navOpen.value = false
   await nextTick()
@@ -194,13 +218,28 @@ onBeforeUnmount(() => {
               <span>{{ currentUser.data.value.user.username }}</span>
             </div>
             <button
+              ref="userMenuButtonElement"
               class="button button-quiet"
               type="button"
+              aria-haspopup="menu"
+              :aria-expanded="userMenuOpen"
+              :aria-label="userMenuOpen ? '关闭用户菜单' : '打开用户菜单'"
               :disabled="logoutMutation.isPending.value"
-              @click="startLogout"
+              @click="toggleUserMenu"
             >
-              {{ logoutMutation.isPending.value ? "正在退出…" : logoutError ? "重新退出" : "退出登录" }}
+              设置与账户
             </button>
+            <div v-if="userMenuOpen" class="user-menu" role="menu" aria-label="用户菜单">
+              <RouterLink role="menuitem" :to="{ path: '/settings', query: { from: route.fullPath } }">设置</RouterLink>
+              <button
+                role="menuitem"
+                type="button"
+                :disabled="logoutMutation.isPending.value"
+                @click="startLogout"
+              >
+                {{ logoutMutation.isPending.value ? "正在退出…" : logoutError ? "重新退出" : "退出登录" }}
+              </button>
+            </div>
           </div>
           <div
             v-if="logoutError"

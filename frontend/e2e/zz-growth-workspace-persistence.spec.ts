@@ -17,6 +17,15 @@ async function expectNoSeededDemo(page: Page) {
 test("formal workspace stays clean and persists only explicitly recorded data", async ({ page }) => {
   await login(page)
 
+  await page.getByRole("button", { name: "打开用户菜单" }).click()
+  await page.getByRole("menuitem", { name: "设置" }).click()
+  await expect(page).toHaveURL(/\/settings\?from=/)
+  await expect(page.getByRole("heading", { name: "设置中心" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "高级管理" })).toHaveCount(0)
+  await expect(page.getByText("真实 AI Provider 尚未配置")).toBeVisible()
+  await page.getByRole("link", { name: "返回工作台" }).click()
+  await expect(page).toHaveURL(/\/$/)
+
   await expect(page.getByRole("heading", { name: "今天发现的采购机会" })).toBeVisible()
   await expect(page.getByRole("heading", { name: "今天还没有已验证的采购机会" })).toBeVisible()
   await expect(page.getByRole("heading", { name: "还没有真实 AI 可见度监测记录" })).toBeVisible()

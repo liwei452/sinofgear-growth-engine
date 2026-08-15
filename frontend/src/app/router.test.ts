@@ -22,6 +22,7 @@ const LegacyAnalytics = defineComponent({ name: "LegacyAnalyticsStub", template:
 const Promotion = defineComponent({ name: "PromotionStub", template: "<p>工厂推广工作区</p>" })
 const Opportunities = defineComponent({ name: "OpportunitiesStub", template: "<p>证据化客户机会</p>" })
 const Company = defineComponent({ name: "CompanyStub", template: "<p>公司事实资料</p>" })
+const Settings = defineComponent({ name: "SettingsStub", template: "<p>统一设置中心</p>" })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
 function deferred<T>() {
@@ -39,7 +40,7 @@ function router(client = queryClient(), initialPath?: string) {
   if (initialPath) history.push(initialPath)
   return createAppRouter(client, {
     history,
-    components: { Login, Shell, Dashboard, Promotion, Opportunities, Company, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LegacyAnalytics, Placeholder },
+    components: { Login, Shell, Dashboard, Promotion, Opportunities, Company, Settings, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LegacyAnalytics, Placeholder },
   })
 }
 
@@ -58,7 +59,7 @@ describe("protected routing", () => {
     pending.resolve(new Response(JSON.stringify({
       user: { id: 1, username: "operator" },
       organization: { id: "org-1", name: "示例组织", slug: "demo" },
-      membership: { id: "member-1", role: "OPERATOR", status: "ACTIVE" },
+      membership: { id: "member-1", role: "OPERATOR", status: "ACTIVE", permissions: ["products.read"] },
     }), { status: 200, headers: { "Content-Type": "application/json" } }))
     await navigation
     expect(await screen.findByText("真实产品库")).toBeInTheDocument()
@@ -66,7 +67,7 @@ describe("protected routing", () => {
 
   it("mounts distinct real product and knowledge route components", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: [] } })
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["products.read", "knowledge.read"] } })
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
     await appRouter.push("/products")
@@ -77,7 +78,7 @@ describe("protected routing", () => {
 
   it("mounts distinct content factory and review center route components", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: [] } })
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["campaigns.read", "content.read"] } })
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
 
@@ -90,7 +91,7 @@ describe("protected routing", () => {
 
   it("mounts all four distinct publishing operations workspaces", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: [] } })
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["assets.read", "publishing.read", "tracking.read"] } })
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
     for (const [path, label] of [["/assets", "真实素材库"], ["/publishing-calendar", "真实发布日历"], ["/platform-accounts", "真实平台账户"], ["/analytics", "真实数据看板"]]) {
@@ -112,6 +113,28 @@ describe("protected routing", () => {
       await appRouter.push(path)
       expect(await screen.findByText(label)).toBeInTheDocument()
     }
+  })
+
+  it("blocks direct access to a settings destination without its permission", async () => {
+    const client = queryClient()
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: [] } })
+    const appRouter = router(client)
+
+    await appRouter.push("/products")
+
+    expect(appRouter.currentRoute.value.name).toBe("settings")
+    expect(appRouter.currentRoute.value.query.blocked).toBe("products.read")
+  })
+
+  it("keeps administrator-only routes closed to non-administrators", async () => {
+    const client = queryClient()
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["tracking.read"] } })
+    const appRouter = router(client)
+
+    await appRouter.push("/admin/analytics")
+
+    expect(appRouter.currentRoute.value.name).toBe("settings")
+    expect(appRouter.currentRoute.value.query.blocked).toBe("administrator")
   })
 
   it.each([401, 403])("redirects status %s to login with the local target", async (status) => {

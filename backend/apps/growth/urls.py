@@ -4,6 +4,8 @@ from .views import (
     ChannelPackageApproveView,
     ChannelPackageManualExportView,
     CompanyFactVerifyView,
+    DiscoveryProfileView,
+    DiscoveryRunView,
     FollowUpView,
     GrowthWorkspaceView,
     MetricReceiptCreateView,
@@ -16,6 +18,12 @@ from .views import (
 
 urlpatterns = [
     path("growth/workspace", GrowthWorkspaceView.as_view(), name="growth-workspace"),
+    path("growth/discovery/run", DiscoveryRunView.as_view(), name="growth-discovery-run"),
+    path(
+        "growth/discovery/profile",
+        DiscoveryProfileView.as_view(),
+        name="growth-discovery-profile",
+    ),
     path(
         "growth/opportunity-imports/manual-url",
         ManualOpportunityImportView.as_view(),

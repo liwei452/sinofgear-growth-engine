@@ -33,6 +33,31 @@ class GrowthValidationErrorSerializer(GrowthErrorSerializer):
     errors = serializers.DictField(required=False)
 
 
+class DiscoveryProfileUpdateSerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+
+
+class DiscoveryRunResultSerializer(serializers.Serializer):
+    status = serializers.CharField()
+    finished_at = serializers.DateTimeField(allow_null=True)
+    found_count = serializers.IntegerField()
+    new_company_count = serializers.IntegerField()
+    new_signal_count = serializers.IntegerField()
+    duplicate_count = serializers.IntegerField()
+    skipped_count = serializers.IntegerField()
+    message = serializers.CharField()
+
+
+class DiscoverySummarySerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+    source_label = serializers.CharField()
+    schedule_label = serializers.CharField()
+    product_scope_label = serializers.CharField()
+    next_run_at = serializers.DateTimeField(allow_null=True)
+    last_run = DiscoveryRunResultSerializer(allow_null=True)
+    available_sources = serializers.ListField(child=serializers.DictField())
+
+
 class GrowthPublishItemSerializer(serializers.ModelSerializer):
     error_code = serializers.SerializerMethodField()
     recovery_action = serializers.SerializerMethodField()
@@ -126,6 +151,7 @@ class IntentSignalSerializer(serializers.ModelSerializer):
             "MANUAL_URL": "人工导入网页",
             "LICENSED_API": "许可数据接口",
             "INBOUND": "主动入站",
+            "OFFICIAL_PUBLIC_API": "官方公开数据接口",
         }.get(obj.collection_method, "采集方式未说明")
 
     def get_priority_label(self, obj: IntentSignal) -> str:

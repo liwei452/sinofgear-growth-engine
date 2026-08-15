@@ -5,10 +5,14 @@ from rest_framework.views import APIView
 
 from apps.identity.permissions import CanManageCampaigns, CanReadCampaigns
 from apps.platforms.connection_status import connection_summary
+from integrations.sources.base import SourceAdapterError
 
+from .discovery import DiscoveryAlreadyRunning, run_discovery
 from .models import (
     ChannelPackage,
     Contact,
+    DiscoveryProfile,
+    DiscoveryRun,
     FieldProvenance,
     FollowUp,
     GrowthPublishBatch,
@@ -22,6 +26,9 @@ from .manual_imports import import_manual_opportunity
 from .serializers import (
     ChannelPackageSerializer,
     ContactSerializer,
+    DiscoveryProfileUpdateSerializer,
+    DiscoveryRunResultSerializer,
+    DiscoverySummarySerializer,
     FieldProvenanceSerializer,
     FollowUpSerializer,
     GrowthPublishBatchSerializer,
@@ -68,6 +75,50 @@ def connector_readiness(organization):
     return results
 
 
+def discovery_profile_for(organization):
+    profile, _ = DiscoveryProfile.objects.get_or_create(organization=organization)
+    return profile
+
+
+def discovery_run_payload(run):
+    count = run.created_signal_count
+    message = (
+        f"发现 {count} 条新采购信号，等待你审核。"
+        if run.status == DiscoveryRun.Status.SUCCEEDED
+        else "自动查找暂时未完成，请稍后重试。"
+    )
+    return {
+        "status": run.status,
+        "finished_at": run.finished_at,
+        "found_count": run.fetched_count,
+        "new_company_count": run.created_account_count,
+        "new_signal_count": count,
+        "duplicate_count": run.duplicate_count,
+        "skipped_count": run.skipped_count,
+        "message": message,
+    }
+
+
+def discovery_summary(profile):
+    last_run = profile.runs.exclude(status=DiscoveryRun.Status.RUNNING).first()
+    return {
+        "enabled": profile.enabled,
+        "source_label": "欧盟官方采购数据",
+        "schedule_label": "每天自动查找" if profile.enabled else "已暂停自动查找",
+        "product_scope_label": "齿轮、传动与驱动部件",
+        "next_run_at": profile.next_run_at,
+        "last_run": discovery_run_payload(last_run) if last_run else None,
+        "available_sources": [
+            {"code": "TED", "label": "欧盟官方采购数据", "status": "ACTIVE"},
+            {
+                "code": "GOOGLE_PLACES",
+                "label": "Google Maps 官方企业发现",
+                "status": "KEY_REQUIRED",
+            },
+        ],
+    }
+
+
 class GrowthWorkspaceView(APIView):
     permission_classes = [CanReadCampaigns]
 
@@ -98,7 +149,56 @@ class GrowthWorkspaceView(APIView):
                 FieldProvenance.objects.filter(organization=organization), many=True,
             ).data,
             "connectors": connector_readiness(organization),
+            "discovery": discovery_summary(discovery_profile_for(organization)),
         })
+
+
+class DiscoveryRunView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=None,
+        responses={
+            200: DiscoveryRunResultSerializer,
+            409: GrowthErrorSerializer,
+            503: GrowthErrorSerializer,
+        },
+    )
+    def post(self, request):
+        profile = discovery_profile_for(request.organization)
+        try:
+            run = run_discovery(profile.id, trigger=DiscoveryRun.Trigger.MANUAL)
+        except DiscoveryAlreadyRunning:
+            return Response({
+                "code": "DISCOVERY_ALREADY_RUNNING",
+                "message": "正在查找客户，请等待当前任务完成。",
+                "recovery_action": "稍后刷新客户机会。",
+            }, status=409)
+        except SourceAdapterError:
+            return Response({
+                "code": "DISCOVERY_SOURCE_UNAVAILABLE",
+                "message": "官方数据源暂时不可用。",
+                "recovery_action": "请稍后再次点击立即查找。",
+            }, status=503)
+        return Response(discovery_run_payload(run))
+
+
+class DiscoveryProfileView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=DiscoveryProfileUpdateSerializer,
+        responses={200: DiscoverySummarySerializer, 400: GrowthValidationErrorSerializer},
+    )
+    def patch(self, request):
+        serializer = DiscoveryProfileUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        profile = discovery_profile_for(request.organization)
+        profile.enabled = serializer.validated_data["enabled"]
+        profile.save(update_fields=["enabled", "updated_at"])
+        return Response(discovery_summary(profile))
 
 
 class ManualOpportunityImportView(APIView):

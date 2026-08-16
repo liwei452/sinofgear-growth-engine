@@ -268,12 +268,7 @@ class GrowthWorkspaceView(APIView):
     def get(self, request):
         organization = request.organization
         limit, offset = self._pagination(request)
-        cache_key = f"growth:workspace:{organization.id}:{limit}:{offset}"
-        payload = cache.get(cache_key)
-        if payload is not None:
-            return Response(payload)
         payload = self._workspace_payload(organization, limit=limit, offset=offset)
-        cache.set(cache_key, payload, timeout=30)
         return Response(payload)
 
     @staticmethod

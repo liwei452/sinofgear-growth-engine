@@ -454,12 +454,8 @@ class InboundRfqView(APIView):
                 "message": "无法确定询盘所属组织。",
                 "recovery_action": "请配置网站对应的组织标识。",
             }, status=400)
-        rfq = record_inbound_rfq(organization=organization, **serializer.validated_data)
-        return Response({
-            "id": str(rfq.id),
-            "need_slug": rfq.need_slug,
-            "status": rfq.status,
-        }, status=201)
+        result = record_inbound_rfq(organization=organization, **serializer.validated_data)
+        return Response(result, status=201)
 
 
 class DiscoveryRunView(APIView):

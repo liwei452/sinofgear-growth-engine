@@ -782,17 +782,3 @@ class LeadWebsiteVisit(OrganizationOwnedModel):
     session_id = models.CharField(max_length=128, blank=True)
     visited_at = models.DateTimeField(default=timezone.now)
 
-
-class InboundRfq(OrganizationOwnedModel):
-    company_name = models.CharField(max_length=255)
-    country = models.CharField(max_length=96, blank=True)
-    contact_name = models.CharField(max_length=255, blank=True)
-    email = models.EmailField(blank=True)
-    industry = models.CharField(max_length=160, blank=True)
-    product_interest = models.CharField(max_length=255, blank=True)
-    message = models.TextField(blank=True)
-    file_names = models.JSONField(default=list)
-    need_slug = models.CharField(max_length=32, blank=True)
-    landing_page = models.CharField(max_length=500, blank=True)
-    lead_id = models.CharField(max_length=64, blank=True)
-    status = models.CharField(max_length=24, default="NEW")

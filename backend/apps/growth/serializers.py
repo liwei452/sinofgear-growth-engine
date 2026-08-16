@@ -135,9 +135,9 @@ class InboundRfqRequestSerializer(serializers.Serializer):
 
 
 class InboundRfqResultSerializer(serializers.Serializer):
-    id = serializers.UUIDField()
+    account_id = serializers.UUIDField()
     need_slug = serializers.CharField()
-    status = serializers.CharField()
+    created_account = serializers.BooleanField()
 
 
 class MarketWatchCreateSerializer(serializers.Serializer):

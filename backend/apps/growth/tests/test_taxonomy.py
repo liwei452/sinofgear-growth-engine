@@ -3,6 +3,7 @@ from apps.growth.taxonomy import (
     classify_need,
     landing_page_path,
     landing_page_url,
+    tracked_landing_url,
 )
 
 
@@ -19,3 +20,16 @@ def test_landing_page_maps_industry_and_need():
     assert landing_page_url("packaging", "oem_production") == (
         "https://sinfogear.com/industries/packaging/custom-gears/"
     )
+
+
+def test_tracked_landing_url_includes_utm_and_lead_id():
+    url = tracked_landing_url(
+        "/industries/mining/replacement-gears/",
+        "lead-123",
+        source="google_maps",
+        campaign="south_africa_mining",
+    )
+    assert url.startswith("https://sinfogear.com/industries/mining/replacement-gears/?")
+    assert "utm_source=google_maps" in url
+    assert "utm_campaign=south_africa_mining" in url
+    assert "lead_id=lead-123" in url

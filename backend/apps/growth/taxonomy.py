@@ -1,3 +1,6 @@
+from urllib.parse import urlencode
+
+
 INDUSTRY_TAXONOMY = {
     "mining": {"label": "Mining", "keywords": ("mining", "mine", "crusher", "mineral")},
     "cement": {"label": "Cement", "keywords": ("cement",)},
@@ -60,3 +63,20 @@ def landing_page_path(industry: str, need: str) -> str:
 
 def landing_page_url(industry: str, need: str) -> str:
     return f"https://sinfogear.com{landing_page_path(industry, need)}"
+
+
+def tracked_landing_url(
+    path: str,
+    lead_id: str,
+    *,
+    source: str = "google_maps",
+    medium: str = "email",
+    campaign: str = "auto_discovery",
+) -> str:
+    query = urlencode({
+        "utm_source": source,
+        "utm_medium": medium,
+        "utm_campaign": campaign,
+        "lead_id": str(lead_id),
+    })
+    return f"https://sinfogear.com{path}?{query}"

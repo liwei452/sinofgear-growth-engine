@@ -14,7 +14,13 @@ from .market_pilots import matched_gear_terms
 from .lead_judgment import judge_candidate
 from .buying_signals import detect_buying_signals
 from .contact_intelligence import extract_team_contacts, infer_name_from_email
-from .taxonomy import classify_industry, classify_need, landing_page_url
+from .taxonomy import (
+    classify_industry,
+    classify_need,
+    landing_page_path,
+    landing_page_url,
+    tracked_landing_url,
+)
 
 
 WEBSITE_TIMEOUT_SECONDS = 15
@@ -113,6 +119,11 @@ def prepare_website_enrichment(candidate, *, transport=None):
     industry_slug = classify_industry(f"{candidate.industry} {facts.text_excerpt}")
     need_slug = classify_need(facts.text_excerpt)
     landing_page = landing_page_url(industry_slug, need_slug)
+    tracked_landing_page = tracked_landing_url(
+        landing_page_path(industry_slug, need_slug),
+        candidate.id,
+        source="google_maps" if candidate.import_format == "GOOGLE_MAPS" else "manual",
+    )
     public_contact_paths = (
         [{
             "label": email,
@@ -153,6 +164,7 @@ def prepare_website_enrichment(candidate, *, transport=None):
             "industry_slug": industry_slug,
             "need_slug": need_slug,
             "landing_page": landing_page,
+            "tracked_landing_page": tracked_landing_page,
         },
     }
     snapshot, created = CandidateEnrichmentSnapshot.objects.get_or_create(

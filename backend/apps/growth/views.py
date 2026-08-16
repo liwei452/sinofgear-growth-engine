@@ -57,6 +57,7 @@ from .maps_discovery import (
 )
 from .website_enrichment import build_website_transport, prepare_website_enrichment
 from .lead_intent import record_lead_visit
+from .inbound_rfq import default_organization, record_inbound_rfq
 from .promotion_plan import (
     approve_promotion_plan,
     clear_promotion_plan_approval,
@@ -87,6 +88,8 @@ from .serializers import (
     GoogleMapsDiscoveryRunResultSerializer,
     LeadVisitRequestSerializer,
     LeadVisitResultSerializer,
+    InboundRfqRequestSerializer,
+    InboundRfqResultSerializer,
     GrowthPublishBatchSerializer,
     GrowthErrorSerializer,
     GrowthValidationErrorSerializer,
@@ -397,6 +400,40 @@ class LeadVisitView(APIView):
             "intent_score": candidate.intent_score,
             "intent_breakdown": candidate.intent_breakdown,
         })
+
+
+class InboundRfqView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=InboundRfqRequestSerializer,
+        responses={201: InboundRfqResultSerializer, 403: GrowthValidationErrorSerializer},
+    )
+    def post(self, request):
+        expected = getattr(settings, "LEAD_VISIT_WEBHOOK_SECRET", "")
+        provided = request.headers.get("X-Lead-Visit-Secret", "")
+        if expected and not secrets.compare_digest(expected, provided):
+            return Response({
+                "code": "INVALID_WEBHOOK_SECRET",
+                "message": "无效的网站回传密钥。",
+                "recovery_action": "请在网站端配置正确的回传密钥。",
+            }, status=403)
+        serializer = InboundRfqRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        organization = default_organization()
+        if organization is None:
+            return Response({
+                "code": "NO_ORGANIZATION",
+                "message": "系统尚未初始化组织。",
+                "recovery_action": "请先完成系统初始化。",
+            }, status=500)
+        rfq = record_inbound_rfq(organization=organization, **serializer.validated_data)
+        return Response({
+            "id": str(rfq.id),
+            "need_slug": rfq.need_slug,
+            "status": rfq.status,
+        }, status=201)
 
 
 class DiscoveryRunView(APIView):

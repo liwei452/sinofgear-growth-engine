@@ -121,6 +121,25 @@ class LeadVisitResultSerializer(serializers.Serializer):
     intent_breakdown = serializers.DictField()
 
 
+class InboundRfqRequestSerializer(serializers.Serializer):
+    company_name = serializers.CharField(max_length=255)
+    country = serializers.CharField(max_length=96, required=False, allow_blank=True, default="")
+    contact_name = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+    email = serializers.EmailField(required=False, allow_blank=True, default="")
+    industry = serializers.CharField(max_length=160, required=False, allow_blank=True, default="")
+    product_interest = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+    message = serializers.CharField(required=False, allow_blank=True, default="")
+    file_names = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    landing_page = serializers.CharField(max_length=500, required=False, allow_blank=True, default="")
+    lead_id = serializers.CharField(max_length=64, required=False, allow_blank=True, default="")
+
+
+class InboundRfqResultSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    need_slug = serializers.CharField()
+    status = serializers.CharField()
+
+
 class MarketWatchCreateSerializer(serializers.Serializer):
     country_code = serializers.RegexField(r"^[A-Za-z]{2,3}$", min_length=2, max_length=3)
     country_label = serializers.CharField(min_length=1, max_length=96)

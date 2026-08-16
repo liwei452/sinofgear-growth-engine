@@ -2,6 +2,7 @@ import secrets
 
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
+from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.http import HttpResponse
@@ -57,13 +58,24 @@ from .maps_discovery import (
 )
 from .website_enrichment import build_website_transport, prepare_website_enrichment
 from .lead_intent import record_lead_visit
-from .inbound_rfq import default_organization, record_inbound_rfq
+from .inbound_rfq import record_inbound_rfq, resolve_website_organization
 from .promotion_plan import (
     approve_promotion_plan,
     clear_promotion_plan_approval,
     generate_promotion_plan,
     promotion_plan_status,
 )
+
+
+def _webhook_rate_limited(request, prefix, limit=30, window_seconds=60):
+    ip = request.META.get("REMOTE_ADDR", "unknown")
+    key = f"webhook-rate:{prefix}:{ip}"
+    try:
+        current = cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, timeout=window_seconds)
+        current = 1
+    return current > limit
 from .manual_imports import import_manual_opportunity
 from .market_pilots import market_pilot_summary, market_profiles_for
 from .serializers import (
@@ -378,9 +390,15 @@ class LeadVisitView(APIView):
         },
     )
     def post(self, request):
+        if _webhook_rate_limited(request, "lead-visits"):
+            return Response({
+                "code": "RATE_LIMITED",
+                "message": "访问回传过于频繁，请稍后再试。",
+                "recovery_action": "稍后重试。",
+            }, status=429)
         expected = getattr(settings, "LEAD_VISIT_WEBHOOK_SECRET", "")
         provided = request.headers.get("X-Lead-Visit-Secret", "")
-        if expected and not secrets.compare_digest(expected, provided):
+        if not expected or not secrets.compare_digest(expected, provided):
             return Response({
                 "code": "INVALID_WEBHOOK_SECRET",
                 "message": "无效的网站回传密钥。",
@@ -411,9 +429,15 @@ class InboundRfqView(APIView):
         responses={201: InboundRfqResultSerializer, 403: GrowthValidationErrorSerializer},
     )
     def post(self, request):
+        if _webhook_rate_limited(request, "inbound-rfq"):
+            return Response({
+                "code": "RATE_LIMITED",
+                "message": "询盘提交过于频繁，请稍后再试。",
+                "recovery_action": "稍后重试。",
+            }, status=429)
         expected = getattr(settings, "LEAD_VISIT_WEBHOOK_SECRET", "")
         provided = request.headers.get("X-Lead-Visit-Secret", "")
-        if expected and not secrets.compare_digest(expected, provided):
+        if not expected or not secrets.compare_digest(expected, provided):
             return Response({
                 "code": "INVALID_WEBHOOK_SECRET",
                 "message": "无效的网站回传密钥。",
@@ -421,13 +445,15 @@ class InboundRfqView(APIView):
             }, status=403)
         serializer = InboundRfqRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        organization = default_organization()
+        organization = resolve_website_organization(
+            serializer.validated_data.get("lead_id", ""),
+        )
         if organization is None:
             return Response({
                 "code": "NO_ORGANIZATION",
-                "message": "系统尚未初始化组织。",
-                "recovery_action": "请先完成系统初始化。",
-            }, status=500)
+                "message": "无法确定询盘所属组织。",
+                "recovery_action": "请配置网站对应的组织标识。",
+            }, status=400)
         rfq = record_inbound_rfq(organization=organization, **serializer.validated_data)
         return Response({
             "id": str(rfq.id),

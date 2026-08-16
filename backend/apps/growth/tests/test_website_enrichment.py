@@ -1,7 +1,11 @@
 import pytest
 
 from apps.growth.models import DiscoveryCandidate
-from apps.growth.website_enrichment import extract_website_facts, prepare_website_enrichment
+from apps.growth.website_enrichment import (
+    _validate_public_url,
+    extract_website_facts,
+    prepare_website_enrichment,
+)
 from apps.identity.models import Organization
 
 
@@ -35,6 +39,23 @@ def test_extract_website_facts_is_tolerant_to_empty_html():
     assert facts.title == ""
     assert facts.emails == ()
     assert facts.gear_terms == ()
+
+
+@pytest.mark.parametrize("url", [
+    "http://127.0.0.1/",
+    "http://169.254.169.254/latest/meta-data",
+    "http://localhost/",
+    "http://10.0.0.1/",
+    "ftp://example.com/file",
+    "http://8.8.8.8:22/",
+])
+def test_validate_public_url_rejects_private_or_non_http(url):
+    with pytest.raises(ValueError):
+        _validate_public_url(url)
+
+
+def test_validate_public_url_allows_public_ip():
+    _validate_public_url("https://8.8.8.8/")
 
 
 @pytest.mark.django_db

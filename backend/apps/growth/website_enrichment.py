@@ -1,9 +1,11 @@
+import ipaddress
 import re
+import socket
 from dataclasses import dataclass
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from urllib.robotparser import RobotFileParser
 
 from django.conf import settings
@@ -41,6 +43,7 @@ class WebsiteTransport(Protocol):
 
 class UrllibWebsiteTransport:
     def fetch_html(self, url, *, timeout_seconds, max_bytes) -> str:
+        _validate_public_url(url)
         if not _robots_allow(url):
             raise ValueError("robots.txt disallows this page")
         request = Request(
@@ -48,8 +51,17 @@ class UrllibWebsiteTransport:
             headers={"User-Agent": "SinofGearBot/1.0 (+public-discovery)"},
             method="GET",
         )
+        opener = build_opener(_NoRedirect())
         try:
-            with urlopen(request, timeout=timeout_seconds) as response:
+            with opener.open(request, timeout=timeout_seconds) as response:
+                status = getattr(response, "status", None)
+                if status is None:
+                    status = getattr(response, "code", None)
+                if isinstance(status, int) and 300 <= status < 400:
+                    raise ValueError("website redirect is not allowed")
+                content_type = response.headers.get("Content-Type", "")
+                if content_type and "text/html" not in content_type and not content_type.startswith("text/"):
+                    raise ValueError("website is not an HTML page")
                 body = response.read(max_bytes + 1)
         except HTTPError as error:
             raise ValueError(f"website returned HTTP {error.code}") from error
@@ -58,6 +70,35 @@ class UrllibWebsiteTransport:
         if len(body) > max_bytes:
             raise ValueError("website is too large")
         return body.decode("utf-8", errors="replace")
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _validate_public_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("only http/https websites are allowed")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("website host is missing")
+    port = parsed.port
+    if port is not None and port not in (80, 443, 8000, 8080, 8443):
+        raise ValueError("website port is not allowed")
+    try:
+        addresses = socket.getaddrinfo(host, port or 80, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as error:
+        raise ValueError("website host cannot be resolved") from error
+    for address in addresses:
+        ip_text = address[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_text)
+        except ValueError:
+            continue
+        if not ip.is_global:
+            raise ValueError("website resolves to a private address")
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,7 @@
 import pytest
 
-from apps.growth.inbound_rfq import record_inbound_rfq
+from apps.growth.inbound_rfq import record_inbound_rfq, resolve_website_organization
+from apps.growth.models import DiscoveryCandidate
 from apps.identity.models import Organization
 
 
@@ -19,3 +20,18 @@ def test_record_inbound_rfq_classifies_need(organization):
     )
     assert rfq.need_slug == "replacement"
     assert rfq.company_name == "ABC Mining"
+
+
+def test_resolve_website_organization_from_lead_id(organization):
+    candidate = DiscoveryCandidate.objects.create(
+        organization=organization,
+        company_name="ABC Mining",
+        country="ZAF",
+        import_format="GOOGLE_MAPS",
+        record_hash="org-resolve-hash",
+    )
+    assert resolve_website_organization(str(candidate.id)) == organization
+
+
+def test_resolve_website_organization_returns_none_without_config(organization):
+    assert resolve_website_organization("") is None

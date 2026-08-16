@@ -1,8 +1,9 @@
+from django.conf import settings
 from django.db import transaction
 
 from apps.identity.models import Organization
 
-from .models import InboundRfq
+from .models import DiscoveryCandidate, InboundRfq
 from .taxonomy import classify_need
 
 
@@ -26,5 +27,12 @@ def record_inbound_rfq(*, organization, **payload) -> InboundRfq:
     return rfq
 
 
-def default_organization():
-    return Organization.objects.first()
+def resolve_website_organization(lead_id: str = ""):
+    if lead_id:
+        candidate = DiscoveryCandidate.objects.filter(id=lead_id).first()
+        if candidate:
+            return candidate.organization
+    slug = getattr(settings, "LEAD_WEBSITE_ORGANIZATION_SLUG", "")
+    if slug:
+        return Organization.objects.filter(slug=slug).first()
+    return None

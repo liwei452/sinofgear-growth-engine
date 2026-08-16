@@ -20,3 +20,18 @@ def test_detects_unresolvable_domain(monkeypatch):
     monkeypatch.setattr("socket.gethostbyname", raise_error)
     result = verify_email("sales@does-not-exist.invalid")
     assert result["status"] == "DOMAIN_UNRESOLVABLE"
+
+
+def fake_provider():
+    class _FakeProvider:
+        def verify(self, email):
+            return {"email": email, "status": "FAKE_VERIFIED", "domain_resolves": True}
+
+    return _FakeProvider()
+
+
+def test_verify_email_uses_configured_provider(settings):
+    settings.EMAIL_VERIFICATION_PROVIDER_FACTORY = (
+        "apps.growth.tests.test_email_verification.fake_provider"
+    )
+    assert verify_email("a@b.com")["status"] == "FAKE_VERIFIED"

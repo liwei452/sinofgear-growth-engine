@@ -168,6 +168,8 @@ def test_pending_candidate_can_be_reviewed_into_enrichment_without_creating_an_o
         "is_demo": False,
         "score": 0,
         "grade": "C",
+        "intent_score": 0,
+        "intent_breakdown": {},
         "created_at": candidate.created_at.isoformat().replace("+00:00", "Z"),
     }]
     assert reviewed.status_code == 200

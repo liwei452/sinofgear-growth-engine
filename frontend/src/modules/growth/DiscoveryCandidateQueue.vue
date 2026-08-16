@@ -64,6 +64,7 @@ function formatDate(value: string): string {
           <p>
             {{ candidate.country }}<template v-if="candidate.industry"> · {{ candidate.industry }}</template>
             · <span class="candidate-grade">{{ candidate.grade }} 级</span>
+            <template v-if="candidate.intent_score >= 80"> · <span class="candidate-intent">高意向</span></template>
           </p>
         </div>
         <span class="status-pill">{{ candidate.status_label }}</span>
@@ -85,6 +86,7 @@ function formatDate(value: string): string {
 
 <style scoped>
 .candidate-grade { color: var(--sg-brand); font-weight: 700; }
+.candidate-intent { color: var(--sg-gold, #a16207); font-weight: 800; }
 </style>
 
 <style scoped src="./growth-pages.css"></style>

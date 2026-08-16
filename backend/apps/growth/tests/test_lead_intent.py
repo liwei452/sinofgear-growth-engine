@@ -20,6 +20,24 @@ def test_intent_score_accumulates_website_signals():
     assert score == 5 + 8 + 5 + (8 + 10 + 5 + 5 + 5)
 
 
+def test_intent_score_deduplicates_repeated_pages_and_caps_at_100():
+    paths = [
+        "/replacement-gears/",
+        "/replacement-gears/",
+        "/replacement-gears/",
+    ]
+    score, breakdown = intent_score_from_visits(paths, sessions=1)
+    assert score == 8
+    assert breakdown["page_signals"] == 8
+
+    score_capped, _ = intent_score_from_visits(
+        ["/reverse-engineering-gears/"] * 20,
+        email_clicked=True,
+        sessions=10,
+    )
+    assert score_capped <= 100
+
+
 def test_intent_score_is_zero_without_signals():
     score, breakdown = intent_score_from_visits([], sessions=1)
     assert score == 0

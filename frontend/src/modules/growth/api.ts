@@ -286,6 +286,8 @@ export type DiscoveryCandidate = {
   is_demo: boolean
   score: number
   grade: "A" | "B" | "C"
+  intent_score: number
+  intent_breakdown: Record<string, number>
   created_at: string
 }
 

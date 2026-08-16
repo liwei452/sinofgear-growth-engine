@@ -253,7 +253,7 @@ class DiscoveryCandidateSerializer(serializers.ModelSerializer):
         fields = [
             "id", "company_name", "country", "website", "industry", "status",
             "status_label", "source_owner", "license_contract", "import_format",
-            "is_demo", "score", "grade", "created_at",
+            "is_demo", "score", "grade", "intent_score", "intent_breakdown", "created_at",
         ]
 
     def get_status_label(self, obj):

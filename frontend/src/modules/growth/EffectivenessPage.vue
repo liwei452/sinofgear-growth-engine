@@ -57,8 +57,8 @@ async function saveMetrics(): Promise<void> {
     views: Number(views.value), clicks: Number(clicks.value), replies: Number(replies.value),
     inquiries: Number(inquiries.value),
   }
-  payload.source_note = sourceNote.value.trim()
-  payload.observed_at = observedAt.value
+  payload.source_note = sourceNote.value.trim() || "人工回填"
+  payload.observed_at = observedAt.value || new Date().toISOString()
   await metricMutation.mutateAsync({
     channel: channel.value,
     payload,
@@ -72,6 +72,7 @@ async function saveMetrics(): Promise<void> {
     <header class="growth-hero"><div><p class="eyebrow">效果</p><h1>推广效果</h1><p>每个结论都保留时间范围、分子、分母和数据来源。</p></div><span class="fake-label">仅显示已记录结果</span></header>
     <AccountAttributionPanel v-if="workspaceQuery.data.value" :workspace="workspaceQuery.data.value" />
     <div class="attribution-auxiliary-label"><strong>以下只显示已保存的人工渠道回填</strong><span>未保存的发送、回复和询盘不会推算或补零。</span></div>
+    <div class="growth-heading effect-section-heading"><div><h2>渠道效果</h2><p>渠道层级的数据回填与结果摘要。</p></div><span class="fake-label">按渠道</span></div>
     <section class="metric-grid" aria-label="渠道回填摘要">
       <article><span>已回填渠道</span><strong>{{ latestReceipts.length }}</strong><p>仅统计每个渠道最新一条记录</p></article>
       <article><span>已记录点击</span><strong>{{ latestReceipts.length ? recordedClicks.toLocaleString() : "无数据" }}</strong><p>来自已保存渠道记录</p></article>
@@ -96,12 +97,12 @@ async function saveMetrics(): Promise<void> {
         <div class="growth-heading"><div><h2 id="metric-backfill-title">手工回填渠道结果</h2><p>只保存人工确认的结果，不连接或操作真实平台。</p></div><span class="fake-label">人工核实结果</span></div>
         <div class="metric-fields">
           <label>渠道<select v-model="channel"><option value="TIKTOK">TikTok</option><option value="LINKEDIN">LinkedIn</option><option value="INSTAGRAM">Instagram</option><option value="FACEBOOK">Facebook</option></select></label>
-          <label>播放或访问<input v-model.number="views" type="number" min="0" required /></label>
-          <label>点击<input v-model.number="clicks" type="number" min="0" required /></label>
-          <label>回复<input v-model.number="replies" type="number" min="0" required /></label>
-          <label>询盘<input v-model.number="inquiries" type="number" min="0" required /></label>
-          <label class="manual-import-wide">数据来源说明<input v-model="sourceNote" maxlength="500" required placeholder="例如：平台后台截图，由负责人于当日核对" /></label>
-          <label>观察时间<input v-model="observedAt" type="datetime-local" required /></label>
+          <label>播放或访问<input v-model.number="views" type="number" min="0" /></label>
+          <label>点击<input v-model.number="clicks" type="number" min="0" /></label>
+          <label>回复<input v-model.number="replies" type="number" min="0" /></label>
+          <label>询盘<input v-model.number="inquiries" type="number" min="0" /></label>
+          <label class="manual-import-wide">数据来源说明<input v-model="sourceNote" maxlength="500" placeholder="例如：平台后台截图，由负责人于当日核对" /></label>
+          <label>观察时间<input v-model="observedAt" type="datetime-local" /></label>
         </div>
         <button class="button button-primary" type="submit" :disabled="metricMutation.isPending.value">{{ metricMutation.isPending.value ? "正在保存…" : "保存回填" }}</button>
         <p v-if="savedMessage" role="status" class="approval-status">{{ savedMessage }}</p>
@@ -112,3 +113,8 @@ async function saveMetrics(): Promise<void> {
   </div>
 </template>
 <style scoped src="./growth-pages.css"></style>
+<style scoped>
+.effect-section-heading {
+  margin-top: 6px;
+}
+</style>

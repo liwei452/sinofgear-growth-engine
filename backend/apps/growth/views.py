@@ -54,6 +54,7 @@ from integrations.secrets import encrypt_secret
 from .maps_discovery import (
     MapsDiscoveryMissingKey,
     MapsDiscoveryNotEnabled,
+    probe_maps_connection,
     run_maps_discovery,
 )
 from .website_enrichment import build_website_transport, prepare_website_enrichment
@@ -1048,6 +1049,20 @@ class GoogleMapsDiscoveryRunView(APIView):
                 },
                 status=502,
             )
+        return Response(result)
+
+
+class GoogleMapsDiscoveryTestView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=None,
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    def post(self, request):
+        config = maps_config_for(request.organization)
+        result = probe_maps_connection(config.id)
         return Response(result)
 
 

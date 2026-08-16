@@ -17,6 +17,7 @@ from .views import (
     FollowUpView,
     GoogleMapsDiscoveryConfigView,
     GoogleMapsDiscoveryRunView,
+    GoogleMapsDiscoveryTestView,
     GrowthWorkspaceView,
     InboundRfqView,
     LeadVisitView,
@@ -88,6 +89,11 @@ urlpatterns = [
         "growth/maps-discovery/run",
         GoogleMapsDiscoveryRunView.as_view(),
         name="growth-maps-discovery-run",
+    ),
+    path(
+        "growth/maps-discovery/test",
+        GoogleMapsDiscoveryTestView.as_view(),
+        name="growth-maps-discovery-test",
     ),
     path("growth/discovery/candidate-imports", CandidateListImportView.as_view(), name="growth-candidate-import"),
     path(

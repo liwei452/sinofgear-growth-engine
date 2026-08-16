@@ -177,6 +177,21 @@ def run_due_maps_configs(*, limit=25, source_factory=None) -> dict:
     return result
 
 
+def probe_maps_connection(config_id, *, source_factory=None) -> dict:
+    config = GoogleMapsDiscoveryConfig.objects.get(pk=config_id)
+    if not config.api_key_ciphertext:
+        return {"ok": False, "error_code": "API_KEY_NOT_CONFIGURED"}
+    api_key = decrypt_secret(config.api_key_ciphertext)
+    source = source_factory(api_key) if source_factory else GooglePlacesSource(api_key=api_key)
+    try:
+        source.fetch(MapsQuery(text_query="industrial machinery", region_code="US", limit=1))
+    except SourceAdapterError as error:
+        return {"ok": False, "error_code": error.code}
+    except ValueError:
+        return {"ok": False, "error_code": "INVALID_CONFIG"}
+    return {"ok": True, "error_code": ""}
+
+
 def _normalize_cities(cities):
     if not isinstance(cities, list):
         return []

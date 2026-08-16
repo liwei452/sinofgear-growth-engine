@@ -2,6 +2,7 @@ import pytest
 
 from apps.growth.maps_discovery import (
     MapsDiscoveryNotEnabled,
+    probe_maps_connection,
     run_due_maps_configs,
     run_maps_discovery,
 )
@@ -108,3 +109,19 @@ def test_disabled_config_is_rejected(organization, config):
     config.save(update_fields=["enabled"])
     with pytest.raises(MapsDiscoveryNotEnabled):
         run_maps_discovery(config.id, trigger="MANUAL", source_factory=lambda key: FakeMapsSource(key))
+
+
+def test_maps_connection_ok_with_fake_source(config):
+    result = probe_maps_connection(config.id, source_factory=lambda key: FakeMapsSource(key))
+    assert result["ok"] is True
+
+
+def test_maps_connection_requires_key(organization):
+    empty = GoogleMapsDiscoveryConfig.objects.create(
+        organization=organization,
+        enabled=True,
+        api_key_ciphertext="",
+    )
+    result = probe_maps_connection(empty.id)
+    assert result["ok"] is False
+    assert result["error_code"] == "API_KEY_NOT_CONFIGURED"

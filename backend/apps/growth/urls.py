@@ -18,6 +18,7 @@ from .views import (
     GoogleMapsDiscoveryConfigView,
     GoogleMapsDiscoveryRunView,
     GrowthWorkspaceView,
+    LeadVisitView,
     MetricReceiptCreateView,
     MarketWatchCreateView,
     MarketWatchView,
@@ -57,6 +58,11 @@ urlpatterns = [
         name="growth-reactivation-approve",
     ),
     path("growth/discovery/run", DiscoveryRunView.as_view(), name="growth-discovery-run"),
+    path(
+        "growth/lead-visits",
+        LeadVisitView.as_view(),
+        name="growth-lead-visits",
+    ),
     path(
         "growth/promotion-plan/approve",
         PromotionPlanApproveView.as_view(),

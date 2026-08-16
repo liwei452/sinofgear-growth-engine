@@ -1,4 +1,8 @@
-from apps.growth.lead_intent import intent_score_from_visits
+import pytest
+
+from apps.growth.lead_intent import intent_score_from_visits, record_lead_visit
+from apps.growth.models import DiscoveryCandidate
+from apps.identity.models import Organization
 
 
 def test_intent_score_accumulates_website_signals():
@@ -25,3 +29,24 @@ def test_intent_score_is_zero_without_signals():
         "return_visit": 0,
         "multi_product": 0,
     }
+
+
+@pytest.fixture
+def organization(db):
+    return Organization.objects.create(name="Lead intent", slug="lead-intent")
+
+
+def test_record_lead_visit_updates_candidate_intent_score(organization):
+    candidate = DiscoveryCandidate.objects.create(
+        organization=organization,
+        company_name="ABC Mining",
+        country="ZAF",
+        import_format="GOOGLE_MAPS",
+        record_hash="visit-test-hash",
+    )
+    record_lead_visit(lead_id=candidate.id, path="/replacement-gears/", session_id="s1")
+    record_lead_visit(lead_id=candidate.id, path="/reverse-engineering-gears/", session_id="s2")
+
+    candidate.refresh_from_db()
+    assert candidate.intent_score == 8 + 10 + 8  # two page signals + return visit
+    assert candidate.intent_breakdown["return_visit"] == 8

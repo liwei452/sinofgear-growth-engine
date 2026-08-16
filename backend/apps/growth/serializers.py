@@ -107,6 +107,20 @@ class GoogleMapsDiscoveryRunResultSerializer(serializers.Serializer):
     skipped_count = serializers.IntegerField()
 
 
+class LeadVisitRequestSerializer(serializers.Serializer):
+    lead_id = serializers.UUIDField()
+    path = serializers.CharField(max_length=500)
+    utm_source = serializers.CharField(max_length=64, required=False, allow_blank=True, default="")
+    utm_campaign = serializers.CharField(max_length=128, required=False, allow_blank=True, default="")
+    session_id = serializers.CharField(max_length=128, required=False, allow_blank=True, default="")
+
+
+class LeadVisitResultSerializer(serializers.Serializer):
+    lead_id = serializers.UUIDField()
+    intent_score = serializers.IntegerField()
+    intent_breakdown = serializers.DictField()
+
+
 class MarketWatchCreateSerializer(serializers.Serializer):
     country_code = serializers.RegexField(r"^[A-Za-z]{2,3}$", min_length=2, max_length=3)
     country_label = serializers.CharField(min_length=1, max_length=96)

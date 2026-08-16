@@ -4,6 +4,7 @@ import re
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
 
 from apps.identity.models import Organization
 
@@ -463,6 +464,8 @@ class DiscoveryCandidate(OrganizationOwnedModel):
     score = models.PositiveSmallIntegerField(default=0)
     grade = models.CharField(max_length=1, default="C")
     score_breakdown = models.JSONField(default=dict)
+    intent_score = models.PositiveSmallIntegerField(default=0)
+    intent_breakdown = models.JSONField(default=dict)
     review_note = models.CharField(max_length=255, blank=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     reviewed_by = models.ForeignKey(
@@ -763,3 +766,18 @@ class TradeCompanyMatch(OrganizationOwnedModel):
 
     def delete(self, *args, **kwargs):
         raise ValueError("Trade company match history cannot be deleted.")
+
+
+class LeadWebsiteVisit(OrganizationOwnedModel):
+    candidate = models.ForeignKey(
+        DiscoveryCandidate,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="website_visits",
+    )
+    path = models.CharField(max_length=500)
+    utm_source = models.CharField(max_length=64, blank=True)
+    utm_campaign = models.CharField(max_length=128, blank=True)
+    session_id = models.CharField(max_length=128, blank=True)
+    visited_at = models.DateTimeField(default=timezone.now)

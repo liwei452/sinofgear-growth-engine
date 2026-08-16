@@ -1,3 +1,5 @@
+import secrets
+
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from django.core.cache import cache
@@ -7,6 +9,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
 from apps.content.models import PlatformContent
@@ -53,6 +56,7 @@ from .maps_discovery import (
     run_maps_discovery,
 )
 from .website_enrichment import build_website_transport, prepare_website_enrichment
+from .lead_intent import record_lead_visit
 from .promotion_plan import (
     approve_promotion_plan,
     clear_promotion_plan_approval,
@@ -81,6 +85,8 @@ from .serializers import (
     GoogleMapsDiscoveryConfigResponseSerializer,
     GoogleMapsDiscoveryConfigUpdateSerializer,
     GoogleMapsDiscoveryRunResultSerializer,
+    LeadVisitRequestSerializer,
+    LeadVisitResultSerializer,
     GrowthPublishBatchSerializer,
     GrowthErrorSerializer,
     GrowthValidationErrorSerializer,
@@ -355,6 +361,42 @@ class PromotionPlanRegenerateView(APIView):
     def post(self, request):
         clear_promotion_plan_approval(organization=request.organization)
         return Response(promotion_plan_status(request.organization))
+
+
+class LeadVisitView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Growth workspace"],
+        request=LeadVisitRequestSerializer,
+        responses={
+            200: LeadVisitResultSerializer,
+            403: GrowthValidationErrorSerializer,
+        },
+    )
+    def post(self, request):
+        expected = getattr(settings, "LEAD_VISIT_WEBHOOK_SECRET", "")
+        provided = request.headers.get("X-Lead-Visit-Secret", "")
+        if expected and not secrets.compare_digest(expected, provided):
+            return Response({
+                "code": "INVALID_WEBHOOK_SECRET",
+                "message": "无效的网站回传密钥。",
+                "recovery_action": "请在网站端配置正确的回传密钥。",
+            }, status=403)
+        serializer = LeadVisitRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        candidate = record_lead_visit(**serializer.validated_data)
+        if candidate is None:
+            return Response({
+                "code": "LEAD_NOT_FOUND",
+                "message": "找不到对应的客户记录。",
+                "recovery_action": "确认 lead_id 是否有效。",
+            }, status=404)
+        return Response({
+            "lead_id": str(candidate.id),
+            "intent_score": candidate.intent_score,
+            "intent_breakdown": candidate.intent_breakdown,
+        })
 
 
 class DiscoveryRunView(APIView):

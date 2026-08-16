@@ -56,6 +56,10 @@ def growth_publish_ready(growth_client):
             status="APPROVED",
             is_demo=True,
         ))
+    from apps.growth.promotion_plan import approve_promotion_plan
+
+    owner = get_user_model().objects.get(username="growth-owner")
+    approve_promotion_plan(organization=organization, actor=owner)
     return client, organization, packages
 
 

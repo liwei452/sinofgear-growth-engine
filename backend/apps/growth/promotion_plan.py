@@ -74,6 +74,7 @@ def _plan_input(organization) -> dict:
     markets = list(_active_markets(organization))
     facts = list(_verified_facts(organization))
     return {
+        "channels": list(PUBLISH_CHANNELS),
         "markets": [
             {
                 "country_code": market.country_code,

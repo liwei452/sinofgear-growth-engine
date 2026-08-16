@@ -14,6 +14,7 @@ from .market_pilots import matched_gear_terms
 from .lead_judgment import judge_candidate
 from .buying_signals import detect_buying_signals
 from .contact_intelligence import extract_team_contacts, infer_name_from_email
+from .taxonomy import classify_industry, classify_need, landing_page_url
 
 
 WEBSITE_TIMEOUT_SECONDS = 15
@@ -109,6 +110,9 @@ def prepare_website_enrichment(candidate, *, transport=None):
     judgment = judge_candidate(candidate, website_facts=facts)
     buying_signals = detect_buying_signals(facts.text_excerpt)
     team_contacts = extract_team_contacts(html, candidate.website)
+    industry_slug = classify_industry(f"{candidate.industry} {facts.text_excerpt}")
+    need_slug = classify_need(facts.text_excerpt)
+    landing_page = landing_page_url(industry_slug, need_slug)
     public_contact_paths = (
         [{
             "label": email,
@@ -146,6 +150,9 @@ def prepare_website_enrichment(candidate, *, transport=None):
             "observed_at": timezone.now().isoformat(),
             "buying_signals": buying_signals,
             "team_contacts": team_contacts,
+            "industry_slug": industry_slug,
+            "need_slug": need_slug,
+            "landing_page": landing_page,
         },
     }
     snapshot, created = CandidateEnrichmentSnapshot.objects.get_or_create(

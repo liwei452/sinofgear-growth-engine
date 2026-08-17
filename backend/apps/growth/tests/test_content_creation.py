@@ -215,3 +215,22 @@ def test_content_creation_enrich_tool_binds_assets(organization):
     assert result.ok is True
     brief.refresh_from_db()
     assert list(brief.asset_links.values_list("asset_id", flat=True)) == [asset.id]
+
+
+def test_missing_media_requirements_detects_platforms_without_matching_assets():
+    from apps.growth.agent import content_creation_tools as cct
+
+    brief = SimpleNamespace(
+        platform_links=SimpleNamespace(select_related=lambda name: [
+            SimpleNamespace(platform=SimpleNamespace(code="INSTAGRAM")),
+            SimpleNamespace(platform=SimpleNamespace(code="TIKTOK")),
+            SimpleNamespace(platform=SimpleNamespace(code="LINKEDIN")),
+        ]),
+        asset_links=SimpleNamespace(select_related=lambda name: [
+            SimpleNamespace(asset=SimpleNamespace(mime_type="application/pdf")),
+        ]),
+    )
+
+    missing = cct._missing_media_requirements(brief)
+
+    assert missing == ["INSTAGRAM", "TIKTOK"]

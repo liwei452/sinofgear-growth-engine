@@ -53,6 +53,29 @@ def _get_master(organization, master_id: str) -> MasterContent | None:
     return MasterContent.objects.filter(id=master_id, organization=organization).first()
 
 
+def _missing_media_requirements(brief) -> list[str]:
+    media_platforms = {"INSTAGRAM", "TIKTOK", "YOUTUBE"}
+    assets = list(brief.asset_links.select_related("asset"))
+    missing = []
+    for link in brief.platform_links.select_related("platform"):
+        code = link.platform.code.upper()
+        if code not in media_platforms:
+            continue
+        if code in {"TIKTOK", "YOUTUBE"}:
+            matched = any(
+                (asset_link.asset.mime_type or "").startswith("video/")
+                for asset_link in assets
+            )
+        else:
+            matched = any(
+                (asset_link.asset.mime_type or "").startswith(("image/", "video/"))
+                for asset_link in assets
+            )
+        if not matched:
+            missing.append(code)
+    return missing
+
+
 def _enrich_tool(organization) -> Tool:
     def func(args: dict[str, Any]) -> ToolResult:
         brief = _brief(organization, args.get("brief_id", ""))
@@ -72,7 +95,14 @@ def _enrich_tool(organization) -> Tool:
             )
         except ValidationError as exc:
             return ToolResult(ok=False, error=str(exc))
-        return ToolResult(ok=True, output={"brief_id": str(brief.id), "status": brief.status})
+        return ToolResult(
+            ok=True,
+            output={
+                "brief_id": str(brief.id),
+                "status": brief.status,
+                "missing_asset_requirements": _missing_media_requirements(brief),
+            },
+        )
 
     return Tool(
         name="enrich_content_brief",

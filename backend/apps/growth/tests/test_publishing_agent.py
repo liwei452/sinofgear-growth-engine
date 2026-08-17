@@ -42,4 +42,34 @@ def test_social_ops_agent_requires_approval_before_publishing(organization, monk
     )
     assert resumed.status == "completed"
     assert len(calls) == 1
-    assert calls[0]["scheduled_at"] == "2026-08-20T09:00:00Z"
+    assert calls[0]["scheduled_at"].isoformat() == "2026-08-20T09:00:00+00:00"
+
+
+def test_analyze_post_performance_summary(monkeypatch):
+    from apps.growth.agent import publishing_tools as pt
+    from apps.growth import models as growth_models
+    from apps import tracking
+
+    class FakeQs:
+        def __init__(self, count):
+            self._count = count
+
+        def filter(self, **kwargs):
+            return self
+
+        def count(self):
+            return self._count
+
+    monkeypatch.setattr(pt, "PublishedPost", SimpleNamespace(objects=FakeQs(3)))
+    monkeypatch.setattr(tracking.models, "ClickEvent", SimpleNamespace(objects=FakeQs(4)))
+    monkeypatch.setattr(growth_models, "InboundRfq", SimpleNamespace(objects=FakeQs(5)))
+    monkeypatch.setattr(growth_models, "CRMHandoff", SimpleNamespace(objects=FakeQs(2)))
+
+    result = pt._summarize_performance(SimpleNamespace(id="org-1"))
+
+    assert result == {
+        "published_count": 3,
+        "click_count": 4,
+        "inquiry_count": 5,
+        "crm_handoff_count": 2,
+    }

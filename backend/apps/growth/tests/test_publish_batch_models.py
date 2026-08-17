@@ -71,7 +71,7 @@ def test_publish_items_preserve_one_channel_snapshot_per_batch(publishing_rows):
         "CONFIGURATION_REQUIRED",
     }
     assert set(GrowthPublishItem.Status.values) == {
-        "QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "SKIPPED",
+        "QUEUED", "RUNNING", "DELEGATED", "SUCCEEDED", "FAILED", "SKIPPED",
     }
     with pytest.raises(IntegrityError), transaction.atomic():
         GrowthPublishItem.objects.create(

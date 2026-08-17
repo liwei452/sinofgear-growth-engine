@@ -78,7 +78,7 @@ def _enrich_tool(organization) -> Tool:
             },
             "required": ["brief_id"],
         },
-        risk="read",
+        risk="write",
         func=func,
     )
 
@@ -105,7 +105,7 @@ def _mark_ready_tool(organization, actor_id: str) -> Tool:
             "properties": {"brief_id": {"type": "string"}},
             "required": ["brief_id"],
         },
-        risk="read",
+        risk="write",
         func=func,
     )
 
@@ -156,7 +156,7 @@ def _trigger_tool(organization, actor_id: str) -> Tool:
             "properties": {"brief_id": {"type": "string"}},
             "required": ["brief_id"],
         },
-        risk="read",
+        risk="write",
         func=func,
     )
 
@@ -200,7 +200,7 @@ def _platform_variants_tool(organization, actor_id: str) -> Tool:
             "properties": {"master_id": {"type": "string"}},
             "required": ["master_id"],
         },
-        risk="read",
+        risk="write",
         func=func,
     )
 
@@ -217,11 +217,23 @@ def run_content_creation_agent(
     values: dict[str, Any],
     product_id: str,
     platform_id: str,
+    approvals=None,
 ) -> Any:
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
         idempotency_key=f"content-creation:{brief_id}",
-        defaults={"goal": "content creation", "max_steps": 10},
+        defaults={
+            "goal": "content creation",
+            "agent_type": "content_creation",
+            "resume_args": {
+                "brief_id": brief_id,
+                "actor_id": actor_id,
+                "values": values,
+                "product_id": product_id,
+                "platform_id": platform_id,
+            },
+            "max_steps": 10,
+        },
     )
     tools = ToolRegistry(build_content_creation_tools(organization, actor_id))
     planner = DeterministicPlanner(
@@ -240,14 +252,21 @@ def run_content_creation_agent(
             Plan(reasoning="trigger generation", tool_name="trigger_master_generation", tool_args={"brief_id": brief_id}),
         ]
     )
-    return continue_agent_run(run=run, planner=planner, tools=tools)
+    return continue_agent_run(run=run, planner=planner, tools=tools, approvals=approvals)
 
 
-def run_platform_variants_agent(*, organization, master_id: str, actor_id: str) -> Any:
+def run_platform_variants_agent(
+    *, organization, master_id: str, actor_id: str, approvals=None,
+) -> Any:
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
         idempotency_key=f"platform-variants:{master_id}",
-        defaults={"goal": "platform variants", "max_steps": 5},
+        defaults={
+            "goal": "platform variants",
+            "agent_type": "platform_variants",
+            "resume_args": {"master_id": master_id, "actor_id": actor_id},
+            "max_steps": 5,
+        },
     )
     tools = ToolRegistry(build_platform_variants_tools(organization, actor_id))
     planner = DeterministicPlanner(
@@ -259,4 +278,4 @@ def run_platform_variants_agent(*, organization, master_id: str, actor_id: str) 
             )
         ]
     )
-    return continue_agent_run(run=run, planner=planner, tools=tools)
+    return continue_agent_run(run=run, planner=planner, tools=tools, approvals=approvals)

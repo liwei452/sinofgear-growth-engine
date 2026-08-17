@@ -5,7 +5,7 @@ from apps.catalog.models import Product
 from apps.growth.agent.customer_service_tools import run_customer_service_agent
 from apps.growth.customer_service import product_knowledge
 from apps.growth.inbound_rfq import record_inbound_rfq
-from apps.growth.models import AgentRun, CustomerServiceTurn, InboundLead
+from apps.growth.models import AgentRun, CustomerServiceTurn
 from apps.identity.models import Organization
 
 
@@ -22,12 +22,10 @@ def test_customer_service_agent_auto_replies_with_email(organization):
         message="",
         product_interest="",
     )
-    lead = InboundLead.objects.get(id=rfq["lead_id"])
-
-    result = run_customer_service_agent(organization=organization, lead_id=str(lead.id))
+    result = run_customer_service_agent(organization=organization, rfq_id=rfq["rfq_id"])
 
     assert result.status == "completed"
-    turn = CustomerServiceTurn.objects.get(organization=organization, lead=lead)
+    turn = CustomerServiceTurn.objects.get(organization=organization, rfq_id=rfq["rfq_id"])
     assert turn.decision == CustomerServiceTurn.Decision.AUTO_REPLY
     assert turn.draft_reply
 
@@ -40,12 +38,10 @@ def test_customer_service_agent_escalates_without_email(organization):
         message="Need a gearbox.",
         product_interest="gearbox",
     )
-    lead = InboundLead.objects.get(id=rfq["lead_id"])
-
-    result = run_customer_service_agent(organization=organization, lead_id=str(lead.id))
+    result = run_customer_service_agent(organization=organization, rfq_id=rfq["rfq_id"])
 
     assert result.status == "completed"
-    turn = CustomerServiceTurn.objects.get(organization=organization, lead=lead)
+    turn = CustomerServiceTurn.objects.get(organization=organization, rfq_id=rfq["rfq_id"])
     assert turn.decision == CustomerServiceTurn.Decision.HUMAN_ESCALATION
     assert turn.draft_reply == ""
 
@@ -58,15 +54,13 @@ def test_customer_service_agent_is_idempotent(organization):
         message="Need a gearbox.",
         product_interest="gearbox",
     )
-    lead = InboundLead.objects.get(id=rfq["lead_id"])
+    run_customer_service_agent(organization=organization, rfq_id=rfq["rfq_id"])
+    run_customer_service_agent(organization=organization, rfq_id=rfq["rfq_id"])
 
-    run_customer_service_agent(organization=organization, lead_id=str(lead.id))
-    run_customer_service_agent(organization=organization, lead_id=str(lead.id))
-
-    assert CustomerServiceTurn.objects.filter(lead=lead).count() == 1
+    assert CustomerServiceTurn.objects.filter(rfq_id=rfq["rfq_id"]).count() == 1
     run = AgentRun.objects.get(
         organization=organization,
-        idempotency_key=f"customer-service:{lead.id}",
+        idempotency_key=f"customer-service:{rfq['rfq_id']}",
     )
     assert run.steps.count() == 4
 

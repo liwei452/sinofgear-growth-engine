@@ -344,6 +344,8 @@ def run_proactive_acquisition(
         idempotency_key=f"proactive:{candidate_id}",
         defaults={
             "goal": f"proactive acquisition for candidate {candidate_id}",
+            "agent_type": "proactive",
+            "resume_args": {"candidate_id": candidate_id},
             "max_steps": 20,
         },
     )

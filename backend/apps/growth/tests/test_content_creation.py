@@ -64,25 +64,40 @@ def test_content_creation_agent_marks_ready_and_triggers(organization, monkeypat
         lambda *args, **kwargs: None,
     )
 
-    result = run_content_creation_agent(
-        organization=organization,
-        brief_id=str(brief.id),
-        actor_id=str(user.id),
-        values={
-            "target_country": "US",
-            "customer_type": "Buyer",
-            "content_objective": "Leads",
-            "cta": "Quote",
-            "landing_page_url": "https://example.com",
-            "language": "en",
-            "selling_points": ["Quality"],
-            "advantages": ["Speed"],
-            "keywords": ["gear"],
-        },
-        product_id=str(product.id),
-        platform_id=str(platform.id),
-    )
+    def run(approvals):
+        return run_content_creation_agent(
+            organization=organization,
+            brief_id=str(brief.id),
+            actor_id=str(user.id),
+            values={
+                "target_country": "US",
+                "customer_type": "Buyer",
+                "content_objective": "Leads",
+                "cta": "Quote",
+                "landing_page_url": "https://example.com",
+                "language": "en",
+                "selling_points": ["Quality"],
+                "advantages": ["Speed"],
+                "keywords": ["gear"],
+            },
+            product_id=str(product.id),
+            platform_id=str(platform.id),
+            approvals=approvals,
+        )
 
+    first = run(None)
+    assert first.status == "waiting_approval"
+    token1 = first.pending_approval.approval_token
+
+    second = run({token1})
+    assert second.status == "waiting_approval"
+    token2 = second.pending_approval.approval_token
+
+    third = run({token1, token2})
+    assert third.status == "waiting_approval"
+    token3 = third.pending_approval.approval_token
+
+    result = run({token1, token2, token3})
     assert result.status == "completed"
     brief.refresh_from_db()
     assert brief.status == ContentBrief.Status.READY
@@ -119,10 +134,19 @@ def test_platform_variants_tool_creates_per_platform(organization, monkeypatch):
 
     monkeypatch.setattr(cct, "create_platform_content", fake_create)
 
+    first = run_platform_variants_agent(
+        organization=organization,
+        master_id="m1",
+        actor_id=str(user.id),
+    )
+    assert first.status == "waiting_approval"
+    token = first.pending_approval.approval_token
+
     result = run_platform_variants_agent(
         organization=organization,
         master_id="m1",
         actor_id=str(user.id),
+        approvals={token},
     )
 
     assert result.status == "completed"

@@ -1,6 +1,7 @@
 import hashlib
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from apps.identity.models import Organization
@@ -31,6 +32,20 @@ def record_inbound_rfq(*, organization, **payload) -> dict:
     landing_page = str(payload.get("landing_page", "")).strip()
     file_names = list(payload.get("file_names") or [])
     need = classify_need(f"{message} {product_interest}")
+    request_id = str(payload.get("request_id", "")).strip()
+    if request_id:
+        existing = InboundRfq.objects.filter(
+            organization=organization, external_request_id=request_id
+        ).first()
+        if existing is not None:
+            return {
+                "account_id": str(existing.account_id) if existing.account_id else None,
+                "need_slug": existing.need_slug,
+                "created_account": False,
+                "lead_id": str(existing.lead_id) if existing.lead_id else None,
+                "rfq_id": str(existing.id),
+                "route": existing.lead.route if existing.lead else None,
+            }
 
     source_identity = f"website-rfq:{email or company_name.casefold()}"
     account, account_created = TargetAccount.objects.get_or_create(
@@ -102,6 +117,7 @@ def record_inbound_rfq(*, organization, **payload) -> dict:
         file_names=file_names,
         need_slug=need,
         landing_page=landing_page,
+        external_request_id=request_id,
     )
     emit_growth_event(
         organization=organization,
@@ -129,7 +145,10 @@ def record_inbound_rfq(*, organization, **payload) -> dict:
 
 def resolve_website_organization(lead_id: str = ""):
     if lead_id:
-        candidate = DiscoveryCandidate.objects.filter(id=lead_id).first()
+        try:
+            candidate = DiscoveryCandidate.objects.filter(id=lead_id).first()
+        except (ValidationError, ValueError):
+            return None
         if candidate:
             return candidate.organization
     slug = getattr(settings, "LEAD_WEBSITE_ORGANIZATION_SLUG", "")

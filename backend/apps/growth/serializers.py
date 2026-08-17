@@ -132,12 +132,16 @@ class InboundRfqRequestSerializer(serializers.Serializer):
     file_names = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     landing_page = serializers.CharField(max_length=500, required=False, allow_blank=True, default="")
     lead_id = serializers.CharField(max_length=64, required=False, allow_blank=True, default="")
+    request_id = serializers.CharField(max_length=128, required=False, allow_blank=True, default="")
 
 
 class InboundRfqResultSerializer(serializers.Serializer):
-    account_id = serializers.UUIDField()
-    need_slug = serializers.CharField()
+    account_id = serializers.UUIDField(required=False, allow_null=True)
+    need_slug = serializers.CharField(required=False, allow_blank=True, default="")
     created_account = serializers.BooleanField()
+    lead_id = serializers.UUIDField(required=False, allow_null=True)
+    rfq_id = serializers.UUIDField()
+    route = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 class MarketWatchCreateSerializer(serializers.Serializer):

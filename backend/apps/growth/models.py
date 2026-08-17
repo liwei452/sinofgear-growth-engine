@@ -153,9 +153,17 @@ class InboundRfq(OrganizationOwnedModel):
     need_slug = models.CharField(max_length=32, blank=True)
     landing_page = models.CharField(max_length=500, blank=True)
     status = models.CharField(max_length=24, default="NEW")
+    external_request_id = models.CharField(max_length=128, blank=True)
 
     class Meta:
         ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "external_request_id"],
+                condition=~models.Q(external_request_id=""),
+                name="growth_unique_rfq_request_id",
+            ),
+        ]
 
 
 class CustomerServiceTurn(OrganizationOwnedModel):
@@ -168,6 +176,13 @@ class CustomerServiceTurn(OrganizationOwnedModel):
         on_delete=models.PROTECT,
         related_name="customer_service_turns",
     )
+    rfq = models.ForeignKey(
+        InboundRfq,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="customer_service_turns",
+    )
     decision = models.CharField(max_length=24, choices=Decision.choices)
     draft_reply = models.TextField(blank=True)
     reasoning = models.TextField(blank=True)
@@ -177,8 +192,8 @@ class CustomerServiceTurn(OrganizationOwnedModel):
         ordering = ["-created_at", "-id"]
         constraints = [
             models.UniqueConstraint(
-                fields=["organization", "lead"],
-                name="growth_unique_customer_service_turn",
+                fields=["organization", "rfq"],
+                name="growth_unique_customer_service_rfq",
             ),
         ]
 
@@ -465,6 +480,7 @@ class GrowthPublishItem(OrganizationOwnedModel):
     class Status(models.TextChoices):
         QUEUED = "QUEUED", "Queued"
         RUNNING = "RUNNING", "Running"
+        DELEGATED = "DELEGATED", "Delegated"
         SUCCEEDED = "SUCCEEDED", "Succeeded"
         FAILED = "FAILED", "Failed"
         SKIPPED = "SKIPPED", "Skipped"
@@ -919,6 +935,8 @@ class AgentRun(OrganizationOwnedModel):
 
     idempotency_key = models.CharField(max_length=128)
     goal = models.CharField(max_length=500)
+    agent_type = models.CharField(max_length=32, blank=True)
+    resume_args = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.RUNNING)
     terminal_reason = models.CharField(max_length=500, blank=True)
     max_steps = models.PositiveSmallIntegerField(default=20)

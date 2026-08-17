@@ -2,7 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
 import { computed, ref } from "vue"
 
-import { agentRunsQueryOptions, approveAgentRun, type AgentRun } from "./agentApi"
+import { agentRunsQueryOptions, approveAgentRun, startAgentRun, type AgentRun } from "./agentApi"
 
 const queryClient = useQueryClient()
 const runsQuery = useQuery(agentRunsQueryOptions())
@@ -33,6 +33,18 @@ const approveMutation = useMutation({
   },
 })
 
+const startMutation = useMutation({
+  mutationFn: ({ agentType, params }: { agentType: string; params: Record<string, unknown> }) =>
+    startAgentRun(agentType, params),
+  onSuccess: () => {
+    actionError.value = ""
+    void queryClient.invalidateQueries({ queryKey: ["growth", "agent-runs"] })
+  },
+  onError: (error) => {
+    actionError.value = error instanceof Error ? error.message : "启动失败"
+  },
+})
+
 function draftText(run: AgentRun): string {
   const draft = run.steps.find((step) => step.tool_name === "draft_outreach")
   const output = draft?.output
@@ -42,6 +54,42 @@ function draftText(run: AgentRun): string {
 function toggle(runId: string): void {
   expandedRunId.value = expandedRunId.value === runId ? null : runId
 }
+
+function start(agentType: string): void {
+  let params: Record<string, unknown> = {}
+  if (agentType === "platform_variants") {
+    const masterId = window.prompt("master_id")
+    if (!masterId) return
+    params = { master_id: masterId }
+  } else if (agentType === "content_creation") {
+    const briefId = window.prompt("brief_id")
+    const productId = window.prompt("product_id")
+    const platformId = window.prompt("platform_id")
+    if (!briefId || !productId || !platformId) return
+    params = {
+      brief_id: briefId,
+      product_id: productId,
+      platform_id: platformId,
+      values: {
+        target_country: "US",
+        customer_type: "Buyer",
+        content_objective: "Leads",
+        cta: "Quote",
+        landing_page_url: "https://sinfogear.com",
+        language: "en",
+        selling_points: ["Quality"],
+        advantages: ["Speed"],
+        keywords: ["gear"],
+      },
+    }
+  } else if (agentType === "social_ops") {
+    const contentId = window.prompt("content_id")
+    const accountId = window.prompt("account_id")
+    if (!contentId || !accountId) return
+    params = { content_id: contentId, account_id: accountId }
+  }
+  startMutation.mutate({ agentType, params })
+}
 </script>
 
 <template>
@@ -50,6 +98,14 @@ function toggle(runId: string): void {
       <h1>Agent 审批</h1>
       <p>待审批 {{ pendingRuns.length }} 个发送</p>
     </header>
+
+    <section class="agent-approvals__start">
+      <h2>启动 Agent</h2>
+      <button type="button" @click="start('content_strategy')">内容策略</button>
+      <button type="button" @click="start('platform_variants')">平台变体</button>
+      <button type="button" @click="start('content_creation')">内容创作</button>
+      <button type="button" @click="start('social_ops')">社媒排期</button>
+    </section>
 
     <p v-if="actionError" class="agent-approvals__error">{{ actionError }}</p>
     <p v-if="runsQuery.isError.value" class="agent-approvals__error">

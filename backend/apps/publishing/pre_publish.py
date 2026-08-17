@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from apps.assets.storage import get_object_storage
 from apps.tracking.services import create_short_link, create_tracking_link
 
 
@@ -10,10 +11,30 @@ class PrePublishTrackingUnavailable(RuntimeError):
 
 
 SHORT_LINK_BASE_URL = "https://sinfogear.com/s"
+MEDIA_PLATFORMS = {"INSTAGRAM", "TIKTOK", "YOUTUBE"}
 
 
 def build_short_link_url(short_link) -> str:
     return f"{SHORT_LINK_BASE_URL}/{short_link.code}"
+
+
+def resolve_media_url(platform_content, *, expires_seconds: int = 3600) -> str | None:
+    code = platform_content.platform.code.upper()
+    if code not in MEDIA_PLATFORMS:
+        return None
+    links = platform_content.master_content.brief.asset_links.select_related("asset")
+    for link in links:
+        asset = link.asset
+        mime = (asset.mime_type or "").lower()
+        if code in {"TIKTOK", "YOUTUBE"} and mime.startswith("video/"):
+            return get_object_storage().presigned_download_url(
+                asset.storage_key, expires_seconds,
+            )
+        if code == "INSTAGRAM" and (mime.startswith("image/") or mime.startswith("video/")):
+            return get_object_storage().presigned_download_url(
+                asset.storage_key, expires_seconds,
+            )
+    return None
 
 
 def prepare_pre_publish_short_link(*, platform_content, actor):

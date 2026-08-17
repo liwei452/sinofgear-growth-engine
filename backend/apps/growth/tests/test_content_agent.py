@@ -76,10 +76,21 @@ def test_content_strategy_agent_creates_brief(organization):
         role=Role.objects.create_operator(),
     )
 
-    result = run_content_strategy_agent(organization=organization, creator_id=str(user.id))
+    first = run_content_strategy_agent(organization=organization, creator_id=str(user.id))
+    assert first.status == "waiting_approval"
+    token = first.pending_approval.approval_token
 
+    result = run_content_strategy_agent(
+        organization=organization,
+        creator_id=str(user.id),
+        approvals={token},
+    )
     assert result.status == "completed"
-    brief_step = next(step for step in result.steps if step.tool_name == "create_content_brief")
+    brief_step = next(
+        step
+        for step in result.steps
+        if step.tool_name == "create_content_brief" and step.outcome == "succeeded"
+    )
     assert brief_step.output["brief_id"]
     assert brief_step.output["topic"]
     assert ContentBrief.objects.filter(id=brief_step.output["brief_id"]).exists()

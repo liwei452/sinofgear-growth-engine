@@ -120,13 +120,14 @@ def _reasoning(decision: str, context: dict) -> str:
 
 
 @transaction.atomic
-def record_customer_service_turn(*, lead: InboundLead) -> CustomerServiceTurn:
+def record_customer_service_turn(*, lead: InboundLead, rfq) -> CustomerServiceTurn:
     context = lead_context(lead)
     decision = decide(context)
     turn, _ = CustomerServiceTurn.objects.get_or_create(
         organization=lead.organization,
-        lead=lead,
+        rfq=rfq,
         defaults={
+            "lead": lead,
             "decision": decision,
             "draft_reply": draft_reply(lead.organization, context),
             "reasoning": _reasoning(decision, context),
@@ -139,6 +140,6 @@ def record_customer_service_turn(*, lead: InboundLead) -> CustomerServiceTurn:
         entity_type="lead",
         entity_id=lead.id,
         payload={"decision": turn.decision, "draft_reply": turn.draft_reply},
-        idempotency_key=f"customer_service.decided:{lead.id}",
+        idempotency_key=f"customer_service.decided:{rfq.id}",
     )
     return turn

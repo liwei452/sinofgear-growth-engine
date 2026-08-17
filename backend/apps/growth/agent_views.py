@@ -8,7 +8,13 @@ from rest_framework.views import APIView
 
 from apps.identity.permissions import CanManageCampaigns, CanReadCampaigns
 
-from .agent.acquisition import resume_proactive_acquisition
+from .agent.resume import resume_agent_run
+from .agent.content_creation_tools import (
+    run_content_creation_agent,
+    run_platform_variants_agent,
+)
+from .agent.content_tools import run_content_strategy_agent
+from .agent.publishing_tools import run_social_ops_agent
 from .growth_events import mark_events_published
 from .models import AgentRun, AgentRunStep, GrowthEvent
 
@@ -97,17 +103,67 @@ class AgentRunApproveView(APIView):
         pending = run.steps.filter(outcome="blocked_approval").order_by("-index", "-id").first()
         if pending is None or not pending.approval_token:
             return Response({"message": "No pending approval."}, status=409)
-        candidate_id = (pending.args or {}).get("candidate_id")
-        if not candidate_id:
-            return Response({"message": "Pending step has no candidate_id."}, status=409)
 
-        resume_proactive_acquisition(
-            organization=request.organization,
-            candidate_id=str(candidate_id),
-            approval_token=pending.approval_token,
-        )
+        try:
+            resume_agent_run(run=run, approval_token=pending.approval_token)
+        except (KeyError, ValueError) as exc:
+            return Response({"message": str(exc)}, status=409)
         run.refresh_from_db()
         return Response(AgentRunSerializer(run).data)
+
+
+class AgentRunStartView(APIView):
+    permission_classes = [CanManageCampaigns]
+
+    @extend_schema(tags=["Agent"])
+    def post(self, request):
+        agent_type = request.data.get("agent_type")
+        organization = request.organization
+        actor_id = str(request.user.id)
+        try:
+            if agent_type == "content_strategy":
+                result = run_content_strategy_agent(
+                    organization=organization, creator_id=actor_id,
+                )
+            elif agent_type == "content_creation":
+                result = run_content_creation_agent(
+                    organization=organization,
+                    brief_id=str(request.data["brief_id"]),
+                    actor_id=actor_id,
+                    values=request.data.get("values", {}),
+                    product_id=str(request.data["product_id"]),
+                    platform_id=str(request.data["platform_id"]),
+                )
+            elif agent_type == "platform_variants":
+                result = run_platform_variants_agent(
+                    organization=organization,
+                    master_id=str(request.data["master_id"]),
+                    actor_id=actor_id,
+                )
+            elif agent_type == "social_ops":
+                result = run_social_ops_agent(
+                    organization=organization,
+                    content_id=str(request.data["content_id"]),
+                    account_id=str(request.data["account_id"]),
+                    scheduled_at=request.data.get("scheduled_at"),
+                    timezone_name=request.data.get("timezone_name", "UTC"),
+                )
+            else:
+                return Response(
+                    {"message": f"Unknown agent type {agent_type!r}."},
+                    status=400,
+                )
+        except (KeyError, ValueError) as exc:
+            return Response({"message": str(exc)}, status=400)
+
+        return Response({
+            "status": result.status,
+            "terminal_reason": result.terminal_reason,
+            "pending_approval_token": (
+                result.pending_approval.approval_token
+                if result.pending_approval else None
+            ),
+        })
 
 
 class GrowthEventSerializer(serializers.ModelSerializer):

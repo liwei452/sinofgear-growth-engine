@@ -1,6 +1,11 @@
 import pytest
+import hashlib
+import hmac
+import json
+import time
 
 from apps.growth.inbound_rfq import record_inbound_rfq, resolve_website_organization
+from apps.growth.webhook_auth import verify_webhook_signature
 from apps.growth.inbound_triage import decide_inbound_route, triage_inbound_lead
 from apps.growth.models import (
     Contact,
@@ -99,3 +104,51 @@ def test_inbound_rfq_saves_each_inquiry_separately(organization):
     assert rfqs[0].email == "procurement@abc.example"
     assert rfqs[0].contact_name == "Website inquiry"
     assert rfqs[0].message == "Need gear A."
+
+
+def test_inbound_rfq_request_id_is_idempotent(organization):
+    first = record_inbound_rfq(
+        organization=organization,
+        company_name="ABC Mining",
+        email="procurement@abc.example",
+        message="Need gear.",
+        product_interest="gearbox",
+        request_id="req-1",
+    )
+    second = record_inbound_rfq(
+        organization=organization,
+        company_name="ABC Mining",
+        email="procurement@abc.example",
+        message="Need gear.",
+        product_interest="gearbox",
+        request_id="req-1",
+    )
+    assert first["rfq_id"] == second["rfq_id"]
+    assert InboundRfq.objects.filter(organization=organization).count() == 1
+
+
+def test_webhook_signature_verification():
+    payload = {"company_name": "ABC Mining"}
+    timestamp = str(int(time.time()))
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    signature = hmac.new(
+        "secret".encode(), f"{timestamp}.{canonical}".encode(), hashlib.sha256,
+    ).hexdigest()
+
+    assert verify_webhook_signature(
+        secret="secret", timestamp=timestamp, signature=signature, payload=payload,
+    )
+    assert not verify_webhook_signature(
+        secret="secret", timestamp=timestamp, signature="bad", payload=payload,
+    )
+    stale = str(int(time.time()) - 1000)
+    stale_signature = hmac.new(
+        "secret".encode(), f"{stale}.{canonical}".encode(), hashlib.sha256,
+    ).hexdigest()
+    assert not verify_webhook_signature(
+        secret="secret", timestamp=stale, signature=stale_signature, payload=payload,
+    )
+
+
+def test_resolve_website_organization_rejects_non_uuid():
+    assert resolve_website_organization("not-a-uuid") is None

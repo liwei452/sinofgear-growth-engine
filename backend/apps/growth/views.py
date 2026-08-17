@@ -60,6 +60,7 @@ from .maps_discovery import (
 from .website_enrichment import build_website_transport, prepare_website_enrichment
 from .lead_intent import record_lead_visit
 from .inbound_rfq import record_inbound_rfq, resolve_website_organization
+from .webhook_auth import verify_webhook_signature
 from .promotion_plan import (
     approve_promotion_plan,
     clear_promotion_plan_approval,
@@ -393,13 +394,21 @@ class LeadVisitView(APIView):
                 "message": "访问回传过于频繁，请稍后再试。",
                 "recovery_action": "稍后重试。",
             }, status=429)
-        expected = getattr(settings, "LEAD_VISIT_WEBHOOK_SECRET", "")
-        provided = request.headers.get("X-Lead-Visit-Secret", "")
-        if not expected or not secrets.compare_digest(expected, provided):
+        secret = getattr(settings, "RFQ_WEBHOOK_SECRET", "") or getattr(
+            settings, "LEAD_VISIT_WEBHOOK_SECRET", ""
+        )
+        timestamp = request.headers.get("X-Timestamp", "")
+        signature = request.headers.get("X-Signature", "")
+        if not verify_webhook_signature(
+            secret=secret,
+            timestamp=timestamp,
+            signature=signature,
+            payload=request.data,
+        ):
             return Response({
-                "code": "INVALID_WEBHOOK_SECRET",
-                "message": "无效的网站回传密钥。",
-                "recovery_action": "请在网站端配置正确的回传密钥。",
+                "code": "INVALID_WEBHOOK_SIGNATURE",
+                "message": "询盘签名无效或已过期。",
+                "recovery_action": "请使用正确的 HMAC 签名和时间戳重试。",
             }, status=403)
         serializer = LeadVisitRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

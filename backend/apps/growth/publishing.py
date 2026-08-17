@@ -6,6 +6,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.platforms.models import SocialAccount
+from apps.publishing.models import PublishedPost, PublishTask
 from apps.publishing.services import PublishingConflict, create_publish_task
 from integrations.platforms.base import ConnectorConfigurationRequired, OfficialPublishRequest
 from integrations.platforms.manual_fake import simulate_publish
@@ -137,7 +138,10 @@ def _refresh_batch_status(batch: GrowthPublishBatch) -> GrowthPublishBatch:
     statuses = list(batch.items.values_list("status", flat=True))
     if any(status == GrowthPublishItem.Status.RUNNING for status in statuses):
         status = GrowthPublishBatch.Status.RUNNING
-    elif any(status == GrowthPublishItem.Status.QUEUED for status in statuses):
+    elif any(
+        status in {GrowthPublishItem.Status.QUEUED, GrowthPublishItem.Status.DELEGATED}
+        for status in statuses
+    ):
         status = GrowthPublishBatch.Status.QUEUED
     else:
         succeeded = statuses.count(GrowthPublishItem.Status.SUCCEEDED)
@@ -322,7 +326,7 @@ def create_publish_batch(
                         }
                         item.save(update_fields=["status", "last_error", "updated_at"])
                     else:
-                        item.status = GrowthPublishItem.Status.SUCCEEDED
+                        item.status = GrowthPublishItem.Status.DELEGATED
                         item.publish_task = task
                         item.save(update_fields=["status", "publish_task", "updated_at"])
                 else:
@@ -348,3 +352,31 @@ def retry_failed_items(*, batch: GrowthPublishBatch, actor) -> GrowthPublishBatc
         execute_growth_publish_item.delay(item_id)
     batch.refresh_from_db()
     return _refresh_batch_status(batch)
+
+
+@transaction.atomic
+def sync_publish_item_from_task(*, task_id):
+    item = GrowthPublishItem.objects.select_for_update().filter(
+        publish_task_id=task_id
+    ).first()
+    if item is None:
+        return None
+    task = PublishTask.objects.filter(id=task_id).first()
+    if task is None:
+        return item
+    if task.status == PublishTask.Status.SUCCEEDED:
+        post = PublishedPost.objects.filter(task_id=task.id).first()
+        item.status = GrowthPublishItem.Status.SUCCEEDED
+        item.external_post_id = post.external_id if post else ""
+        item.last_error = None
+    elif task.status == PublishTask.Status.FAILED:
+        item.status = GrowthPublishItem.Status.FAILED
+        item.last_error = task.last_error or {
+            "code": "PUBLISH_FAILED",
+            "message": "Publish failed.",
+        }
+    item.save(update_fields=["status", "external_post_id", "last_error", "updated_at"])
+    batch = item.batch
+    batch.refresh_from_db()
+    _refresh_batch_status(batch)
+    return item

@@ -44,6 +44,7 @@ from .agent_views import (
     AgentRunApproveView,
     AgentRunDetailView,
     AgentRunListView,
+    AgentRunStartView,
     GrowthEventAcknowledgeView,
     GrowthEventListView,
 )
@@ -180,6 +181,7 @@ urlpatterns = [
         name="growth-company-fact-verify",
     ),
     path("growth/agent/runs", AgentRunListView.as_view(), name="growth-agent-runs"),
+    path("growth/agent/runs/start", AgentRunStartView.as_view(), name="growth-agent-run-start"),
     path(
         "growth/agent/runs/<uuid:run_id>",
         AgentRunDetailView.as_view(),

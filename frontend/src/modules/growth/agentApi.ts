@@ -52,3 +52,21 @@ export async function approveAgentRun(
   if (!result) throw new Error("审批失败")
   return result
 }
+
+export type AgentRunStartResult = {
+  status: string
+  terminal_reason: string | null
+  pending_approval_token: string | null
+}
+
+export async function startAgentRun(
+  agentType: string,
+  params: Record<string, unknown> = {},
+): Promise<AgentRunStartResult> {
+  const result = await apiRequest<AgentRunStartResult>(
+    "/api/v1/growth/agent/runs/start",
+    { method: "POST", body: { agent_type: agentType, ...params } },
+  )
+  if (!result) throw new Error("启动失败")
+  return result
+}

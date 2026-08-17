@@ -693,12 +693,22 @@ def _prepare_tracking_url(task) -> str | None:
         return None
 
 
+def _resolve_media_url(task) -> str | None:
+    try:
+        from .pre_publish import resolve_media_url
+
+        return resolve_media_url(task.platform_content)
+    except Exception:
+        logger.exception("Media URL resolution failed.")
+        return None
+
+
 def _publish_official(task, attempt_number):
     content_payload = task.platform_content.payload or {}
     payload = build_publish_payload(
         platform_code=task.platform.code,
         content_payload=content_payload,
-        media_url=content_payload.get("media_url"),
+        media_url=_resolve_media_url(task),
         tracking_url=_prepare_tracking_url(task),
     )
     consent = content_payload.get("consent")

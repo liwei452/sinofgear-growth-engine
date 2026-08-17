@@ -39,6 +39,7 @@ from .content_creation_tools import (
     run_platform_variants_agent,
 )
 from .publishing_tools import build_social_ops_tools, run_social_ops_agent
+from .resume import resume_agent_run
 
 __all__ = [
     "AgentRunError",
@@ -71,6 +72,7 @@ __all__ = [
     "run_content_creation_agent",
     "run_platform_variants_agent",
     "run_social_ops_agent",
+    "resume_agent_run",
     "continue_agent_run",
     "load_run_memory",
     "proactive_acquisition_plan",

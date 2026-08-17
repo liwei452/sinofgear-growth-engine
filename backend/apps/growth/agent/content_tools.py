@@ -135,7 +135,7 @@ def _create_brief_tool(organization, creator_id: str) -> Tool:
         name="create_content_brief",
         description="Create a content brief from the analyzed content opportunity.",
         parameters={"type": "object", "properties": {}},
-        risk="read",
+        risk="write",
         func=func,
     )
 
@@ -147,11 +147,18 @@ def build_content_strategy_tools(organization, creator_id: str | None = None) ->
     return tools
 
 
-def run_content_strategy_agent(*, organization, creator_id: str | None = None) -> Any:
+def run_content_strategy_agent(
+    *, organization, creator_id: str | None = None, approvals=None,
+) -> Any:
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
         idempotency_key=f"content-strategy:{organization.id}",
-        defaults={"goal": "content strategy", "max_steps": 5},
+        defaults={
+            "goal": "content strategy",
+            "agent_type": "content_strategy",
+            "resume_args": {"creator_id": creator_id},
+            "max_steps": 5,
+        },
     )
     tools = ToolRegistry(build_content_strategy_tools(organization, creator_id=creator_id))
     actions = [
@@ -166,4 +173,4 @@ def run_content_strategy_agent(*, organization, creator_id: str | None = None) -
             Plan(reasoning="create content brief", tool_name="create_content_brief", tool_args={})
         )
     planner = DeterministicPlanner(actions)
-    return continue_agent_run(run=run, planner=planner, tools=tools)
+    return continue_agent_run(run=run, planner=planner, tools=tools, approvals=approvals)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.utils.dateparse import parse_datetime
+
 from apps.content.models import PlatformContent
 from apps.platforms.models import SocialAccount
 from apps.publishing.models import PublishedPost
@@ -35,8 +37,21 @@ def _propose_calendar(organization) -> list[dict[str, str]]:
 
 
 def _summarize_performance(organization) -> dict[str, Any]:
+    from apps.tracking.models import ClickEvent
+
+    from ..models import CRMHandoff, InboundRfq
+
     posts = PublishedPost.objects.filter(organization=organization)
-    return {"published_count": posts.count()}
+    return {
+        "published_count": posts.count(),
+        "click_count": ClickEvent.objects.filter(
+            tracking_link__organization=organization
+        ).count(),
+        "inquiry_count": InboundRfq.objects.filter(organization=organization).count(),
+        "crm_handoff_count": CRMHandoff.objects.filter(
+            organization=organization
+        ).count(),
+    }
 
 
 def _propose_tool(organization) -> Tool:
@@ -73,6 +88,11 @@ def _schedule_tool(organization) -> Tool:
         account = _get_account(organization, args.get("account_id", ""))
         if account is None:
             return ToolResult(ok=False, error="account_id not found.")
+        scheduled_at = args.get("scheduled_at")
+        if isinstance(scheduled_at, str):
+            scheduled_at = parse_datetime(scheduled_at)
+            if scheduled_at is None:
+                return ToolResult(ok=False, error="scheduled_at is not a valid datetime.")
         key = args.get("idempotency_key") or (
             f"publish:{content.id}:{account.id}:{args.get('scheduled_at', '')}"
         )
@@ -81,7 +101,7 @@ def _schedule_tool(organization) -> Tool:
                 content=content,
                 account=account,
                 idempotency_key=key,
-                scheduled_at=args.get("scheduled_at"),
+                scheduled_at=scheduled_at,
                 timezone_name=args.get("timezone_name", "UTC"),
                 connector_code="mock",
             )
@@ -129,7 +149,18 @@ def run_social_ops_agent(
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
         idempotency_key=f"social-ops:{content_id}:{account_id}",
-        defaults={"goal": "social publishing", "max_steps": 5},
+        defaults={
+            "goal": "social publishing",
+            "agent_type": "social_ops",
+            "resume_args": {
+                "content_id": content_id,
+                "account_id": account_id,
+                "scheduled_at": scheduled_at,
+                "timezone_name": timezone_name,
+                "idempotency_key": idempotency_key,
+            },
+            "max_steps": 5,
+        },
     )
     tools = ToolRegistry(build_social_ops_tools(organization))
     planner = DeterministicPlanner(

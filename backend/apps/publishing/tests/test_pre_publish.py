@@ -41,3 +41,31 @@ def test_prepare_pre_publish_short_link(monkeypatch):
     assert captured["published_post"] is None
     assert captured["platform"].code == "LINKEDIN"
     assert captured["product"].id == "product-1"
+
+
+def test_resolve_media_url(monkeypatch):
+    fake_storage = SimpleNamespace(
+        presigned_download_url=lambda key, expires: f"https://media/{key}"
+    )
+    monkeypatch.setattr(pre_publish, "get_object_storage", lambda: fake_storage)
+
+    links = [
+        SimpleNamespace(asset=SimpleNamespace(mime_type="video/mp4", storage_key="video-1")),
+        SimpleNamespace(asset=SimpleNamespace(mime_type="image/png", storage_key="image-1")),
+    ]
+    platform_content = SimpleNamespace(
+        platform=SimpleNamespace(code="TIKTOK"),
+        master_content=SimpleNamespace(
+            brief=SimpleNamespace(
+                asset_links=SimpleNamespace(select_related=lambda name: links)
+            )
+        ),
+    )
+
+    assert pre_publish.resolve_media_url(platform_content) == "https://media/video-1"
+    assert pre_publish.resolve_media_url(
+        SimpleNamespace(
+            platform=SimpleNamespace(code="LINKEDIN"),
+            master_content=platform_content.master_content,
+        )
+    ) is None

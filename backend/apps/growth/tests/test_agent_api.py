@@ -141,3 +141,28 @@ def test_rejected_run_does_not_reappear(organization):
         account=account,
         status=OutreachMessage.Status.SENT,
     ).exists()
+
+
+def test_agent_start_content_strategy(organization):
+    DiscoveryCandidate.objects.create(
+        organization=organization,
+        company_name="Mining Co",
+        country="ZAF",
+        website="",
+        industry="mining equipment",
+        status=DiscoveryCandidate.Status.ACCEPTED,
+        import_format="GOOGLE_MAPS",
+        raw_record={"primary_type": "mining"},
+        record_hash="agent-start-hash",
+        is_demo=False,
+        intent_score=50,
+    )
+    client = _client(organization, suffix="start")
+    response = client.post(
+        "/api/v1/growth/agent/runs/start",
+        {"agent_type": "content_strategy"},
+        format="json",
+    )
+    assert response.status_code == 200
+    assert response.data["status"] == "waiting_approval"
+    assert response.data["pending_approval_token"]

@@ -62,3 +62,11 @@ def execute_growth_publish_item(item_id):
     from .publishing import _execute_item
 
     return _execute_item(item_id)
+
+
+@shared_task
+def sync_growth_publish_item_from_task(task_id):
+    from .publishing import sync_publish_item_from_task
+
+    item = sync_publish_item_from_task(task_id=task_id)
+    return {"item_id": str(item.id), "status": item.status} if item else None

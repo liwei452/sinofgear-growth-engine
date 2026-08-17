@@ -10,7 +10,6 @@ from apps.growth.inbound_rfq import record_inbound_rfq
 from apps.growth.models import (
     FollowUp,
     GrowthEvent,
-    InboundLead,
     OutreachDraft,
     TargetAccount,
 )
@@ -93,8 +92,7 @@ def test_customer_service_emits_decision_event(organization):
         message="Need a gear.",
         product_interest="gearbox",
     )
-    lead = InboundLead.objects.get(id=rfq["lead_id"])
-    run_customer_service_agent(organization=organization, lead_id=str(lead.id))
+    run_customer_service_agent(organization=organization, rfq_id=rfq["rfq_id"])
     assert GrowthEvent.objects.filter(
         organization=organization,
         event_type="customer_service.decided",

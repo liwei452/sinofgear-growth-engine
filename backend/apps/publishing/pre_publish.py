@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from apps.assets.storage import get_object_storage
 from apps.tracking.services import create_short_link, create_tracking_link
 
@@ -14,11 +16,17 @@ SHORT_LINK_BASE_URL = "https://sinfogear.com/s"
 MEDIA_PLATFORMS = {"INSTAGRAM", "TIKTOK", "YOUTUBE"}
 
 
+@dataclass(frozen=True)
+class ResolvedMedia:
+    url: str
+    kind: str
+
+
 def build_short_link_url(short_link) -> str:
     return f"{SHORT_LINK_BASE_URL}/{short_link.code}"
 
 
-def resolve_media_url(platform_content, *, expires_seconds: int = 3600) -> str | None:
+def resolve_media(platform_content, *, expires_seconds: int = 3600) -> ResolvedMedia | None:
     code = platform_content.platform.code.upper()
     if code not in MEDIA_PLATFORMS:
         return None
@@ -27,14 +35,33 @@ def resolve_media_url(platform_content, *, expires_seconds: int = 3600) -> str |
         asset = link.asset
         mime = (asset.mime_type or "").lower()
         if code in {"TIKTOK", "YOUTUBE"} and mime.startswith("video/"):
-            return get_object_storage().presigned_download_url(
-                asset.storage_key, expires_seconds,
+            return ResolvedMedia(
+                url=get_object_storage().presigned_download_url(
+                    asset.storage_key, expires_seconds,
+                ),
+                kind="VIDEO",
             )
-        if code == "INSTAGRAM" and (mime.startswith("image/") or mime.startswith("video/")):
-            return get_object_storage().presigned_download_url(
-                asset.storage_key, expires_seconds,
-            )
+        if code == "INSTAGRAM":
+            if mime.startswith("video/"):
+                return ResolvedMedia(
+                    url=get_object_storage().presigned_download_url(
+                        asset.storage_key, expires_seconds,
+                    ),
+                    kind="VIDEO",
+                )
+            if mime.startswith("image/"):
+                return ResolvedMedia(
+                    url=get_object_storage().presigned_download_url(
+                        asset.storage_key, expires_seconds,
+                    ),
+                    kind="IMAGE",
+                )
     return None
+
+
+def resolve_media_url(platform_content, *, expires_seconds: int = 3600) -> str | None:
+    media = resolve_media(platform_content, expires_seconds=expires_seconds)
+    return media.url if media else None
 
 
 def prepare_pre_publish_short_link(*, platform_content, actor):

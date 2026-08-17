@@ -2,6 +2,7 @@
 
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -46,6 +47,8 @@ def _require(request, permission: str) -> None:
 
 
 class AgentRunStepSerializer(serializers.ModelSerializer):
+    executed_by = serializers.SerializerMethodField()
+
     class Meta:
         model = AgentRunStep
         fields = [
@@ -56,12 +59,23 @@ class AgentRunStepSerializer(serializers.ModelSerializer):
             "output",
             "error",
             "reasoning",
+            "executed_by",
         ]
+
+    def get_executed_by(self, obj: AgentRunStep):
+        user = obj.executed_by
+        return {"id": user.id, "username": user.username} if user else None
 
 
 class AgentRunSerializer(serializers.ModelSerializer):
     steps = AgentRunStepSerializer(many=True, read_only=True)
     pending_approval = serializers.SerializerMethodField()
+    created_by = serializers.SerializerMethodField()
+    approved_by = serializers.SerializerMethodField()
+    rejected_by = serializers.SerializerMethodField()
+    approved_at = serializers.DateTimeField(read_only=True)
+    rejected_at = serializers.DateTimeField(read_only=True)
+    approval_comment = serializers.CharField(read_only=True)
 
     class Meta:
         model = AgentRun
@@ -72,9 +86,24 @@ class AgentRunSerializer(serializers.ModelSerializer):
             "terminal_reason",
             "created_at",
             "updated_at",
+            "created_by",
+            "approved_by",
+            "rejected_by",
+            "approved_at",
+            "rejected_at",
+            "approval_comment",
             "steps",
             "pending_approval",
         ]
+
+    def get_created_by(self, obj: AgentRun):
+        return {"id": obj.created_by.id, "username": obj.created_by.username} if obj.created_by else None
+
+    def get_approved_by(self, obj: AgentRun):
+        return {"id": obj.approved_by.id, "username": obj.approved_by.username} if obj.approved_by else None
+
+    def get_rejected_by(self, obj: AgentRun):
+        return {"id": obj.rejected_by.id, "username": obj.rejected_by.username} if obj.rejected_by else None
 
     def get_pending_approval(self, obj: AgentRun) -> dict | None:
         step = obj.steps.filter(outcome="blocked_approval").order_by("-index", "-id").first()
@@ -98,6 +127,7 @@ class AgentRunStartSerializer(serializers.Serializer):
     scheduled_at = serializers.DateTimeField(required=False, allow_null=True)
     timezone_name = serializers.CharField(required=False, default="UTC")
     values = serializers.DictField(required=False)
+    asset_ids = serializers.ListField(child=serializers.UUIDField(), required=False)
 
 
 class AgentRunStartResultSerializer(serializers.Serializer):
@@ -110,6 +140,7 @@ class AgentRunApproveSerializer(serializers.Serializer):
     decision = serializers.ChoiceField(
         choices=["approve", "reject"], required=False, default="approve",
     )
+    comment = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 class AgentRunListView(APIView):
@@ -160,10 +191,18 @@ class AgentRunApproveView(APIView):
             return Response({"message": "Run is not waiting for approval."}, status=409)
 
         decision = request.data.get("decision", "approve")
+        comment = str(request.data.get("comment") or "").strip()
+        now = timezone.now()
         if decision == "reject":
             run.status = AgentRun.Status.REJECTED
             run.terminal_reason = "Rejected by reviewer."
-            run.save(update_fields=["status", "terminal_reason", "updated_at"])
+            run.rejected_by = request.user
+            run.rejected_at = now
+            run.approval_comment = comment
+            run.save(update_fields=[
+                "status", "terminal_reason", "rejected_by",
+                "rejected_at", "approval_comment", "updated_at",
+            ])
             return Response(AgentRunSerializer(run).data)
 
         pending = run.steps.filter(outcome="blocked_approval").order_by("-index", "-id").first()
@@ -171,6 +210,10 @@ class AgentRunApproveView(APIView):
             return Response({"message": "No pending approval."}, status=409)
 
         _require(request, TOOL_PERMISSIONS.get(pending.tool_name or "", "campaigns.manage"))
+        run.approved_by = request.user
+        run.approved_at = now
+        run.approval_comment = comment
+        run.save(update_fields=["approved_by", "approved_at", "approval_comment", "updated_at"])
         try:
             resume_agent_run(run=run, approval_token=pending.approval_token)
         except (KeyError, ValueError) as exc:
@@ -207,6 +250,7 @@ class AgentRunStartView(APIView):
                     values=request.data.get("values", {}),
                     product_id=str(request.data["product_id"]),
                     platform_id=str(request.data["platform_id"]),
+                    asset_ids=request.data.get("asset_ids"),
                 )
             elif agent_type == "platform_variants":
                 result = run_platform_variants_agent(

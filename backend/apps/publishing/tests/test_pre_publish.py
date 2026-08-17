@@ -69,3 +69,27 @@ def test_resolve_media_url(monkeypatch):
             master_content=platform_content.master_content,
         )
     ) is None
+
+
+def test_resolve_media_keeps_image_vs_video_kind(monkeypatch):
+    fake_storage = SimpleNamespace(
+        presigned_download_url=lambda key, expires: f"https://media/{key}"
+    )
+    monkeypatch.setattr(pre_publish, "get_object_storage", lambda: fake_storage)
+
+    links = [
+        SimpleNamespace(asset=SimpleNamespace(mime_type="image/png", storage_key="image-1")),
+        SimpleNamespace(asset=SimpleNamespace(mime_type="video/mp4", storage_key="video-1")),
+    ]
+
+    media = pre_publish.resolve_media(
+        SimpleNamespace(
+            platform=SimpleNamespace(code="INSTAGRAM"),
+            master_content=SimpleNamespace(
+                brief=SimpleNamespace(asset_links=SimpleNamespace(select_related=lambda name: links))
+            ),
+        )
+    )
+
+    assert media.url == "https://media/image-1"
+    assert media.kind == "IMAGE"

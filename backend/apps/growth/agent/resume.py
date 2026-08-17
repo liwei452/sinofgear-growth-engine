@@ -39,6 +39,7 @@ def resume_agent_run(*, run: AgentRun, approval_token: str):
             values=args["values"],
             product_id=args["product_id"],
             platform_id=args["platform_id"],
+            asset_ids=args.get("asset_ids"),
             approvals={approval_token},
         )
     if agent_type == "platform_variants":

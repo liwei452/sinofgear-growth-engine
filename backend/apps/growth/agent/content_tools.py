@@ -150,6 +150,11 @@ def build_content_strategy_tools(organization, creator_id: str | None = None) ->
 def run_content_strategy_agent(
     *, organization, creator_id: str | None = None, approvals=None,
 ) -> Any:
+    creator_id_value = None
+    try:
+        creator_id_value = int(creator_id) if creator_id else None
+    except (TypeError, ValueError):
+        creator_id_value = None
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
         idempotency_key=f"content-strategy:{organization.id}",
@@ -157,6 +162,7 @@ def run_content_strategy_agent(
             "goal": "content strategy",
             "agent_type": "content_strategy",
             "resume_args": {"creator_id": creator_id},
+            "created_by_id": creator_id_value,
             "max_steps": 5,
         },
     )

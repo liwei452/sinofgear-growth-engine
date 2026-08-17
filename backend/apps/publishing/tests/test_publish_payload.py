@@ -29,9 +29,19 @@ def test_instagram_requires_media_url():
         content_payload={"body": "Caption"},
         media_url="https://media.example/image.mp4",
     ) == {
-        "media_url": "https://media.example/image.mp4",
+        "video_url": "https://media.example/image.mp4",
         "caption": "Caption",
         "media_type": "REELS",
+    }
+    assert build_publish_payload(
+        platform_code="INSTAGRAM",
+        content_payload={"body": "Caption"},
+        media_url="https://media.example/image.png",
+        media_kind="IMAGE",
+    ) == {
+        "image_url": "https://media.example/image.png",
+        "caption": "Caption",
+        "media_type": "IMAGE",
     }
 
 

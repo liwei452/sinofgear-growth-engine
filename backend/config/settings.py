@@ -210,6 +210,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.growth.tasks.reconcile_delegated_publish_items",
         "schedule": 3600.0,
     },
+    "publishing-queue-due-minute": {
+        "task": "apps.publishing.tasks.queue_due_publish_tasks",
+        "schedule": 60.0,
+    },
 }
 
 OBJECT_STORAGE_BACKEND = os.environ.get("OBJECT_STORAGE_BACKEND", "minio")

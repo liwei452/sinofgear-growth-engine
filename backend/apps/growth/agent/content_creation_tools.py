@@ -38,6 +38,13 @@ def _actor(organization, actor_id: str):
     return actor, ""
 
 
+def _user_id(value) -> int | None:
+    try:
+        return int(value) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _brief(organization, brief_id: str) -> ContentBrief | None:
     return ContentBrief.objects.filter(id=brief_id, organization=organization).first()
 
@@ -54,12 +61,14 @@ def _enrich_tool(organization) -> Tool:
         values = args.get("values") or {}
         product_ids = args.get("product_ids") or []
         platform_ids = args.get("platform_ids") or []
+        asset_ids = args.get("asset_ids") or []
         try:
             brief = update_content_brief(
                 brief.id,
                 values=values,
                 product_ids=product_ids,
                 platform_ids=platform_ids,
+                asset_ids=asset_ids,
             )
         except ValidationError as exc:
             return ToolResult(ok=False, error=str(exc))
@@ -75,6 +84,7 @@ def _enrich_tool(organization) -> Tool:
                 "values": {"type": "object"},
                 "product_ids": {"type": "array", "items": {"type": "string"}},
                 "platform_ids": {"type": "array", "items": {"type": "string"}},
+                "asset_ids": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["brief_id"],
         },
@@ -217,6 +227,7 @@ def run_content_creation_agent(
     values: dict[str, Any],
     product_id: str,
     platform_id: str,
+    asset_ids: list[str] | None = None,
     approvals=None,
 ) -> Any:
     run, _ = AgentRun.objects.get_or_create(
@@ -231,7 +242,9 @@ def run_content_creation_agent(
                 "values": values,
                 "product_id": product_id,
                 "platform_id": platform_id,
+                "asset_ids": asset_ids or [],
             },
+            "created_by_id": _user_id(actor_id),
             "max_steps": 10,
         },
     )
@@ -246,6 +259,7 @@ def run_content_creation_agent(
                     "values": values,
                     "product_ids": [product_id],
                     "platform_ids": [platform_id],
+                    "asset_ids": asset_ids or [],
                 },
             ),
             Plan(reasoning="mark ready", tool_name="mark_content_brief_ready", tool_args={"brief_id": brief_id}),
@@ -265,6 +279,7 @@ def run_platform_variants_agent(
             "goal": "platform variants",
             "agent_type": "platform_variants",
             "resume_args": {"master_id": master_id, "actor_id": actor_id},
+            "created_by_id": _user_id(actor_id),
             "max_steps": 5,
         },
     )

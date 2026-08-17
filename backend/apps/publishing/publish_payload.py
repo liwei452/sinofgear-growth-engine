@@ -12,6 +12,7 @@ def build_publish_payload(
     platform_code: str,
     content_payload: dict,
     media_url: str | None = None,
+    media_kind: str = "VIDEO",
     tracking_url: str | None = None,
 ) -> dict:
     code = (platform_code or "").strip().upper()
@@ -40,7 +41,9 @@ def build_publish_payload(
     if code == "INSTAGRAM":
         if not media_url or not media_url.startswith("https://"):
             raise PublishPayloadError("Instagram content needs a public HTTPS media URL.")
-        return {"media_url": media_url, "caption": _with_tracking(body), "media_type": "REELS"}
+        if media_kind == "IMAGE":
+            return {"image_url": media_url, "caption": _with_tracking(body), "media_type": "IMAGE"}
+        return {"video_url": media_url, "caption": _with_tracking(body), "media_type": "REELS"}
 
     if code == "TIKTOK":
         if not media_url or not media_url.startswith("https://"):

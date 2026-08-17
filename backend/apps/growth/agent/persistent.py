@@ -86,6 +86,7 @@ def continue_agent_run(
             error=step.error or "",
             reasoning=step.reasoning,
             approval_token=step.approval_token or "",
+            executed_by=run.created_by,
         )
     run.status = _status_from_result(result)
     run.terminal_reason = result.terminal_reason or ""

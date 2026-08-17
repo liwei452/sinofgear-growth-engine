@@ -39,6 +39,7 @@ def test_tiktok_queries_creator_before_direct_post_and_preserves_consent() -> No
     transport = RecordingTransport([
         HttpResponse(200, {"data": {"privacy_level_options": ["PUBLIC_TO_EVERYONE", "SELF_ONLY"]}}, {}),
         HttpResponse(200, {"data": {"publish_id": "publish-1"}}, {}),
+        HttpResponse(200, {"data": {"status": "PUBLISH_COMPLETE"}}, {}),
     ])
     connector = TikTokConnector(
         transport=transport, token_store=TokenStore(), client_audited=True,
@@ -57,6 +58,7 @@ def test_tiktok_queries_creator_before_direct_post_and_preserves_consent() -> No
     assert [url for _method, url, _kwargs in transport.requests] == [
         "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
         "https://open.tiktokapis.com/v2/post/publish/video/init/",
+        "https://open.tiktokapis.com/v2/post/publish/status/fetch/",
     ]
     post_info = transport.requests[1][2]["json"]["post_info"]
     assert post_info == {
@@ -83,6 +85,7 @@ def test_unaudited_tiktok_client_cannot_claim_public_publication() -> None:
     transport = RecordingTransport([
         HttpResponse(200, {"data": {"privacy_level_options": ["SELF_ONLY"]}}, {}),
         HttpResponse(200, {"data": {"publish_id": "private-1"}}, {}),
+        HttpResponse(200, {"data": {"status": "PUBLISH_COMPLETE"}}, {}),
     ])
 
     result = TikTokConnector(
@@ -119,3 +122,51 @@ def test_tiktok_provider_errors_are_normalized(
     assert result.error_code == expected_code
     assert result.retryable is retryable
     assert "tiktok-token" not in result.error_message
+
+
+def test_tiktok_keeps_polling_until_publish_complete() -> None:
+    transport = RecordingTransport([
+        HttpResponse(200, {"data": {"privacy_level_options": ["SELF_ONLY"]}}, {}),
+        HttpResponse(200, {"data": {"publish_id": "publish-2"}}, {}),
+        HttpResponse(200, {"data": {"status": "PROCESSING_UPLOAD"}}, {}),
+        HttpResponse(200, {"data": {"status": "PROCESSING_DOWNLOAD"}}, {}),
+        HttpResponse(200, {"data": {"status": "PUBLISH_COMPLETE"}}, {}),
+    ])
+    connector = TikTokConnector(
+        transport=transport,
+        token_store=TokenStore(),
+        client_audited=True,
+        status_poll_interval_seconds=0,
+    )
+
+    result = connector.publish(publish_request({
+        "explicit": True, "privacy_level": "SELF_ONLY",
+        "allow_comment": False, "allow_duet": False, "allow_stitch": False,
+    }))
+
+    assert result.status == "SUCCEEDED"
+    assert result.external_id == "publish-2"
+    assert len(transport.requests) == 5
+
+
+def test_tiktok_returns_retryable_when_still_processing() -> None:
+    transport = RecordingTransport([
+        HttpResponse(200, {"data": {"privacy_level_options": ["SELF_ONLY"]}}, {}),
+        HttpResponse(200, {"data": {"publish_id": "publish-3"}}, {}),
+        *[HttpResponse(200, {"data": {"status": "PROCESSING_UPLOAD"}}, {}) for _ in range(10)],
+    ])
+    connector = TikTokConnector(
+        transport=transport,
+        token_store=TokenStore(),
+        client_audited=True,
+        status_poll_interval_seconds=0,
+    )
+
+    result = connector.publish(publish_request({
+        "explicit": True, "privacy_level": "SELF_ONLY",
+        "allow_comment": False, "allow_duet": False, "allow_stitch": False,
+    }))
+
+    assert result.status == "FAILED"
+    assert result.error_code == "PROVIDER_UNAVAILABLE"
+    assert result.retryable is True

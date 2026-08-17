@@ -940,6 +940,30 @@ class AgentRun(OrganizationOwnedModel):
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.RUNNING)
     terminal_reason = models.CharField(max_length=500, blank=True)
     max_steps = models.PositiveSmallIntegerField(default=20)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="initiated_agent_runs",
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_agent_runs",
+    )
+    rejected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rejected_agent_runs",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    approval_comment = models.TextField(blank=True)
 
     class Meta:
         ordering = ["-created_at", "-id"]
@@ -965,6 +989,13 @@ class AgentRunStep(OrganizationOwnedModel):
     error = models.CharField(max_length=1000, blank=True)
     reasoning = models.TextField(blank=True)
     approval_token = models.CharField(max_length=64, blank=True)
+    executed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="executed_agent_run_steps",
+    )
 
     class Meta:
         ordering = ["index", "id"]

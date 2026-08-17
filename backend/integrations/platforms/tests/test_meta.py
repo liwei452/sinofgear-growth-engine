@@ -59,7 +59,7 @@ def test_instagram_publish_creates_checks_and_publishes_media_container() -> Non
     result = MetaConnector(transport=transport, token_store=TokenStore()).publish(
         request("INSTAGRAM", {
             "caption": "Precision gear proof",
-            "media_url": "https://cdn.example.com/gear.mp4",
+            "video_url": "https://cdn.example.com/gear.mp4",
             "media_type": "REELS",
         })
     )
@@ -72,6 +72,34 @@ def test_instagram_publish_creates_checks_and_publishes_media_container() -> Non
         ("POST", "https://graph.facebook.com/v23.0/account-123/media_publish"),
     ]
     assert transport.requests[2][2]["json"] == {"creation_id": "container-1"}
+    assert transport.requests[0][2]["json"] == {
+        "caption": "Precision gear proof",
+        "video_url": "https://cdn.example.com/gear.mp4",
+        "media_type": "REELS",
+    }
+
+
+def test_instagram_image_publish_uses_image_container() -> None:
+    transport = RecordingTransport([
+        HttpResponse(200, {"id": "container-2"}, {}),
+        HttpResponse(200, {"status_code": "FINISHED"}, {}),
+        HttpResponse(200, {"id": "ig-post-2"}, {}),
+    ])
+
+    result = MetaConnector(transport=transport, token_store=TokenStore()).publish(
+        request("INSTAGRAM", {
+            "caption": "Gear close-up",
+            "image_url": "https://cdn.example.com/gear.png",
+            "media_type": "IMAGE",
+        })
+    )
+
+    assert result.status == "SUCCEEDED"
+    assert result.external_id == "ig-post-2"
+    assert transport.requests[0][2]["json"] == {
+        "caption": "Gear close-up",
+        "image_url": "https://cdn.example.com/gear.png",
+    }
 
 
 @pytest.mark.parametrize(

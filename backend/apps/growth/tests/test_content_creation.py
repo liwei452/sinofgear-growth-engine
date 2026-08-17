@@ -1,13 +1,20 @@
+import uuid
+
 import pytest
 from django.contrib.auth import get_user_model
 from types import SimpleNamespace
 
 from apps.ai.models import PromptVersion
 from apps.ai.services import PromptVersionService
+from apps.assets.models import MaterialAsset
 from apps.campaigns.models import ContentBrief
 from apps.campaigns.services import create_campaign, create_content_brief
 from apps.catalog.models import Product
-from apps.growth.agent.content_creation_tools import run_content_creation_agent
+from apps.growth.agent.content_creation_tools import (
+    build_content_creation_tools,
+    run_content_creation_agent,
+)
+from apps.growth.agent.tools import ToolRegistry
 from apps.identity.models import Membership, Organization, Role
 from apps.jobs.models import Job
 from apps.platforms.models import Platform
@@ -153,3 +160,58 @@ def test_platform_variants_tool_creates_per_platform(organization, monkeypatch):
     assert calls == ["LINKEDIN", "FACEBOOK"]
     variants = result.steps[-1].output["variants"]
     assert {variant["platform_code"] for variant in variants} == {"LINKEDIN", "FACEBOOK"}
+
+
+def test_content_creation_enrich_tool_binds_assets(organization):
+    user = get_user_model().objects.create_user(username="asset-binder", password="pw")
+    Membership.objects.create(
+        user=user,
+        organization=organization,
+        role=Role.objects.create_operator(),
+    )
+    campaign = create_campaign(organization=organization, values={"name": "Asset"}, product_ids=())
+    brief = create_content_brief(
+        organization=organization,
+        campaign=campaign,
+        creator=user,
+        values={},
+        product_ids=(),
+        asset_ids=(),
+        platform_ids=(),
+        concept_links=(),
+    )
+    asset_id = uuid.uuid4()
+    asset = MaterialAsset.objects.create(
+        id=asset_id,
+        organization=organization,
+        asset_type=MaterialAsset.AssetType.DOCUMENT,
+        storage_key=f"organizations/{organization.id}/assets/{asset_id}/original",
+        original_filename="proof.pdf",
+        mime_type="application/pdf",
+        size_bytes=10,
+        checksum="a" * 64,
+        created_by=user,
+    )
+
+    tools = ToolRegistry(build_content_creation_tools(organization, str(user.id)))
+    result = tools.get("enrich_content_brief").func({
+        "brief_id": str(brief.id),
+        "values": {
+            "target_country": "US",
+            "customer_type": "Buyer",
+            "content_objective": "Leads",
+            "cta": "Quote",
+            "landing_page_url": "https://example.com",
+            "language": "en",
+            "selling_points": ["Quality"],
+            "advantages": ["Speed"],
+            "keywords": ["gear"],
+        },
+        "product_ids": [],
+        "platform_ids": [],
+        "asset_ids": [str(asset.id)],
+    })
+
+    assert result.ok is True
+    brief.refresh_from_db()
+    assert list(brief.asset_links.values_list("asset_id", flat=True)) == [asset.id]

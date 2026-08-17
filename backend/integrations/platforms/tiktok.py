@@ -9,11 +9,22 @@ from .base import (
 class TikTokConnector:
     CREATOR_URL = "https://open.tiktokapis.com/v2/post/publish/creator_info/query/"
     DIRECT_POST_URL = "https://open.tiktokapis.com/v2/post/publish/video/init/"
+    STATUS_URL = "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
 
-    def __init__(self, *, transport, token_store, client_audited: bool):
+    def __init__(
+        self,
+        *,
+        transport,
+        token_store,
+        client_audited: bool,
+        status_poll_attempts=10,
+        status_poll_interval_seconds=6,
+    ):
         self.transport = transport
         self.token_store = token_store
         self.client_audited = client_audited
+        self.status_poll_attempts = status_poll_attempts
+        self.status_poll_interval_seconds = status_poll_interval_seconds
 
     def _headers(self, token: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=UTF-8"}
@@ -65,9 +76,44 @@ class TikTokConnector:
                 return provider_failure(
                     published.status_code, retry_after=published.headers.get("Retry-After"),
                 )
-            return OfficialPublishResult(
-                status="SUCCEEDED" if self.client_audited else "SUCCEEDED_PRIVATE",
-                external_id=str(published.json_body.get("data", {}).get("publish_id", "")),
-            )
+            publish_id = str(published.json_body.get("data", {}).get("publish_id", ""))
+            if not publish_id:
+                return OfficialPublishResult(
+                    status="FAILED", error_code="VALIDATION_REJECTED",
+                    error_message="TikTok 未返回可追踪的 publish_id。",
+                )
+            return self._await_publish_status(token, publish_id)
         except TimeoutError:
             return timeout_failure()
+
+    def _await_publish_status(self, token: str, publish_id: str) -> OfficialPublishResult:
+        import time
+
+        for _ in range(self.status_poll_attempts):
+            status_response = self.transport.request(
+                "POST", self.STATUS_URL,
+                headers=self._headers(token),
+                json={"publish_id": publish_id},
+                timeout_seconds=20,
+            )
+            if not 200 <= status_response.status_code < 300:
+                return provider_failure(
+                    status_response.status_code,
+                    retry_after=status_response.headers.get("Retry-After"),
+                )
+            status = str(status_response.json_body.get("data", {}).get("status", "")).upper()
+            if status == "PUBLISH_COMPLETE":
+                return OfficialPublishResult(
+                    status="SUCCEEDED" if self.client_audited else "SUCCEEDED_PRIVATE",
+                    external_id=publish_id,
+                )
+            if "FAILED" in status or status in {"EXPIRED", "CANCELED"}:
+                return OfficialPublishResult(
+                    status="FAILED", error_code="VALIDATION_REJECTED",
+                    error_message=f"TikTok 视频发布失败（{status}）。",
+                )
+            time.sleep(self.status_poll_interval_seconds)
+        return OfficialPublishResult(
+            status="FAILED", error_code="PROVIDER_UNAVAILABLE",
+            error_message="TikTok 视频仍在处理中，请稍后查询结果。", retryable=True,
+        )

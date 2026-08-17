@@ -58,9 +58,15 @@ def test_list_detail_and_approve_agent_run(organization):
     draft_step = next(step for step in detail.data["steps"] if step["tool_name"] == "draft_outreach")
     assert draft_step["output"]["english_draft"]
 
-    approve = client.post(f"{RUNS_URL}/{run_id}/approve", {"decision": "approve"}, format="json")
+    approve = client.post(
+        f"{RUNS_URL}/{run_id}/approve",
+        {"decision": "approve", "comment": "内容核实无误，批准发送。"},
+        format="json",
+    )
     assert approve.status_code == 200
     assert approve.data["status"] == "COMPLETED"
+    assert approve.data["approved_by"]["username"] == "agent-api-manager"
+    assert approve.data["approval_comment"] == "内容核实无误，批准发送。"
 
     account = TargetAccount.objects.get(
         organization=organization,
@@ -123,11 +129,13 @@ def test_rejected_run_does_not_reappear(organization):
     client = _client(organization, suffix="reject")
     response = client.post(
         f"{RUNS_URL}/{run.id}/approve",
-        {"decision": "reject"},
+        {"decision": "reject", "comment": "目标行业不符，拒绝。"},
         format="json",
     )
     assert response.status_code == 200
     assert response.data["status"] == "REJECTED"
+    assert response.data["rejected_by"]["username"] == "agent-api-reject"
+    assert response.data["approval_comment"] == "目标行业不符，拒绝。"
 
     result = run_proactive_acquisition(organization=organization, candidate_id=str(candidate.id))
     assert result.status == "rejected"

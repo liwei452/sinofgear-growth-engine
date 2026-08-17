@@ -37,13 +37,28 @@ def _propose_calendar(organization) -> list[dict[str, str]]:
 
 
 def _summarize_performance(organization) -> dict[str, Any]:
+    from django.db.models import Sum
+
     from apps.tracking.models import ClickEvent
 
     from ..models import CRMHandoff, InboundRfq
+    from apps.publishing.models import PostMetric
 
     posts = PublishedPost.objects.filter(organization=organization)
+    metric_totals = PostMetric.objects.filter(post__organization=organization).aggregate(
+        impressions=Sum("impressions"),
+        plays=Sum("plays"),
+        likes=Sum("likes"),
+        comments=Sum("comments"),
+        shares=Sum("shares"),
+    )
     return {
         "published_count": posts.count(),
+        "impressions": metric_totals["impressions"] or 0,
+        "plays": metric_totals["plays"] or 0,
+        "likes": metric_totals["likes"] or 0,
+        "comments": metric_totals["comments"] or 0,
+        "shares": metric_totals["shares"] or 0,
         "click_count": ClickEvent.objects.filter(
             tracking_link__organization=organization
         ).count(),

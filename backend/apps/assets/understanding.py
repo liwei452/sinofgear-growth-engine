@@ -192,7 +192,7 @@ def load_understanding_result(job: Job) -> UnderstandingResult:
     )
 
 
-def _execute(job: Job, *, actor) -> UnderstandingResult:
+def _execute(job: Job, *, actor=None) -> UnderstandingResult:
     provider_code = job.input_snapshot.get("provider", "fake")
     provider_model = job.input_snapshot.get("provider_model", "deterministic-labeled-lines-v1")
     provider_label = job.input_snapshot.get("provider_label", PROVIDER_LABEL)
@@ -342,7 +342,11 @@ def start_understanding(
         created_by=actor,
     )
     if job.status in {Job.Status.QUEUED, Job.Status.RETRY_QUEUED}:
-        return _execute(job, actor=actor)
+        from .tasks import run_asset_understanding
+
+        run_asset_understanding.delay(str(job.id))
+        job.refresh_from_db()
+        return load_understanding_result(job)
     return load_understanding_result(job)
 
 
@@ -356,7 +360,16 @@ def retry_understanding(
             "Confirm that bounded PDF text may be sent to DeepSeek for this retry."
         )
     retried = JobService.retry(job.id, organization=job.organization)
-    return _execute(retried, actor=actor)
+    from .tasks import run_asset_understanding
+
+    run_asset_understanding.delay(str(retried.id))
+    retried.refresh_from_db()
+    return load_understanding_result(retried)
+
+
+def execute_understanding_job(job_id) -> UnderstandingResult:
+    job = Job.objects.get(pk=job_id)
+    return _execute(job, actor=job.created_by)
 
 
 @transaction.atomic

@@ -1,6 +1,7 @@
 from celery import shared_task
 
 from .services import enqueue_due_publish_tasks, execute_publish_task
+from .metrics import sync_post_metrics
 
 
 @shared_task
@@ -21,3 +22,13 @@ def run_publish_task(task_id):
 @shared_task
 def queue_due_publish_tasks(limit=100):
     return {"queued": enqueue_due_publish_tasks(limit=limit)}
+
+
+@shared_task
+def sync_post_metrics_hourly():
+    from apps.identity.models import Organization
+
+    synced = 0
+    for organization in Organization.objects.all():
+        synced += sync_post_metrics(organization=organization)
+    return {"synced": synced}

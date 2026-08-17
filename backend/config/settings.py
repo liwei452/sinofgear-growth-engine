@@ -218,6 +218,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.jobs.tasks.reap_stale_jobs",
         "schedule": 60.0,
     },
+    "publishing-sync-post-metrics-hourly": {
+        "task": "apps.publishing.tasks.sync_post_metrics_hourly",
+        "schedule": 3600.0,
+    },
 }
 
 OBJECT_STORAGE_BACKEND = os.environ.get("OBJECT_STORAGE_BACKEND", "minio")

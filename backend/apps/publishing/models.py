@@ -154,3 +154,26 @@ class PublishedPost(ProtectedPublishingModel):
 
     class Meta(ProtectedPublishingModel.Meta):
         ordering = ["-published_at", "-id"]
+
+
+class PostMetric(ProtectedPublishingModel):
+    post = models.ForeignKey(
+        PublishedPost, on_delete=models.PROTECT, related_name="metrics",
+    )
+    collected_on = models.DateField()
+    impressions = models.PositiveIntegerField(default=0)
+    plays = models.PositiveIntegerField(default=0)
+    likes = models.PositiveIntegerField(default=0)
+    comments = models.PositiveIntegerField(default=0)
+    shares = models.PositiveIntegerField(default=0)
+    clicks = models.PositiveIntegerField(default=0)
+    source = models.CharField(max_length=32, default="demo")
+
+    class Meta(ProtectedPublishingModel.Meta):
+        ordering = ["-collected_on", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["post", "collected_on"],
+                name="publishing_unique_post_metric_day",
+            ),
+        ]

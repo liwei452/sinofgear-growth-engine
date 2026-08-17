@@ -112,10 +112,63 @@ class IntentSignal(OrganizationOwnedModel):
 
 
 class InboundLead(OrganizationOwnedModel):
+    class Route(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        ACQUISITION = "ACQUISITION", "Acquisition"
+        CUSTOMER_SERVICE = "CUSTOMER_SERVICE", "Customer service"
+        MANUAL_REVIEW = "MANUAL_REVIEW", "Manual review"
+
     account = models.ForeignKey(TargetAccount, null=True, blank=True, on_delete=models.PROTECT, related_name="inbound_leads")
     source_label = models.CharField(max_length=255)
     status = models.CharField(max_length=32, default="NEW")
+    route = models.CharField(max_length=24, choices=Route.choices, default=Route.PENDING)
+    route_reason = models.CharField(max_length=500, blank=True)
+    routed_at = models.DateTimeField(null=True, blank=True)
     is_demo = models.BooleanField(default=False)
+
+
+class CustomerServiceTurn(OrganizationOwnedModel):
+    class Decision(models.TextChoices):
+        AUTO_REPLY = "AUTO_REPLY", "Auto reply"
+        HUMAN_ESCALATION = "HUMAN_ESCALATION", "Human escalation"
+
+    lead = models.ForeignKey(
+        InboundLead,
+        on_delete=models.PROTECT,
+        related_name="customer_service_turns",
+    )
+    decision = models.CharField(max_length=24, choices=Decision.choices)
+    draft_reply = models.TextField(blank=True)
+    reasoning = models.TextField(blank=True)
+    evidence = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "lead"],
+                name="growth_unique_customer_service_turn",
+            ),
+        ]
+
+
+class GrowthEvent(OrganizationOwnedModel):
+    event_type = models.CharField(max_length=64)
+    entity_type = models.CharField(max_length=64)
+    entity_id = models.CharField(max_length=64)
+    payload = models.JSONField(default=dict)
+    occurred_at = models.DateTimeField(default=timezone.now)
+    published_at = models.DateTimeField(null=True, blank=True)
+    idempotency_key = models.CharField(max_length=128)
+
+    class Meta:
+        ordering = ["occurred_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "idempotency_key"],
+                name="growth_unique_event_key",
+            ),
+        ]
 
 
 class FollowUp(OrganizationOwnedModel):
@@ -131,6 +184,8 @@ class FollowUp(OrganizationOwnedModel):
         SITE_VISITED = "SITE_VISITED", "Site visited"
         FOLLOW_UP_1 = "FOLLOW_UP_1", "Follow up 1"
         REPLIED = "REPLIED", "Replied"
+        BOUNCED = "BOUNCED", "Bounced"
+        UNSUBSCRIBED = "UNSUBSCRIBED", "Unsubscribed"
         RFQ = "RFQ", "RFQ"
         QUOTED = "QUOTED", "Quoted"
         WON = "WON", "Won"
@@ -153,6 +208,38 @@ class OutreachDraft(OrganizationOwnedModel):
     english_draft = models.TextField()
     chinese_explanation = models.TextField()
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+
+
+class OutreachMessage(OrganizationOwnedModel):
+    class Status(models.TextChoices):
+        SENT = "SENT", "Sent"
+        REPLIED = "REPLIED", "Replied"
+        BOUNCED = "BOUNCED", "Bounced"
+        UNSUBSCRIBED = "UNSUBSCRIBED", "Unsubscribed"
+
+    account = models.ForeignKey(
+        TargetAccount,
+        on_delete=models.PROTECT,
+        related_name="outreach_messages",
+    )
+    draft = models.ForeignKey(
+        OutreachDraft,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="outreach_messages",
+    )
+    provider = models.CharField(max_length=64)
+    provider_message_id = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.SENT)
+    payload = models.JSONField(default=dict)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    replied_at = models.DateTimeField(null=True, blank=True)
+    bounced_at = models.DateTimeField(null=True, blank=True)
+    unsubscribed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
 
 
 class ReactivationRecord(OrganizationOwnedModel):
@@ -782,3 +869,51 @@ class LeadWebsiteVisit(OrganizationOwnedModel):
     session_id = models.CharField(max_length=128, blank=True)
     visited_at = models.DateTimeField(default=timezone.now)
 
+
+class AgentRun(OrganizationOwnedModel):
+    class Status(models.TextChoices):
+        RUNNING = "RUNNING", "Running"
+        WAITING_APPROVAL = "WAITING_APPROVAL", "Waiting approval"
+        COMPLETED = "COMPLETED", "Completed"
+        BUDGET_EXCEEDED = "BUDGET_EXCEEDED", "Budget exceeded"
+        FAILED = "FAILED", "Failed"
+
+    idempotency_key = models.CharField(max_length=128)
+    goal = models.CharField(max_length=500)
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.RUNNING)
+    terminal_reason = models.CharField(max_length=500, blank=True)
+    max_steps = models.PositiveSmallIntegerField(default=20)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "idempotency_key"],
+                name="growth_unique_agent_run_key",
+            ),
+        ]
+
+
+class AgentRunStep(OrganizationOwnedModel):
+    run = models.ForeignKey(
+        AgentRun,
+        on_delete=models.PROTECT,
+        related_name="steps",
+    )
+    index = models.PositiveSmallIntegerField()
+    tool_name = models.CharField(max_length=160, blank=True)
+    args = models.JSONField(default=dict)
+    outcome = models.CharField(max_length=32)
+    output = models.JSONField(null=True, blank=True)
+    error = models.CharField(max_length=1000, blank=True)
+    reasoning = models.TextField(blank=True)
+    approval_token = models.CharField(max_length=64, blank=True)
+
+    class Meta:
+        ordering = ["index", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run", "index"],
+                name="growth_unique_agent_run_step_index",
+            ),
+        ]

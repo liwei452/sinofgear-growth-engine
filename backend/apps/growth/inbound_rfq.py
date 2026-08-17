@@ -14,6 +14,8 @@ from .models import (
     TargetAccount,
 )
 from .taxonomy import classify_need
+from .inbound_triage import triage_inbound_lead
+from .growth_events import EVENT_RFQ_CREATED, emit_growth_event
 
 
 @transaction.atomic
@@ -79,15 +81,26 @@ def record_inbound_rfq(*, organization, **payload) -> dict:
         account=account,
         defaults={"stage": FollowUp.Stage.RFQ},
     )
-    InboundLead.objects.get_or_create(
+    lead, _ = InboundLead.objects.get_or_create(
         organization=organization,
         account=account,
         defaults={"source_label": "网站 RFQ"},
+    )
+    triage_inbound_lead(lead=lead)
+    emit_growth_event(
+        organization=organization,
+        event_type=EVENT_RFQ_CREATED,
+        entity_type="account",
+        entity_id=account.id,
+        payload={"need_slug": need, "route": lead.route, "email": email},
+        idempotency_key=f"rfq.created:{account.id}",
     )
     return {
         "account_id": str(account.id),
         "need_slug": need,
         "created_account": account_created,
+        "lead_id": str(lead.id),
+        "route": lead.route,
     }
 
 

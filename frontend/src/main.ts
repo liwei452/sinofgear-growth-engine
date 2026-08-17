@@ -10,6 +10,7 @@ import DashboardPage from "./modules/dashboard/DashboardPage.vue"
 import CompanyPage from "./modules/growth/CompanyPage.vue"
 import EffectivenessPage from "./modules/growth/EffectivenessPage.vue"
 import OpportunitiesPage from "./modules/growth/OpportunitiesPage.vue"
+import AgentApprovalsPage from "./modules/growth/AgentApprovalsPage.vue"
 import PromotionPage from "./modules/growth/PromotionPage.vue"
 import PlaceholderPage from "./shared/components/PlaceholderPage.vue"
 import "./styles/tokens.css"
@@ -22,6 +23,7 @@ const router = createAppRouter(queryClient, {
     Dashboard: DashboardPage,
     Promotion: PromotionPage,
     Opportunities: OpportunitiesPage,
+    AgentApprovals: AgentApprovalsPage,
     Company: CompanyPage,
     Settings: defineAsyncComponent(() => import("./modules/settings/SettingsCenterPage.vue")),
     MapsDiscovery: defineAsyncComponent(() => import("./modules/growth/GoogleMapsDiscoverySettings.vue")),

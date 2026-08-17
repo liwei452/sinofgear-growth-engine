@@ -1,8 +1,12 @@
+import json
+
+from django.conf import settings
 from django.db import transaction
 
 from apps.content.models import PlatformContent
 from apps.content.services import content_is_consistent
 from integrations.platforms.manual_fake import ManualPackageFakeConnector, ManualPackageReceipt
+from integrations.ai.providers import provider_registry
 
 from .models import (
     CRMHandoff,
@@ -153,6 +157,49 @@ class OpportunityHandoffBlocked(RuntimeError):
     pass
 
 
+OUTREACH_DRAFT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "draft": {"type": "string"},
+        "reasoning": {"type": "string"},
+    },
+    "required": ["draft", "reasoning"],
+}
+
+
+def _outreach_draft_text(account: TargetAccount) -> str:
+    provider_code = getattr(settings, "PRODUCT_AI_PROVIDER", "fake")
+    if provider_code != "deepseek":
+        return _template_outreach_draft(account)
+    signal = account.intent_signals.order_by("-observed_at", "-id").first()
+    snapshot = {
+        "company_name": account.name,
+        "country": account.country,
+        "industry": account.industry,
+        "website": account.website,
+        "evidence": signal.evidence_text if signal else "",
+    }
+    prompt = "Draft a personalized development email using only the supplied facts.\n||INPUT:" + json.dumps(
+        snapshot, ensure_ascii=False,
+    )
+    try:
+        result = provider_registry.get("deepseek").generate(
+            prompt=prompt,
+            schema=OUTREACH_DRAFT_SCHEMA,
+        )
+        return result["draft"]
+    except Exception:
+        return _template_outreach_draft(account)
+
+
+def _template_outreach_draft(account: TargetAccount) -> str:
+    return (
+        f"Hello {account.name} team, may I share a short manufacturing capability summary "
+        "for your review?"
+    )
+
+
 @transaction.atomic
 def add_to_follow_up(*, account: TargetAccount) -> tuple[FollowUp, bool]:
     return FollowUp.objects.get_or_create(organization=account.organization, account=account)
@@ -166,10 +213,7 @@ def create_outreach_draft(*, account: TargetAccount) -> tuple[OutreachDraft, boo
     return OutreachDraft.objects.create(
         organization=account.organization,
         account=account,
-        english_draft=(
-            f"Hello {account.name} team, may I share a short manufacturing capability summary "
-            "for your review?"
-        ),
+        english_draft=_outreach_draft_text(account),
         chinese_explanation="仅建议询问对方是否愿意查看能力摘要；没有声称对方已经采购，也不会自动发送。",
     ), True
 

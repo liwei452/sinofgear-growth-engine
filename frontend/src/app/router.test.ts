@@ -21,6 +21,7 @@ const Analytics = defineComponent({ name: "AnalyticsStub", template: "<p>真实�
 const LegacyAnalytics = defineComponent({ name: "LegacyAnalyticsStub", template: "<p>高级数据看板</p>" })
 const Promotion = defineComponent({ name: "PromotionStub", template: "<p>工厂推广工作区</p>" })
 const Opportunities = defineComponent({ name: "OpportunitiesStub", template: "<p>证据化客户机会</p>" })
+const AgentApprovals = defineComponent({ name: "AgentApprovalsStub", template: "<p>Agent 审批</p>" })
 const Company = defineComponent({ name: "CompanyStub", template: "<p>公司事实资料</p>" })
 const Settings = defineComponent({ name: "SettingsStub", template: "<p>统一设置中心</p>" })
 const MapsDiscovery = defineComponent({ name: "MapsDiscoveryStub", template: "<p>谷歌地图获客</p>" })
@@ -41,7 +42,7 @@ function router(client = queryClient(), initialPath?: string) {
   if (initialPath) history.push(initialPath)
   return createAppRouter(client, {
     history,
-    components: { Login, Shell, Dashboard, Promotion, Opportunities, Company, Settings, MapsDiscovery, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LegacyAnalytics, Placeholder },
+    components: { Login, Shell, Dashboard, Promotion, Opportunities, AgentApprovals, Company, Settings, MapsDiscovery, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LegacyAnalytics, Placeholder },
   })
 }
 

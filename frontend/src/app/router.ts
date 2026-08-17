@@ -13,6 +13,7 @@ export type AppRouteComponents = {
   Dashboard: Component
   Promotion: Component
   Opportunities: Component
+  AgentApprovals: Component
   Company: Component
   Settings: Component
   MapsDiscovery: Component
@@ -63,6 +64,7 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
     },
     { path: "promotion", name: "promotion", component: options.components.Promotion, meta: { title: "推广" } },
     { path: "opportunities", name: "opportunities", component: options.components.Opportunities, meta: { title: "客户机会" } },
+    { path: "agent-approvals", name: "agent-approvals", component: options.components.AgentApprovals, meta: { title: "Agent 审批", requiredPermission: "campaigns.read" } },
     { path: "company", name: "company", component: options.components.Company, meta: { title: "我的公司" } },
     { path: "settings", name: "settings", component: options.components.Settings, meta: { title: "设置中心" } },
     { path: "maps-discovery", name: "maps-discovery", component: options.components.MapsDiscovery, meta: { title: "谷歌地图获客" } },

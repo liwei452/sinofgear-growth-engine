@@ -12,6 +12,7 @@ const navigation = [{
     { label: "今天", to: "/", icon: "今" },
     { label: "推广", to: "/promotion", icon: "推" },
     { label: "客户机会", to: "/opportunities", icon: "客" },
+    { label: "Agent 审批", to: "/agent-approvals", icon: "审" },
     { label: "效果", to: "/analytics", icon: "效" },
     { label: "我的公司", to: "/company", icon: "企" },
   ],

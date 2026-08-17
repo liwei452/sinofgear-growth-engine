@@ -40,6 +40,13 @@ from .views import (
     TradeSnapshotListView,
     TradeSyncView,
 )
+from .agent_views import (
+    AgentRunApproveView,
+    AgentRunDetailView,
+    AgentRunListView,
+    GrowthEventAcknowledgeView,
+    GrowthEventListView,
+)
 
 urlpatterns = [
     path("growth/workspace", GrowthWorkspaceView.as_view(), name="growth-workspace"),
@@ -172,4 +179,17 @@ urlpatterns = [
         CompanyFactVerifyView.as_view(),
         name="growth-company-fact-verify",
     ),
+    path("growth/agent/runs", AgentRunListView.as_view(), name="growth-agent-runs"),
+    path(
+        "growth/agent/runs/<uuid:run_id>",
+        AgentRunDetailView.as_view(),
+        name="growth-agent-run-detail",
+    ),
+    path(
+        "growth/agent/runs/<uuid:run_id>/approve",
+        AgentRunApproveView.as_view(),
+        name="growth-agent-run-approve",
+    ),
+    path("growth/events", GrowthEventListView.as_view(), name="growth-events"),
+    path("growth/events/acknowledge", GrowthEventAcknowledgeView.as_view(), name="growth-events-acknowledge"),
 ]

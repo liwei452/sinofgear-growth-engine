@@ -23,6 +23,12 @@ jobs:
         run: ruff check apps integrations config
       - name: Run tests
         run: python -m pytest -q
+      - name: Django system check
+        run: python manage.py check --settings=config.test_settings
+      - name: Check migration drift
+        run: python manage.py makemigrations --check --dry-run --settings=config.test_settings
+      - name: Validate OpenAPI schema
+        run: python manage.py spectacular --settings=config.test_settings --validate
 
   frontend:
     name: Frontend checks
@@ -32,6 +38,12 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies for API contract
+        run: pip install ".[dev]"
+        working-directory: backend
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -42,6 +54,8 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: API contract check
+        run: pnpm api:check
       - name: Typecheck
         run: pnpm typecheck
       - name: Lint

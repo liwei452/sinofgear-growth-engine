@@ -140,3 +140,52 @@ def test_version_two_schema_requires_evidence_for_master_and_platforms():
     assert payloads.CONTENT_OUTPUT_SCHEMA_V2["properties"]["evidence_fact_ids"]["minItems"] == 1
     assert payloads.PLATFORM_VARIANT_V2_SCHEMA["properties"]["evidence_fact_ids"]["minItems"] == 1
     assert "internal_translation_zh" not in payloads.CONTENT_OUTPUT_SCHEMA_V2["properties"]
+
+
+def test_generated_output_rejects_prohibited_claims():
+    snapshot = {
+        **_snapshot(),
+        "prohibited_claims": ["guaranteed zero wear"],
+    }
+    output = _output()
+    output["body"] = "This gear set comes with guaranteed zero wear."
+
+    with pytest.raises(ValueError, match="prohibited claim"):
+        payloads.validate_generated_content_output(output, snapshot)
+
+
+def test_generated_output_rejects_prohibited_claims_in_platform_copy():
+    snapshot = {
+        **_snapshot(),
+        "prohibited_claims": ["PRECISION GROUND TEETH"],
+    }
+    output = _output()
+    output["platform_variants"][0]["body"] = "Precision ground teeth for mining equipment."
+
+    with pytest.raises(ValueError, match="prohibited claim"):
+        payloads.validate_generated_content_output(output, snapshot)
+
+
+def test_generated_output_rejects_numeric_claim_without_verified_fact():
+    snapshot = {
+        **_snapshot(),
+        "verified_product_facts": [{"fact_id": "fact-1", "value": "18"}],
+    }
+    output = _output()
+    output["body"] = "Our gears are available with 20 teeth."
+
+    with pytest.raises(ValueError, match="numeric claim"):
+        payloads.validate_generated_content_output(output, snapshot)
+
+
+def test_generated_output_accepts_numeric_claim_backed_by_verified_fact():
+    snapshot = {
+        **_snapshot(),
+        "verified_product_facts": [{"fact_id": "fact-1", "value": "20 teeth"}],
+    }
+    output = _output()
+    output["body"] = "Our gears are available with 20 teeth."
+
+    cleaned = payloads.validate_generated_content_output(output, snapshot)
+
+    assert cleaned["body"] == "Our gears are available with 20 teeth."

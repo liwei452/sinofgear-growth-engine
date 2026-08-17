@@ -375,6 +375,12 @@ def sync_publish_item_from_task(*, task_id):
             "code": "PUBLISH_FAILED",
             "message": "Publish failed.",
         }
+    elif task.status == PublishTask.Status.CANCELED:
+        item.status = GrowthPublishItem.Status.FAILED
+        item.last_error = {
+            "code": "PUBLISH_CANCELED",
+            "message": "Publish was canceled.",
+        }
     item.save(update_fields=["status", "external_post_id", "last_error", "updated_at"])
     batch = item.batch
     batch.refresh_from_db()

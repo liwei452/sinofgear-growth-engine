@@ -51,6 +51,7 @@ def continue_agent_run(
     tools: ToolRegistry,
     approvals: set[str] | None = None,
 ) -> AgentRunResult:
+    run = AgentRun.objects.select_for_update().get(pk=run.pk)
     memory, completed = load_run_memory(run)
     if run.status == AgentRun.Status.REJECTED:
         return AgentRunResult(

@@ -91,3 +91,61 @@ def test_sync_publish_item_from_task_marks_success(db, monkeypatch):
     assert result is item
     assert item.status == "SUCCEEDED"
     assert item.external_post_id == "post-1"
+
+
+def test_sync_publish_item_from_task_marks_canceled(db, monkeypatch):
+    from apps.growth import publishing as gp
+
+    class FakeItem:
+        def __init__(self):
+            self.status = "DELEGATED"
+            self.external_post_id = ""
+            self.last_error = None
+            self.batch = SimpleNamespace(refresh_from_db=lambda: None)
+
+        def save(self, update_fields=None):
+            self.update_fields = update_fields
+
+    item = FakeItem()
+    monkeypatch.setattr(
+        gp,
+        "GrowthPublishItem",
+        SimpleNamespace(
+            Status=SimpleNamespace(SUCCEEDED="SUCCEEDED", FAILED="FAILED"),
+            objects=SimpleNamespace(
+                select_for_update=lambda: SimpleNamespace(
+                    filter=lambda **kwargs: SimpleNamespace(first=lambda: item)
+                )
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        gp,
+        "PublishTask",
+        SimpleNamespace(
+            Status=SimpleNamespace(
+                SUCCEEDED="SUCCEEDED", FAILED="FAILED", CANCELED="CANCELED",
+            ),
+            objects=SimpleNamespace(
+                filter=lambda **kwargs: SimpleNamespace(
+                    first=lambda: SimpleNamespace(id="task-1", status="CANCELED")
+                )
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        gp,
+        "PublishedPost",
+        SimpleNamespace(
+            objects=SimpleNamespace(
+                filter=lambda **kwargs: SimpleNamespace(first=lambda: None)
+            )
+        ),
+    )
+    monkeypatch.setattr(gp, "_refresh_batch_status", lambda batch: batch)
+
+    result = gp.sync_publish_item_from_task(task_id="task-1")
+
+    assert result is item
+    assert item.status == "FAILED"
+    assert item.last_error["code"] == "PUBLISH_CANCELED"

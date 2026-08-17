@@ -1,12 +1,13 @@
 """HTTP endpoints for inspecting and approving agent runs."""
 
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
 from django.shortcuts import get_object_or_404
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.identity.permissions import CanManageCampaigns, CanReadCampaigns
+from apps.identity.services import get_active_membership, require_permission
 
 from .agent.resume import resume_agent_run
 from .agent.content_creation_tools import (
@@ -17,6 +18,31 @@ from .agent.content_tools import run_content_strategy_agent
 from .agent.publishing_tools import run_social_ops_agent
 from .growth_events import mark_events_published
 from .models import AgentRun, AgentRunStep, GrowthEvent
+
+
+AGENT_PERMISSIONS = {
+    "content_strategy": "campaigns.manage",
+    "content_creation": "content.manage",
+    "platform_variants": "content.manage",
+    "social_ops": "publishing.manage",
+}
+
+TOOL_PERMISSIONS = {
+    "create_content_brief": "campaigns.manage",
+    "enrich_content_brief": "content.manage",
+    "mark_content_brief_ready": "content.review",
+    "trigger_master_generation": "content.manage",
+    "create_platform_variants": "content.manage",
+    "schedule_social_post": "publishing.manage",
+    "send_email": "campaigns.manage",
+}
+
+
+def _require(request, permission: str) -> None:
+    require_permission(
+        membership=get_active_membership(user=request.user),
+        permission=permission,
+    )
 
 
 class AgentRunStepSerializer(serializers.ModelSerializer):
@@ -61,10 +87,46 @@ class AgentRunSerializer(serializers.ModelSerializer):
         }
 
 
+class AgentRunStartSerializer(serializers.Serializer):
+    agent_type = serializers.ChoiceField(choices=list(AGENT_PERMISSIONS.keys()))
+    brief_id = serializers.UUIDField(required=False)
+    product_id = serializers.UUIDField(required=False)
+    platform_id = serializers.UUIDField(required=False)
+    master_id = serializers.UUIDField(required=False)
+    content_id = serializers.UUIDField(required=False)
+    account_id = serializers.UUIDField(required=False)
+    scheduled_at = serializers.DateTimeField(required=False, allow_null=True)
+    timezone_name = serializers.CharField(required=False, default="UTC")
+    values = serializers.DictField(required=False)
+
+
+class AgentRunStartResultSerializer(serializers.Serializer):
+    status = serializers.CharField()
+    terminal_reason = serializers.CharField(allow_null=True)
+    pending_approval_token = serializers.CharField(allow_null=True)
+
+
+class AgentRunApproveSerializer(serializers.Serializer):
+    decision = serializers.ChoiceField(
+        choices=["approve", "reject"], required=False, default="approve",
+    )
+
+
 class AgentRunListView(APIView):
     permission_classes = [CanReadCampaigns]
 
-    @extend_schema(tags=["Agent"])
+    @extend_schema(
+        tags=["Agent"],
+        parameters=[
+            OpenApiParameter(
+                "status",
+                OpenApiTypes.STR,
+                enum=AgentRun.Status.values,
+                required=False,
+            ),
+        ],
+        responses={200: AgentRunSerializer(many=True)},
+    )
     def get(self, request):
         runs = AgentRun.objects.filter(organization=request.organization).order_by(
             "-created_at", "-id",
@@ -78,16 +140,20 @@ class AgentRunListView(APIView):
 class AgentRunDetailView(APIView):
     permission_classes = [CanReadCampaigns]
 
-    @extend_schema(tags=["Agent"])
+    @extend_schema(tags=["Agent"], responses={200: AgentRunSerializer})
     def get(self, request, run_id):
         run = get_object_or_404(AgentRun, id=run_id, organization=request.organization)
         return Response(AgentRunSerializer(run).data)
 
 
 class AgentRunApproveView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanReadCampaigns]
 
-    @extend_schema(tags=["Agent"])
+    @extend_schema(
+        tags=["Agent"],
+        request=AgentRunApproveSerializer,
+        responses={200: AgentRunSerializer},
+    )
     def post(self, request, run_id):
         run = get_object_or_404(AgentRun, id=run_id, organization=request.organization)
         if run.status != AgentRun.Status.WAITING_APPROVAL:
@@ -104,6 +170,7 @@ class AgentRunApproveView(APIView):
         if pending is None or not pending.approval_token:
             return Response({"message": "No pending approval."}, status=409)
 
+        _require(request, TOOL_PERMISSIONS.get(pending.tool_name or "", "campaigns.manage"))
         try:
             resume_agent_run(run=run, approval_token=pending.approval_token)
         except (KeyError, ValueError) as exc:
@@ -113,11 +180,18 @@ class AgentRunApproveView(APIView):
 
 
 class AgentRunStartView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanReadCampaigns]
 
-    @extend_schema(tags=["Agent"])
+    @extend_schema(
+        tags=["Agent"],
+        request=AgentRunStartSerializer,
+        responses={200: AgentRunStartResultSerializer},
+    )
     def post(self, request):
         agent_type = request.data.get("agent_type")
+        if agent_type not in AGENT_PERMISSIONS:
+            return Response({"message": f"Unknown agent type {agent_type!r}."}, status=400)
+        _require(request, AGENT_PERMISSIONS[agent_type])
         organization = request.organization
         actor_id = str(request.user.id)
         try:
@@ -147,11 +221,6 @@ class AgentRunStartView(APIView):
                     account_id=str(request.data["account_id"]),
                     scheduled_at=request.data.get("scheduled_at"),
                     timezone_name=request.data.get("timezone_name", "UTC"),
-                )
-            else:
-                return Response(
-                    {"message": f"Unknown agent type {agent_type!r}."},
-                    status=400,
                 )
         except (KeyError, ValueError) as exc:
             return Response({"message": str(exc)}, status=400)
@@ -184,10 +253,14 @@ class GrowthEventAcknowledgeSerializer(serializers.Serializer):
     event_ids = serializers.ListField(child=serializers.UUIDField(), allow_empty=False)
 
 
+class GrowthEventAcknowledgeResultSerializer(serializers.Serializer):
+    acknowledged = serializers.IntegerField()
+
+
 class GrowthEventListView(APIView):
     permission_classes = [CanReadCampaigns]
 
-    @extend_schema(tags=["Gateway events"])
+    @extend_schema(tags=["Gateway events"], responses={200: GrowthEventSerializer(many=True)})
     def get(self, request):
         events = GrowthEvent.objects.filter(organization=request.organization).order_by(
             "occurred_at", "id",
@@ -203,6 +276,7 @@ class GrowthEventAcknowledgeView(APIView):
     @extend_schema(
         tags=["Gateway events"],
         request=GrowthEventAcknowledgeSerializer,
+        responses={200: GrowthEventAcknowledgeResultSerializer},
     )
     def post(self, request):
         serializer = GrowthEventAcknowledgeSerializer(data=request.data)

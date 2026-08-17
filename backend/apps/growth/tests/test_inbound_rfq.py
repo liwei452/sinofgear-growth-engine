@@ -152,3 +152,35 @@ def test_webhook_signature_verification():
 
 def test_resolve_website_organization_rejects_non_uuid():
     assert resolve_website_organization("not-a-uuid") is None
+
+
+def test_rfq_webhook_requires_hmac(db, settings, monkeypatch):
+    from rest_framework.test import APIClient
+
+    from apps.growth import views
+
+    settings.RFQ_WEBHOOK_SECRET = "rfq-secret"
+    settings.LEAD_WEBSITE_ORGANIZATION_SLUG = "rfq-org"
+    Organization.objects.create(name="RFQ Org", slug="rfq-org")
+    monkeypatch.setattr(views, "_webhook_rate_limited", lambda *args, **kwargs: False)
+
+    client = APIClient()
+    url = "/api/v1/growth/inbound-rfq"
+    payload = {"company_name": "ABC Mining", "email": "p@x.com", "message": "Need gear"}
+
+    bad = client.post(
+        url, payload, format="json", HTTP_X_TIMESTAMP="0", HTTP_X_SIGNATURE="bad",
+    )
+    assert bad.status_code == 403
+
+    timestamp = str(int(time.time()))
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    signature = hmac.new(
+        "rfq-secret".encode(), f"{timestamp}.{canonical}".encode(), hashlib.sha256,
+    ).hexdigest()
+    good = client.post(
+        url, payload, format="json",
+        HTTP_X_TIMESTAMP=timestamp, HTTP_X_SIGNATURE=signature,
+    )
+    assert good.status_code == 201
+    assert good.data["rfq_id"]

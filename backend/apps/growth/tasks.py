@@ -70,3 +70,19 @@ def sync_growth_publish_item_from_task(task_id):
 
     item = sync_publish_item_from_task(task_id=task_id)
     return {"item_id": str(item.id), "status": item.status} if item else None
+
+
+@shared_task
+def reconcile_delegated_publish_items(limit=200):
+    from .models import GrowthPublishItem
+    from .publishing import sync_publish_item_from_task
+
+    task_ids = list(
+        GrowthPublishItem.objects.filter(
+            status=GrowthPublishItem.Status.DELEGATED,
+            publish_task__status__in=["SUCCEEDED", "FAILED", "CANCELED"],
+        ).values_list("publish_task_id", flat=True)[:limit]
+    )
+    for task_id in task_ids:
+        sync_publish_item_from_task(task_id=str(task_id))
+    return {"reconciled": len(task_ids)}

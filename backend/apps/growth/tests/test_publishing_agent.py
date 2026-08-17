@@ -31,6 +31,14 @@ def test_social_ops_agent_requires_approval_before_publishing(organization, monk
     )
     assert first.status == "waiting_approval"
     assert calls == []
+    assert [step.tool_name for step in first.steps] == [
+        "analyze_post_performance",
+        "propose_publish_calendar",
+        "schedule_social_post",
+    ]
+    assert first.steps[0].outcome == "succeeded"
+    assert first.steps[1].outcome == "succeeded"
+    assert first.steps[2].outcome == "blocked_approval"
     token = first.pending_approval.approval_token
 
     resumed = run_social_ops_agent(

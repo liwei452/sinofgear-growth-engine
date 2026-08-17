@@ -5,10 +5,13 @@ from .services import enqueue_due_publish_tasks, execute_publish_task
 
 @shared_task
 def run_publish_task(task_id):
-    post = execute_publish_task(task_id)
     from apps.growth.tasks import sync_growth_publish_item_from_task
 
-    sync_growth_publish_item_from_task.delay(str(task_id))
+    post = None
+    try:
+        post = execute_publish_task(task_id)
+    finally:
+        sync_growth_publish_item_from_task.delay(str(task_id))
     return {
         "task_id": str(task_id),
         "published_post_id": str(post.id) if post else None,

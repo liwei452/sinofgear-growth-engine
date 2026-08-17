@@ -42,6 +42,7 @@ CONTRACTS_FINDER_DISCOVERY_MAX_RESPONSE_BYTES = int(
 GROWTH_DISCOVERY_SOURCE_FACTORY = os.environ.get("GROWTH_DISCOVERY_SOURCE_FACTORY", "")
 GROWTH_WEBSITE_TRANSPORT_FACTORY = os.environ.get("GROWTH_WEBSITE_TRANSPORT_FACTORY", "")
 LEAD_VISIT_WEBHOOK_SECRET = os.environ.get("LEAD_VISIT_WEBHOOK_SECRET", "")
+RFQ_WEBHOOK_SECRET = os.environ.get("RFQ_WEBHOOK_SECRET", "")
 LEAD_WEBSITE_ORGANIZATION_SLUG = os.environ.get("LEAD_WEBSITE_ORGANIZATION_SLUG", "")
 EMAIL_VERIFICATION_PROVIDER_FACTORY = os.environ.get("EMAIL_VERIFICATION_PROVIDER_FACTORY", "")
 PUBLIC_TRADE_PROVIDER_MODE = os.environ.get(
@@ -204,6 +205,10 @@ CELERY_BEAT_SCHEDULE = {
     "growth-proactive-acquisition-daily": {
         "task": "apps.growth.tasks.run_due_proactive_acquisition",
         "schedule": crontab(hour=2, minute=0),
+    },
+    "growth-publish-reconciliation-hourly": {
+        "task": "apps.growth.tasks.reconcile_delegated_publish_items",
+        "schedule": 3600.0,
     },
 }
 

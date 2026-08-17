@@ -166,3 +166,13 @@ def test_agent_start_content_strategy(organization):
     assert response.status_code == 200
     assert response.data["status"] == "waiting_approval"
     assert response.data["pending_approval_token"]
+
+
+def test_reader_cannot_start_agent(organization):
+    reader = _client(organization, reader=True, suffix="reader-start")
+    response = reader.post(
+        "/api/v1/growth/agent/runs/start",
+        {"agent_type": "content_strategy"},
+        format="json",
+    )
+    assert response.status_code == 403

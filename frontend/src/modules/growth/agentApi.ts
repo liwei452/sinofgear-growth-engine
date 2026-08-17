@@ -16,7 +16,7 @@ export type AgentRunStep = {
 export type AgentRun = {
   id: string
   goal: string
-  status: "RUNNING" | "WAITING_APPROVAL" | "COMPLETED" | "BUDGET_EXCEEDED" | "FAILED"
+  status: "RUNNING" | "WAITING_APPROVAL" | "COMPLETED" | "BUDGET_EXCEEDED" | "FAILED" | "REJECTED"
   terminal_reason: string | null
   created_at: string
   updated_at: string

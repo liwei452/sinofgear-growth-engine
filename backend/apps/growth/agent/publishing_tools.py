@@ -148,7 +148,10 @@ def run_social_ops_agent(
 ) -> Any:
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
-        idempotency_key=f"social-ops:{content_id}:{account_id}",
+        idempotency_key=(
+            idempotency_key
+            or f"social-ops:{content_id}:{account_id}:{scheduled_at or 'immediate'}"
+        ),
         defaults={
             "goal": "social publishing",
             "agent_type": "social_ops",
@@ -165,6 +168,16 @@ def run_social_ops_agent(
     tools = ToolRegistry(build_social_ops_tools(organization))
     planner = DeterministicPlanner(
         [
+            Plan(
+                reasoning="summarize published post performance",
+                tool_name="analyze_post_performance",
+                tool_args={},
+            ),
+            Plan(
+                reasoning="propose a publish calendar from approved content",
+                tool_name="propose_publish_calendar",
+                tool_args={},
+            ),
             Plan(
                 reasoning="schedule approved social post",
                 tool_name="schedule_social_post",

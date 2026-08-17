@@ -1,4 +1,5 @@
 import json
+import re
 
 
 MAX_CONTENT_JSON_BYTES = 65_536
@@ -9,6 +10,10 @@ MAX_EVIDENCE_FACT_IDS = 100
 MAX_PLATFORM_VARIANTS = 12
 MAX_SHOTS = 24
 TEXT_LIMITS = {"title": 500, "body": 50_000, "cta": 2_000}
+NUMERIC_CLAIM_PATTERN = re.compile(
+    r"\d+(?:[.,]\d+)?\s*(?:mm|cm|µm|um|micron|microns|%|°|hrc|hrb|kw|rpm|kg|ton|teeth?|modules?)\b",
+    re.IGNORECASE,
+)
 COMMON_V2_TEXT_LIMITS = {
     **TEXT_LIMITS,
     "language": 16,
@@ -326,6 +331,8 @@ def validate_generated_content_output(payload, snapshot):
             or variant["subtitle_language"] != target_language
         ):
             raise ValueError("TikTok language metadata must match the publication language.")
+    _assert_no_prohibited_claims(cleaned, snapshot)
+    _assert_numeric_claims_grounded(cleaned, snapshot)
     _ensure_json_limit(cleaned)
     return cleaned
 
@@ -346,6 +353,74 @@ def platform_variant_payload(master_payload, platform_code):
 def _ensure_json_limit(cleaned):
     if len(json.dumps(cleaned, ensure_ascii=False, separators=(",", ":")).encode()) > MAX_CONTENT_JSON_BYTES:
         raise ValueError("Content payload exceeds the total JSON byte limit.")
+
+
+def _claim_scan_text_fields(cleaned):
+    """Return every user-facing text field as ``(label, text)`` pairs."""
+    fields = [(name, cleaned[name]) for name in ("title", "body", "cta")]
+    for variant in cleaned.get("platform_variants", []):
+        code = variant.get("platform_code", "UNKNOWN")
+        for name in ("title", "body", "cta"):
+            fields.append((f"platform:{code}:{name}", variant.get(name, "")))
+        if code == "TIKTOK":
+            for name in ("script", "voiceover", "subtitles"):
+                fields.append((f"platform:TIKTOK:{name}", variant.get(name, "")))
+            for index, shot in enumerate(variant.get("shot_list", []), start=1):
+                fields.append((
+                    f"platform:TIKTOK:shot:{index}:on_screen_text",
+                    shot.get("on_screen_text", "") if isinstance(shot, dict) else "",
+                ))
+    return fields
+
+
+def _assert_no_prohibited_claims(cleaned, snapshot):
+    prohibited = [
+        claim.strip().casefold()
+        for claim in snapshot.get("prohibited_claims", [])
+        if isinstance(claim, str) and claim.strip()
+    ]
+    if not prohibited:
+        return
+    for label, text in _claim_scan_text_fields(cleaned):
+        folded = text.casefold()
+        for claim in prohibited:
+            if claim in folded:
+                raise ValueError(f"Generated content contains a prohibited claim in {label}.")
+
+
+def _grounding_fact_values(snapshot):
+    values = []
+    for fact in snapshot.get("verified_product_facts", []):
+        if not isinstance(fact, dict):
+            continue
+        value = fact.get("value")
+        if isinstance(value, str) and value.strip():
+            folded = value.strip().casefold()
+            if len(folded) >= 2:
+                values.append(folded)
+    return values
+
+
+def _numeric_claim_sentences(cleaned):
+    sentences = []
+    for _label, text in _claim_scan_text_fields(cleaned):
+        for sentence in re.split(r"[.!?\n]+", text):
+            sentence = sentence.strip()
+            if sentence and NUMERIC_CLAIM_PATTERN.search(sentence):
+                sentences.append(sentence)
+    return sentences
+
+
+def _assert_numeric_claims_grounded(cleaned, snapshot):
+    """Require numeric/spec claims to trace back to a verified fact value."""
+    claim_sentences = _numeric_claim_sentences(cleaned)
+    if not claim_sentences:
+        return
+    fact_values = _grounding_fact_values(snapshot)
+    for sentence in claim_sentences:
+        folded = sentence.casefold()
+        if not any(value in folded for value in fact_values):
+            raise ValueError("Generated content contains a numeric claim without a verified fact.")
 
 
 def validate_content_payload(payload, *, platform_code=None):

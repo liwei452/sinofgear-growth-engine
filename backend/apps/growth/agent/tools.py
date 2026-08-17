@@ -20,6 +20,7 @@ class Tool:
     parameters: dict[str, Any]
     risk: str
     func: Callable[[dict[str, Any]], ToolResult]
+    approval_required: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -29,6 +30,8 @@ class Tool:
 
     @property
     def requires_approval(self) -> bool:
+        if self.approval_required is not None:
+            return self.approval_required
         return self.risk == "write"
 
     def descriptor(self) -> dict[str, Any]:

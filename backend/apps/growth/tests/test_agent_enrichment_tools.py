@@ -242,3 +242,22 @@ def test_proactive_acquisition_website_path_end_to_end(organization, monkeypatch
     )
     follow_up = FollowUp.objects.get(organization=organization, account=account)
     assert follow_up.stage == "EMAIL_1_SENT"
+
+
+def test_acquisition_write_tools_are_classified_write_but_only_send_needs_approval(organization):
+    tools = ToolRegistry(build_proactive_acquisition_tools(organization))
+
+    risks = {tool.name: tool.risk for tool in tools._tools.values()}
+    approvals = {tool.name: tool.requires_approval for tool in tools._tools.values()}
+
+    assert risks["discover_maps_candidates"] == "write"
+    assert risks["enrich_candidate"] == "write"
+    assert risks["website_enrich_candidate"] == "write"
+    assert risks["add_to_follow_up"] == "write"
+    assert risks["draft_outreach"] == "write"
+    assert risks["send_email"] == "write"
+
+    assert approvals["enrich_candidate"] is False
+    assert approvals["add_to_follow_up"] is False
+    assert approvals["draft_outreach"] is False
+    assert approvals["send_email"] is True

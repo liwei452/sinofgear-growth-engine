@@ -47,6 +47,37 @@ def test_deepseek_provider_uses_bounded_official_json_request(monkeypatch):
     assert "test-secret-never-log" not in captured["request"].data.decode()
 
 
+def test_deepseek_provider_records_usage_metadata(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    content = json.dumps({"title": "T", "body": "B"})
+
+    def opener(_request, *, timeout):
+        return _Response(json.dumps({
+            "id": "chatcmpl-123",
+            "model": "deepseek-chat",
+            "choices": [{
+                "message": {"content": content},
+                "finish_reason": "stop",
+            }],
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 5,
+                "total_tokens": 17,
+            },
+        }).encode())
+
+    provider = DeepSeekAIProvider(opener=opener, timeout_seconds=12)
+    provider.generate(prompt="input", schema={"type": "object", "required": ["title", "body"]})
+
+    assert provider.last_usage["model"] == "deepseek-chat"
+    assert provider.last_usage["request_id"] == "chatcmpl-123"
+    assert provider.last_usage["finish_reason"] == "stop"
+    assert provider.last_usage["prompt_tokens"] == 12
+    assert provider.last_usage["completion_tokens"] == 5
+    assert provider.last_usage["total_tokens"] == 17
+    assert provider.last_usage["latency_seconds"] >= 0
+
+
 def test_deepseek_provider_never_calls_network_without_key(monkeypatch):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 

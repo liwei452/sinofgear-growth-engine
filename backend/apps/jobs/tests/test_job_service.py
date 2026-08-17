@@ -1,12 +1,19 @@
+from datetime import timedelta
 from uuid import uuid4
 from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 from apps.identity.models import Organization
 from apps.jobs.models import Job
-from apps.jobs.services import JobConflictError, JobService, StaleJobWorkerError
+from apps.jobs.services import (
+    JOB_LEASE_SECONDS,
+    JobConflictError,
+    JobService,
+    StaleJobWorkerError,
+)
 
 
 @pytest.fixture
@@ -317,3 +324,24 @@ def test_job_history_rejects_direct_bulk_base_and_delete_writes(job):
         job.delete()
     with pytest.raises(ValidationError):
         Job._base_manager.filter(pk=job.pk).delete()
+
+
+@pytest.mark.django_db
+def test_heartbeat_extends_lease_and_reaper_fails_stale_running_job(job):
+    claimed = JobService.claim(worker_id="worker-a")
+    assert claimed.heartbeat_at is not None
+    assert claimed.lease_expires_at is not None
+
+    assert JobService.reap_stale_jobs(now=timezone.now()) == 0
+
+    JobService.heartbeat(claimed.id, claim_token=claimed.claim_token)
+    claimed.refresh_from_db()
+    assert claimed.heartbeat_at > timezone.now() - timedelta(seconds=10)
+
+    expired = timezone.now() + timedelta(seconds=JOB_LEASE_SECONDS + 1)
+    assert JobService.reap_stale_jobs(now=expired) == 1
+
+    claimed.refresh_from_db()
+    assert claimed.status == Job.Status.FAILED
+    assert claimed.error["code"] == "stale_worker"
+    assert claimed.claim_token is None

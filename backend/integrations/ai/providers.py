@@ -145,6 +145,7 @@ class DeepSeekAIProvider:
         self._timeout_seconds = timeout_seconds
         self._max_attempts = max(1, min(max_attempts, 2))
         self._sleeper = sleeper
+        self.last_usage = None
 
     def generate(self, *, prompt: str, schema: dict) -> dict:
         api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
@@ -174,6 +175,7 @@ class DeepSeekAIProvider:
             "Accept": "application/json",
         }, method="POST")
         raw = None
+        started = time.monotonic()
         for attempt in range(self._max_attempts):
             try:
                 with self._opener(request, timeout=self._timeout_seconds) as response:
@@ -197,6 +199,17 @@ class DeepSeekAIProvider:
             result = json.loads(content)
         except (KeyError, IndexError, TypeError, ValueError, UnicodeDecodeError) as exc:
             raise RuntimeError("DeepSeek returned an invalid JSON response.") from exc
+        usage = envelope.get("usage") if isinstance(envelope.get("usage"), dict) else {}
+        first_choice = envelope.get("choices", [{}])[0] if isinstance(envelope.get("choices"), list) else {}
+        self.last_usage = {
+            "model": envelope.get("model"),
+            "request_id": envelope.get("id"),
+            "finish_reason": first_choice.get("finish_reason"),
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+            "latency_seconds": round(time.monotonic() - started, 3),
+        }
         if not isinstance(result, dict):
             raise RuntimeError("DeepSeek returned an invalid JSON response.")
         try:

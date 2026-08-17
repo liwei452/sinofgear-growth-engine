@@ -1,11 +1,46 @@
 import json
 
 from django.db import transaction
+from django.utils import timezone
 from jsonschema import Draft202012Validator
 
 from apps.common.security import scrub_secrets
 
-from .models import PromptVersion, ai_audit_writes
+from .models import AIRun, PromptVersion, ai_audit_writes
+
+
+class AIBudgetExceeded(RuntimeError):
+    pass
+
+
+def organization_daily_token_usage(organization_id, *, now=None) -> int:
+    now = now or timezone.now()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    total = 0
+    runs = AIRun.objects.filter(
+        organization_id=organization_id,
+        started_at__gte=start,
+        status=AIRun.Status.SUCCEEDED,
+    )
+    for run in runs:
+        metadata = run.provider_metadata
+        if not isinstance(metadata, dict):
+            continue
+        usage = metadata.get("usage")
+        if isinstance(usage, dict) and isinstance(usage.get("total_tokens"), int):
+            total += usage["total_tokens"]
+    return total
+
+
+def assert_ai_budget_available(organization) -> None:
+    budget = getattr(organization, "ai_daily_token_budget", None)
+    if not budget:
+        return
+    used = organization_daily_token_usage(organization.id)
+    if used >= budget:
+        raise AIBudgetExceeded(
+            f"Organization daily AI token budget exceeded ({used} >= {budget})."
+        )
 
 
 class PromptVersionService:

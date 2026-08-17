@@ -2,6 +2,7 @@ from celery import shared_task
 
 from apps.ai.orchestration import execute_generation_job
 from apps.platforms.lifecycle import refresh_due_credentials
+from apps.jobs.services import JobService
 
 
 @shared_task
@@ -13,3 +14,8 @@ def execute_ai_job(job_id: str, prompt_version_id: str):
 @shared_task
 def refresh_social_credentials(organization_id: str | None = None):
     return refresh_due_credentials(organization_id=organization_id, limit=100)
+
+
+@shared_task
+def reap_stale_jobs():
+    return {"reaped": JobService.reap_stale_jobs()}

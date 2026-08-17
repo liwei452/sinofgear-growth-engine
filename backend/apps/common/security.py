@@ -39,6 +39,8 @@ _CONTROLLED_ERROR_MESSAGES = {
     "ai_run_start_failed": "AI audit run could not start.",
     "job_canceled": "Job was canceled.",
     "content_finalize_failed": "Generated content could not be finalized.",
+    "stale_worker": "Worker lease expired without heartbeat.",
+    "ai_budget_exceeded": "Organization daily AI token budget exceeded.",
 }
 
 

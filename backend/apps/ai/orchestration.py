@@ -11,6 +11,7 @@ from apps.campaigns.generation_schema import generation_input_errors
 from apps.common.security import normalize_persisted_error, scrub_secrets
 from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService
+from apps.ai.services import AIBudgetExceeded, assert_ai_budget_available
 from apps.content.recommendations import (
     ContentRecommendationError,
     validate_recommendation_snapshot,
@@ -144,7 +145,8 @@ def _create_run(*, job: Job, prompt: PromptVersion, provider: str, model: str | 
 
 @transaction.atomic
 def _record_success(
-    run_id, *, job_id, claim_token, output: dict, result_writer=None
+    run_id, *, job_id, claim_token, output: dict, result_writer=None,
+    provider_metadata: dict | None = None,
 ) -> AIRun:
     job = Job.objects.select_for_update().get(pk=job_id)
     run = AIRun.objects.select_for_update().get(pk=run_id)
@@ -155,7 +157,11 @@ def _record_success(
     run.status = AIRun.Status.SUCCEEDED
     run.output_json = output
     run.confidence = Decimal("1.0000")
-    run.provider_metadata = {"provider_code": run.provider}
+    run.provider_metadata = (
+        provider_metadata
+        if provider_metadata is not None
+        else {"provider_code": run.provider}
+    )
     run.error = None
     run.finished_at = timezone.now()
     with ai_audit_writes():
@@ -282,6 +288,15 @@ def execute_generation_job(
         raise JobConflictError(f"Job in status {job.status} cannot be claimed.")
     token = claimed.claim_token
     try:
+        assert_ai_budget_available(claimed)
+    except AIBudgetExceeded as exc:
+        JobService.fail(
+            claimed.id,
+            claim_token=token,
+            error={"code": "ai_budget_exceeded", "message": str(exc)},
+        )
+        raise GenerationError("ai_budget_exceeded", str(exc)) from exc
+    try:
         run = _create_run(
             job=claimed, prompt=prompt, provider=provider_name, model=provider_model,
         )
@@ -305,6 +320,10 @@ def execute_generation_job(
         if len(encoded) > MAX_OUTPUT_BYTES:
             raise GenerationError("output_too_large", "Provider output exceeds the size limit.")
         output_validator.validate(output)
+        usage = getattr(provider, "last_usage", None)
+        provider_metadata = {"provider_code": provider_name}
+        if isinstance(usage, dict):
+            provider_metadata["usage"] = scrub_secrets(usage)
     except GenerationError as exc:
         error = {"code": exc.code, "message": str(exc)}
     except JSONSchemaValidationError:
@@ -323,6 +342,7 @@ def execute_generation_job(
                 claim_token=token,
                 output=output,
                 result_writer=result_writer,
+                provider_metadata=provider_metadata,
             )
         except Exception:
             logger.exception("Generated content could not be finalized.")

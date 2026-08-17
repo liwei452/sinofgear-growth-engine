@@ -63,7 +63,8 @@ def _discover_maps_tool(organization, source_factory) -> Tool:
         name="discover_maps_candidates",
         description="Discover candidate companies from Google Maps for the organization.",
         parameters={"type": "object", "properties": {}},
-        risk="read",
+        risk="write",
+        approval_required=False,
         func=func,
     )
 
@@ -97,7 +98,8 @@ def _enrich_tool(organization) -> Tool:
             "properties": {"candidate_id": {"type": "string"}},
             "required": ["candidate_id"],
         },
-        risk="read",
+        risk="write",
+        approval_required=False,
         func=func,
     )
 
@@ -129,7 +131,8 @@ def _website_enrich_tool(organization, transport) -> Tool:
             "properties": {"candidate_id": {"type": "string"}},
             "required": ["candidate_id"],
         },
-        risk="read",
+        risk="write",
+        approval_required=False,
         func=func,
     )
 
@@ -210,7 +213,8 @@ def _add_to_follow_up_tool(organization) -> Tool:
             "properties": {"candidate_id": {"type": "string"}},
             "required": ["candidate_id"],
         },
-        risk="read",
+        risk="write",
+        approval_required=False,
         func=func,
     )
 
@@ -242,7 +246,8 @@ def _draft_tool(organization) -> Tool:
             "properties": {"candidate_id": {"type": "string"}},
             "required": ["candidate_id"],
         },
-        risk="read",
+        risk="write",
+        approval_required=False,
         func=func,
     )
 

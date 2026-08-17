@@ -1,6 +1,7 @@
 import hashlib
 import json
 from copy import deepcopy
+from datetime import timedelta
 from uuid import UUID, uuid4
 
 from django.core.exceptions import ValidationError
@@ -10,6 +11,9 @@ from django.utils import timezone
 from apps.common.security import normalize_persisted_error, scrub_secrets
 
 from .models import Job, JobAttempt, job_service_writes
+
+
+JOB_LEASE_SECONDS = 300
 
 
 class JobConflictError(ValueError):
@@ -117,6 +121,8 @@ class JobService:
         job.claim_token = token
         job.claimed_by = worker_id
         job.claimed_at = now
+        job.heartbeat_at = now
+        job.lease_expires_at = now + timedelta(seconds=JOB_LEASE_SECONDS)
         job.started_at = job.started_at or now
         job.finished_at = None
         job.version += 1
@@ -124,6 +130,7 @@ class JobService:
             job.save(
                 update_fields=[
                     "status", "claim_token", "claimed_by", "claimed_at",
+                    "heartbeat_at", "lease_expires_at",
                     "started_at", "finished_at", "version", "updated_at",
                 ]
             )
@@ -150,6 +157,47 @@ class JobService:
         job.version += 1
         JobService._save(job, ["progress", "version", "updated_at"])
         return job
+
+    @staticmethod
+    @transaction.atomic
+    def heartbeat(job_id: UUID, *, claim_token: UUID) -> Job:
+        job = JobService._locked(job_id)
+        JobService._require_owner(job, claim_token)
+        now = timezone.now()
+        job.heartbeat_at = now
+        job.lease_expires_at = now + timedelta(seconds=JOB_LEASE_SECONDS)
+        job.version += 1
+        JobService._save(job, ["heartbeat_at", "lease_expires_at", "version", "updated_at"])
+        return job
+
+    @staticmethod
+    @transaction.atomic
+    def reap_stale_jobs(*, now=None) -> int:
+        now = now or timezone.now()
+        stale = list(
+            Job.objects.select_for_update(skip_locked=True)
+            .filter(status=Job.Status.RUNNING, lease_expires_at__lt=now)
+        )
+        for job in stale:
+            token = job.claim_token
+            error = normalize_persisted_error({
+                "code": "stale_worker",
+                "message": "Worker lease expired without heartbeat.",
+            })
+            job.status = Job.Status.FAILED
+            job.error = error
+            job.result_reference = None
+            job.finished_at = now
+            job.claim_token = None
+            job.version += 1
+            JobService._save(
+                job,
+                ["status", "error", "result_reference", "finished_at",
+                 "claim_token", "version", "updated_at"],
+            )
+            if token:
+                JobService._finish_attempt(token, JobAttempt.Status.FAILED, now, error=error)
+        return len(stale)
 
     @staticmethod
     @transaction.atomic

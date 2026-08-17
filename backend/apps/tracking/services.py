@@ -238,7 +238,50 @@ def _tracking_fingerprint(values: dict[str, object]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _pre_publish_tracking_consistent(link: TrackingLink) -> bool:
+    try:
+        canonical_destination = canonicalize_destination(link.destination)
+        canonical = build_canonical_url(
+            canonical_destination,
+            source=link.utm_source,
+            medium=link.utm_medium,
+            campaign=link.utm_campaign,
+            content=link.utm_content or None,
+            term=link.utm_term or None,
+        )
+        fingerprint = _tracking_fingerprint({
+            "destination": canonical_destination,
+            "full_url": canonical,
+            "utm_source": link.utm_source,
+            "utm_medium": link.utm_medium,
+            "utm_campaign": link.utm_campaign,
+            "utm_content": link.utm_content,
+            "utm_term": link.utm_term,
+            "campaign_id": str(link.campaign_id),
+            "platform_id": str(link.platform_id),
+            "product_id": str(link.product_id),
+        })
+        return (
+            link.organization_id == link.campaign.organization_id == link.product.organization_id
+            and link.organization_id == link.platform.organization_id
+            and link.product.status == Product.Status.ACTIVE
+            and link.full_url == canonical
+            and link.destination == canonical_destination
+            and normalize_slug(link.utm_source) == link.utm_source
+            and normalize_slug(link.utm_medium) == link.utm_medium
+            and normalize_slug(link.utm_campaign) == link.utm_campaign
+            and (not link.utm_content or normalize_slug(link.utm_content) == link.utm_content)
+            and (not link.utm_term or normalize_slug(link.utm_term) == link.utm_term)
+            and validate_idempotency_key(link.idempotency_key) == link.idempotency_key
+            and link.request_fingerprint == fingerprint
+        )
+    except (AttributeError, ObjectDoesNotExist, TrackingConflict, ValidationError, ValueError):
+        return False
+
+
 def _tracking_consistent(link: TrackingLink) -> bool:
+    if link.published_post_id is None:
+        return _pre_publish_tracking_consistent(link)
     try:
         post = link.published_post
         content = post.platform_content
@@ -260,11 +303,10 @@ def _tracking_consistent(link: TrackingLink) -> bool:
             "utm_campaign": link.utm_campaign,
             "utm_content": link.utm_content,
             "utm_term": link.utm_term,
-            "campaign_id": str(link.campaign_id),
-            "platform_id": str(link.platform_id),
-            "product_id": str(link.product_id),
-            "published_post_id": str(link.published_post_id),
-        })
+        "campaign_id": str(link.campaign_id),
+        "platform_id": str(link.platform_id),
+        "product_id": str(link.product_id),
+    })
         return (
             link.organization_id == post.organization_id == content.organization_id
             and link.organization_id == link.campaign.organization_id == link.product.organization_id
@@ -300,7 +342,7 @@ def _tracking_consistent(link: TrackingLink) -> bool:
 @transaction.atomic
 def create_tracking_link(
     *, organization, destination, utm_source, utm_medium, utm_campaign,
-    campaign, platform, product, published_post, idempotency_key,
+    campaign, platform, product, published_post=None, idempotency_key,
     utm_content=None, utm_term=None, actor=None,
 ):
     key = validate_idempotency_key(idempotency_key)
@@ -325,7 +367,6 @@ def create_tracking_link(
         "campaign_id": str(campaign.id),
         "platform_id": str(platform.id),
         "product_id": str(product.id),
-        "published_post_id": str(published_post.id),
     }
     fingerprint = _tracking_fingerprint(payload)
     existing = TrackingLink.objects.filter(organization=organization, idempotency_key=key).first()
@@ -334,10 +375,12 @@ def create_tracking_link(
             raise TrackingConflict("Idempotency-Key already has a different or inconsistent request.")
         return existing
     try:
-        locked_post = type(published_post).objects.select_for_update().select_related(
-            "platform_content__master_content__brief__campaign", "task", "attempt",
-            "social_account",
-        ).get(pk=published_post.pk)
+        locked_post = None
+        if published_post is not None:
+            locked_post = type(published_post).objects.select_for_update().select_related(
+                "platform_content__master_content__brief__campaign", "task", "attempt",
+                "social_account",
+            ).get(pk=published_post.pk)
         locked_campaign = type(campaign).objects.select_for_update().get(pk=campaign.pk)
         locked_product = type(product).objects.select_for_update().get(pk=product.pk)
         locked_platform = type(platform).objects.get(pk=platform.pk)

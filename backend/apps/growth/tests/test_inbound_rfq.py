@@ -7,6 +7,7 @@ from apps.growth.models import (
     DiscoveryCandidate,
     FollowUp,
     InboundLead,
+    InboundRfq,
     IntentSignal,
     TargetAccount,
 )
@@ -36,6 +37,7 @@ def test_record_inbound_rfq_creates_lead_chain(organization):
     assert lead.routed_at is not None
     assert Contact.objects.filter(account=account).exists()
     assert result["route"] == InboundLead.Route.ACQUISITION
+    assert InboundRfq.objects.filter(id=result["rfq_id"]).exists()
 
 
 def test_resolve_website_organization_from_lead_id(organization):
@@ -75,3 +77,25 @@ def test_triage_inbound_lead_without_account_is_manual(organization):
     lead = InboundLead.objects.create(organization=organization, source_label="orphan")
     triage_inbound_lead(lead=lead)
     assert lead.route == InboundLead.Route.MANUAL_REVIEW
+
+
+def test_inbound_rfq_saves_each_inquiry_separately(organization):
+    record_inbound_rfq(
+        organization=organization,
+        company_name="ABC Mining",
+        email="procurement@abc.example",
+        message="Need gear A.",
+        product_interest="gearbox",
+    )
+    record_inbound_rfq(
+        organization=organization,
+        company_name="ABC Mining",
+        email="procurement@abc.example",
+        message="Need gear B.",
+        product_interest="gearbox",
+    )
+    rfqs = list(InboundRfq.objects.filter(organization=organization).order_by("created_at"))
+    assert len(rfqs) == 2
+    assert rfqs[0].email == "procurement@abc.example"
+    assert rfqs[0].contact_name == "Website inquiry"
+    assert rfqs[0].message == "Need gear A."

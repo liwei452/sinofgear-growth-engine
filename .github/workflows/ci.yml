@@ -19,6 +19,8 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install ".[dev]"
+      - name: Lint
+        run: ruff check apps integrations config
       - name: Run tests
         run: python -m pytest -q
 

@@ -19,8 +19,10 @@ from .models import (
 )
 
 
-logger = logging.getLogger(__name__)
 from .storage import get_object_storage
+
+
+logger = logging.getLogger(__name__)
 
 
 class AssetUploadError(ValueError):

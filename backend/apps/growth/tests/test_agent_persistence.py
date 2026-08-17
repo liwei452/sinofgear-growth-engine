@@ -256,3 +256,24 @@ def test_inbound_triage_tool_routes_lead(organization):
 
     assert run.status == "completed"
     assert run.steps[0].output["route"] == "ACQUISITION"
+
+
+def test_due_proactive_acquisition_task_runs_region_day(organization):
+    from apps.growth.tasks import run_due_proactive_acquisition
+
+    DiscoveryCandidate.objects.create(
+        organization=organization,
+        company_name="PT Mitra",
+        country="Vietnam",
+        website="",
+        industry="gearbox repair",
+        status=DiscoveryCandidate.Status.ACCEPTED,
+        import_format="GOOGLE_MAPS",
+        raw_record={"primary_type": "industrial_supplier", "types": ["gearbox_repair_shop"]},
+        record_hash="due-acquisition-hash",
+        is_demo=False,
+    )
+    summary = run_due_proactive_acquisition(limit=10)
+    assert summary["organizations"] == 1
+    assert summary["candidates"] == 1
+    assert summary["waiting_approval"] == 1

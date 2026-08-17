@@ -312,7 +312,7 @@ def execute_generation_job(
             "code": "invalid_provider_output",
             "message": "Provider output did not match the required schema.",
         }
-    except Exception as exc:
+    except Exception:
         logger.exception("AI provider generation failed.")
         error = {"code": "provider_error", "message": "AI provider generation failed."}
     else:
@@ -324,7 +324,7 @@ def execute_generation_job(
                 output=output,
                 result_writer=result_writer,
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("Generated content could not be finalized.")
             error = {
                 "code": "content_finalize_failed",

@@ -96,7 +96,11 @@ class TrackingLink(ProtectedTrackingModel):
     platform = models.ForeignKey("platforms.Platform", on_delete=models.PROTECT, related_name="tracking_links")
     product = models.ForeignKey("catalog.Product", on_delete=models.PROTECT, related_name="tracking_links")
     published_post = models.ForeignKey(
-        "publishing.PublishedPost", on_delete=models.PROTECT, related_name="tracking_links"
+        "publishing.PublishedPost",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="tracking_links",
     )
     idempotency_key = models.CharField(max_length=128)
     request_fingerprint = models.CharField(max_length=64)

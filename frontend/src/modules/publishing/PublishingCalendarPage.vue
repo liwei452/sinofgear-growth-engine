@@ -9,10 +9,11 @@ import { cancelPublish,getPublishCalendar,getPublishTaskPage,isEligiblePublishin
 const client=useQueryClient(),user=useQuery(currentUserQueryOptions()),open=ref(false),contentId=ref(""),accountId=ref(""),localTime=ref(""),message=ref(""),pageUrl=ref<string|null>(null),accountFilter=ref(""),intentKey=ref(""),formError=ref("")
 const dialogGeneration=ref(0),submittingGeneration=ref<number|null>(null),pendingActions=ref(new Set<string>()),actionErrors=ref<Record<string,string>>({})
 const org=computed(()=>user.data.value?.organization.id??""),canManage=computed(()=>user.data.value?.membership.permissions.includes("publishing.manage")??false)
-const timezone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC",anchor=ref(new Date()),monthLabel=computed(()=>anchor.value.toLocaleDateString("zh-CN",{year:"numeric",month:"long"}))
-const range=computed(()=>localMonthRange(anchor.value,timezone))
+const localTimezone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC",anchor=ref(new Date()),monthLabel=computed(()=>anchor.value.toLocaleDateString("zh-CN",{year:"numeric",month:"long"}))
+const range=computed(()=>localMonthRange(anchor.value,localTimezone))
 const calendarInput=computed(()=>({...range.value,...(accountFilter.value?{account:accountFilter.value}:{})}))
 const calendar=useQuery({queryKey:computed(()=>[...publishingKeys.calendar(org.value,range.value.start),accountFilter.value]),queryFn:()=>getPublishCalendar(calendarInput.value),enabled:computed(()=>Boolean(org.value))})
+const timezone=computed(()=>calendar.data.value?.timezone||localTimezone)
 const tasks=useQuery({queryKey:computed(()=>[...publishingKeys.tasks(org.value),pageUrl.value]),queryFn:()=>pageUrl.value?getPublishTaskPage(pageUrl.value):listPublishTasks(),enabled:computed(()=>Boolean(org.value)),refetchInterval:query=>shouldPollPublishTasks(query.state.data?.results??[])?5000:false})
 const contents=useQuery({queryKey:computed(()=>[...publishingKeys.all(org.value),"contents","approved-heads"]),queryFn:listApprovedCurrentHeads,enabled:computed(()=>Boolean(org.value)&&canManage.value)})
 const accounts=useQuery({queryKey:computed(()=>[...publishingKeys.all(org.value),"accounts"]),queryFn:listSocialAccounts,enabled:computed(()=>Boolean(org.value))})
@@ -32,7 +33,7 @@ async function submitSchedule(){
   const generation=dialogGeneration.value
   if(submittingGeneration.value===generation)return
   const selectedLocalTime=localTime.value,parsedTime=new Date(selectedLocalTime)
-  const snapshot=Object.freeze({generation,organizationId:org.value,contentId:contentId.value,accountId:accountId.value,localTime:selectedLocalTime,scheduledAt:Number.isNaN(parsedTime.getTime())?null:parsedTime.toISOString(),timezone,key:intentKey.value})
+  const snapshot=Object.freeze({generation,organizationId:org.value,contentId:contentId.value,accountId:accountId.value,localTime:selectedLocalTime,scheduledAt:Number.isNaN(parsedTime.getTime())?null:parsedTime.toISOString(),timezone:timezone.value,key:intentKey.value})
   submittingGeneration.value=generation
   try{
     if(!snapshot.scheduledAt)throw new ApiError(0,"请选择有效的发布时间。")

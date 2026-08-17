@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
 from apps.growth.agent.acquisition import run_proactive_acquisition
-from apps.growth.models import AgentRun, DiscoveryCandidate, FollowUp, TargetAccount
+from apps.growth.models import AgentRun, DiscoveryCandidate, FollowUp, OutreachMessage, TargetAccount
 from apps.identity.models import Membership, Organization, Role
 
 
@@ -111,3 +111,33 @@ def test_growth_events_api(organization):
     assert ack.status_code == 200
     assert ack.data["acknowledged"] == 1
     assert client.get("/api/v1/growth/events?unpublished=true").data == []
+
+
+def test_rejected_run_does_not_reappear(organization):
+    candidate = _candidate(organization)
+    run_proactive_acquisition(organization=organization, candidate_id=str(candidate.id))
+    run = AgentRun.objects.get(
+        organization=organization,
+        idempotency_key=f"proactive:{candidate.id}",
+    )
+    client = _client(organization, suffix="reject")
+    response = client.post(
+        f"{RUNS_URL}/{run.id}/approve",
+        {"decision": "reject"},
+        format="json",
+    )
+    assert response.status_code == 200
+    assert response.data["status"] == "REJECTED"
+
+    result = run_proactive_acquisition(organization=organization, candidate_id=str(candidate.id))
+    assert result.status == "rejected"
+    assert result.pending_approval is None
+    account = TargetAccount.objects.get(
+        organization=organization,
+        source_identity=f"candidate:{candidate.id}",
+    )
+    assert not OutreachMessage.objects.filter(
+        organization=organization,
+        account=account,
+        status=OutreachMessage.Status.SENT,
+    ).exists()

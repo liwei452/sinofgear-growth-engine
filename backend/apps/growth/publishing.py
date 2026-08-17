@@ -6,6 +6,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.platforms.models import SocialAccount
+from apps.publishing.services import PublishingConflict, create_publish_task
 from integrations.platforms.base import ConnectorConfigurationRequired, OfficialPublishRequest
 from integrations.platforms.manual_fake import simulate_publish
 from integrations.platforms.registry import ConnectorRegistry
@@ -20,6 +21,27 @@ class PublishBatchConflict(RuntimeError):
 
 class PublishPackageSelectionInvalid(RuntimeError):
     pass
+
+
+def delegate_channel_package_to_publish_task(
+    *,
+    package: ChannelPackage,
+    account: SocialAccount,
+    actor,
+    scheduled_at=None,
+):
+    if package.status != "APPROVED":
+        raise PublishBatchConflict("Package must be approved before publishing.")
+    content = package.source_platform_content
+    if content is None:
+        raise PublishBatchConflict("Package has no source platform content.")
+    return create_publish_task(
+        content=content,
+        account=account,
+        idempotency_key=f"batch-delegated:{package.id}",
+        actor=actor,
+        scheduled_at=scheduled_at,
+    )
 
 
 def _validate_idempotency_key(value: str) -> str:
@@ -230,7 +252,9 @@ def create_publish_batch(
                 raise PublishBatchConflict("Idempotency-Key already has a different request.")
             return existing
 
-        packages = list(ChannelPackage.objects.select_for_update().filter(
+        packages = list(ChannelPackage.objects.select_for_update().select_related(
+            "source_platform_content"
+        ).filter(
             organization=organization, id__in=normalized_ids,
         ).order_by("channel", "id"))
         if len(packages) != len(normalized_ids):
@@ -278,21 +302,49 @@ def create_publish_batch(
                 last_error=last_error,
             )
             if item_status == GrowthPublishItem.Status.QUEUED:
-                queued_ids.append(item.id)
+                if (
+                    package.source_platform_content_id
+                    and account is not None
+                    and account.publish_mode == SocialAccount.PublishMode.API_AUTO
+                ):
+                    try:
+                        task = create_publish_task(
+                            content=package.source_platform_content,
+                            account=account,
+                            idempotency_key=f"batch-delegated:{package.id}",
+                            actor=actor,
+                        )
+                    except PublishingConflict as error:
+                        item.status = GrowthPublishItem.Status.FAILED
+                        item.last_error = {
+                            "code": "PUBLISH_CONFLICT",
+                            "message": str(error),
+                        }
+                        item.save(update_fields=["status", "last_error", "updated_at"])
+                    else:
+                        item.status = GrowthPublishItem.Status.SUCCEEDED
+                        item.publish_task = task
+                        item.save(update_fields=["status", "publish_task", "updated_at"])
+                else:
+                    queued_ids.append(item.id)
+
+    from .tasks import execute_growth_publish_item
 
     for item_id in queued_ids:
-        _execute_item(item_id)
+        execute_growth_publish_item.delay(item_id)
     batch.refresh_from_db()
     return _refresh_batch_status(batch)
 
 
 def retry_failed_items(*, batch: GrowthPublishBatch, actor) -> GrowthPublishBatch:
     del actor
+    from .tasks import execute_growth_publish_item
+
     failed_ids = list(batch.items.filter(
         status=GrowthPublishItem.Status.FAILED,
         last_error__retryable=True,
     ).values_list("id", flat=True))
     for item_id in failed_ids:
-        _execute_item(item_id)
+        execute_growth_publish_item.delay(item_id)
     batch.refresh_from_db()
     return _refresh_batch_status(batch)

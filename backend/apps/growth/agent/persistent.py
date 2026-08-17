@@ -52,6 +52,18 @@ def continue_agent_run(
     approvals: set[str] | None = None,
 ) -> AgentRunResult:
     memory, completed = load_run_memory(run)
+    if run.status == AgentRun.Status.REJECTED:
+        return AgentRunResult(
+            status="rejected",
+            steps=memory.events,
+            terminal_reason=run.terminal_reason or "Rejected by reviewer.",
+        )
+    if run.status == AgentRun.Status.COMPLETED:
+        return AgentRunResult(
+            status="completed",
+            steps=memory.events,
+            terminal_reason=run.terminal_reason or "complete",
+        )
     existing_count = run.steps.count()
     runtime = AgentRuntime(planner=planner, tools=tools, max_steps=run.max_steps)
     result = runtime.run(

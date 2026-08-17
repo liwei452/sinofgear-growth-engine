@@ -1,8 +1,7 @@
-from integrations.sources.base import SourceAdapterError, maps_governance_for
+from integrations.sources.base import maps_governance_for
 from integrations.sources.google_places import (
     GooglePlacesSource,
     MapsBatch,
-    MapsPlace,
     MapsQuery,
 )
 
@@ -87,7 +86,6 @@ def test_governance_reflects_google_caching_rules():
 
 
 def test_invalid_query_and_missing_key_are_rejected():
-    source = GooglePlacesSource(api_key="k", transport=FakeGooglePlacesTransport({}))
     try:
         MapsQuery(text_query="", region_code="ID")
     except ValueError:

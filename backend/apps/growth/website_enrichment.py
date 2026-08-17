@@ -231,12 +231,25 @@ def _robots_allow(url: str) -> bool:
     if parsed.scheme not in {"http", "https"}:
         return False
     robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-    parser = RobotFileParser()
-    parser.set_url(robots_url)
     try:
-        parser.read()
+        _validate_public_url(robots_url)
+    except ValueError:
+        return False
+    try:
+        request = Request(
+            robots_url,
+            headers={"User-Agent": "SinofGearBot/1.0 (+public-discovery)"},
+            method="GET",
+        )
+        opener = build_opener(_NoRedirect())
+        with opener.open(request, timeout=5) as response:
+            body = response.read(64 * 1024 + 1)
     except Exception:
         return True
+    if len(body) > 64 * 1024:
+        return True
+    parser = RobotFileParser()
+    parser.parse(body.decode("utf-8", errors="replace").splitlines())
     return parser.can_fetch("SinofGearBot/1.0", url)
 
 

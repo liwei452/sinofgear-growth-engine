@@ -10,6 +10,7 @@ from .models import (
     DiscoveryCandidate,
     FollowUp,
     InboundLead,
+    InboundRfq,
     IntentSignal,
     TargetAccount,
 )
@@ -87,19 +88,41 @@ def record_inbound_rfq(*, organization, **payload) -> dict:
         defaults={"source_label": "网站 RFQ"},
     )
     triage_inbound_lead(lead=lead)
+    rfq = InboundRfq.objects.create(
+        organization=organization,
+        lead=lead,
+        account=account,
+        company_name=company_name,
+        country=country,
+        contact_name=contact_name,
+        email=email,
+        industry=industry,
+        product_interest=product_interest,
+        message=message,
+        file_names=file_names,
+        need_slug=need,
+        landing_page=landing_page,
+    )
     emit_growth_event(
         organization=organization,
         event_type=EVENT_RFQ_CREATED,
-        entity_type="account",
-        entity_id=account.id,
-        payload={"need_slug": need, "route": lead.route, "email": email},
-        idempotency_key=f"rfq.created:{account.id}",
+        entity_type="rfq",
+        entity_id=rfq.id,
+        payload={
+            "need_slug": need,
+            "route": lead.route,
+            "email": email,
+            "contact_name": contact_name,
+            "file_names": file_names,
+        },
+        idempotency_key=f"rfq.created:{rfq.id}",
     )
     return {
         "account_id": str(account.id),
         "need_slug": need,
         "created_account": account_created,
         "lead_id": str(lead.id),
+        "rfq_id": str(rfq.id),
         "route": lead.route,
     }
 

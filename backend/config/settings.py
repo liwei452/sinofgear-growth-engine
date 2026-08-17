@@ -1,6 +1,8 @@
 import os
 from urllib.parse import unquote, urlparse
 
+from celery.schedules import crontab
+
 
 def database_from_url(database_url: str) -> dict[str, object]:
     """Return Django database settings from a PostgreSQL URL."""
@@ -198,6 +200,10 @@ CELERY_BEAT_SCHEDULE = {
     "growth-maps-discovery-hourly": {
         "task": "apps.growth.tasks.scan_due_maps_configs",
         "schedule": 3600.0,
+    },
+    "growth-proactive-acquisition-daily": {
+        "task": "apps.growth.tasks.run_due_proactive_acquisition",
+        "schedule": crontab(hour=2, minute=0),
     },
 }
 

@@ -26,6 +26,19 @@ from .customer_service_tools import (
     customer_service_plan,
     run_customer_service_agent,
 )
+from .content_tools import (
+    build_content_strategy_tools,
+    content_opportunity_signals,
+    propose_content_opportunities,
+    run_content_strategy_agent,
+)
+from .content_creation_tools import (
+    build_content_creation_tools,
+    build_platform_variants_tools,
+    run_content_creation_agent,
+    run_platform_variants_agent,
+)
+from .publishing_tools import build_social_ops_tools, run_social_ops_agent
 
 __all__ = [
     "AgentRunError",
@@ -46,8 +59,18 @@ __all__ = [
     "build_proactive_acquisition_tools",
     "build_inbound_triage_tools",
     "build_customer_service_tools",
+    "build_content_strategy_tools",
+    "build_content_creation_tools",
+    "build_platform_variants_tools",
+    "build_social_ops_tools",
+    "content_opportunity_signals",
     "customer_service_plan",
+    "propose_content_opportunities",
     "run_customer_service_agent",
+    "run_content_strategy_agent",
+    "run_content_creation_agent",
+    "run_platform_variants_agent",
+    "run_social_ops_agent",
     "continue_agent_run",
     "load_run_memory",
     "proactive_acquisition_plan",

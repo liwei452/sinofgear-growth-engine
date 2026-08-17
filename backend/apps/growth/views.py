@@ -67,16 +67,6 @@ from .promotion_plan import (
     promotion_plan_status,
 )
 
-
-def _webhook_rate_limited(request, prefix, limit=30, window_seconds=60):
-    ip = request.META.get("REMOTE_ADDR", "unknown")
-    key = f"webhook-rate:{prefix}:{ip}"
-    try:
-        current = cache.incr(key)
-    except ValueError:
-        cache.set(key, 1, timeout=window_seconds)
-        current = 1
-    return current > limit
 from .manual_imports import import_manual_opportunity
 from .market_pilots import market_pilot_summary, market_profiles_for
 from .serializers import (
@@ -164,6 +154,17 @@ from .trade_runtime import (
     trade_source_runtime,
 )
 from integrations.sources.comtrade import TradeQuery
+
+
+def _webhook_rate_limited(request, prefix, limit=30, window_seconds=60):
+    ip = request.META.get("REMOTE_ADDR", "unknown")
+    key = f"webhook-rate:{prefix}:{ip}"
+    try:
+        current = cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, timeout=window_seconds)
+        current = 1
+    return current > limit
 
 
 def connector_readiness(organization):

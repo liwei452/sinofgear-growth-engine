@@ -3,6 +3,7 @@ import pytest
 from apps.growth.models import DiscoveryCandidate
 from apps.growth.website_enrichment import (
     _validate_public_url,
+    _robots_allow,
     extract_website_facts,
     prepare_website_enrichment,
 )
@@ -56,6 +57,10 @@ def test_validate_public_url_rejects_private_or_non_http(url):
 
 def test_validate_public_url_allows_public_ip():
     _validate_public_url("https://8.8.8.8/")
+
+
+def test_robots_allow_rejects_private_address():
+    assert _robots_allow("http://127.0.0.1/") is False
 
 
 @pytest.mark.django_db

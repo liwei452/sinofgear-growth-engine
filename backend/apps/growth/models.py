@@ -127,6 +127,37 @@ class InboundLead(OrganizationOwnedModel):
     is_demo = models.BooleanField(default=False)
 
 
+class InboundRfq(OrganizationOwnedModel):
+    lead = models.ForeignKey(
+        InboundLead,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="rfqs",
+    )
+    account = models.ForeignKey(
+        TargetAccount,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="inbound_rfqs",
+    )
+    company_name = models.CharField(max_length=255)
+    country = models.CharField(max_length=96, blank=True)
+    contact_name = models.CharField(max_length=255, blank=True)
+    email = models.EmailField(blank=True)
+    industry = models.CharField(max_length=160, blank=True)
+    product_interest = models.CharField(max_length=255, blank=True)
+    message = models.TextField(blank=True)
+    file_names = models.JSONField(default=list)
+    need_slug = models.CharField(max_length=32, blank=True)
+    landing_page = models.CharField(max_length=500, blank=True)
+    status = models.CharField(max_length=24, default="NEW")
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+
 class CustomerServiceTurn(OrganizationOwnedModel):
     class Decision(models.TextChoices):
         AUTO_REPLY = "AUTO_REPLY", "Auto reply"
@@ -443,6 +474,13 @@ class GrowthPublishItem(OrganizationOwnedModel):
     )
     channel_package = models.ForeignKey(
         ChannelPackage, on_delete=models.PROTECT, related_name="publish_items",
+    )
+    publish_task = models.ForeignKey(
+        "publishing.PublishTask",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="growth_publish_items",
     )
     social_account = models.ForeignKey(
         "platforms.SocialAccount",
@@ -877,6 +915,7 @@ class AgentRun(OrganizationOwnedModel):
         COMPLETED = "COMPLETED", "Completed"
         BUDGET_EXCEEDED = "BUDGET_EXCEEDED", "Budget exceeded"
         FAILED = "FAILED", "Failed"
+        REJECTED = "REJECTED", "Rejected"
 
     idempotency_key = models.CharField(max_length=128)
     goal = models.CharField(max_length=500)

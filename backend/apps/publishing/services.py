@@ -18,14 +18,18 @@ from apps.platforms.capabilities import resolve_account_capabilities
 from apps.platforms.codes import AccountCapability
 from apps.platforms.models import ConnectorCredential, PlatformCapability, SocialAccount
 
-from integrations.platforms.base import PublishRequest, PublishResult
+from integrations.platforms.base import OfficialPublishRequest, PublishRequest, PublishResult
+from integrations.platforms.runtime import get_social_provider_runtime
 
 
-logger = logging.getLogger(__name__)
 from integrations.platforms.registry import get_connector
 from integrations.platforms.registry import CONNECTOR_FACTORIES
 
 from .models import PublishAttempt, PublishedPost, PublishTask, publishing_writes
+from .publish_payload import PublishPayloadError, build_publish_payload
+
+
+logger = logging.getLogger(__name__)
 
 
 MAX_SCHEDULE_AHEAD = timedelta(days=366)
@@ -663,6 +667,75 @@ def complete_publish_success(task_id, claim_token, result, *, actor=None):
     return post
 
 
+def _publish_mock(task, attempt_number) -> PublishResult:
+    request = PublishRequest(
+        task_id=task.id,
+        attempt_number=attempt_number,
+        platform_code=task.platform.code,
+        account_external_id=task.social_account.external_id,
+        content_payload=task.platform_content.payload,
+        scheduled_at=task.scheduled_at,
+    )
+    return get_connector(task.connector_code, task.social_account).publish(request)
+
+
+def _prepare_tracking_url(task) -> str | None:
+    from .pre_publish import build_short_link_url, prepare_pre_publish_short_link
+
+    try:
+        short_link = prepare_pre_publish_short_link(
+            platform_content=task.platform_content,
+            actor=task.created_by,
+        )
+        return build_short_link_url(short_link)
+    except Exception:
+        logger.exception("Pre-publish tracking link preparation failed.")
+        return None
+
+
+def _publish_official(task, attempt_number):
+    content_payload = task.platform_content.payload or {}
+    payload = build_publish_payload(
+        platform_code=task.platform.code,
+        content_payload=content_payload,
+        media_url=content_payload.get("media_url"),
+        tracking_url=_prepare_tracking_url(task),
+    )
+    consent = content_payload.get("consent")
+    if not isinstance(consent, dict):
+        consent = {}
+    connector = get_social_provider_runtime().connector_registry.resolve(task.social_account)
+    return connector.publish(OfficialPublishRequest(
+        channel=task.platform.code,
+        account_external_id=task.social_account.external_id,
+        credential_reference=(
+            task.social_account.credential.secret_reference
+            if task.social_account.credential else ""
+        ),
+        payload=payload,
+        idempotency_key=f"{task.id}:{attempt_number}",
+        consent=consent,
+    ))
+
+
+def _associate_pre_publish_tracking(task, post) -> None:
+    from apps.tracking.models import TrackingLink, tracking_writes
+
+    try:
+        link = TrackingLink.objects.filter(
+            organization=task.organization,
+            idempotency_key=f"pre-publish:{task.platform_content_id}",
+            published_post__isnull=True,
+        ).first()
+        if link is None:
+            return
+        with tracking_writes():
+            link.published_post = post
+            link.save(update_fields=["published_post", "updated_at"])
+    except Exception:
+        logger.exception("Pre-publish tracking association failed.")
+
+
 def execute_publish_task(task_id):
     existing = PublishedPost.objects.filter(task_id=task_id).first()
     if existing:
@@ -672,19 +745,24 @@ def execute_publish_task(task_id):
         return PublishedPost.objects.filter(task_id=task_id).first()
     task, attempt = claimed
     task = PublishTask.objects.select_related(
-        "platform", "platform_content", "social_account"
+        "platform", "platform_content", "social_account", "social_account__credential"
     ).get(pk=task.pk)
-    request = PublishRequest(
-        task_id=task.id,
-        attempt_number=attempt.number,
-        platform_code=task.platform.code,
-        account_external_id=task.social_account.external_id,
-        content_payload=task.platform_content.payload,
-        scheduled_at=task.scheduled_at,
-    )
+
+    metadata = task.social_account.connector_metadata if isinstance(
+        task.social_account.connector_metadata, dict
+    ) else {}
+    connection_kind = metadata.get("connection_kind")
+    if not connection_kind and metadata.get("fixture") == "phase-a-e2e":
+        connection_kind = "demo_fake"
+
     try:
-        result = get_connector(task.connector_code, task.social_account).publish(request)
-    except Exception as exc:
+        if connection_kind == "official_oauth":
+            result = _publish_official(task, attempt.number)
+        else:
+            result = _publish_mock(task, attempt.number)
+    except PublishPayloadError as exc:
+        result = PublishResult(succeeded=False, error_code="VALIDATION_REJECTED", error_message=str(exc))
+    except Exception:
         logger.exception("Provider rejected the publish request.")
         result = PublishResult(
             succeeded=False, error_code="PROVIDER_ERROR",
@@ -694,16 +772,18 @@ def execute_publish_task(task_id):
         complete_publish_failure(task.id, attempt.claim_token, result)
         return None
     try:
-        return complete_publish_success(
+        post = complete_publish_success(
             task.id, attempt.claim_token, result, actor=task.created_by
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("Publish finalization failed.")
         complete_publish_failure(
             task.id, attempt.claim_token,
             PublishResult(succeeded=False, error_code="PUBLISH_FINALIZE_ERROR"),
         )
         return None
+    _associate_pre_publish_tracking(task, post)
+    return post
 
 
 @transaction.atomic

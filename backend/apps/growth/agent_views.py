@@ -89,7 +89,7 @@ class AgentRunApproveView(APIView):
 
         decision = request.data.get("decision", "approve")
         if decision == "reject":
-            run.status = AgentRun.Status.FAILED
+            run.status = AgentRun.Status.REJECTED
             run.terminal_reason = "Rejected by reviewer."
             run.save(update_fields=["status", "terminal_reason", "updated_at"])
             return Response(AgentRunSerializer(run).data)

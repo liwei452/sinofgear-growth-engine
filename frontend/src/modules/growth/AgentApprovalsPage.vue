@@ -2,6 +2,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
 import { computed, reactive, ref } from "vue"
 
+import WorkspaceHeader from "../../shared/components/WorkspaceHeader.vue"
+
 import {
   agentRunsQueryOptions,
   approveAgentRun,
@@ -20,13 +22,13 @@ import {
 import { getProductPage, listProducts, type Product } from "../products/api"
 import { listApprovedCurrentHeads } from "../publishing/api"
 import { listSocialAccounts, type SocialAccount } from "../platformAccounts/api"
+import AgentApprovalCard from "./AgentApprovalCard.vue"
 
 type StartableAgent = "platform_variants" | "content_creation" | "social_ops"
 
 const queryClient = useQueryClient()
 const runsQuery = useQuery(agentRunsQueryOptions())
 const actionError = ref("")
-const expandedRunId = ref<string | null>(null)
 
 const activeAgent = ref<StartableAgent | null>(null)
 const form = reactive({
@@ -241,16 +243,6 @@ function accountLabel(account: SocialAccount): string {
   return `${platformName(account.platform_id)} · ${account.display_name}`
 }
 
-function draftText(run: AgentRun): string {
-  const draft = run.steps.find((step) => step.tool_name === "draft_outreach")
-  const output = draft?.output
-  return typeof output?.english_draft === "string" ? output.english_draft : ""
-}
-
-function toggle(runId: string): void {
-  expandedRunId.value = expandedRunId.value === runId ? null : runId
-}
-
 function openStart(agentType: StartableAgent): void {
   activeAgent.value = agentType
   actionError.value = ""
@@ -311,15 +303,37 @@ function submitStart(): void {
 
 <template>
   <main class="agent-approvals">
-    <header class="agent-approvals__header">
-      <p class="eyebrow">智能自动化</p>
-      <h1>Agent 审批</h1>
-      <p>系统会自动研究工作、写草稿和安排排期；对外发布前会停下来等你审批。</p>
-      <p v-if="pendingRuns.length" class="pending-note">当前有 {{ pendingRuns.length }} 个任务等待审批。</p>
-    </header>
+    <WorkspaceHeader
+      eyebrow="人工控制台"
+      title="等待你决定"
+      description="Agent 可以研究、创作和安排社媒工作，但任何对外动作都必须由你明确批准。"
+    >
+      <template #meta>
+        <span v-if="pendingRuns.length" class="pending-note">{{ pendingRuns.length }} 个任务等待审批</span>
+      </template>
+    </WorkspaceHeader>
 
-    <section class="card start-panel">
-      <h2>启动 Agent</h2>
+    <p v-if="actionError" class="error" role="alert">{{ actionError }}</p>
+    <p v-if="runsQuery.isError.value" class="error" role="alert">
+      加载失败：{{ runsQuery.error.value?.message }}
+    </p>
+    <p v-if="runsQuery.isLoading.value" class="empty">加载中…</p>
+
+    <div v-else class="agent-approvals__list">
+      <AgentApprovalCard
+        v-for="run in runsQuery.data.value ?? []"
+        :key="run.id"
+        :run="run"
+        :status-label="statusLabels[run.status]"
+        :busy="approveMutation.isPending.value"
+        @approve="approveMutation.mutate({ runId: run.id, decision: 'approve' })"
+        @reject="approveMutation.mutate({ runId: run.id, decision: 'reject' })"
+      />
+      <p v-if="!(runsQuery.data.value ?? []).length" class="card empty">当前没有等待处理的 Agent 任务。</p>
+    </div>
+
+    <details class="card start-panel">
+      <summary>启动新的 Agent 任务</summary>
       <p class="hint">每个 Agent 只做一小段受控流程，需要写数据或对外发布时都会回到这里审批。</p>
       <div class="start-actions">
         <button type="button" class="primary" @click="startContentStrategy">内容策略</button>
@@ -327,7 +341,7 @@ function submitStart(): void {
         <button type="button" class="secondary" @click="openStart('content_creation')">内容创作</button>
         <button type="button" class="secondary" @click="openStart('social_ops')">社媒排期</button>
       </div>
-    </section>
+    </details>
 
     <section v-if="activeAgent" class="card start-form">
       <div class="start-form__head">
@@ -410,61 +424,6 @@ function submitStart(): void {
         </div>
       </template>
     </section>
-
-    <p v-if="actionError" class="error" role="alert">{{ actionError }}</p>
-    <p v-if="runsQuery.isError.value" class="error" role="alert">
-      加载失败：{{ runsQuery.error.value?.message }}
-    </p>
-    <p v-if="runsQuery.isLoading.value" class="empty">加载中…</p>
-
-    <div v-else class="agent-approvals__list">
-      <article
-        v-for="run in runsQuery.data.value ?? []"
-        :key="run.id"
-        class="agent-approvals__run card"
-      >
-        <button class="agent-approvals__toggle" type="button" @click="toggle(run.id)">
-          <span>{{ statusLabels[run.status] }}</span>
-          <strong>{{ run.goal }}</strong>
-          <small>{{ new Date(run.created_at).toLocaleString() }}</small>
-        </button>
-
-        <div v-if="expandedRunId === run.id" class="agent-approvals__detail">
-          <div v-if="draftText(run)" class="agent-approvals__draft">
-            <h3>开发信草稿</h3>
-            <p>{{ draftText(run) }}</p>
-          </div>
-
-          <ol class="agent-approvals__steps">
-            <li v-for="step in run.steps" :key="step.index" class="agent-approvals__step">
-              <span class="agent-approvals__step-name">{{ step.tool_name }}</span>
-              <span class="agent-approvals__step-outcome">{{ step.outcome }}</span>
-              <p v-if="step.reasoning">{{ step.reasoning }}</p>
-              <p v-if="step.error" class="error">{{ step.error }}</p>
-            </li>
-          </ol>
-
-          <div v-if="run.status === 'WAITING_APPROVAL'" class="agent-approvals__actions">
-            <button
-              type="button"
-              class="primary"
-              :disabled="approveMutation.isPending.value"
-              @click="approveMutation.mutate({ runId: run.id, decision: 'approve' })"
-            >
-              批准
-            </button>
-            <button
-              type="button"
-              class="agent-approvals__reject"
-              :disabled="approveMutation.isPending.value"
-              @click="approveMutation.mutate({ runId: run.id, decision: 'reject' })"
-            >
-              拒绝
-            </button>
-          </div>
-        </div>
-      </article>
-    </div>
   </main>
 </template>
 
@@ -472,20 +431,16 @@ function submitStart(): void {
 .agent-approvals {
   display: grid;
   gap: 18px;
-  max-width: 960px;
-}
-.agent-approvals__header h1 {
-  margin: 3px 0 8px;
-}
-.agent-approvals__header p {
-  margin: 0;
-  color: var(--sg-muted);
+  max-width: 1120px;
 }
 .pending-note {
-  margin-top: 8px;
-  color: var(--sg-brand);
-  font-weight: 600;
-  font-size: 0.86rem;
+  display: inline-flex;
+  border-radius: 999px;
+  background: #fff3df;
+  padding: 5px 9px;
+  color: #8a5900;
+  font-weight: 800;
+  font-size: 0.78rem;
 }
 .eyebrow {
   margin: 0;
@@ -521,8 +476,7 @@ function submitStart(): void {
 }
 .primary,
 .secondary,
-.ghost,
-.agent-approvals__reject {
+.ghost {
   border: 0;
   cursor: pointer;
   border-radius: 9px;
@@ -583,75 +537,6 @@ function submitStart(): void {
   display: grid;
   gap: 12px;
 }
-.agent-approvals__run {
-  padding: 0;
-  overflow: hidden;
-}
-.agent-approvals__toggle {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 14px 16px;
-  border: 0;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  font: inherit;
-}
-.agent-approvals__toggle span {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--sg-brand-soft);
-  color: var(--sg-brand);
-  font-size: 12px;
-}
-.agent-approvals__toggle small {
-  margin-left: auto;
-  color: var(--sg-muted);
-}
-.agent-approvals__detail {
-  padding: 0 16px 16px;
-}
-.agent-approvals__draft {
-  padding: 12px;
-  border-radius: 8px;
-  background: #f8fafc;
-}
-.agent-approvals__draft h3 {
-  margin: 0 0 8px;
-  font-size: 14px;
-}
-.agent-approvals__steps {
-  margin: 12px 0;
-  padding-left: 20px;
-}
-.agent-approvals__step {
-  margin-bottom: 10px;
-}
-.agent-approvals__step-name {
-  font-weight: 600;
-}
-.agent-approvals__step-outcome {
-  margin-left: 8px;
-  color: var(--sg-muted);
-  font-size: 12px;
-}
-.agent-approvals__actions {
-  display: flex;
-  gap: 8px;
-}
-.agent-approvals__reject {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-@media (max-width: 640px) {
-  .agent-approvals__toggle {
-    flex-wrap: wrap;
-  }
-  .agent-approvals__toggle small {
-    margin-left: 0;
-    width: 100%;
-  }
-}
+.start-panel summary { cursor: pointer; color: var(--sg-ink); font-weight: 850; }
+.start-panel[open] summary { margin-bottom: 2px; }
 </style>

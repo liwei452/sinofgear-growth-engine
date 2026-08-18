@@ -1,9 +1,21 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
 import { render, screen, within } from "@testing-library/vue"
+import { config } from "@vue/test-utils"
 import userEvent from "@testing-library/user-event"
-import { afterEach, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest"
+import { createTestRouter } from "../../test/testRouter"
 import { currentUserQueryOptions } from "../auth/auth"
 import AnalyticsPage from "./AnalyticsPage.vue"
+
+const testRouter = createTestRouter()
+beforeAll(async () => {
+  config.global.plugins.push(testRouter)
+  await testRouter.push("/")
+  await testRouter.isReady()
+})
+afterAll(() => {
+  config.global.plugins = config.global.plugins.filter((plugin) => plugin !== testRouter)
+})
 
 const json=(value:unknown,status=200)=>new Response(JSON.stringify(value),{status,headers:{"Content-Type":"application/json"}})
 afterEach(()=>vi.unstubAllGlobals())

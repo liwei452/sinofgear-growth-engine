@@ -2,6 +2,7 @@ import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
 import { render, screen, waitFor, within } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
+import { createMemoryHistory, createRouter } from "vue-router"
 
 import { currentUserQueryOptions, type CurrentUser } from "../auth/auth"
 import ContentFactoryPage from "./ContentFactoryPage.vue"
@@ -42,10 +43,26 @@ function baseResponse(path: string, activeBriefs: unknown[] = []) {
   return { results: [] }
 }
 
+function contentRouter() {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: "/", component: { template: "<div />" } },
+      { path: "/content-factory", component: { template: "<div />" } },
+      { path: "/reviews", component: { template: "<div />" } },
+      { path: "/publishing-calendar", component: { template: "<div />" } },
+      { path: "/platform-accounts", component: { template: "<div />" } },
+    ],
+  })
+  void router.push("/content-factory")
+  return router
+}
+
 function renderPage(permissions: string[]) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(permissions))
-  return render(ContentFactoryPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+  const router = contentRouter()
+  return render(ContentFactoryPage, { global: { plugins: [[VueQueryPlugin, { queryClient }], router] } })
 }
 
 async function openAdvancedManualWizard(user: ReturnType<typeof userEvent.setup>) {
@@ -64,6 +81,11 @@ it("uses AI recommendation as the single primary creation path", async () => {
   })))
   renderPage(["campaigns.read", "campaigns.manage", "content.read", "content.manage", "products.read"])
 
+  const workspaceNav = screen.getByRole("navigation", { name: "内容与发布工作区" })
+  expect(within(workspaceNav).getByRole("link", { name: "创建内容" })).toHaveAttribute("href", "/content-factory")
+  expect(within(workspaceNav).getByRole("link", { name: "审核内容" })).toHaveAttribute("href", "/reviews")
+  expect(within(workspaceNav).getByRole("link", { name: "发布日历" })).toHaveAttribute("href", "/publishing-calendar")
+  expect(within(workspaceNav).getByRole("link", { name: "平台账户" })).toHaveAttribute("href", "/platform-accounts")
   expect(await screen.findByRole("button", { name: "让 AI 推荐推广方向" })).toBeVisible()
   expect(screen.queryByRole("button", { name: "创建内容任务" })).not.toBeInTheDocument()
   expect(screen.getByText("高级手动创建（可选）")).toBeVisible()
@@ -272,7 +294,7 @@ it("fetches fresh workflow data after the organization changes", async () => {
   vi.stubGlobal("fetch", fetchMock)
   const key = currentUserQueryOptions().queryKey
   queryClient.setQueryData(key, currentUser(["campaigns.read"]))
-  const first = render(ContentFactoryPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+  const first = render(ContentFactoryPage, { global: { plugins: [[VueQueryPlugin, { queryClient }], contentRouter()] } })
   await screen.findByRole("heading", { level: 1 })
   await new Promise((resolve) => setTimeout(resolve, 0))
   first.unmount()
@@ -281,7 +303,7 @@ it("fetches fresh workflow data after the organization changes", async () => {
     ...currentUser(["campaigns.read"]),
     organization: { id: "org-2", name: "鍙︿竴缁勭粐", slug: "other" },
   })
-  render(ContentFactoryPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+  render(ContentFactoryPage, { global: { plugins: [[VueQueryPlugin, { queryClient }], contentRouter()] } })
   await screen.findByRole("heading", { level: 1 })
   await new Promise((resolve) => setTimeout(resolve, 0))
 

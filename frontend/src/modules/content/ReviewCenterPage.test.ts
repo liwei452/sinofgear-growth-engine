@@ -2,6 +2,7 @@ import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
 import { render, screen, waitFor, within } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
+import { createMemoryHistory, createRouter } from "vue-router"
 
 import { currentUserQueryOptions, type CurrentUser } from "../auth/auth"
 import ReviewCenterPage from "./ReviewCenterPage.vue"
@@ -81,7 +82,20 @@ function common(path: string) {
 function renderPage(permissions: string[]) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser(permissions))
-  return render(ReviewCenterPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: "/", component: { template: "<div />" } },
+      { path: "/content-factory", component: { template: "<div />" } },
+      { path: "/reviews", component: { template: "<div />" } },
+      { path: "/publishing-calendar", component: { template: "<div />" } },
+      { path: "/platform-accounts", component: { template: "<div />" } },
+      { path: "/company", component: { template: "<div />" } },
+      { path: "/promotion", component: { template: "<div />" } },
+    ],
+  })
+  void router.push("/reviews")
+  return render(ReviewCenterPage, { global: { plugins: [[VueQueryPlugin, { queryClient }], router] } })
 }
 
 afterEach(() => { vi.unstubAllGlobals(); document.cookie = "csrftoken=; Max-Age=0; path=/" })
@@ -92,9 +106,15 @@ it("shows real creation paths instead of sample content for an empty review queu
   })))
   renderPage(["content.read"])
 
-  expect(await screen.findByRole("heading", { name: "当前没有符合条件的内容" })).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "创建内容" })).toHaveAttribute("href", "/content-factory")
-  expect(screen.getByRole("link", { name: "补充公司信息" })).toHaveAttribute("href", "/company")
+  const workspaceNav = screen.getByRole("navigation", { name: "内容与发布工作区" })
+  expect(within(workspaceNav).getByRole("link", { name: "创建内容" })).toHaveAttribute("href", "/content-factory")
+  expect(within(workspaceNav).getByRole("link", { name: "审核内容" })).toHaveAttribute("href", "/reviews")
+  expect(within(workspaceNav).getByRole("link", { name: "发布日历" })).toHaveAttribute("href", "/publishing-calendar")
+  expect(within(workspaceNav).getByRole("link", { name: "平台账户" })).toHaveAttribute("href", "/platform-accounts")
+  const emptyState = (await screen.findByRole("heading", { name: "当前没有符合条件的内容" })).closest("section")
+  expect(emptyState).not.toBeNull()
+  expect(within(emptyState as HTMLElement).getByRole("link", { name: "创建内容" })).toHaveAttribute("href", "/content-factory")
+  expect(within(emptyState as HTMLElement).getByRole("link", { name: "补充公司信息" })).toHaveAttribute("href", "/company")
   expect(screen.queryByText("精密齿轮解决方案")).not.toBeInTheDocument()
 })
 
@@ -111,6 +131,9 @@ it("shows plain content fields and a safe, collapsed AI audit summary", async ()
   expect(reviewDialog.getByText("面向德国工业采购的可靠齿轮。")).toBeInTheDocument()
   expect(reviewDialog.getByText("HELICAL_GEAR")).toBeInTheDocument()
   expect(screen.queryByText(/never-render/)).not.toBeInTheDocument()
+  const technicalSummary = reviewDialog.getByText("技术与来源详情")
+  expect(technicalSummary.closest("details")).not.toHaveAttribute("open")
+  await user.click(technicalSummary)
   await user.click(screen.getByRole("button", { name: "查看AI生成记录" }))
   expect(await screen.findByText("gpt-safe")).toBeInTheDocument()
   expect(screen.getByText("SUCCEEDED")).toBeInTheDocument()

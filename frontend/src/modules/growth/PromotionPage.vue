@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
 import { computed, nextTick, ref, watchEffect } from "vue"
+import { RouterLink } from "vue-router"
 
 import {
   approveChannelPackage,
@@ -648,8 +649,8 @@ const socialChannelStatuses = computed<SocialChannelStatus[]>(() => socialChanne
         <h3>还没有可审核的渠道内容包</h3>
         <p>请先用已确认的公司和产品事实创建内容，再到审核中心逐个平台核对；空工作区不会生成固定脚本或文案。</p>
         <div class="page-actions">
-          <a class="button button-primary" href="/content-factory">创建内容</a>
-          <a class="button button-secondary" href="/reviews">进入审核中心</a>
+          <RouterLink class="button button-primary" to="/content-factory">创建内容</RouterLink>
+          <RouterLink class="button button-secondary" to="/reviews">进入审核中心</RouterLink>
         </div>
       </div>
       <ChannelPublishPanel

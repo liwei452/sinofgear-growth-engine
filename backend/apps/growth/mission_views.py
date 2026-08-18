@@ -8,8 +8,12 @@ from apps.identity.permissions import (
     CanManageMissions,
     CanReadMissions,
     CanReviewMissions,
+    CanRunAgents,
 )
 
+from .agent.acquisition import run_proactive_acquisition
+from .agent.content_tools import run_content_strategy_agent
+from .agent_views import AgentRunSerializer
 from .mission_planning import (
     MissionPlanGenerationError,
     approve_mission_plan,
@@ -25,11 +29,19 @@ from .mission_serializers import (
 )
 from .mission_services import (
     create_mission,
+    link_mission_entity,
     mission_available_actions,
+    sync_mission_links_from_agent_run,
     transition_mission,
     update_draft_mission,
 )
-from .models import GrowthMission, MissionPlan
+from .models import (
+    AgentRun,
+    DiscoveryCandidate,
+    GrowthMission,
+    MissionEntityLink,
+    MissionPlan,
+)
 
 
 def _available_actions(request, mission):
@@ -210,3 +222,63 @@ class MissionTimelineView(APIView):
                 for item in items
             ]
         )
+
+
+class MissionStartOutreachView(APIView):
+    permission_classes = [CanRunAgents]
+
+    @extend_schema(tags=["Growth missions"], responses={200: dict})
+    def post(self, request, mission_id, candidate_id):
+        mission = get_object_or_404(
+            GrowthMission, id=mission_id, organization=request.organization
+        )
+        candidate = get_object_or_404(
+            DiscoveryCandidate,
+            id=candidate_id,
+            organization=request.organization,
+            status=DiscoveryCandidate.Status.ACCEPTED,
+        )
+        run_proactive_acquisition(
+            organization=request.organization, candidate_id=str(candidate.id)
+        )
+        run = get_object_or_404(
+            AgentRun,
+            organization=request.organization,
+            idempotency_key=f"proactive:{candidate.id}",
+        )
+        link_mission_entity(
+            mission=mission,
+            entity=run,
+            lane=MissionEntityLink.Lane.OUTREACH,
+            actor=request.user,
+        )
+        sync_mission_links_from_agent_run(run=run, actor=request.user)
+        return Response(AgentRunSerializer(run).data)
+
+
+class MissionStartContentStrategyView(APIView):
+    permission_classes = [CanRunAgents]
+
+    @extend_schema(tags=["Growth missions"], responses={200: dict})
+    def post(self, request, mission_id):
+        mission = get_object_or_404(
+            GrowthMission, id=mission_id, organization=request.organization
+        )
+        run_content_strategy_agent(
+            organization=request.organization,
+            creator_id=str(request.user.id),
+            mission_id=str(mission.id),
+        )
+        run = get_object_or_404(
+            AgentRun,
+            organization=request.organization,
+            idempotency_key=f"content-strategy:{request.organization.id}:{mission.id}",
+        )
+        link_mission_entity(
+            mission=mission,
+            entity=run,
+            lane=MissionEntityLink.Lane.SOCIAL,
+            actor=request.user,
+        )
+        sync_mission_links_from_agent_run(run=run, actor=request.user)
+        return Response(AgentRunSerializer(run).data)

@@ -43,9 +43,11 @@ from .models import (
     FieldProvenance,
     FollowUp,
     GoogleMapsDiscoveryConfig,
+    GrowthMission,
     GrowthPublishBatch,
     InboundLead,
     IntentSignal,
+    MissionEntityLink,
     MetricReceipt,
     MarketCountryProfile,
     OpportunityReview,
@@ -56,6 +58,7 @@ from .models import (
     TradeDatasetSnapshot,
     TradeSyncRun,
 )
+from .mission_services import link_mission_entity
 from integrations.secrets import encrypt_secret
 from .maps_discovery import (
     MapsDiscoveryMissingKey,
@@ -1258,6 +1261,18 @@ class ChannelPackageFromPlatformContentView(APIView):
                 "message": str(error),
                 "recovery_action": "返回内容审核中心，确认使用已批准的最新版本。",
             }, status=409)
+        mission_id = request.data.get("mission_id")
+        if mission_id:
+            mission = GrowthMission.objects.filter(
+                organization=request.organization, id=mission_id
+            ).first()
+            if mission is not None:
+                link_mission_entity(
+                    mission=mission,
+                    entity=package,
+                    lane=MissionEntityLink.Lane.SOCIAL,
+                    actor=request.user,
+                )
         return Response(
             ChannelPackageSerializer(package).data,
             status=201 if created else 200,
@@ -1401,6 +1416,18 @@ class PublishBatchCreateView(APIView):
                 "code": "IDEMPOTENCY_CONFLICT",
                 "message": "该发布请求与之前的操作不一致。",
             }, status=409)
+        mission_id = serializer.validated_data.get("mission_id")
+        if mission_id:
+            mission = GrowthMission.objects.filter(
+                organization=request.organization, id=mission_id
+            ).first()
+            if mission is not None:
+                link_mission_entity(
+                    mission=mission,
+                    entity=batch,
+                    lane=MissionEntityLink.Lane.SOCIAL,
+                    actor=request.user,
+                )
         return Response(
             GrowthPublishBatchSerializer(batch).data,
             status=200 if existed else 201,

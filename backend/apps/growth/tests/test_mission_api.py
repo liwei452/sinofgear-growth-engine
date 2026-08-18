@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
 from apps.catalog.models import Product
-from apps.growth.models import GrowthMission
+from apps.growth.models import DiscoveryCandidate, GrowthMission, MissionEntityLink
 from apps.identity.models import Membership, Organization, Role
 
 
@@ -192,3 +192,44 @@ def test_pause_and_resume_mission(administrator_client, mission):
     )
     assert resumed.status_code == 200
     assert resumed.data["status"] == "RUNNING"
+
+
+def test_start_content_strategy_links_mission(administrator_client, mission):
+    response = administrator_client.post(
+        f"{MISSIONS_URL}/{mission.id}/start-content-strategy", {}, format="json"
+    )
+    assert response.status_code == 200
+    assert MissionEntityLink.objects.filter(
+        mission=mission,
+        entity_type=MissionEntityLink.EntityType.AGENT_RUN,
+        lane=MissionEntityLink.Lane.SOCIAL,
+    ).exists()
+
+
+def test_start_outreach_links_mission(administrator_client, mission, monkeypatch):
+    from apps.growth.agent import acquisition as acq
+
+    monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
+    candidate = DiscoveryCandidate.objects.create(
+        organization=mission.organization,
+        company_name="Mining Co",
+        country="ZA",
+        website="",
+        industry="mining equipment",
+        status=DiscoveryCandidate.Status.ACCEPTED,
+        import_format="GOOGLE_MAPS",
+        raw_record={"primary_type": "mining"},
+        record_hash="mission-outreach-hash",
+        is_demo=False,
+    )
+    response = administrator_client.post(
+        f"{MISSIONS_URL}/{mission.id}/candidates/{candidate.id}/start-outreach",
+        {},
+        format="json",
+    )
+    assert response.status_code == 200
+    assert MissionEntityLink.objects.filter(
+        mission=mission,
+        entity_type=MissionEntityLink.EntityType.AGENT_RUN,
+        lane=MissionEntityLink.Lane.OUTREACH,
+    ).exists()

@@ -23,7 +23,8 @@ from .agent.content_creation_tools import (
 from .agent.content_tools import run_content_strategy_agent
 from .agent.publishing_tools import run_social_ops_agent
 from .growth_events import mark_events_published
-from .models import AgentRun, AgentRunStep, GrowthEvent
+from .mission_services import link_mission_entity, sync_mission_links_from_agent_run
+from .models import AgentRun, AgentRunStep, GrowthEvent, GrowthMission, MissionEntityLink
 
 
 AGENT_PERMISSIONS = {
@@ -137,6 +138,7 @@ class AgentRunStartSerializer(serializers.Serializer):
     timezone_name = serializers.CharField(required=False, default="UTC")
     values = serializers.DictField(required=False)
     asset_ids = serializers.ListField(child=serializers.UUIDField(), required=False)
+    mission_id = serializers.UUIDField(required=False)
 
 
 class AgentRunStartResultSerializer(serializers.Serializer):
@@ -255,10 +257,22 @@ class AgentRunStartView(APIView):
         _require(request, AGENT_PERMISSIONS[agent_type])
         organization = request.organization
         actor_id = str(request.user.id)
+        mission_id = (
+            str(request.data["mission_id"]) if request.data.get("mission_id") else None
+        )
+        social_ops_key = None
+        if agent_type == "social_ops" and mission_id:
+            social_ops_key = (
+                f"social-ops:mission:{mission_id}:{request.data.get('content_id')}:"
+                f"{request.data.get('account_id')}:"
+                f"{request.data.get('scheduled_at') or 'immediate'}"
+            )
         try:
             if agent_type == "content_strategy":
                 result = run_content_strategy_agent(
-                    organization=organization, creator_id=actor_id,
+                    organization=organization,
+                    creator_id=actor_id,
+                    mission_id=mission_id,
                 )
             elif agent_type == "content_creation":
                 result = run_content_creation_agent(
@@ -283,9 +297,36 @@ class AgentRunStartView(APIView):
                     account_id=str(request.data["account_id"]),
                     scheduled_at=request.data.get("scheduled_at"),
                     timezone_name=request.data.get("timezone_name", "UTC"),
+                    idempotency_key=social_ops_key,
                 )
         except (KeyError, ValueError) as exc:
             return Response({"message": str(exc)}, status=400)
+
+        if mission_id:
+            mission = GrowthMission.objects.filter(
+                organization=organization, id=mission_id
+            ).first()
+            run = None
+            if agent_type == "content_strategy":
+                run = AgentRun.objects.filter(
+                    organization=organization,
+                    idempotency_key=f"content-strategy:{organization.id}:{mission_id}",
+                ).first()
+            elif agent_type == "social_ops" and social_ops_key:
+                run = AgentRun.objects.filter(
+                    organization=organization,
+                    idempotency_key=social_ops_key,
+                ).first()
+            if mission is not None and run is not None:
+                lane = (
+                    MissionEntityLink.Lane.OUTREACH
+                    if agent_type == "proactive"
+                    else MissionEntityLink.Lane.SOCIAL
+                )
+                link_mission_entity(
+                    mission=mission, entity=run, lane=lane, actor=request.user
+                )
+                sync_mission_links_from_agent_run(run=run, actor=request.user)
 
         return Response({
             "status": result.status,

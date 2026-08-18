@@ -29,6 +29,7 @@ class PublishBatchCreateSerializer(serializers.Serializer):
     package_ids = serializers.ListField(
         child=serializers.UUIDField(), allow_empty=False, max_length=8,
     )
+    mission_id = serializers.UUIDField(required=False)
 
 
 class ChannelPackageBatchApproveSerializer(serializers.Serializer):

@@ -29,6 +29,7 @@ def resume_agent_run(*, run: AgentRun, approval_token: str):
         return run_content_strategy_agent(
             organization=organization,
             creator_id=args.get("creator_id"),
+            mission_id=args.get("mission_id"),
             approvals={approval_token},
         )
     if agent_type == "content_creation":

@@ -150,7 +150,7 @@ def build_content_strategy_tools(organization, creator_id: str | None = None) ->
 
 
 def run_content_strategy_agent(
-    *, organization, creator_id: str | None = None, approvals=None,
+    *, organization, creator_id: str | None = None, approvals=None, mission_id: str | None = None,
 ) -> Any:
     creator_id_value = None
     try:
@@ -174,16 +174,21 @@ def run_content_strategy_agent(
         fallback=fallback,
         allow_llm=True,
     )
+    idempotency_key = (
+        f"content-strategy:{organization.id}:{mission_id}"
+        if mission_id
+        else f"content-strategy:{organization.id}:{timezone.now().date()}"
+    )
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
-        idempotency_key=f"content-strategy:{organization.id}:{timezone.now().date()}",
+        idempotency_key=idempotency_key,
         defaults={
             "goal": "content strategy",
             "agent_type": "content_strategy",
             "execution_mode": proposed_execution.mode,
             "planner_provider": proposed_execution.provider,
             "planner_model": proposed_execution.model,
-            "resume_args": {"creator_id": creator_id},
+            "resume_args": {"creator_id": creator_id, "mission_id": mission_id},
             "created_by_id": creator_id_value,
             "max_steps": 5,
         },

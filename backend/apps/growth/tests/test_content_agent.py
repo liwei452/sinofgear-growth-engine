@@ -94,3 +94,34 @@ def test_content_strategy_agent_creates_brief(organization):
     assert brief_step.output["brief_id"]
     assert brief_step.output["topic"]
     assert ContentBrief.objects.filter(id=brief_step.output["brief_id"]).exists()
+
+
+def test_content_strategy_agent_key_is_scoped_to_calendar_day(organization, monkeypatch):
+    from datetime import timezone as dt_timezone
+
+    from django.utils import timezone as real_timezone
+
+    from apps.growth.agent import content_tools
+    from apps.growth.models import AgentRun
+
+    class Clock:
+        def __init__(self, day):
+            self.day = day
+
+        def now(self):
+            return real_timezone.datetime(2026, 8, self.day, 0, 0, tzinfo=dt_timezone.utc)
+
+    clock = Clock(18)
+    monkeypatch.setattr(content_tools, "timezone", clock)
+
+    run_content_strategy_agent(organization=organization)
+    run_content_strategy_agent(organization=organization)
+    assert AgentRun.objects.filter(
+        organization=organization, agent_type="content_strategy"
+    ).count() == 1
+
+    clock.day = 19
+    run_content_strategy_agent(organization=organization)
+    assert AgentRun.objects.filter(
+        organization=organization, agent_type="content_strategy"
+    ).count() == 2

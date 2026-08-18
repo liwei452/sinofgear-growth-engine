@@ -6,6 +6,7 @@ from typing import Any
 
 from django.contrib.auth import get_user_model
 from django.db.models import Count
+from django.utils import timezone
 
 from apps.campaigns.models import Campaign
 from apps.campaigns.services import create_campaign, create_content_brief
@@ -157,7 +158,7 @@ def run_content_strategy_agent(
         creator_id_value = None
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
-        idempotency_key=f"content-strategy:{organization.id}",
+        idempotency_key=f"content-strategy:{organization.id}:{timezone.now().date()}",
         defaults={
             "goal": "content strategy",
             "agent_type": "content_strategy",

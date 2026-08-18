@@ -89,3 +89,24 @@ def test_daily_publish_limit_blocks_extra_scheduling(publishing_context):
             idempotency_key="limit-2",
             actor=context["actor"],
         )
+
+
+def test_daily_publish_limit_counts_pending_tasks(publishing_context):
+    context = publishing_context
+    context["organization"].daily_publish_limit = 1
+    context["organization"].save(update_fields=["daily_publish_limit"])
+
+    create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="pending-1",
+        actor=context["actor"],
+    )
+
+    with pytest.raises(PublishingConflict, match="Daily publishing limit"):
+        create_publish_task(
+            content=context["content"],
+            account=context["account"],
+            idempotency_key="pending-2",
+            actor=context["actor"],
+        )

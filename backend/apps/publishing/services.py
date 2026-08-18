@@ -439,7 +439,15 @@ def create_publish_task(
             organization_id=locked_content.organization_id,
             published_at__gte=start,
         ).count()
-        if published_today >= limit:
+        pending = PublishTask.objects.filter(
+            organization_id=locked_content.organization_id,
+            status__in=[
+                PublishTask.Status.SCHEDULED,
+                PublishTask.Status.QUEUED,
+                PublishTask.Status.RUNNING,
+            ],
+        ).count()
+        if published_today + pending >= limit:
             raise PublishingConflict("Daily publishing limit reached.")
     status = PublishTask.Status.SCHEDULED if scheduled_at else PublishTask.Status.QUEUED
     try:

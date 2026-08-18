@@ -48,6 +48,13 @@ from .agent_views import (
     GrowthEventAcknowledgeView,
     GrowthEventListView,
 )
+from .mission_views import (
+    MissionApprovePlanView,
+    MissionDetailView,
+    MissionGeneratePlanView,
+    MissionListCreateView,
+    MissionStatusView,
+)
 
 urlpatterns = [
     path("growth/workspace", GrowthWorkspaceView.as_view(), name="growth-workspace"),
@@ -194,4 +201,25 @@ urlpatterns = [
     ),
     path("growth/events", GrowthEventListView.as_view(), name="growth-events"),
     path("growth/events/acknowledge", GrowthEventAcknowledgeView.as_view(), name="growth-events-acknowledge"),
+    path("growth/missions", MissionListCreateView.as_view(), name="growth-missions"),
+    path(
+        "growth/missions/<uuid:mission_id>",
+        MissionDetailView.as_view(),
+        name="growth-mission-detail",
+    ),
+    path(
+        "growth/missions/<uuid:mission_id>/generate-plan",
+        MissionGeneratePlanView.as_view(),
+        name="growth-mission-generate-plan",
+    ),
+    path(
+        "growth/missions/<uuid:mission_id>/approve-plan",
+        MissionApprovePlanView.as_view(),
+        name="growth-mission-approve-plan",
+    ),
+    path(
+        "growth/missions/<uuid:mission_id>/status",
+        MissionStatusView.as_view(),
+        name="growth-mission-status",
+    ),
 ]

@@ -89,6 +89,18 @@ class CanReadMetrics(HasOrganizationPermission):
     permission_code = PermissionCode.METRICS_READ
 
 
+class CanReadMissions(HasOrganizationPermission):
+    permission_code = PermissionCode.MISSIONS_READ
+
+
+class CanManageMissions(HasOrganizationPermission):
+    permission_code = PermissionCode.MISSIONS_MANAGE
+
+
+class CanReviewMissions(HasOrganizationPermission):
+    permission_code = PermissionCode.MISSIONS_REVIEW
+
+
 class CanReadKnowledge(HasOrganizationPermission):
     permission_code = PermissionCode.KNOWLEDGE_READ
 

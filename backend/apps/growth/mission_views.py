@@ -1,0 +1,186 @@
+from django.core.exceptions import ValidationError
+from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.identity.permissions import (
+    CanManageMissions,
+    CanReadMissions,
+    CanReviewMissions,
+)
+
+from .mission_planning import (
+    MissionPlanGenerationError,
+    approve_mission_plan,
+    generate_mission_plan,
+)
+from .mission_serializers import (
+    GrowthMissionInputSerializer,
+    GrowthMissionSerializer,
+    MissionApprovePlanSerializer,
+    MissionPlanSerializer,
+    MissionStatusSerializer,
+)
+from .mission_services import (
+    create_mission,
+    mission_available_actions,
+    transition_mission,
+    update_draft_mission,
+)
+from .models import GrowthMission, MissionPlan
+
+
+def _available_actions(request, mission):
+    permissions = request.membership.role.permissions
+    return mission_available_actions(
+        mission,
+        can_manage="missions.manage" in permissions,
+        can_review="missions.review" in permissions,
+    )
+
+
+def _serialize(request, mission):
+    return GrowthMissionSerializer(
+        mission, context={"available_actions": _available_actions(request, mission)}
+    ).data
+
+
+class MissionListCreateView(APIView):
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [CanManageMissions()]
+        return [CanReadMissions()]
+
+    @extend_schema(
+        tags=["Growth missions"],
+        responses={200: GrowthMissionSerializer(many=True)},
+    )
+    def get(self, request):
+        missions = GrowthMission.objects.filter(organization=request.organization)
+        return Response([_serialize(request, mission) for mission in missions])
+
+    @extend_schema(
+        tags=["Growth missions"],
+        request=GrowthMissionInputSerializer,
+        responses={201: GrowthMissionSerializer},
+    )
+    def post(self, request):
+        serializer = GrowthMissionInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            mission = create_mission(
+                organization=request.organization,
+                actor=request.user,
+                values=serializer.validated_data,
+            )
+        except ValidationError as exc:
+            return Response({"detail": exc.message_dict}, status=400)
+        return Response(_serialize(request, mission), status=201)
+
+
+class MissionDetailView(APIView):
+    def get_permissions(self):
+        if self.request.method == "PATCH":
+            return [CanManageMissions()]
+        return [CanReadMissions()]
+
+    @extend_schema(tags=["Growth missions"], responses={200: GrowthMissionSerializer})
+    def get(self, request, mission_id):
+        mission = get_object_or_404(
+            GrowthMission, id=mission_id, organization=request.organization
+        )
+        return Response(_serialize(request, mission))
+
+    @extend_schema(
+        tags=["Growth missions"],
+        request=GrowthMissionInputSerializer,
+        responses={200: GrowthMissionSerializer},
+    )
+    def patch(self, request, mission_id):
+        mission = get_object_or_404(
+            GrowthMission, id=mission_id, organization=request.organization
+        )
+        serializer = GrowthMissionInputSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        try:
+            mission = update_draft_mission(
+                mission=mission,
+                actor=request.user,
+                values=serializer.validated_data,
+            )
+        except ValidationError as exc:
+            return Response({"detail": exc.message_dict}, status=400)
+        return Response(_serialize(request, mission))
+
+
+class MissionGeneratePlanView(APIView):
+    permission_classes = [CanManageMissions]
+
+    @extend_schema(
+        tags=["Growth missions"],
+        request=None,
+        responses={201: MissionPlanSerializer},
+    )
+    def post(self, request, mission_id):
+        mission = get_object_or_404(
+            GrowthMission, id=mission_id, organization=request.organization
+        )
+        try:
+            plan = generate_mission_plan(mission=mission, actor=request.user)
+        except MissionPlanGenerationError as exc:
+            return Response({"detail": str(exc)}, status=422)
+        return Response(MissionPlanSerializer(plan).data, status=201)
+
+
+class MissionApprovePlanView(APIView):
+    permission_classes = [CanReviewMissions]
+
+    @extend_schema(
+        tags=["Growth missions"],
+        request=MissionApprovePlanSerializer,
+        responses={200: MissionPlanSerializer},
+    )
+    def post(self, request, mission_id):
+        mission = get_object_or_404(
+            GrowthMission, id=mission_id, organization=request.organization
+        )
+        serializer = MissionApprovePlanSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        plan = get_object_or_404(
+            MissionPlan,
+            id=serializer.validated_data["plan_id"],
+            organization=request.organization,
+            mission=mission,
+        )
+        try:
+            plan = approve_mission_plan(mission=mission, plan=plan, actor=request.user)
+        except ValidationError as exc:
+            return Response({"detail": exc.message_dict}, status=400)
+        return Response(MissionPlanSerializer(plan).data)
+
+
+class MissionStatusView(APIView):
+    permission_classes = [CanManageMissions]
+
+    @extend_schema(
+        tags=["Growth missions"],
+        request=MissionStatusSerializer,
+        responses={200: GrowthMissionSerializer},
+    )
+    def post(self, request, mission_id):
+        mission = get_object_or_404(
+            GrowthMission, id=mission_id, organization=request.organization
+        )
+        serializer = MissionStatusSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            mission = transition_mission(
+                mission=mission,
+                actor=request.user,
+                target_status=serializer.validated_data["status"],
+                reason=serializer.validated_data.get("reason", ""),
+            )
+        except ValidationError as exc:
+            return Response({"detail": exc.message_dict}, status=400)
+        return Response(_serialize(request, mission))

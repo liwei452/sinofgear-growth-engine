@@ -7,9 +7,11 @@ from typing import Any
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Q
 
 from apps.ai.models import PromptVersion
 from apps.ai.runtime import product_ai_status
+from apps.assets.models import MaterialAsset
 from apps.campaigns.models import ContentBrief
 from apps.campaigns.services import (
     build_content_generation_input,
@@ -22,6 +24,7 @@ from apps.content.services import ContentStateError, create_platform_content
 from apps.identity.models import Membership
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
+from apps.platforms.models import Platform
 
 from .persistent import continue_agent_run
 from .planner import DeterministicPlanner, Plan
@@ -43,6 +46,31 @@ def _user_id(value) -> int | None:
         return int(value) if value else None
     except (TypeError, ValueError):
         return None
+
+
+def _auto_match_assets(organization, platform_id) -> list[str]:
+    platform = Platform.objects.filter(id=platform_id).first()
+    if platform is None:
+        return []
+    code = platform.code.upper()
+    if code in {"TIKTOK", "YOUTUBE"}:
+        prefixes = ("video/",)
+    elif code == "INSTAGRAM":
+        prefixes = ("image/", "video/")
+    else:
+        prefixes = ("image/", "video/", "application/pdf")
+    query = Q()
+    for prefix in prefixes:
+        query |= Q(mime_type__startswith=prefix)
+    assets = (
+        MaterialAsset.objects.filter(
+            organization=organization,
+            status=MaterialAsset.Status.ACTIVE,
+        )
+        .filter(query)
+        .order_by("-created_at", "-id")[:5]
+    )
+    return [str(asset.id) for asset in assets]
 
 
 def _brief(organization, brief_id: str) -> ContentBrief | None:
@@ -260,6 +288,8 @@ def run_content_creation_agent(
     asset_ids: list[str] | None = None,
     approvals=None,
 ) -> Any:
+    if not asset_ids:
+        asset_ids = _auto_match_assets(organization, platform_id)
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
         idempotency_key=f"content-creation:{brief_id}",

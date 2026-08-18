@@ -11,6 +11,7 @@ from apps.campaigns.models import ContentBrief
 from apps.campaigns.services import create_campaign, create_content_brief
 from apps.catalog.models import Product
 from apps.growth.agent.content_creation_tools import (
+    _auto_match_assets,
     build_content_creation_tools,
     run_content_creation_agent,
 )
@@ -234,3 +235,36 @@ def test_missing_media_requirements_detects_platforms_without_matching_assets():
     missing = cct._missing_media_requirements(brief)
 
     assert missing == ["INSTAGRAM", "TIKTOK"]
+
+
+def test_auto_match_assets_prefers_matching_media(organization):
+    platform = Platform.objects.create(code="INSTAGRAM", name="Instagram")
+    actor = get_user_model().objects.create_user(username="asset-matcher", password="pw")
+    image_id = uuid.uuid4()
+    image = MaterialAsset.objects.create(
+        id=image_id,
+        organization=organization,
+        asset_type=MaterialAsset.AssetType.IMAGE,
+        storage_key=f"organizations/{organization.id}/assets/{image_id}/original",
+        original_filename="hero.png",
+        mime_type="image/png",
+        size_bytes=10,
+        checksum="b" * 64,
+        created_by=actor,
+    )
+    document_id = uuid.uuid4()
+    MaterialAsset.objects.create(
+        id=document_id,
+        organization=organization,
+        asset_type=MaterialAsset.AssetType.DOCUMENT,
+        storage_key=f"organizations/{organization.id}/assets/{document_id}/original",
+        original_filename="notes.pdf",
+        mime_type="application/pdf",
+        size_bytes=10,
+        checksum="c" * 64,
+        created_by=actor,
+    )
+
+    matched = _auto_match_assets(organization, platform.id)
+
+    assert matched == [str(image.id)]

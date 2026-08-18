@@ -52,20 +52,42 @@ def _summarize_performance(organization) -> dict[str, Any]:
         comments=Sum("comments"),
         shares=Sum("shares"),
     )
+    impressions = metric_totals["impressions"] or 0
+    plays = metric_totals["plays"] or 0
+    click_count = ClickEvent.objects.filter(
+        tracking_link__organization=organization
+    ).count()
+    inquiry_count = InboundRfq.objects.filter(organization=organization).count()
+    recommendations = []
+    if impressions == 0:
+        recommendations.append(
+            "No impressions yet; publish consistently and verify platform credentials."
+        )
+    elif plays == 0:
+        recommendations.append(
+            "Impressions exist but no video plays; consider short-video formats for wider reach."
+        )
+    if impressions > 0 and click_count == 0:
+        recommendations.append(
+            "Low click-through; strengthen the CTA and landing-page value."
+        )
+    if click_count > 0 and inquiry_count == 0:
+        recommendations.append(
+            "Clicks are coming but no inquiries; simplify the RFQ/quote path."
+        )
     return {
         "published_count": posts.count(),
-        "impressions": metric_totals["impressions"] or 0,
-        "plays": metric_totals["plays"] or 0,
+        "impressions": impressions,
+        "plays": plays,
         "likes": metric_totals["likes"] or 0,
         "comments": metric_totals["comments"] or 0,
         "shares": metric_totals["shares"] or 0,
-        "click_count": ClickEvent.objects.filter(
-            tracking_link__organization=organization
-        ).count(),
-        "inquiry_count": InboundRfq.objects.filter(organization=organization).count(),
+        "click_count": click_count,
+        "inquiry_count": inquiry_count,
         "crm_handoff_count": CRMHandoff.objects.filter(
             organization=organization
         ).count(),
+        "recommendations": recommendations,
     }
 
 

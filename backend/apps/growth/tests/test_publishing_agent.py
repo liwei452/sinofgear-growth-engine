@@ -96,4 +96,42 @@ def test_analyze_post_performance_summary(monkeypatch):
         "click_count": 4,
         "inquiry_count": 5,
         "crm_handoff_count": 2,
+        "recommendations": [],
     }
+
+
+def test_analyze_post_performance_emits_gap_recommendations(monkeypatch):
+    from apps.growth.agent import publishing_tools as pt
+    from apps.growth import models as growth_models
+    from apps import tracking
+    from apps.publishing import models as publishing_models
+
+    class FakeQs:
+        def __init__(self, count):
+            self._count = count
+
+        def filter(self, **kwargs):
+            return self
+
+        def count(self):
+            return self._count
+
+        def aggregate(self, **kwargs):
+            return {
+                "impressions": 120,
+                "plays": 0,
+                "likes": 0,
+                "comments": 0,
+                "shares": 0,
+            }
+
+    monkeypatch.setattr(pt, "PublishedPost", SimpleNamespace(objects=FakeQs(2)))
+    monkeypatch.setattr(tracking.models, "ClickEvent", SimpleNamespace(objects=FakeQs(0)))
+    monkeypatch.setattr(growth_models, "InboundRfq", SimpleNamespace(objects=FakeQs(0)))
+    monkeypatch.setattr(growth_models, "CRMHandoff", SimpleNamespace(objects=FakeQs(0)))
+    monkeypatch.setattr(publishing_models, "PostMetric", SimpleNamespace(objects=FakeQs(0)))
+
+    result = pt._summarize_performance(SimpleNamespace(id="org-1"))
+
+    assert any("video" in item for item in result["recommendations"])
+    assert any("CTA" in item for item in result["recommendations"])

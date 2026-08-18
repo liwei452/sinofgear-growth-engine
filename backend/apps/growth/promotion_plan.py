@@ -1,10 +1,9 @@
 import json
 
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from integrations.ai.providers import provider_registry
+from apps.ai.provider_config import resolve_product_ai
 
 from .models import MarketCountryProfile, PromotionPlanApproval
 
@@ -53,8 +52,8 @@ PROMOTION_PLAN_SCHEMA = {
 
 
 def generate_promotion_plan(organization) -> dict:
-    provider_code = getattr(settings, "PRODUCT_AI_PROVIDER", "fake")
-    if provider_code != "deepseek":
+    runtime = resolve_product_ai(organization)
+    if not runtime.real_requests_enabled:
         return _deterministic_plan(organization)
     snapshot = _plan_input(organization)
     prompt = (
@@ -62,12 +61,19 @@ def generate_promotion_plan(organization) -> dict:
         "||INPUT:" + json.dumps(snapshot, ensure_ascii=False)
     )
     try:
-        return provider_registry.get(provider_code).generate(
+        return runtime.provider.generate(
             prompt=prompt,
             schema=PROMOTION_PLAN_SCHEMA,
         )
     except Exception:
         return _deterministic_plan(organization)
+
+
+def promotion_plan_preview(organization) -> dict:
+    approval = PromotionPlanApproval.objects.filter(organization=organization).first()
+    if approval is not None and approval.approved_at and approval.plan_snapshot:
+        return approval.plan_snapshot
+    return _deterministic_plan(organization)
 
 
 def _plan_input(organization) -> dict:

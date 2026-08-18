@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from json import JSONDecodeError
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from django.conf import settings
@@ -217,6 +218,22 @@ def build_social_provider_runtime(
     )
 
 
+class UrlMediaLoader:
+    def __init__(self, opener=urlopen):
+        self._opener = opener
+
+    def load(self, media_url: str, max_bytes: int) -> bytes:
+        parsed = urlsplit(media_url)
+        if parsed.scheme != "https" or parsed.username or parsed.password:
+            raise ValueError("YouTube media must be a public HTTPS URL.")
+        request = Request(media_url, headers={"User-Agent": "SinofGear/1.0"}, method="GET")
+        with self._opener(request, timeout=60) as response:
+            data = response.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise ValueError("YouTube media exceeds the size limit.")
+        return data
+
+
 def get_social_provider_runtime() -> SocialProviderRuntime:
     try:
         configs = load_provider_configs(
@@ -243,4 +260,5 @@ def get_social_provider_runtime() -> SocialProviderRuntime:
         resolver,
         token_store,
         lambda _code: UrllibPlatformTransport(),
+        youtube_media_loader=UrlMediaLoader(),
     )

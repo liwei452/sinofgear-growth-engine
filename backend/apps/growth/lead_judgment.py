@@ -1,8 +1,6 @@
 import json
 
-from django.conf import settings
-
-from integrations.ai.providers import provider_registry
+from apps.ai.provider_config import resolve_product_ai
 
 from .grading import grade_candidate
 
@@ -23,8 +21,8 @@ LEAD_JUDGMENT_SCHEMA = {
 
 
 def judge_candidate(candidate, *, website_facts=None) -> dict:
-    provider_code = getattr(settings, "PRODUCT_AI_PROVIDER", "fake")
-    if provider_code not in {"deepseek"}:
+    runtime = resolve_product_ai(candidate.organization)
+    if not runtime.real_requests_enabled:
         return _deterministic_judgment(candidate, website_facts)
 
     snapshot = {
@@ -40,7 +38,7 @@ def judge_candidate(candidate, *, website_facts=None) -> dict:
         snapshot, ensure_ascii=False,
     )
     try:
-        return provider_registry.get(provider_code).generate(
+        return runtime.provider.generate(
             prompt=prompt,
             schema=LEAD_JUDGMENT_SCHEMA,
         )

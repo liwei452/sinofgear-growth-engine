@@ -200,8 +200,10 @@ class AgentRunApproveView(APIView):
             return Response({"message": "Run is not waiting for approval."}, status=409)
         _require(request, PermissionCode.AGENTS_APPROVE)
 
-        decision = request.data.get("decision", "approve")
-        comment = str(request.data.get("comment") or "").strip()
+        serializer = AgentRunApproveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        decision = serializer.validated_data["decision"]
+        comment = str(serializer.validated_data.get("comment") or "").strip()
         now = timezone.now()
         if decision == "reject":
             run.status = AgentRun.Status.REJECTED

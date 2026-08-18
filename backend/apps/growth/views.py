@@ -70,7 +70,7 @@ from .webhook_auth import verify_webhook_signature
 from .promotion_plan import (
     approve_promotion_plan,
     clear_promotion_plan_approval,
-    generate_promotion_plan,
+    promotion_plan_preview,
     promotion_plan_status,
 )
 
@@ -351,7 +351,7 @@ class GrowthWorkspaceView(APIView):
                 accounts=accounts,
                 profiles=market_profiles_for(organization),
             ),
-            "promotion_plan": generate_promotion_plan(organization),
+            "promotion_plan": promotion_plan_preview(organization),
             "promotion_plan_approval": promotion_plan_status(organization),
         }
 

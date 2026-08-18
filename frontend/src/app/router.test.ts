@@ -117,9 +117,8 @@ describe("protected routing", () => {
 
     await appRouter.push("/agent-approvals")
 
-    expect(appRouter.currentRoute.value.name).toBe("agent-workspace")
-    expect(appRouter.currentRoute.value.query.view).toBe("approvals")
-    expect(await screen.findByText("Agent 工作台")).toBeInTheDocument()
+    expect(appRouter.currentRoute.value.name).toBe("agent-approvals")
+    expect(await screen.findByText("Agent 审批")).toBeInTheDocument()
   })
 
   it("lets an agent operator open the agent workspace and applies business-facing titles", async () => {

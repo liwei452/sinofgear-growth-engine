@@ -20,7 +20,7 @@ const router = createAppRouter(queryClient, {
     Login: LoginPage,
     Shell: AppShell,
     Dashboard: DashboardPage,
-    Promotion: defineAsyncComponent(() => import("./modules/social/SocialOperationsPage.vue")),
+    Promotion: defineAsyncComponent(() => import("./modules/growth/PromotionPage.vue")),
     Opportunities: OpportunitiesPage,
     AgentApprovals: AgentApprovalsPage,
     AgentWorkspace: defineAsyncComponent(() => import("./modules/agents/AgentWorkspacePage.vue")),

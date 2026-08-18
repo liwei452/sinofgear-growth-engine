@@ -10,13 +10,11 @@ from django.utils import timezone
 from pypdf import PdfReader
 
 from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
-from apps.ai.runtime import product_ai_status
+from apps.ai.provider_config import resolve_product_ai
 from apps.ai.services import PromptVersionService
 from apps.common.security import normalize_persisted_error
 from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService
-from integrations.ai.providers import provider_registry
-
 from .ai_extraction import FACT_RESULT_SCHEMA, ExtractedPage, extract_candidate_facts
 from .models import MaterialAsset, ProductEvidenceFact
 from .storage import get_object_storage
@@ -197,7 +195,8 @@ def _execute(job: Job, *, actor=None) -> UnderstandingResult:
     provider_model = job.input_snapshot.get("provider_model", "deterministic-labeled-lines-v1")
     provider_label = job.input_snapshot.get("provider_label", PROVIDER_LABEL)
     is_demo = bool(job.input_snapshot.get("is_demo", provider_code == "fake"))
-    if provider_code == "deepseek" and product_ai_status()["mode"] != "CONFIGURED_AI":
+    runtime = resolve_product_ai(job.organization)
+    if provider_code == "deepseek" and not runtime.real_requests_enabled:
         raise AssetUnderstandingError("DeepSeek API key is not configured.")
     claimed = JobService.claim(worker_id="local-asset-understanding", job_id=job.id)
     if claimed is None:
@@ -229,7 +228,7 @@ def _execute(job: Job, *, actor=None) -> UnderstandingResult:
             pages, extraction_warnings = _extract_pdf(data)
             if provider_code == "deepseek":
                 outcome = extract_candidate_facts(
-                    pages, provider=provider_registry.get(provider_code)
+                    pages, provider=runtime.provider
                 )
                 rows = list(outcome.rows)
                 provider_warnings = list(outcome.warnings)
@@ -303,19 +302,19 @@ def start_understanding(
     _validate_asset(asset)
     if product.organization_id != asset.organization_id:
         raise ValidationError("Product and asset must belong to the same organization.")
-    provider_status = product_ai_status()
-    if provider_status["mode"] == "CONFIGURATION_REQUIRED":
+    runtime = resolve_product_ai(asset.organization)
+    if runtime.mode == "CONFIGURATION_REQUIRED":
         raise AssetUnderstandingError("DeepSeek API key is not configured.")
-    provider_code = "deepseek" if provider_status["mode"] == "CONFIGURED_AI" else "fake"
-    if provider_code == "deepseek" and external_text_consent is not True:
+    provider_code = runtime.provider_code
+    if runtime.real_requests_enabled and external_text_consent is not True:
         raise AssetUnderstandingError(
             "Confirm that bounded PDF text may be sent to DeepSeek for this processing run."
         )
-    provider_model = str(provider_status["model"])
+    provider_model = runtime.model
     provider_label = (
-        str(provider_status["provider_label"]) if provider_code == "deepseek" else PROVIDER_LABEL
+        runtime.provider_label if runtime.real_requests_enabled else PROVIDER_LABEL
     )
-    is_demo = provider_code == "fake"
+    is_demo = not runtime.real_requests_enabled
     job = JobService.create(
         organization=asset.organization,
         job_type=Job.Type.ASSET_UNDERSTAND,

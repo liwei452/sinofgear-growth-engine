@@ -1,12 +1,11 @@
 import json
 
-from django.conf import settings
 from django.db import transaction
 
 from apps.content.models import PlatformContent
 from apps.content.services import content_is_consistent
 from integrations.platforms.manual_fake import ManualPackageFakeConnector, ManualPackageReceipt
-from integrations.ai.providers import provider_registry
+from apps.ai.provider_config import resolve_product_ai
 
 from .models import (
     CRMHandoff,
@@ -169,8 +168,8 @@ OUTREACH_DRAFT_SCHEMA = {
 
 
 def _outreach_draft_text(account: TargetAccount) -> str:
-    provider_code = getattr(settings, "PRODUCT_AI_PROVIDER", "fake")
-    if provider_code != "deepseek":
+    runtime = resolve_product_ai(account.organization)
+    if not runtime.real_requests_enabled:
         return _template_outreach_draft(account)
     signal = account.intent_signals.order_by("-observed_at", "-id").first()
     snapshot = {
@@ -184,7 +183,7 @@ def _outreach_draft_text(account: TargetAccount) -> str:
         snapshot, ensure_ascii=False,
     )
     try:
-        result = provider_registry.get("deepseek").generate(
+        result = runtime.provider.generate(
             prompt=prompt,
             schema=OUTREACH_DRAFT_SCHEMA,
         )

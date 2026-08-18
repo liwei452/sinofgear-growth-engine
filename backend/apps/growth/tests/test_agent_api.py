@@ -99,6 +99,26 @@ def test_reader_cannot_approve(organization):
     assert response.status_code == 403
 
 
+def test_approve_rejects_invalid_decision_value(organization):
+    candidate = _candidate(organization)
+    run_proactive_acquisition(organization=organization, candidate_id=str(candidate.id))
+    run = AgentRun.objects.get(
+        organization=organization,
+        idempotency_key=f"proactive:{candidate.id}",
+    )
+    client = _client(organization, suffix="typo")
+
+    response = client.post(
+        f"{RUNS_URL}/{run.id}/approve",
+        {"decision": "aprove"},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    run.refresh_from_db()
+    assert run.status == AgentRun.Status.WAITING_APPROVAL
+
+
 def test_growth_events_api(organization):
     from apps.growth.growth_events import emit_growth_event
 

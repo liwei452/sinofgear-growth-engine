@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 
-from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 
+from apps.ai.provider_config import resolve_product_ai
 from apps.catalog.models import Product
-from integrations.ai.providers import provider_registry
 
 from .growth_events import EVENT_CUSTOMER_SERVICE_DECIDED, emit_growth_event
 from .inbound_triage import inbound_evidence
@@ -75,20 +74,20 @@ def _product_summary(product: Product) -> str:
 
 
 def draft_reply(organization, context: dict) -> str:
-    provider_code = getattr(settings, "PRODUCT_AI_PROVIDER", "fake")
-    if provider_code == "deepseek":
-        return _llm_reply(organization, context)
+    runtime = resolve_product_ai(organization)
+    if runtime.real_requests_enabled:
+        return _llm_reply(organization, context, runtime.provider)
     return _template_reply(organization, context)
 
 
-def _llm_reply(organization, context: dict) -> str:
+def _llm_reply(organization, context: dict, provider) -> str:
     knowledge = product_knowledge(organization, context["need_slug"])
     prompt = "Draft a short customer-service reply using only the supplied facts.\n||INPUT:" + json.dumps(
         {"context": context, "knowledge": knowledge},
         ensure_ascii=False,
     )
     try:
-        result = provider_registry.get("deepseek").generate(prompt=prompt, schema=REPLY_SCHEMA)
+        result = provider.generate(prompt=prompt, schema=REPLY_SCHEMA)
         return result["reply"]
     except Exception:
         return _template_reply(organization, context)

@@ -10,6 +10,7 @@ from apps.assets.models import ProductEvidenceFact
 from apps.assets.services import upload_asset
 from apps.assets.understanding import review_fact, start_understanding
 from apps.ai.models import AIRun
+from apps.ai.provider_config import ProductAIRuntime
 from apps.jobs.models import Job
 
 from .conftest import make_product, png_bytes
@@ -116,6 +117,18 @@ class DeepSeekFactProvider:
         }
 
 
+def _deepseek_runtime(provider) -> ProductAIRuntime:
+    return ProductAIRuntime(
+        mode="CONFIGURED_AI",
+        provider_label="DeepSeek 官方 API",
+        provider_code="deepseek",
+        model="deepseek-chat",
+        configured=True,
+        real_requests_enabled=True,
+        provider=provider,
+    )
+
+
 @pytest.mark.django_db
 @override_settings(PRODUCT_AI_PROVIDER="deepseek", PRODUCT_AI_MODEL="deepseek-chat")
 def test_deepseek_pdf_understanding_persists_real_evidence_without_secret(
@@ -129,8 +142,8 @@ def test_deepseek_pdf_understanding_persists_real_evidence_without_secret(
     product = make_product(own, name="Real extraction gear")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-never-persist")
     monkeypatch.setattr(
-        "apps.assets.understanding.provider_registry.get",
-        lambda code: DeepSeekFactProvider(),
+        "apps.assets.understanding.resolve_product_ai",
+        lambda org: _deepseek_runtime(DeepSeekFactProvider()),
     )
 
     result = start_understanding(
@@ -194,8 +207,8 @@ def test_real_provider_job_does_not_reuse_fake_understanding(organizations, monk
     fake_result = start_understanding(asset=asset, product=product, actor=actor)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-never-persist")
     monkeypatch.setattr(
-        "apps.assets.understanding.provider_registry.get",
-        lambda code: DeepSeekFactProvider(),
+        "apps.assets.understanding.resolve_product_ai",
+        lambda org: _deepseek_runtime(DeepSeekFactProvider()),
     )
 
     with override_settings(PRODUCT_AI_PROVIDER="deepseek", PRODUCT_AI_MODEL="deepseek-chat"):
@@ -218,7 +231,10 @@ def test_repeated_real_understanding_is_idempotent(organizations, monkeypatch) -
     product = make_product(own, name="Repeat gear")
     provider = DeepSeekFactProvider()
     monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-never-persist")
-    monkeypatch.setattr("apps.assets.understanding.provider_registry.get", lambda code: provider)
+    monkeypatch.setattr(
+        "apps.assets.understanding.resolve_product_ai",
+        lambda org: _deepseek_runtime(provider),
+    )
 
     first = start_understanding(
         asset=asset, product=product, actor=actor, external_text_consent=True

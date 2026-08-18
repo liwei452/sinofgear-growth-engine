@@ -13,6 +13,7 @@ import {
 } from "../growth/api"
 import { agentRunsQueryOptions } from "../growth/agentApi"
 import { getProductAIStatus } from "../settings/api"
+import TodayWorkInbox from "../workItems/TodayWorkInbox.vue"
 import DashboardKpiStrip from "./DashboardKpiStrip.vue"
 import DashboardSideRail, { type DashboardChannelIssue } from "./DashboardSideRail.vue"
 import DashboardTrendCard from "./DashboardTrendCard.vue"
@@ -251,6 +252,7 @@ function toggleEvidence(id: string) {
 
     <div class="dashboard-workbench">
       <div class="dashboard-main">
+        <TodayWorkInbox />
         <TodayActionList :items="todayActions" />
 
         <section class="workspace-card opportunities-panel" aria-labelledby="today-opportunities">

@@ -246,6 +246,9 @@ PLATFORM_CONNECTOR_CAPABILITIES = {}
 DEMO_POST_METRICS_ENABLED = (
     os.environ.get("DEMO_POST_METRICS_ENABLED", "false").lower() == "true"
 )
+PUBLISHING_MOCK_ENABLED = (
+    os.environ.get("PUBLISHING_MOCK_ENABLED", "false").lower() == "true"
+)
 PRODUCT_AI_PROVIDER = os.environ.get("PRODUCT_AI_PROVIDER", "fake").strip().lower()
 if PRODUCT_AI_PROVIDER not in {"fake", "deepseek"}:
     raise ValueError("PRODUCT_AI_PROVIDER must be 'fake' or 'deepseek'.")

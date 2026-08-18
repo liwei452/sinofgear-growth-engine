@@ -65,3 +65,21 @@ def test_smtp_provider_sends_through_django_mail(settings):
     assert result["status"] == "SENT"
     assert len(mail.outbox) == 1
     assert mail.outbox[0].to == ["a@example.com"]
+
+
+def test_send_failure_is_not_recorded_as_sent(organization, monkeypatch):
+    from apps.growth import outreach_events
+
+    account, draft = _account_and_draft(organization)
+
+    class FailingProvider:
+        def send(self, *, email, subject, body):
+            return {"provider": "smtp", "message_id": "smtp-x", "status": "FAILED"}
+
+    monkeypatch.setattr(outreach_events, "get_delivery_provider", lambda: FailingProvider())
+
+    message = record_sent(account=account, draft=draft, email="a@example.com")
+
+    assert message.status == OutreachMessage.Status.FAILED
+    assert message.sent_at is None
+    assert FollowUp.objects.get(account=account).stage == FollowUp.Stage.QUALIFIED

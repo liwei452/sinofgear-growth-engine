@@ -8,6 +8,7 @@ from django.utils import timezone
 from .email_delivery import get_delivery_provider
 from .growth_events import (
     EVENT_EMAIL_BOUNCED,
+    EVENT_EMAIL_FAILED,
     EVENT_EMAIL_REPLIED,
     EVENT_EMAIL_SENT,
     EVENT_EMAIL_UNSUBSCRIBED,
@@ -24,16 +25,28 @@ def record_sent(*, account, draft, email: str) -> OutreachMessage:
         subject="",
         body=draft.english_draft if draft else "",
     )
+    status = str(result.get("status", "SENT"))
     message = OutreachMessage.objects.create(
         organization=account.organization,
         account=account,
         draft=draft,
         provider=result.get("provider", "unknown"),
         provider_message_id=result.get("message_id", ""),
-        status=OutreachMessage.Status.SENT,
+        status=OutreachMessage.Status.SENT
+        if status == "SENT" else OutreachMessage.Status.FAILED,
         payload=result,
-        sent_at=timezone.now(),
+        sent_at=timezone.now() if status == "SENT" else None,
     )
+    if status != "SENT":
+        emit_growth_event(
+            organization=account.organization,
+            event_type=EVENT_EMAIL_FAILED,
+            entity_type="account",
+            entity_id=account.id,
+            payload={"message_id": str(message.id), "provider": message.provider, "email": email},
+            idempotency_key=f"email.failed:{message.id}",
+        )
+        return message
     follow_up = FollowUp.objects.filter(
         organization=account.organization,
         account=account,

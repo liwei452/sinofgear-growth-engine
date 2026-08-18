@@ -259,6 +259,7 @@ class OutreachDraft(OrganizationOwnedModel):
 class OutreachMessage(OrganizationOwnedModel):
     class Status(models.TextChoices):
         SENT = "SENT", "Sent"
+        FAILED = "FAILED", "Failed"
         REPLIED = "REPLIED", "Replied"
         BOUNCED = "BOUNCED", "Bounced"
         UNSUBSCRIBED = "UNSUBSCRIBED", "Unsubscribed"

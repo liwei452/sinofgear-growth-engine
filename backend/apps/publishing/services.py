@@ -5,6 +5,7 @@ import uuid
 from datetime import timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import IntegrityError, transaction
 from django.db.models import Exists, OuterRef, Prefetch, Q
@@ -838,8 +839,14 @@ def execute_publish_task(task_id):
     try:
         if connection_kind == "official_oauth":
             result = _publish_official(task, attempt.number)
-        else:
+        elif connection_kind == "demo_fake" or getattr(settings, "PUBLISHING_MOCK_ENABLED", False):
             result = _publish_mock(task, attempt.number)
+        else:
+            result = PublishResult(
+                succeeded=False,
+                error_code="PUBLISH_NOT_ELIGIBLE",
+                error_message="Social account is not connected via official OAuth.",
+            )
     except PublishPayloadError as exc:
         result = PublishResult(succeeded=False, error_code="VALIDATION_REJECTED", error_message=str(exc))
     except Exception:

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from apps.growth.agent.acquisition import build_proactive_acquisition_tools
@@ -261,3 +263,26 @@ def test_acquisition_write_tools_are_classified_write_but_only_send_needs_approv
     assert approvals["add_to_follow_up"] is False
     assert approvals["draft_outreach"] is False
     assert approvals["send_email"] is True
+
+
+def test_send_email_tool_respects_outreach_cooldown(organization, monkeypatch):
+    from apps.growth.agent import acquisition as acq
+
+    candidate = SimpleNamespace(id="candidate-cooldown")
+    draft = SimpleNamespace(id="draft-1", english_draft="Draft")
+    account = SimpleNamespace(
+        id="account-cooldown",
+        outreach_drafts=SimpleNamespace(order_by=lambda *a, **k: SimpleNamespace(first=lambda: draft)),
+        outreach_messages=SimpleNamespace(filter=lambda **k: SimpleNamespace(exists=lambda: True)),
+    )
+    monkeypatch.setattr(acq, "_candidate", lambda org, args: candidate)
+    monkeypatch.setattr(acq, "_account_for_candidate", lambda org, candidate: account)
+    calls = []
+    monkeypatch.setattr(acq, "record_sent", lambda **kwargs: calls.append(kwargs) or SimpleNamespace())
+
+    tools = ToolRegistry(acq.build_proactive_acquisition_tools(organization))
+    result = tools.get("send_email").func({"candidate_id": "candidate-cooldown"})
+
+    assert result.ok is False
+    assert "cooldown" in result.error
+    assert calls == []

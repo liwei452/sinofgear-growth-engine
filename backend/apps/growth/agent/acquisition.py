@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from django.conf import settings
+from django.utils import timezone
 
 from integrations.sources.base import SourceAdapterError
 
@@ -24,11 +26,15 @@ from ..models import (
     CandidateEnrichmentSnapshot,
     DiscoveryCandidate,
     GoogleMapsDiscoveryConfig,
+    OutreachMessage,
     TargetAccount,
 )
 from ..outreach_events import record_sent
 from ..services import create_outreach_draft
 from ..website_enrichment import prepare_website_enrichment
+
+
+OUTREACH_COOLDOWN_DAYS = 7
 
 
 def _candidate(organization, args: dict[str, Any]) -> DiscoveryCandidate | None:
@@ -263,6 +269,12 @@ def _send_tool(organization) -> Tool:
         draft = account.outreach_drafts.order_by("-created_at", "-id").first()
         if draft is None:
             return ToolResult(ok=False, error="no outreach draft to send.")
+        cooldown_cutoff = timezone.now() - timedelta(days=OUTREACH_COOLDOWN_DAYS)
+        if account.outreach_messages.filter(
+            status=OutreachMessage.Status.SENT,
+            sent_at__gte=cooldown_cutoff,
+        ).exists():
+            return ToolResult(ok=False, error="account is within outreach cooldown.")
         email = args.get("email") or "outreach@example.com"
         message = record_sent(account=account, draft=draft, email=email)
         return ToolResult(

@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue"
 import { useQuery, useQueryClient } from "@tanstack/vue-query"
+import { useRouter } from "vue-router"
 
 import { ApiError } from "../../api/client"
 import WorkspaceHeader from "../../shared/components/WorkspaceHeader.vue"
 import { currentUserQueryOptions } from "../auth/auth"
+import { startAgentRun } from "../growth/agentApi"
 import { listProducts, productQueryKeys } from "../products/api"
 import ContentBriefWizard from "./ContentBriefWizard.vue"
 import ContentRecommendationPanel from "./ContentRecommendationPanel.vue"
@@ -19,6 +21,7 @@ import {
 import { useCursorCollection } from "./useCursorCollection"
 
 const queryClient = useQueryClient()
+const router = useRouter()
 const currentUserQuery = useQuery(currentUserQueryOptions())
 const organizationId = computed(() => currentUserQuery.data.value?.organization.id ?? "")
 const permissions = computed(() => currentUserQuery.data.value?.membership.permissions ?? [])
@@ -36,6 +39,7 @@ const focusedMasterV2 = computed<MasterPayloadV2 | null>(() => {
   return payload && "schema_version" in payload && payload.schema_version === 2 ? payload : null
 })
 const focusedMasterElement = ref<HTMLElement | null>(null)
+const agentHandoff = ref(false)
 const timers = new Set<ReturnType<typeof setTimeout>>()
 const pollingJobs = new Set<string>()
 const jobTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -161,6 +165,21 @@ async function startGeneration(brief: ContentBrief): Promise<void> {
   } catch (error) { actionError.value = safeError(error) } finally { actionId.value = "" }
 }
 
+async function handOffToAgent(): Promise<void> {
+  if (agentHandoff.value) return
+  agentHandoff.value = true
+  actionError.value = ""
+  try {
+    await startAgentRun("content_strategy")
+    notice.value = "已交给内容 Agent 分析选题，可在 Agent 工作台查看时间线与审批。"
+    await router.push("/agent-workspace")
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : "内容 Agent 启动失败。"
+  } finally {
+    agentHandoff.value = false
+  }
+}
+
 async function generateRecommendedBrief(briefId: string): Promise<void> {
   if (!has("content.manage") || actionId.value) return
   actionId.value = briefId
@@ -269,7 +288,19 @@ onBeforeUnmount(() => { disposed = true; for (const timer of timers) clearTimeou
       title="AI 内容工厂"
       title-id="factory-title"
       description="AI 根据产品事实、市场、客户画像和目标发布语言准备内容，你只需选择方向并审核结果。"
-    />
+    >
+      <template #actions>
+        <button
+          v-if="has('agents.run')"
+          class="button button-secondary"
+          type="button"
+          :disabled="agentHandoff"
+          @click="handOffToAgent"
+        >
+          {{ agentHandoff ? "正在交给内容 Agent…" : "交给内容 Agent 选题" }}
+        </button>
+      </template>
+    </WorkspaceHeader>
     <ContentWorkspaceNav active="create" />
     <ContentSteps :current-step="currentStep" />
     <p v-if="notice" role="status" class="notice">{{ notice }}</p><p v-if="actionError" role="alert" class="form-alert">{{ actionError }}</p>

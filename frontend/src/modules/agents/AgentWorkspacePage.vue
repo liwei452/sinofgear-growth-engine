@@ -132,7 +132,7 @@ const startMutation = useMutation({
           description="结合客户信号提出选题，再进入受控的内容生成流程。"
           icon="sparkles"
           mode="AI 生成任务"
-          :capabilities="['分析内容机会', '准备内容 Brief', '生成多平台内容']"
+          :capabilities="['分析内容机会', '准备内容 Brief', '交回内容工厂生成']"
           action-label="启动内容策略"
           @action="startDialogOpen = true"
         />

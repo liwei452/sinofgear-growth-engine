@@ -107,6 +107,18 @@ a {
   border-right: 1px solid rgb(255 255 255 / 8%);
   background: linear-gradient(180deg, var(--sg-navy) 0%, var(--sg-navy-2) 100%);
   padding: 22px 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-sidebar > nav:first-of-type {
+  flex: 1;
+}
+
+.sidebar-utilities {
+  margin-top: 20px;
+  border-top: 1px solid rgb(255 255 255 / 10%);
+  padding-top: 12px;
 }
 
 .brand-lockup {
@@ -187,6 +199,10 @@ a {
   font-weight: 900;
 }
 
+.nav-icon svg {
+  display: block;
+}
+
 .nav-link-active .nav-icon {
   background: var(--sg-brand);
   color: #fff;
@@ -224,6 +240,17 @@ a {
   font-size: .82rem;
   font-weight: 600;
   text-decoration: none;
+}
+
+.approval-badge svg,
+.user-menu button svg,
+.button-quiet svg {
+  flex: 0 0 auto;
+}
+
+.button-quiet,
+.user-menu button {
+  gap: 8px;
 }
 
 .approval-badge strong {

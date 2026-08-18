@@ -1,5 +1,5 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
-import { fireEvent, render, screen, waitFor } from "@testing-library/vue"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
 import { defineComponent, h } from "vue"
 import { createMemoryHistory, createRouter, RouterView } from "vue-router"
@@ -33,7 +33,10 @@ function useViewport(narrow: boolean) {
   return mediaQuery
 }
 
-async function renderShell(initialPath = "/", { narrow = false } = {}) {
+async function renderShell(
+  initialPath = "/",
+  { narrow = false, permissions = currentUser.membership.permissions } = {},
+) {
   const mediaQuery = useViewport(narrow)
   const history = createMemoryHistory()
   history.push(initialPath)
@@ -53,7 +56,10 @@ async function renderShell(initialPath = "/", { narrow = false } = {}) {
     ],
   })
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  queryClient.setQueryData(currentUserQueryOptions().queryKey, currentUser)
+  queryClient.setQueryData(currentUserQueryOptions().queryKey, {
+    ...currentUser,
+    membership: { ...currentUser.membership, permissions },
+  })
   const result = render(Root, {
     global: { plugins: [[VueQueryPlugin, { queryClient }], router] },
   })
@@ -77,6 +83,22 @@ it("groups navigation by task and hides entries the role cannot use", async () =
   }
   expect(screen.getByText("示例组织")).toBeInTheDocument()
   expect(screen.getByText("operator")).toBeInTheDocument()
+})
+
+it("uses real SVG navigation icons and keeps approval available to approvers", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([]), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  })))
+  await renderShell("/", { permissions: ["agents.approve"] })
+
+  const todayLink = screen.getByRole("link", { name: "今天" })
+  expect(within(todayLink).getByTestId("icon-calendar-days")).toHaveAttribute("aria-hidden", "true")
+  expect(screen.getByRole("link", { name: "待我审核 0" })).toHaveAttribute("href", "/agent-approvals")
+  expect(screen.getByTestId("sidebar-utilities")).toContainElement(
+    screen.getByRole("link", { name: "设置中心" }),
+  )
+  expect(screen.getByTestId("app-sidebar")).not.toHaveTextContent("今客图内审发账效产知素企设")
 })
 
 it("opens a keyboard-accessible user menu with the settings entry", async () => {

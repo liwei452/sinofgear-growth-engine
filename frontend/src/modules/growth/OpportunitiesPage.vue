@@ -2,6 +2,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
 import { computed, ref } from "vue"
 
+import WorkspaceHeader from "../../shared/components/WorkspaceHeader.vue"
+
 import {
   addOpportunityFollowUp,
   createOpportunityDraft,
@@ -15,6 +17,7 @@ import CandidateListImportForm from "./CandidateListImportForm.vue"
 import CandidateEnrichmentQueue from "./CandidateEnrichmentQueue.vue"
 import DiscoveryCandidateQueue from "./DiscoveryCandidateQueue.vue"
 import MarketPilotComparison from "./MarketPilotComparison.vue"
+import OpportunityWorkspaceNav, { type OpportunityWorkspace } from "./OpportunityWorkspaceNav.vue"
 import ReactivationWorkbench from "./ReactivationWorkbench.vue"
 
 const queryClient = useQueryClient()
@@ -31,9 +34,11 @@ const importOpen = ref(false)
 const importStatus = ref("")
 const selectedMarketName = ref("")
 const marketImportOpen = ref(false)
+const activeWorkspace = ref<OpportunityWorkspace>("queue")
 
 function selectMarket(payload: { countryCode: string; countryName: string }): void {
   selectedMarketName.value = payload.countryName
+  activeWorkspace.value = "import"
   marketImportOpen.value = true
   importOpen.value = true
   window.requestAnimationFrame(() => document.getElementById("candidate-discovery-entry")?.scrollIntoView({ behavior: "smooth", block: "start" }))
@@ -272,156 +277,187 @@ async function handleImported(accountId: string): Promise<void> {
   importOpen.value = false
   importStatus.value = ""
   await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+  activeWorkspace.value = "queue"
   importStatus.value = "已保存为待核实机会；系统没有访问来源网页，也没有联系客户。"
 }
 </script>
 
 <template>
   <div class="growth-page">
-    <header class="growth-hero"><div><p class="eyebrow">客户机会</p><h1>证据化客户机会</h1><p>目标公司不是联系人，公开信号也不是已确认询盘。</p></div><span class="fake-label">人工审核后跟进</span></header>
-    <dl class="object-legend">
-      <div><dt>目标公司</dt><dd>符合 ICP、值得研究的企业</dd></div>
-      <div><dt>联系人</dt><dd>公开可验证的角色或联系路径</dd></div>
-      <div><dt>需求信号</dt><dd>带时间和原始证据的变化</dd></div>
-      <div><dt>入站线索</dt><dd>主动留下联系信息的人或企业</dd></div>
-    </dl>
-    <AutomaticDiscoveryCard
-      v-if="workspaceQuery.data.value?.discovery"
-      :discovery="workspaceQuery.data.value.discovery"
-    />
-    <ReactivationWorkbench
-      v-if="workspaceQuery.data.value"
-      :accounts="sortedAccounts"
-      :reactivations="formalReactivations"
-    />
-    <section id="candidate-discovery-entry" class="market-candidate-entry">
-      <p v-if="selectedMarketName" class="market-selection-note"><strong>{{ selectedMarketName }}</strong> · 先导入许可名单或公开线索，再进入人工核实。</p>
-      <CandidateListImportForm :open="marketImportOpen" :market-name="selectedMarketName" />
-    </section>
-    <DiscoveryCandidateQueue
-      v-if="formalCandidates.length"
-      :candidates="formalCandidates"
-    />
-    <CandidateEnrichmentQueue
-      v-if="formalEnrichmentCandidates.length"
-      :candidates="formalEnrichmentCandidates"
-      :outreach-drafts="workspaceQuery.data.value?.outreach_drafts ?? []"
-    />
-    <MarketPilotComparison
-      v-if="workspaceQuery.data.value?.market_pilots"
-      :summary="workspaceQuery.data.value.market_pilots"
-      @select-market="selectMarket"
-    />
-    <div class="opportunity-import-bar">
-      <div><strong>已有公开采购线索？</strong><span>保存证据后由你决定是否跟进。</span></div>
-      <button class="button button-secondary" type="button" :aria-expanded="importOpen" @click="importOpen = !importOpen">{{ importOpen ? "收起导入" : "导入公开线索" }}</button>
-    </div>
-    <ManualOpportunityImportForm v-if="importOpen" @imported="handleImported" @cancelled="importOpen = false" />
+    <WorkspaceHeader
+      eyebrow="客户机会"
+      title="找到值得联系的公司"
+      description="把客户发现、名单核实和人工跟进分开处理，先看证据，再决定下一步。"
+    >
+      <template #meta><span class="fake-label">人工审核后跟进</span></template>
+    </WorkspaceHeader>
+    <OpportunityWorkspaceNav :active="activeWorkspace" @select="activeWorkspace = $event" />
     <p v-if="importStatus" class="approval-status" role="status">{{ importStatus }}</p>
-    <section v-if="sortedAccounts.length" class="growth-card opportunity-queue" aria-labelledby="opportunity-queue-title">
-      <div class="growth-heading"><div><h2 id="opportunity-queue-title">今日机会队列</h2><p>先按证据门槛、再按信号强度排序；点击公司查看依据。</p></div><span>{{ sortedAccounts.length }} 家目标公司</span></div>
-      <div class="opportunity-queue-grid">
-        <button
-          v-for="account in sortedAccounts" :key="account.id" type="button"
-          class="opportunity-choice" :class="{ active: account.id === activeAccount?.id }"
-          :aria-pressed="account.id === activeAccount?.id" @click="selectAccount(account.id)"
-        >
-          <span><strong>{{ account.name }}</strong><small>{{ account.country }} · {{ account.industry }} · {{ accountTierFor(account.id) }}</small></span>
-          <b>{{ priorityFor(account.id) }} · {{ confidenceFor(account.id) }}</b>
-        </button>
-      </div>
+
+    <section v-if="activeWorkspace === 'discovery'" class="workspace-tab-panel" aria-label="客户发现">
+      <AutomaticDiscoveryCard
+        v-if="workspaceQuery.data.value?.discovery"
+        :discovery="workspaceQuery.data.value.discovery"
+      />
+      <DiscoveryCandidateQueue
+        v-if="formalCandidates.length"
+        :candidates="formalCandidates"
+      />
+      <CandidateEnrichmentQueue
+        v-if="formalEnrichmentCandidates.length"
+        :candidates="formalEnrichmentCandidates"
+        :outreach-drafts="workspaceQuery.data.value?.outreach_drafts ?? []"
+      />
+      <MarketPilotComparison
+        v-if="workspaceQuery.data.value?.market_pilots"
+        :summary="workspaceQuery.data.value.market_pilots"
+        @select-market="selectMarket"
+      />
     </section>
-    <article v-if="activeAccount" class="growth-card opportunity-detail">
-      <div class="opportunity-title"><div><span class="fake-label">{{ detail.label }}</span><h2>{{ detail.name }}</h2><p>{{ detail.country }} · {{ detail.industry }} · {{ detail.size }} 人</p></div><strong>{{ detail.priority }} · {{ detail.confidence }}</strong></div>
-      <div class="evidence-columns">
-        <section><h3>为什么现在值得跟进</h3><p>{{ detail.priority === "优先跟进" ? "公开信号与证据覆盖达到当前规则门槛，适合人工核实采购范围与时间。" : "当前证据仍有缺口，建议继续观察并补充核实。" }}</p></section>
-        <section><h3>需求信号</h3><p>{{ detail.signal }}</p></section>
-        <section><h3>公开联系路径</h3><p>{{ detail.contact }}</p></section>
-      </div>
-      <section class="opportunity-human-review" aria-labelledby="opportunity-review-title">
-        <div>
-          <h3 id="opportunity-review-title">人工判断</h3>
-          <p v-if="activeReview">人工判断：{{ activeReview.status_label }}</p>
-          <p v-else>AI 建议：{{ detail.priority }}</p>
-          <small>每次选择都会追加记录，不会修改原始证据或 AI 评分。</small>
-        </div>
-        <div class="opportunity-review-actions">
-          <button class="button button-secondary" type="button" :disabled="reviewMutation.isPending.value" @click="saveReview('PRIORITIZE')">确认优先跟进</button>
-          <button class="button button-secondary" type="button" :disabled="reviewMutation.isPending.value" @click="saveReview('OBSERVE')">继续观察</button>
-          <button class="button button-secondary" type="button" :disabled="reviewMutation.isPending.value" @click="saveReview('PROCESSED')">标记已处理</button>
-        </div>
+
+    <section v-else-if="activeWorkspace === 'import'" class="workspace-tab-panel" aria-label="名单导入">
+      <section id="candidate-discovery-entry" class="market-candidate-entry">
+        <p v-if="selectedMarketName" class="market-selection-note"><strong>{{ selectedMarketName }}</strong> · 先导入许可名单或公开线索，再进入人工核实。</p>
+        <CandidateListImportForm :open="marketImportOpen" :market-name="selectedMarketName" />
       </section>
-      <section class="account-next-action">
-        <h3>AI 建议下一动作</h3>
-        <p><strong>{{ accountTierFor(detail.id) }} · {{ nextActionFor(detail.id).action }}</strong> · {{ nextActionFor(detail.id).reason }}</p>
-        <small>账户分层综合现有价值匹配、证据覆盖和意向强度；发送仍需人工批准。</small>
-      </section>
-      <div class="page-actions">
-        <button class="button button-primary" type="button" :disabled="followed || followMutation.isPending.value" @click="addFollowUp">{{ followed ? "已加入跟进" : "加入跟进" }}</button>
-        <button class="button button-secondary" type="button" :disabled="!canGenerateDraft || draftMutation.isPending.value" @click="generateDraft">{{ !canGenerateDraft ? "证据不足，不能生成草稿" : draftMutation.isPending.value ? "正在生成…" : "生成联系草稿" }}</button>
-        <button class="button button-secondary" type="button" @click="evidenceOpen = !evidenceOpen">查看证据</button>
+      <div class="opportunity-import-bar">
+        <div><strong>已有公开采购线索？</strong><span>保存证据后由你决定是否跟进。</span></div>
+        <button class="button button-secondary" type="button" :aria-expanded="importOpen" @click="importOpen = !importOpen">{{ importOpen ? "收起导入" : "导入公开线索" }}</button>
       </div>
-      <p v-if="actionError" role="alert" class="approval-status">{{ actionError }}</p>
-      <section v-if="evidenceOpen" class="evidence-detail evidence-review">
-        <div class="evidence-review-head">
-          <div><h3>原始证据</h3><p>{{ detail.evidence }}</p></div>
-          <a
-            v-if="isSafeSourceUrl(activeSignal?.source_url)" class="evidence-source-link"
-            :href="activeSignal?.source_url" target="_blank" rel="noopener noreferrer"
-          >打开原始来源</a>
-        </div>
-        <dl class="evidence-metadata">
-          <div><dt>来源</dt><dd>{{ detail.source }}</dd></div>
-          <div><dt>发现时间</dt><dd>{{ formatDate(activeSignal?.observed_at) }}</dd></div>
-          <div><dt>采集方式</dt><dd>{{ activeSignal?.collection_method_label || "采集方式未说明" }}</dd></div>
-          <div v-if="activeSignal?.evidence_envelope"><dt>许可与使用</dt><dd>{{ licenseLabel(activeSignal.evidence_envelope.license_contract) }}</dd></div>
-          <div v-if="activeSignal?.evidence_envelope"><dt>审查状态</dt><dd>{{ reviewStatusLabel(activeSignal.evidence_envelope.review_status) }}</dd></div>
-          <div v-if="activeSignal?.evidence_envelope"><dt>来源成本</dt><dd>{{ sourceCostLabel(activeSignal.evidence_envelope.source_cost_micros) }}</dd></div>
-          <div v-if="activeSignal?.evidence_envelope?.source_type"><dt>证据来源类型</dt><dd>{{ sourceTypeLabel(activeSignal.evidence_envelope.source_type) }}</dd></div>
-          <div v-if="activeSignal?.evidence_envelope?.matched_keywords"><dt>命中关键词</dt><dd>{{ activeSignal.evidence_envelope.matched_keywords.join("、") || "未命中产品关键词" }}</dd></div>
-          <div v-if="activeSignal?.evidence_envelope?.company_match_confidence !== undefined"><dt>企业匹配置信度</dt><dd>{{ activeSignal.evidence_envelope.company_match_confidence }}%</dd></div>
-          <div v-if="activeSignal?.evidence_envelope?.ai_exclusion_reasons"><dt>AI 排除理由</dt><dd>{{ activeSignal.evidence_envelope.ai_exclusion_reasons.join("；") || "无 AI 排除项" }}</dd></div>
-          <div v-if="activeSignal?.evidence_envelope?.screenshot_reference">
-            <dt>截图证据</dt>
-            <dd>{{ activeSignal.evidence_envelope.screenshot_reference.file_name }} · {{ formatDate(activeSignal.evidence_envelope.screenshot_reference.captured_at) }}（仅元数据）</dd>
+      <ManualOpportunityImportForm v-if="importOpen" @imported="handleImported" @cancelled="importOpen = false" />
+    </section>
+
+    <section v-else-if="activeWorkspace === 'reactivation'" class="workspace-tab-panel" aria-label="老客激活">
+      <ReactivationWorkbench
+        v-if="workspaceQuery.data.value"
+        :accounts="sortedAccounts"
+        :reactivations="formalReactivations"
+      />
+    </section>
+
+    <section v-else class="workspace-tab-panel" aria-label="机会队列">
+      <dl class="object-legend">
+        <div><dt>目标公司</dt><dd>符合 ICP、值得研究的企业</dd></div>
+        <div><dt>联系人</dt><dd>公开可验证的角色或联系路径</dd></div>
+        <div><dt>需求信号</dt><dd>带时间和原始证据的变化</dd></div>
+        <div><dt>入站线索</dt><dd>主动留下联系信息的人或企业</dd></div>
+      </dl>
+      <div v-if="sortedAccounts.length" class="customer-master-detail">
+        <section class="growth-card opportunity-queue" aria-label="客户列表">
+          <div class="growth-heading"><div><h2 id="opportunity-queue-title">今日机会队列</h2><p>先按证据门槛、再按信号强度排序；点击公司查看依据。</p></div><span>{{ sortedAccounts.length }} 家目标公司</span></div>
+          <div class="opportunity-queue-grid">
+            <button
+              v-for="account in sortedAccounts" :key="account.id" type="button"
+              class="opportunity-choice" :class="{ active: account.id === activeAccount?.id }"
+              :aria-pressed="account.id === activeAccount?.id" @click="selectAccount(account.id)"
+            >
+              <span><strong>{{ account.name }}</strong><small>{{ account.country }} · {{ account.industry }} · {{ accountTierFor(account.id) }}</small></span>
+              <b>{{ priorityFor(account.id) }} · {{ confidenceFor(account.id) }}</b>
+            </button>
           </div>
-          <div><dt>评分规则</dt><dd>{{ activeSignal?.scoring_rule_version || "规则版本未记录" }}</dd></div>
-          <div><dt>证据哈希</dt><dd><code>{{ activeSignal?.content_hash ? `${activeSignal.content_hash.slice(0, 12)}…` : "未记录" }}</code></dd></div>
-        </dl>
-        <h3>评分依据</h3>
-        <div v-if="scoreItems.length" class="opportunity-score-grid">
-          <span v-for="item in scoreItems" :key="item.key">{{ item.label }} {{ item.value }}</span>
-        </div>
-        <p v-else>评分明细暂缺，不能仅凭总分判断。</p>
-        <div class="uncertainty-list">
-          <h4>仍需确认</h4>
-          <ul v-if="activeSignal?.uncertainty_notes?.length">
-            <li v-for="note in activeSignal?.uncertainty_notes ?? []" :key="note">{{ note }}</li>
-          </ul>
-          <p v-else>暂未记录不确定项，仍需人工复核原始来源。</p>
-        </div>
-      </section>
-      <section v-if="activeFollowUp || displayedDraft" class="evidence-detail follow-up-timeline">
-        <h3>跟进记录</h3>
-        <p v-if="activeFollowUp">{{ formatDate(activeFollowUp.created_at) }} · 已加入跟进</p>
-        <div v-if="displayedDraft" class="saved-draft">
-          <div><span class="fake-label">从未发送</span><small>{{ displayedDraft.createdAt ? formatDate(displayedDraft.createdAt) : "刚刚生成" }}</small></div>
-          <h4>英文建议</h4><p>{{ displayedDraft.english }}</p>
-          <h4>中文解释</h4><p>{{ displayedDraft.chinese }}</p>
-        </div>
-      </section>
-    </article>
-    <section v-else class="growth-card opportunity-empty" aria-labelledby="opportunity-empty-title">
-      <h2 id="opportunity-empty-title">还没有可审核的客户机会</h2>
-      <p>请先从市场推荐选择数据路径，或导入有许可的客户名单与公开线索。候选公司经过人工核实后才会出现在这里。</p>
-      <div class="page-actions">
-        <button class="button button-primary" type="button" @click="marketImportOpen = true">导入合法名单</button>
+        </section>
+        <article v-if="activeAccount" class="growth-card opportunity-detail" role="region" aria-label="客户详情">
+          <div class="opportunity-title"><div><span class="fake-label">{{ detail.label }}</span><h2>{{ detail.name }}</h2><p>{{ detail.country }} · {{ detail.industry }} · {{ detail.size }} 人</p></div><strong>{{ detail.priority }} · {{ detail.confidence }}</strong></div>
+          <div class="evidence-columns">
+            <section><h3>为什么现在值得跟进</h3><p>{{ detail.priority === "优先跟进" ? "公开信号与证据覆盖达到当前规则门槛，适合人工核实采购范围与时间。" : "当前证据仍有缺口，建议继续观察并补充核实。" }}</p></section>
+            <section><h3>需求信号</h3><p>{{ detail.signal }}</p></section>
+            <section><h3>公开联系路径</h3><p>{{ detail.contact }}</p></section>
+          </div>
+          <section class="opportunity-human-review" aria-labelledby="opportunity-review-title">
+            <div>
+              <h3 id="opportunity-review-title">人工判断</h3>
+              <p v-if="activeReview">人工判断：{{ activeReview.status_label }}</p>
+              <p v-else>AI 建议：{{ detail.priority }}</p>
+              <small>每次选择都会追加记录，不会修改原始证据或 AI 评分。</small>
+            </div>
+            <div class="opportunity-review-actions">
+              <button class="button button-secondary" type="button" :disabled="reviewMutation.isPending.value" @click="saveReview('PRIORITIZE')">确认优先跟进</button>
+              <button class="button button-secondary" type="button" :disabled="reviewMutation.isPending.value" @click="saveReview('OBSERVE')">继续观察</button>
+              <button class="button button-secondary" type="button" :disabled="reviewMutation.isPending.value" @click="saveReview('PROCESSED')">标记已处理</button>
+            </div>
+          </section>
+          <section class="account-next-action">
+            <h3>AI 建议下一动作</h3>
+            <p><strong>{{ accountTierFor(detail.id) }} · {{ nextActionFor(detail.id).action }}</strong> · {{ nextActionFor(detail.id).reason }}</p>
+            <small>账户分层综合现有价值匹配、证据覆盖和意向强度；发送仍需人工批准。</small>
+          </section>
+          <div class="page-actions">
+            <button class="button button-primary" type="button" :disabled="followed || followMutation.isPending.value" @click="addFollowUp">{{ followed ? "已加入跟进" : "加入跟进" }}</button>
+            <button class="button button-secondary" type="button" :disabled="!canGenerateDraft || draftMutation.isPending.value" @click="generateDraft">{{ !canGenerateDraft ? "证据不足，不能生成草稿" : draftMutation.isPending.value ? "正在生成…" : "生成联系草稿" }}</button>
+            <button class="button button-secondary" type="button" @click="evidenceOpen = !evidenceOpen">查看证据</button>
+          </div>
+          <p v-if="actionError" role="alert" class="approval-status">{{ actionError }}</p>
+          <section v-if="evidenceOpen" class="evidence-detail evidence-review">
+            <div class="evidence-review-head">
+              <div><h3>原始证据</h3><p>{{ detail.evidence }}</p></div>
+              <a
+                v-if="isSafeSourceUrl(activeSignal?.source_url)" class="evidence-source-link"
+                :href="activeSignal?.source_url" target="_blank" rel="noopener noreferrer"
+              >打开原始来源</a>
+            </div>
+            <dl class="evidence-metadata">
+              <div><dt>来源</dt><dd>{{ detail.source }}</dd></div>
+              <div><dt>发现时间</dt><dd>{{ formatDate(activeSignal?.observed_at) }}</dd></div>
+              <div><dt>采集方式</dt><dd>{{ activeSignal?.collection_method_label || "采集方式未说明" }}</dd></div>
+              <div v-if="activeSignal?.evidence_envelope"><dt>许可与使用</dt><dd>{{ licenseLabel(activeSignal.evidence_envelope.license_contract) }}</dd></div>
+              <div v-if="activeSignal?.evidence_envelope"><dt>审查状态</dt><dd>{{ reviewStatusLabel(activeSignal.evidence_envelope.review_status) }}</dd></div>
+              <div v-if="activeSignal?.evidence_envelope"><dt>来源成本</dt><dd>{{ sourceCostLabel(activeSignal.evidence_envelope.source_cost_micros) }}</dd></div>
+              <div v-if="activeSignal?.evidence_envelope?.source_type"><dt>证据来源类型</dt><dd>{{ sourceTypeLabel(activeSignal.evidence_envelope.source_type) }}</dd></div>
+              <div v-if="activeSignal?.evidence_envelope?.matched_keywords"><dt>命中关键词</dt><dd>{{ activeSignal.evidence_envelope.matched_keywords.join("、") || "未命中产品关键词" }}</dd></div>
+              <div v-if="activeSignal?.evidence_envelope?.company_match_confidence !== undefined"><dt>企业匹配置信度</dt><dd>{{ activeSignal.evidence_envelope.company_match_confidence }}%</dd></div>
+              <div v-if="activeSignal?.evidence_envelope?.ai_exclusion_reasons"><dt>AI 排除理由</dt><dd>{{ activeSignal.evidence_envelope.ai_exclusion_reasons.join("；") || "无 AI 排除项" }}</dd></div>
+              <div v-if="activeSignal?.evidence_envelope?.screenshot_reference">
+                <dt>截图证据</dt>
+                <dd>{{ activeSignal.evidence_envelope.screenshot_reference.file_name }} · {{ formatDate(activeSignal.evidence_envelope.screenshot_reference.captured_at) }}（仅元数据）</dd>
+              </div>
+              <div><dt>评分规则</dt><dd>{{ activeSignal?.scoring_rule_version || "规则版本未记录" }}</dd></div>
+              <div><dt>证据哈希</dt><dd><code>{{ activeSignal?.content_hash ? `${activeSignal.content_hash.slice(0, 12)}…` : "未记录" }}</code></dd></div>
+            </dl>
+            <h3>评分依据</h3>
+            <div v-if="scoreItems.length" class="opportunity-score-grid">
+              <span v-for="item in scoreItems" :key="item.key">{{ item.label }} {{ item.value }}</span>
+            </div>
+            <p v-else>评分明细暂缺，不能仅凭总分判断。</p>
+            <div class="uncertainty-list">
+              <h4>仍需确认</h4>
+              <ul v-if="activeSignal?.uncertainty_notes?.length">
+                <li v-for="note in activeSignal?.uncertainty_notes ?? []" :key="note">{{ note }}</li>
+              </ul>
+              <p v-else>暂未记录不确定项，仍需人工复核原始来源。</p>
+            </div>
+          </section>
+          <section v-if="activeFollowUp || displayedDraft" class="evidence-detail follow-up-timeline">
+            <h3>跟进记录</h3>
+            <p v-if="activeFollowUp">{{ formatDate(activeFollowUp.created_at) }} · 已加入跟进</p>
+            <div v-if="displayedDraft" class="saved-draft">
+              <div><span class="fake-label">从未发送</span><small>{{ displayedDraft.createdAt ? formatDate(displayedDraft.createdAt) : "刚刚生成" }}</small></div>
+              <h4>英文建议</h4><p>{{ displayedDraft.english }}</p>
+              <h4>中文解释</h4><p>{{ displayedDraft.chinese }}</p>
+            </div>
+          </section>
+        </article>
       </div>
+      <section v-else class="growth-card opportunity-empty" aria-labelledby="opportunity-empty-title">
+        <h2 id="opportunity-empty-title">还没有可审核的客户机会</h2>
+        <p>请先从市场推荐选择数据路径，或导入有许可的客户名单与公开线索。候选公司经过人工核实后才会出现在这里。</p>
+        <div class="page-actions">
+          <button class="button button-primary" type="button" @click="marketImportOpen = true">导入合法名单</button>
+        </div>
+      </section>
     </section>
   </div>
 </template>
 <style scoped src="./growth-pages.css"></style>
 <style scoped>
-.market-selection-note { margin: 0 0 10px; border-radius: 10px; background: #edf6fd; padding: 10px 12px; color: #24516f; font-size: .8rem; }
+.market-selection-note { margin: 0 0 10px; border-radius: 10px; background: #edf6fd; padding: 10px 12px; color: #24516f; font-size: .875rem; }
 .account-next-action { margin-top: 14px; border-radius: 10px; background: #f1f6fa; padding: 12px; }.account-next-action h3 { margin: 0 0 6px; }.account-next-action p { margin: 0; color: #304a61; }.account-next-action small { display: block; margin-top: 6px; color: var(--sg-muted); }
+.workspace-tab-panel { display: grid; gap: 16px; }
+.customer-master-detail { display: grid; grid-template-columns: minmax(280px, .72fr) minmax(0, 1.28fr); gap: 16px; align-items: start; }
+.opportunity-queue { position: sticky; top: 92px; }
+.opportunity-queue-grid { max-height: calc(100vh - 260px); overflow: auto; padding-right: 2px; }
+@media (max-width: 1050px) {
+  .customer-master-detail { grid-template-columns: 1fr; }
+  .opportunity-queue { position: static; }
+  .opportunity-queue-grid { max-height: none; overflow: visible; }
+}
 </style>

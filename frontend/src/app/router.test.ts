@@ -80,7 +80,7 @@ describe("protected routing", () => {
 
   it("mounts distinct content factory and review center route components", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["campaigns.read", "content.read"] } })
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["content.manage", "content.read"] } })
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
 
@@ -89,6 +89,34 @@ describe("protected routing", () => {
     await appRouter.push("/reviews")
     expect(await screen.findByText("真实审核中心")).toBeInTheDocument()
     expect(screen.queryByText("占位内容")).not.toBeInTheDocument()
+  })
+
+  it("uses the same content permission for the menu and content-factory route", async () => {
+    const client = queryClient()
+    client.setQueryData(["auth", "me"], {
+      user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["content.manage"] },
+    })
+    const appRouter = router(client)
+    render(Root, { global: { plugins: [appRouter] } })
+
+    await appRouter.push("/content-factory")
+
+    expect(appRouter.currentRoute.value.name).toBe("content-factory")
+    expect(await screen.findByText("真实内容工厂")).toBeInTheDocument()
+  })
+
+  it("lets an approver open the approval center without campaign permission", async () => {
+    const client = queryClient()
+    client.setQueryData(["auth", "me"], {
+      user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["agents.approve"] },
+    })
+    const appRouter = router(client)
+    render(Root, { global: { plugins: [appRouter] } })
+
+    await appRouter.push("/agent-approvals")
+
+    expect(appRouter.currentRoute.value.name).toBe("agent-approvals")
+    expect(await screen.findByText("Agent 审批")).toBeInTheDocument()
   })
 
   it("mounts all four distinct publishing operations workspaces", async () => {

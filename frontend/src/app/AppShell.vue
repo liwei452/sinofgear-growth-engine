@@ -6,37 +6,8 @@ import { RouterLink, RouterView, useRoute, useRouter } from "vue-router"
 import { ApiError } from "../api/client"
 import { currentUserQueryOptions, logout } from "../modules/auth/auth"
 import { agentRunsQueryOptions } from "../modules/growth/agentApi"
-
-const navigation = [{
-  group: "今天",
-  items: [{ label: "今天", to: "/", icon: "今" }],
-}, {
-  group: "客户",
-  items: [
-    { label: "客户机会", to: "/opportunities", icon: "客", requiredPermission: "leads.read" },
-    { label: "谷歌地图获客", to: "/maps-discovery", icon: "图", requiredPermission: "leads.manage" },
-  ],
-}, {
-  group: "内容与发布",
-  items: [
-    { label: "内容工厂", to: "/content-factory", icon: "内", requiredPermission: "content.manage" },
-    { label: "审核中心", to: "/reviews", icon: "审", requiredPermission: "content.read" },
-    { label: "发布日历", to: "/publishing-calendar", icon: "发", requiredPermission: "publishing.read" },
-    { label: "平台账户", to: "/platform-accounts", icon: "账", requiredPermission: "publishing.read" },
-  ],
-}, {
-  group: "效果",
-  items: [{ label: "效果", to: "/analytics", icon: "效", requiredPermission: "metrics.read" }],
-}, {
-  group: "公司资产",
-  items: [
-    { label: "产品库", to: "/products", icon: "产", requiredPermission: "products.read" },
-    { label: "知识库", to: "/knowledge", icon: "知", requiredPermission: "knowledge.read" },
-    { label: "素材库", to: "/assets", icon: "素", requiredPermission: "assets.read" },
-    { label: "我的公司", to: "/company", icon: "企" },
-    { label: "设置中心", to: "/settings", icon: "设" },
-  ],
-}]
+import AppIcon from "../shared/components/AppIcon.vue"
+import { navigationSections, utilityNavigation } from "./navigation"
 
 const route = useRoute()
 const router = useRouter()
@@ -53,7 +24,7 @@ const pendingApprovalCount = computed(
   () => (pendingApprovals.data.value ?? []).length,
 )
 const visibleNavigation = computed(() =>
-  navigation
+  navigationSections
     .map((section) => ({
       ...section,
       items: section.items.filter((item) => {
@@ -72,7 +43,6 @@ const menuButtonElement = ref<HTMLButtonElement | null>(null)
 const userMenuButtonElement = ref<HTMLButtonElement | null>(null)
 const contentElement = ref<HTMLElement | null>(null)
 const drawerClosed = computed(() => isNarrowViewport.value && !navOpen.value)
-const pageTitle = computed(() => String(route.meta.title ?? "工作台"))
 const logoutMutation = useMutation({
   mutationFn: logout,
   onSuccess: async () => {
@@ -212,7 +182,7 @@ onBeforeUnmount(() => {
       </RouterLink>
       <nav aria-label="主导航">
         <section v-for="section in visibleNavigation" :key="section.group" class="nav-group">
-          <h2>{{ section.group }}</h2>
+          <h2 v-if="section.group">{{ section.group }}</h2>
           <RouterLink
             v-for="item in section.items"
             :key="item.to"
@@ -220,10 +190,22 @@ onBeforeUnmount(() => {
             class="nav-link"
             exact-active-class="nav-link-active"
           >
-            <span class="nav-icon" aria-hidden="true">{{ item.icon }}</span>
+            <span class="nav-icon" aria-hidden="true"><AppIcon :name="item.icon" :size="18" /></span>
             <span>{{ item.label }}</span>
           </RouterLink>
         </section>
+      </nav>
+      <nav class="sidebar-utilities" data-testid="sidebar-utilities" aria-label="账户与设置">
+        <RouterLink
+          v-for="item in utilityNavigation"
+          :key="item.to"
+          :to="item.to"
+          class="nav-link"
+          exact-active-class="nav-link-active"
+        >
+          <span class="nav-icon" aria-hidden="true"><AppIcon :name="item.icon" :size="18" /></span>
+          <span>{{ item.label }}</span>
+        </RouterLink>
       </nav>
     </aside>
     <button
@@ -247,20 +229,18 @@ onBeforeUnmount(() => {
             :aria-label="navOpen ? '关闭导航' : '打开导航'"
             @click="toggleNavigation"
           >
-            <span aria-hidden="true">☰</span>
+            <AppIcon name="panel-left" :size="20" />
           </button>
-          <div>
-            <p class="topbar-label">当前位置</p>
-            <strong>{{ pageTitle }}</strong>
-          </div>
+          <span class="topbar-context">增长工作台</span>
         </div>
         <RouterLink
-          v-if="pendingApprovalCount > 0"
+          v-if="canApprove"
           class="approval-badge"
           to="/agent-approvals"
-          aria-label="查看待我审核的内容"
+          :aria-label="`待我审核 ${pendingApprovalCount}`"
         >
-          待我审核 <strong>{{ pendingApprovalCount }}</strong>
+          <AppIcon name="circle-check" :size="18" />
+          <span>待我审核</span> <strong>{{ pendingApprovalCount }}</strong>
         </RouterLink>
         <div v-if="currentUser.data.value" class="user-session">
           <div class="user-area">
@@ -278,7 +258,7 @@ onBeforeUnmount(() => {
               :disabled="logoutMutation.isPending.value"
               @click="toggleUserMenu"
             >
-              设置与账户
+              设置与账户 <AppIcon name="chevron-down" :size="16" />
             </button>
             <div v-if="userMenuOpen" class="user-menu" role="menu" aria-label="用户菜单">
               <RouterLink role="menuitem" :to="{ path: '/settings', query: { from: route.fullPath } }">设置</RouterLink>
@@ -288,6 +268,7 @@ onBeforeUnmount(() => {
                 :disabled="logoutMutation.isPending.value"
                 @click="startLogout"
               >
+                <AppIcon name="log-out" :size="16" />
                 {{ logoutMutation.isPending.value ? "正在退出…" : logoutError ? "重新退出" : "退出登录" }}
               </button>
             </div>

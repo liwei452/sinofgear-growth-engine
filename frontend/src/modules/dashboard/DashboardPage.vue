@@ -3,12 +3,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
 import { computed, ref } from "vue"
 import { RouterLink } from "vue-router"
 
+import EmptyState from "../../shared/components/EmptyState.vue"
+import WorkspaceHeader from "../../shared/components/WorkspaceHeader.vue"
 import {
   addOpportunityFollowUp,
   createOpportunityDraft,
   growthQueryKeys,
   growthWorkspaceQueryOptions,
 } from "../growth/api"
+import TodayActionList from "./TodayActionList.vue"
 
 type Opportunity = {
   id: string
@@ -95,6 +98,36 @@ const channelMetrics = computed(() => {
   })
 })
 
+const todayActions = computed(() => {
+  const workspace = workspaceQuery.data.value
+  const opportunityCount = opportunities.value.length
+  const hasContent = (workspace?.channel_packages.length ?? 0) > 0
+  const hasCompanyFacts = (workspace?.field_provenance.length ?? 0) > 0
+  return [{
+    id: "opportunities",
+    icon: "users-round" as const,
+    title: opportunityCount ? "跟进新采购机会" : "发现潜在客户",
+    description: opportunityCount ? "先核实证据最完整的企业，再决定是否触达。" : "选择市场或导入有合法来源的企业名单。",
+    count: opportunityCount || undefined,
+    to: "/opportunities",
+    tone: "primary" as const,
+  }, {
+    id: "content",
+    icon: "sparkles" as const,
+    title: hasContent ? "检查待发布内容" : "创建第一批专业内容",
+    description: hasContent ? "核对事实、平台版本和人工审核状态。" : "从已确认的公司和产品事实生成内容。",
+    to: hasContent ? "/reviews" : "/content-factory",
+    tone: "accent" as const,
+  }, {
+    id: "company",
+    icon: "building-2" as const,
+    title: hasCompanyFacts ? "维护公司事实" : "补充公司事实",
+    description: "完善可验证的能力、产品和交付信息，供 Agent 安全调用。",
+    to: "/company",
+    tone: "neutral" as const,
+  }]
+})
+
 const persistedFollowed = computed(() => new Set(
   (workspaceQuery.data.value?.follow_ups ?? []).map((item) => item.account_id),
 ))
@@ -145,13 +178,13 @@ function toggleEvidence(id: string) {
 
 <template>
   <div class="today-page">
-    <header class="today-intro">
-      <div>
-        <p class="eyebrow">今天</p>
-        <h1>早上好</h1>
-        <p>这里仅显示已保存并可追溯的采购机会、公司事实和渠道反馈。</p>
-      </div>
-    </header>
+    <WorkspaceHeader
+      eyebrow="今日工作台"
+      title="今天先做这三件事"
+      description="按业务价值和人工决策优先级排列；所有数量都来自已保存、可追溯的数据。"
+    />
+
+    <TodayActionList :items="todayActions" />
 
     <p v-if="workspaceQuery.isPending.value" class="workspace-state" role="status">正在读取可持久化工作区…</p>
     <p v-else-if="workspaceQuery.isError.value" class="workspace-state" role="alert">暂时无法读取工作区，请稍后重试；页面不会使用演示数据替代。</p>
@@ -223,11 +256,14 @@ function toggleEvidence(id: string) {
             </div>
           </article>
         </div>
-        <div v-else class="workspace-empty">
-          <h3>今天还没有已验证的采购机会</h3>
-          <p>只有带真实来源与观察时间、并通过人工核实的需求信号才会出现在这里。</p>
+        <EmptyState
+          v-else
+          icon="users-round"
+          title="今天还没有已验证的采购机会"
+          description="只有带真实来源与观察时间、并通过人工核实的需求信号才会出现在这里。"
+        >
           <RouterLink class="button button-primary" to="/opportunities">选择市场或导入合法名单</RouterLink>
-        </div>
+        </EmptyState>
       </section>
 
       <div class="insight-column">
@@ -238,11 +274,13 @@ function toggleEvidence(id: string) {
               <p>评分可解释，不代表搜索平台官方排名。</p>
             </div>
           </div>
-          <div class="workspace-empty">
-            <h3>还没有真实 AI 可见度监测记录</h3>
-            <p>该实验模块需要完整回答、平台、模型、地区、引用 URL 和观察时间；没有记录时不生成评分。</p>
+          <EmptyState
+            icon="chart-column"
+            title="还没有真实 AI 可见度监测记录"
+            description="该实验模块需要完整回答、平台、模型、地区、引用 URL 和观察时间；没有记录时不生成评分。"
+          >
             <RouterLink class="button button-primary button-block" to="/company">补充公司事实</RouterLink>
-          </div>
+          </EmptyState>
         </section>
 
         <section class="workspace-card channels-panel" aria-labelledby="channel-performance">
@@ -258,11 +296,14 @@ function toggleEvidence(id: string) {
               <p>{{ channel.metric }} <b>{{ channel.value.toLocaleString() }}</b></p>
             </article>
           </div>
-          <div v-else class="workspace-empty">
-            <h3>还没有人工回填的渠道结果</h3>
-            <p>发布、点击、回复和询盘只有在人工保存后才会展示。</p>
+          <EmptyState
+            v-else
+            icon="chart-column"
+            title="还没有人工回填的渠道结果"
+            description="发布、点击、回复和询盘只有在人工保存后才会展示。"
+          >
             <RouterLink class="button button-primary" to="/analytics">回填渠道结果</RouterLink>
-          </div>
+          </EmptyState>
         </section>
       </div>
     </div>
@@ -284,9 +325,8 @@ function toggleEvidence(id: string) {
 
 <style scoped>
 .today-page { display: grid; gap: 22px; }
-.today-intro, .panel-heading, .signal-topline, .opportunity-actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
-.today-intro h1 { margin: 0; font-size: clamp(1.65rem, 3vw, 2.35rem); }
-.today-intro p:last-child, .panel-heading p { margin: 7px 0 0; color: var(--sg-muted); }
+.panel-heading, .signal-topline, .opportunity-actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.panel-heading p { margin: 7px 0 0; color: var(--sg-muted); }
 .demo-badge, .intent-badge { display: inline-flex; border-radius: 999px; padding: 5px 9px; font-size: .72rem; font-weight: 800; white-space: nowrap; }
 .demo-badge { background: #eef2f6; color: #4f5d6c; }
 .intent-badge { background: #e7f8ed; color: #14733c; }
@@ -300,7 +340,7 @@ function toggleEvidence(id: string) {
 .opportunity-list, .insight-column { display: grid; gap: 16px; }
 .opportunity-list { margin-top: 16px; }
 .opportunity-card { display: grid; grid-template-columns: 150px 1fr; gap: 20px; border: 1px solid var(--sg-line); border-radius: 12px; padding: 18px; }
-.company-block { display: grid; align-content: start; gap: 6px; border-right: 1px solid var(--sg-line); padding-right: 18px; color: var(--sg-muted); font-size: .82rem; }
+.company-block { display: grid; align-content: start; gap: 6px; border-right: 1px solid var(--sg-line); padding-right: 18px; color: var(--sg-muted); font-size: .875rem; }
 .company-block strong { color: var(--sg-ink); font-size: .95rem; }
 .company-avatar { display: grid; width: 44px; height: 44px; place-items: center; margin-bottom: 6px; border-radius: 50%; background: var(--sg-brand-soft); color: var(--sg-brand); font-weight: 900; }
 .signal-block h3 { margin: 12px 0 8px; font-size: 1rem; }
@@ -308,12 +348,12 @@ function toggleEvidence(id: string) {
 .signal-meta { display: flex; flex-wrap: wrap; gap: 18px; margin: 14px 0; }
 .signal-meta div { display: grid; gap: 3px; }
 .signal-meta dt { color: var(--sg-muted); font-size: .72rem; }
-.signal-meta dd { margin: 0; font-size: .82rem; font-weight: 700; }
+.signal-meta dd { margin: 0; font-size: .875rem; font-weight: 700; }
 .opportunity-actions { justify-content: flex-start; flex-wrap: wrap; }
 .evidence-button { min-height: 44px; border: 0; background: transparent; color: var(--sg-brand); font-weight: 750; cursor: pointer; }
 .evidence-box { margin-top: 14px; border-left: 3px solid var(--sg-brand); border-radius: 6px; background: #f6f9fc; padding: 12px 14px; }
-.evidence-box p { margin: 5px 0 0; font-size: .82rem; line-height: 1.55; }
-.safe-note { margin: 9px 0 0; color: var(--sg-muted); font-size: .8rem; text-align: center; }
+.evidence-box p { margin: 5px 0 0; font-size: .875rem; line-height: 1.55; }
+.safe-note { margin: 9px 0 0; color: var(--sg-muted); font-size: .875rem; text-align: center; }
 .channel-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; margin-top: 16px; }
 .channel-grid article { min-width: 0; border: 1px solid var(--sg-line); border-radius: 10px; padding: 11px; }
 .channel-grid article > strong { font-size: .8rem; }
@@ -324,5 +364,5 @@ function toggleEvidence(id: string) {
 .draft-dialog { width: min(100%, 620px); max-height: 90vh; overflow-y: auto; border-radius: 14px; background: white; padding: 26px; box-shadow: var(--sg-shadow); }
 .draft-dialog h2 { margin: 10px 0 0; }.draft-dialog h3 { margin: 20px 0 6px; font-size: .95rem; }.draft-dialog p { line-height: 1.65; }.draft-dialog .safe-note { text-align: left; }
 @media (max-width: 1180px) { .today-grid { grid-template-columns: 1fr; }.opportunities-panel { order: 1; }.insight-column { order: 2; } }
-@media (max-width: 680px) { .today-intro, .panel-heading { align-items: flex-start; flex-direction: column; }.workspace-card { padding: 16px; }.opportunity-card { grid-template-columns: 1fr; }.company-block { grid-template-columns: auto 1fr; border-right: 0; border-bottom: 1px solid var(--sg-line); padding: 0 0 14px; }.company-avatar { grid-row: span 3; }.knowledge-grid { grid-template-columns: 1fr; }.channel-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 680px) { .panel-heading { align-items: flex-start; flex-direction: column; }.workspace-card { padding: 16px; }.opportunity-card { grid-template-columns: 1fr; }.company-block { grid-template-columns: auto 1fr; border-right: 0; border-bottom: 1px solid var(--sg-line); padding: 0 0 14px; }.company-avatar { grid-row: span 3; }.knowledge-grid { grid-template-columns: 1fr; }.channel-grid { grid-template-columns: repeat(2, 1fr); } }
 </style>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useMutation, useQueryClient } from "@tanstack/vue-query"
 import { ref } from "vue"
+import { RouterLink } from "vue-router"
 
 import {
   addCandidateToFollowUp,
@@ -199,8 +200,8 @@ const factLabels: Record<string, string> = {
           {{ websiteMutation.isPending.value && activeCandidateId === candidate.id ? "正在读官网…" : "读官网补全" }}
         </button>
         <div v-if="!allowDemo" class="enrichment-actions">
-          <a class="button button-primary" href="/assets">上传真实资料</a>
-          <a class="button button-secondary" href="/company">补充公司信息</a>
+          <RouterLink class="button button-primary" to="/assets">上传真实资料</RouterLink>
+          <RouterLink class="button button-secondary" to="/company">补充公司信息</RouterLink>
         </div>
       </div>
     </article>

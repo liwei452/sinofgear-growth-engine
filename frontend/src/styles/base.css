@@ -8,16 +8,26 @@ html {
   background: #f8fafc;
   font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   color: var(--sg-ink);
+  font-size: 16px;
 }
 
 body {
   min-height: 100vh;
   margin: 0;
+  overflow-x: hidden;
+  background: var(--sg-canvas);
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
+}
+
+img,
+svg {
+  max-width: 100%;
 }
 
 button,
@@ -107,6 +117,18 @@ a {
   border-right: 1px solid rgb(255 255 255 / 8%);
   background: linear-gradient(180deg, var(--sg-navy) 0%, var(--sg-navy-2) 100%);
   padding: 22px 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-sidebar > nav:first-of-type {
+  flex: 1;
+}
+
+.sidebar-utilities {
+  margin-top: 20px;
+  border-top: 1px solid rgb(255 255 255 / 10%);
+  padding-top: 12px;
 }
 
 .brand-lockup {
@@ -187,12 +209,17 @@ a {
   font-weight: 900;
 }
 
+.nav-icon svg {
+  display: block;
+}
+
 .nav-link-active .nav-icon {
   background: var(--sg-brand);
   color: #fff;
 }
 
 .app-main {
+  min-width: 0;
   min-height: 100vh;
   margin-left: var(--sg-sidebar-width);
 }
@@ -224,6 +251,17 @@ a {
   font-size: .82rem;
   font-weight: 600;
   text-decoration: none;
+}
+
+.approval-badge svg,
+.user-menu button svg,
+.button-quiet svg {
+  flex: 0 0 auto;
+}
+
+.button-quiet,
+.user-menu button {
+  gap: 8px;
 }
 
 .approval-badge strong {
@@ -335,13 +373,101 @@ a {
 }
 
 .content-area {
+  min-width: 0;
   width: min(100%, 1480px);
   margin: 0 auto;
   padding: clamp(22px, 3vw, 36px) clamp(18px, 3vw, 36px);
 }
 
+.workspace-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sg-space-6);
+  padding-bottom: var(--sg-space-5);
+  border-bottom: 1px solid var(--sg-line);
+}
+
+.workspace-header-copy {
+  min-width: 0;
+}
+
+.workspace-eyebrow {
+  margin: 0 0 var(--sg-space-2);
+  color: var(--sg-accent);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.workspace-header h1 {
+  margin: 0;
+  font-size: clamp(1.75rem, 3vw, 2.5rem);
+  letter-spacing: -.035em;
+  line-height: 1.12;
+}
+
+.workspace-description {
+  max-width: 720px;
+  margin: var(--sg-space-2) 0 0;
+  color: var(--sg-muted);
+  font-size: .95rem;
+  line-height: 1.65;
+}
+
+.workspace-meta {
+  margin-top: var(--sg-space-3);
+}
+
+.workspace-header-actions,
+.empty-state-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sg-space-2);
+}
+
+.empty-state {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sg-space-4);
+  border: 1px dashed #c8d0d1;
+  border-radius: var(--sg-radius-md);
+  background: #fafbf9;
+  padding: var(--sg-space-5);
+}
+
+.empty-state-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--sg-brand-soft);
+  color: var(--sg-brand);
+}
+
+.empty-state h3,
+.empty-state p {
+  margin: 0;
+}
+
+.empty-state h3 {
+  font-size: 1rem;
+}
+
+.empty-state p {
+  margin-top: var(--sg-space-1);
+  color: var(--sg-muted);
+  font-size: .875rem;
+  line-height: 1.55;
+}
+
 .page-stack {
   display: grid;
+  min-width: 0;
   gap: 24px;
 }
 
@@ -610,9 +736,24 @@ a {
   }
 
   .placeholder-actions,
-  .section-heading {
+  .section-heading,
+  .workspace-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .empty-state {
+    grid-template-columns: auto 1fr;
+  }
+
+  .empty-state-actions {
+    grid-column: 1 / -1;
+  }
+
+  .workspace-header-actions,
+  .empty-state-actions,
+  .workspace-header-actions > * {
+    width: 100%;
   }
 
   .step-badge {

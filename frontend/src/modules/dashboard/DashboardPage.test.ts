@@ -14,6 +14,8 @@ async function renderDashboard() {
       { path: "/products", component: { template: "<p>产品页</p>" } },
       { path: "/promotion", component: { template: "<p>推广页</p>" } },
       { path: "/opportunities", component: { template: "<p>机会页</p>" } },
+      { path: "/content-factory", component: { template: "<p>内容工厂</p>" } },
+      { path: "/reviews", component: { template: "<p>审核页</p>" } },
       { path: "/company", component: { template: "<p>公司资料页</p>" } },
       { path: "/analytics", component: { template: "<p>效果页</p>" } },
     ],
@@ -29,7 +31,11 @@ async function renderDashboard() {
 it("shows real next steps without fabricated dashboard content in an empty workspace", async () => {
   const { container } = await renderDashboard()
 
-  expect(screen.getByRole("heading", { name: "早上好" })).toBeInTheDocument()
+  expect(screen.getByRole("heading", { level: 1, name: "今天先做这三件事" })).toBeInTheDocument()
+  const priorities = screen.getByRole("region", { name: "今日优先事项" })
+  expect(within(priorities).getByRole("link", { name: /发现潜在客户/ })).toHaveAttribute("href", "/opportunities")
+  expect(within(priorities).getByRole("link", { name: /创建第一批专业内容/ })).toHaveAttribute("href", "/content-factory")
+  expect(within(priorities).getByRole("link", { name: /补充公司事实/ })).toHaveAttribute("href", "/company")
   expect(screen.queryByText(/SinofGear 团队/)).not.toBeInTheDocument()
   expect(screen.getByRole("heading", { name: "今天发现的采购机会" })).toBeInTheDocument()
   expect(screen.getByText("今天还没有已验证的采购机会")).toBeInTheDocument()

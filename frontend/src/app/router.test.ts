@@ -93,7 +93,7 @@ describe("protected routing", () => {
 
   it("mounts all four distinct publishing operations workspaces", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["assets.read", "publishing.read", "tracking.read"] } })
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["assets.read", "publishing.read", "tracking.read", "metrics.read"] } })
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
     for (const [path, label] of [["/assets", "真实素材库"], ["/publishing-calendar", "真实发布日历"], ["/platform-accounts", "真实平台账户"], ["/analytics", "真实数据看板"]]) {
@@ -104,7 +104,7 @@ describe("protected routing", () => {
 
   it("mounts the five ordinary-user workspaces on task-language paths", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: [] } })
+    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: ["leads.read"] } })
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
     for (const [path, label] of [

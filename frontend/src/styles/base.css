@@ -212,6 +212,29 @@ a {
   backdrop-filter: blur(10px);
 }
 
+.approval-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--sg-brand);
+  border-radius: 999px;
+  background: var(--sg-brand-soft);
+  padding: 6px 12px;
+  color: var(--sg-brand);
+  font-size: .82rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.approval-badge strong {
+  min-width: 18px;
+  border-radius: 999px;
+  background: var(--sg-brand);
+  color: white;
+  padding: 1px 7px;
+  text-align: center;
+}
+
 .topbar-start,
 .user-area {
   display: flex;

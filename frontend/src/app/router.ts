@@ -63,11 +63,11 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
       meta: { title: "今天" },
     },
     { path: "promotion", name: "promotion", component: options.components.Promotion, meta: { title: "推广" } },
-    { path: "opportunities", name: "opportunities", component: options.components.Opportunities, meta: { title: "客户机会" } },
+    { path: "opportunities", name: "opportunities", component: options.components.Opportunities, meta: { title: "客户机会", requiredPermission: "leads.read" } },
     { path: "agent-approvals", name: "agent-approvals", component: options.components.AgentApprovals, meta: { title: "Agent 审批", requiredPermission: "campaigns.read" } },
     { path: "company", name: "company", component: options.components.Company, meta: { title: "我的公司" } },
     { path: "settings", name: "settings", component: options.components.Settings, meta: { title: "设置中心" } },
-    { path: "maps-discovery", name: "maps-discovery", component: options.components.MapsDiscovery, meta: { title: "谷歌地图获客" } },
+    { path: "maps-discovery", name: "maps-discovery", component: options.components.MapsDiscovery, meta: { title: "谷歌地图获客", requiredPermission: "leads.manage" } },
     {
       path: "products",
       name: "products",
@@ -95,7 +95,7 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
     { path: "assets", name: "assets", component: options.components.Assets, meta: { title: "素材库", requiredPermission: "assets.read" } },
     { path: "publishing-calendar", name: "publishing-calendar", component: options.components.PublishingCalendar, meta: { title: "发布日历", requiredPermission: "publishing.read" } },
     { path: "platform-accounts", name: "platform-accounts", component: options.components.PlatformAccounts, meta: { title: "平台账户", requiredPermission: "publishing.read" } },
-    { path: "analytics", name: "analytics", component: options.components.Analytics, meta: { title: "效果" } },
+    { path: "analytics", name: "analytics", component: options.components.Analytics, meta: { title: "效果", requiredPermission: "metrics.read" } },
     { path: "admin/analytics", name: "admin-analytics", component: options.components.LegacyAnalytics, meta: { title: "高级数据看板", requiredRole: "ADMINISTRATOR" } },
   ]
   const router = createRouter({

@@ -5,16 +5,36 @@ import { RouterLink, RouterView, useRoute, useRouter } from "vue-router"
 
 import { ApiError } from "../api/client"
 import { currentUserQueryOptions, logout } from "../modules/auth/auth"
+import { agentRunsQueryOptions } from "../modules/growth/agentApi"
 
 const navigation = [{
-  group: "增长工作台",
+  group: "今天",
+  items: [{ label: "今天", to: "/", icon: "今" }],
+}, {
+  group: "客户",
   items: [
-    { label: "今天", to: "/", icon: "今" },
-    { label: "推广", to: "/promotion", icon: "推" },
-    { label: "客户机会", to: "/opportunities", icon: "客" },
-    { label: "Agent 审批", to: "/agent-approvals", icon: "审" },
-    { label: "效果", to: "/analytics", icon: "效" },
+    { label: "客户机会", to: "/opportunities", icon: "客", requiredPermission: "leads.read" },
+    { label: "谷歌地图获客", to: "/maps-discovery", icon: "图", requiredPermission: "leads.manage" },
+  ],
+}, {
+  group: "内容与发布",
+  items: [
+    { label: "内容工厂", to: "/content-factory", icon: "内", requiredPermission: "content.manage" },
+    { label: "审核中心", to: "/reviews", icon: "审", requiredPermission: "content.read" },
+    { label: "发布日历", to: "/publishing-calendar", icon: "发", requiredPermission: "publishing.read" },
+    { label: "平台账户", to: "/platform-accounts", icon: "账", requiredPermission: "publishing.read" },
+  ],
+}, {
+  group: "效果",
+  items: [{ label: "效果", to: "/analytics", icon: "效", requiredPermission: "metrics.read" }],
+}, {
+  group: "公司资产",
+  items: [
+    { label: "产品库", to: "/products", icon: "产", requiredPermission: "products.read" },
+    { label: "知识库", to: "/knowledge", icon: "知", requiredPermission: "knowledge.read" },
+    { label: "素材库", to: "/assets", icon: "素", requiredPermission: "assets.read" },
     { label: "我的公司", to: "/company", icon: "企" },
+    { label: "设置中心", to: "/settings", icon: "设" },
   ],
 }]
 
@@ -22,6 +42,28 @@ const route = useRoute()
 const router = useRouter()
 const queryClient = useQueryClient()
 const currentUser = useQuery(currentUserQueryOptions())
+const canApprove = computed(
+  () => currentUser.data.value?.membership.permissions.includes("agents.approve") ?? false,
+)
+const pendingApprovals = useQuery({
+  ...agentRunsQueryOptions("WAITING_APPROVAL"),
+  enabled: canApprove,
+})
+const pendingApprovalCount = computed(
+  () => (pendingApprovals.data.value ?? []).length,
+)
+const visibleNavigation = computed(() =>
+  navigation
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => {
+        const permission = item.requiredPermission
+        if (!permission) return true
+        return currentUser.data.value?.membership.permissions.includes(permission) ?? false
+      }),
+    }))
+    .filter((section) => section.items.length > 0),
+)
 const navOpen = ref(false)
 const userMenuOpen = ref(false)
 const isNarrowViewport = ref(false)
@@ -169,7 +211,7 @@ onBeforeUnmount(() => {
         <span><strong>SinofGear</strong><small>AI 推广获客</small></span>
       </RouterLink>
       <nav aria-label="主导航">
-        <section v-for="section in navigation" :key="section.group" class="nav-group">
+        <section v-for="section in visibleNavigation" :key="section.group" class="nav-group">
           <h2>{{ section.group }}</h2>
           <RouterLink
             v-for="item in section.items"
@@ -212,6 +254,14 @@ onBeforeUnmount(() => {
             <strong>{{ pageTitle }}</strong>
           </div>
         </div>
+        <RouterLink
+          v-if="pendingApprovalCount > 0"
+          class="approval-badge"
+          to="/agent-approvals"
+          aria-label="查看待我审核的内容"
+        >
+          待我审核 <strong>{{ pendingApprovalCount }}</strong>
+        </RouterLink>
         <div v-if="currentUser.data.value" class="user-session">
           <div class="user-area">
             <div class="user-copy">

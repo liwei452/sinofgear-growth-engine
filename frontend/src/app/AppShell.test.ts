@@ -66,18 +66,17 @@ afterEach(() => {
   document.cookie = "csrftoken=; Max-Age=0; path=/"
 })
 
-it("shows only the five factory-owner navigation choices", async () => {
-  await renderShell("/promotion")
+it("groups navigation by task and hides entries the role cannot use", async () => {
+  await renderShell("/")
 
-  for (const label of ["今天", "推广", "客户机会", "效果", "我的公司"]) {
+  for (const label of ["今天", "产品库", "我的公司", "设置中心"]) {
     expect(screen.getByRole("link", { name: label })).toBeInTheDocument()
   }
-  for (const internalLabel of ["产品库", "知识库", "素材库", "AI 内容工厂", "审核中心", "平台账号"]) {
+  for (const internalLabel of ["客户机会", "AI 内容工厂", "效果", "知识库", "素材库", "平台账号"]) {
     expect(screen.queryByRole("link", { name: internalLabel })).not.toBeInTheDocument()
   }
   expect(screen.getByText("示例组织")).toBeInTheDocument()
   expect(screen.getByText("operator")).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "推广" })).toHaveAttribute("aria-current", "page")
 })
 
 it("opens a keyboard-accessible user menu with the settings entry", async () => {
@@ -119,7 +118,7 @@ it("opens and closes the narrow-screen navigation with button and Escape", async
   expect(screen.getByRole("link", { name: "SinofGear 首页" })).toHaveFocus()
 
   await user.tab({ shift: true })
-  expect(screen.getByRole("link", { name: "我的公司" })).toHaveFocus()
+  expect(screen.getByRole("link", { name: "设置中心" })).toHaveFocus()
   await user.tab()
   expect(screen.getByRole("link", { name: "SinofGear 首页" })).toHaveFocus()
 
@@ -135,9 +134,9 @@ it("opens and closes the narrow-screen navigation with button and Escape", async
   expect(sidebar).toHaveAttribute("inert")
 
   await user.click(menuButton)
-  await user.click(screen.getByRole("link", { name: "推广" }))
+  await user.click(screen.getByRole("link", { name: "产品库" }))
   expect(sidebar).toHaveAttribute("inert")
-  expect(screen.getByRole("heading", { name: "功能" })).toBeVisible()
+  expect(screen.getByRole("heading", { name: "产品库" })).toBeVisible()
   expect(screen.getByRole("main")).toHaveFocus()
   expect(sidebar).not.toContainElement(document.activeElement)
   expect(menuButton).not.toHaveFocus()
@@ -154,7 +153,7 @@ it("keeps the desktop navigation exposed when the drawer state is closed", async
   const sidebar = screen.getByTestId("app-sidebar")
   expect(sidebar).not.toHaveAttribute("aria-hidden")
   expect(sidebar).not.toHaveAttribute("inert")
-  expect(screen.getByRole("link", { name: "推广" })).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "产品库" })).toBeInTheDocument()
 })
 
 it("closes an open narrow drawer and focuses routed content after programmatic navigation", async () => {

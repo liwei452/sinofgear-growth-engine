@@ -11,7 +11,7 @@ from apps.campaigns.generation_schema import generation_input_errors
 from apps.common.security import normalize_persisted_error, scrub_secrets
 from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService
-from apps.ai.services import AIBudgetExceeded, assert_ai_budget_available
+from apps.ai.services import AIBudgetExceeded, reserve_ai_budget, settle_ai_budget
 from apps.content.recommendations import (
     ContentRecommendationError,
     validate_recommendation_snapshot,
@@ -181,6 +181,7 @@ def _record_success(
         claim_token=claim_token,
         result_reference=result_reference,
     )
+    settle_ai_budget(job.organization)
     return run
 
 
@@ -200,6 +201,7 @@ def _record_failure(run_id, *, job_id, claim_token, error: dict) -> AIRun:
     with ai_audit_writes():
         run.save(update_fields=["status", "output_json", "error", "finished_at"])
     JobService.fail(job_id, claim_token=claim_token, error=normalized_error)
+    settle_ai_budget(job.organization)
     return run
 
 
@@ -288,7 +290,7 @@ def execute_generation_job(
         raise JobConflictError(f"Job in status {job.status} cannot be claimed.")
     token = claimed.claim_token
     try:
-        assert_ai_budget_available(claimed.organization)
+        reserve_ai_budget(claimed.organization)
     except AIBudgetExceeded as exc:
         JobService.fail(
             claimed.id,
@@ -302,6 +304,7 @@ def execute_generation_job(
         )
     except Exception as exc:
         logger.exception("AI audit run could not start.")
+        settle_ai_budget(claimed.organization)
         JobService.fail(
             claimed.id,
             claim_token=token,

@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 MAX_SCHEDULE_AHEAD = timedelta(days=366)
 MAX_PUBLISH_ATTEMPTS = 10
+PUBLISH_LEASE_SECONDS = 300
 SAFE_PUBLISH_ERRORS = {
     "PUBLISH_NOT_ELIGIBLE": {
         "code": "PUBLISH_NOT_ELIGIBLE",
@@ -51,6 +52,10 @@ SAFE_PUBLISH_ERRORS = {
     "PUBLISH_FINALIZE_ERROR": {
         "code": "PUBLISH_FINALIZE_ERROR",
         "message": "Publishing result could not be finalized.",
+    },
+    "STALE_WORKER": {
+        "code": "STALE_WORKER",
+        "message": "Worker lease expired without heartbeat.",
     },
 }
 
@@ -564,13 +569,15 @@ def claim_publish_task(task_id=None):
     task.status = PublishTask.Status.RUNNING
     task.claim_token = token
     task.attempt_number += 1
+    task.heartbeat_at = now
+    task.lease_expires_at = now + timedelta(seconds=PUBLISH_LEASE_SECONDS)
     task.started_at = now
     task.finished_at = None
     task.last_error = None
     with publishing_writes():
         task.save(update_fields=[
-            "status", "claim_token", "attempt_number", "started_at",
-            "finished_at", "last_error", "updated_at",
+            "status", "claim_token", "attempt_number", "heartbeat_at",
+            "lease_expires_at", "started_at", "finished_at", "last_error", "updated_at",
         ])
         attempt = PublishAttempt.objects.create(
             organization=task.organization,
@@ -682,6 +689,50 @@ def complete_publish_success(task_id, claim_token, result, *, actor=None):
             "status", "outcome", "external_id", "finished_at", "updated_at",
         ])
     return post
+
+
+@transaction.atomic
+def heartbeat_publish_task(task_id, *, claim_token) -> PublishTask:
+    task = PublishTask.objects.select_for_update().get(pk=task_id)
+    if task.status != PublishTask.Status.RUNNING or task.claim_token != claim_token:
+        return task
+    now = timezone.now()
+    task.heartbeat_at = now
+    task.lease_expires_at = now + timedelta(seconds=PUBLISH_LEASE_SECONDS)
+    with publishing_writes():
+        task.save(update_fields=["heartbeat_at", "lease_expires_at", "updated_at"])
+    return task
+
+
+@transaction.atomic
+def reap_stale_publish_tasks(*, now=None) -> int:
+    now = now or timezone.now()
+    stale = list(
+        PublishTask.objects.select_for_update(skip_locked=True).filter(
+            status=PublishTask.Status.RUNNING,
+            lease_expires_at__lt=now,
+        )
+    )
+    for task in stale:
+        token = task.claim_token
+        error = SAFE_PUBLISH_ERRORS["STALE_WORKER"]
+        task.status = PublishTask.Status.FAILED
+        task.last_error = error
+        task.finished_at = now
+        task.claim_token = None
+        with publishing_writes():
+            task.save(update_fields=[
+                "status", "last_error", "finished_at", "claim_token", "updated_at",
+            ])
+        if token:
+            attempt = PublishAttempt.objects.filter(claim_token=token).first()
+            if attempt is not None and attempt.status == PublishAttempt.Status.RUNNING:
+                attempt.status = PublishAttempt.Status.FAILED
+                attempt.error = error
+                attempt.finished_at = now
+                with publishing_writes():
+                    attempt.save(update_fields=["status", "error", "finished_at"])
+    return len(stale)
 
 
 def _publish_mock(task, attempt_number) -> PublishResult:

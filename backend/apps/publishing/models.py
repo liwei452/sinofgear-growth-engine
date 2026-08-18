@@ -89,6 +89,8 @@ class PublishTask(ProtectedPublishingModel):
     attempt_number = models.PositiveIntegerField(default=0)
     retry_not_before = models.DateTimeField(null=True, blank=True)
     last_error = models.JSONField(null=True, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
     canceled_at = models.DateTimeField(null=True, blank=True)

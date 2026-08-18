@@ -1,6 +1,10 @@
 from celery import shared_task
 
-from .services import enqueue_due_publish_tasks, execute_publish_task
+from .services import (
+    enqueue_due_publish_tasks,
+    execute_publish_task,
+    reap_stale_publish_tasks,
+)
 from .metrics import sync_post_metrics
 
 
@@ -32,3 +36,8 @@ def sync_post_metrics_hourly():
     for organization in Organization.objects.all():
         synced += sync_post_metrics(organization=organization)
     return {"synced": synced}
+
+
+@shared_task
+def reap_stale_publish_tasks_task():
+    return {"reaped": reap_stale_publish_tasks()}

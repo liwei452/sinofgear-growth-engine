@@ -9,6 +9,8 @@ from apps.ai.services import (
     PromptVersionService,
     assert_ai_budget_available,
     organization_daily_token_usage,
+    reserve_ai_budget,
+    settle_ai_budget,
 )
 from apps.identity.models import Organization
 from apps.jobs.models import Job
@@ -109,3 +111,19 @@ def test_assert_ai_budget_available_ignores_old_runs(organization, job, prompt):
         )
 
     assert_ai_budget_available(organization)
+
+
+def test_reserve_and_settle_ai_budget_tokens(organization):
+    organization.ai_daily_token_budget = 100
+    organization.save(update_fields=["ai_daily_token_budget"])
+
+    reserve_ai_budget(organization, tokens=60)
+    organization.refresh_from_db()
+    assert organization.ai_daily_reserved_tokens == 60
+
+    with pytest.raises(AIBudgetExceeded):
+        reserve_ai_budget(organization, tokens=50)
+
+    settle_ai_budget(organization, tokens=60)
+    organization.refresh_from_db()
+    assert organization.ai_daily_reserved_tokens == 0

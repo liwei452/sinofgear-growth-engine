@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 
 import pytest
 from django.test import override_settings
@@ -13,9 +14,12 @@ from apps.publishing.models import (
     publishing_writes,
 )
 from apps.publishing.services import (
+    PUBLISH_LEASE_SECONDS,
     PublishingConflict,
+    claim_publish_task,
     create_publish_task,
     execute_publish_task,
+    reap_stale_publish_tasks,
 )
 
 
@@ -110,3 +114,24 @@ def test_daily_publish_limit_counts_pending_tasks(publishing_context):
             idempotency_key="pending-2",
             actor=context["actor"],
         )
+
+
+def test_reap_stale_publish_tasks_fails_expired_running(publishing_context):
+    context = publishing_context
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="reap-1",
+        actor=context["actor"],
+    )
+    claimed = claim_publish_task(task.id)
+    assert claimed is not None
+    claimed_task, _attempt = claimed
+    assert claimed_task.lease_expires_at is not None
+
+    expired = timezone.now() + timedelta(seconds=PUBLISH_LEASE_SECONDS + 1)
+    assert reap_stale_publish_tasks(now=expired) == 1
+
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.FAILED
+    assert task.last_error["code"] == "STALE_WORKER"

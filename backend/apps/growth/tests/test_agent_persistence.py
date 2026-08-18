@@ -127,8 +127,11 @@ def test_pipeline_judge_tool_is_org_scoped(organization):
     assert result.steps[0].output["grade"] in {"A", "B", "C"}
 
 
-def test_proactive_acquisition_runs_end_to_end_with_approval(organization):
+def test_proactive_acquisition_runs_end_to_end_with_approval(organization, monkeypatch):
     from apps.growth.agent.acquisition import run_proactive_acquisition
+    from apps.growth.agent import acquisition as acq
+
+    monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
 
     candidate = DiscoveryCandidate.objects.create(
         organization=organization,
@@ -179,8 +182,11 @@ def test_proactive_acquisition_runs_end_to_end_with_approval(organization):
     ).count() == 1
 
 
-def test_proactive_acquisition_day_delivers_review_queue_and_is_idempotent(organization):
+def test_proactive_acquisition_day_delivers_review_queue_and_is_idempotent(organization, monkeypatch):
     from apps.growth.agent.acquisition import run_proactive_acquisition_day
+    from apps.growth.agent import acquisition as acq
+
+    monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
 
     candidates = []
     for index in range(3):

@@ -11,6 +11,8 @@ class Organization(models.Model):
     name = models.CharField(max_length=255)
     slug = models.SlugField(max_length=255, unique=True)
     ai_daily_token_budget = models.PositiveIntegerField(null=True, blank=True)
+    ai_daily_reserved_tokens = models.PositiveIntegerField(default=0)
+    ai_daily_reserved_on = models.DateField(null=True, blank=True)
     daily_publish_limit = models.PositiveIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

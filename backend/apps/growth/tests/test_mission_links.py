@@ -228,3 +228,45 @@ def test_demo_fake_connector_cannot_create_formal_publish_success(
     )
     assert batch.status == "CONFIGURATION_REQUIRED"
     assert not batch.items.filter(status=GrowthPublishItem.Status.SUCCEEDED).exists()
+
+
+def test_content_opportunity_signals_are_mission_scoped(mission, operator):
+    from apps.growth.agent.content_tools import content_opportunity_signals
+    from apps.growth.models import DiscoveryCandidate
+
+    linked = DiscoveryCandidate.objects.create(
+        organization=mission.organization,
+        company_name="Linked Mining Co",
+        country="ZA",
+        website="",
+        industry="mining equipment",
+        status=DiscoveryCandidate.Status.ACCEPTED,
+        import_format="GOOGLE_MAPS",
+        raw_record={"primary_type": "mining"},
+        record_hash="mission-linked-candidate",
+        is_demo=False,
+    )
+    DiscoveryCandidate.objects.create(
+        organization=mission.organization,
+        company_name="Unlinked Co",
+        country="DE",
+        website="",
+        industry="machinery",
+        status=DiscoveryCandidate.Status.ACCEPTED,
+        import_format="GOOGLE_MAPS",
+        raw_record={"primary_type": "machinery"},
+        record_hash="mission-unlinked-candidate",
+        is_demo=False,
+    )
+    link_mission_entity(
+        mission=mission,
+        entity=linked,
+        lane=MissionEntityLink.Lane.ACQUISITION,
+        actor=operator,
+    )
+
+    scoped = content_opportunity_signals(
+        mission.organization, mission_id=str(mission.id)
+    )
+    assert scoped["accepted_candidate_count"] == 1
+    assert scoped["top_industries"][0]["industry"] == "mining equipment"

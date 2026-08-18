@@ -16,22 +16,39 @@ from .persistent import continue_agent_run
 from .execution import resolve_agent_execution, resolve_run_execution
 from .planner import DeterministicPlanner, Plan
 from .tools import Tool, ToolRegistry, ToolResult
-from ..models import AgentRun, DiscoveryCandidate, InboundRfq
+from ..models import AgentRun, DiscoveryCandidate, InboundRfq, MissionEntityLink
 
 
-def content_opportunity_signals(organization) -> dict[str, Any]:
+def _mission_entity_ids(mission_id, entity_type):
+    if not mission_id:
+        return None
+    return set(
+        MissionEntityLink.objects.filter(
+            mission_id=mission_id,
+            entity_type=entity_type,
+        ).values_list("entity_id", flat=True)
+    )
+
+
+def content_opportunity_signals(organization, mission_id: str | None = None) -> dict[str, Any]:
     candidates = DiscoveryCandidate.objects.filter(
         organization=organization,
         status=DiscoveryCandidate.Status.ACCEPTED,
     )
+    rfqs = InboundRfq.objects.filter(organization=organization)
+    candidate_ids = _mission_entity_ids(mission_id, MissionEntityLink.EntityType.DISCOVERY_CANDIDATE)
+    rfq_ids = _mission_entity_ids(mission_id, MissionEntityLink.EntityType.INBOUND_RFQ)
+    if candidate_ids is not None:
+        candidates = candidates.filter(id__in=candidate_ids)
+    if rfq_ids is not None:
+        rfqs = rfqs.filter(id__in=rfq_ids)
     top_industries = list(
         candidates.values("industry")
         .annotate(count=Count("id"))
         .order_by("-count", "industry")[:5]
     )
     recent_rfqs = list(
-        InboundRfq.objects.filter(organization=organization)
-        .order_by("-created_at", "-id")[:20]
+        rfqs.order_by("-created_at", "-id")[:20]
     )
     need_slugs = [rfq.need_slug for rfq in recent_rfqs if rfq.need_slug]
     high_intent_count = candidates.filter(intent_score__gte=40).count()
@@ -63,9 +80,9 @@ def propose_content_opportunities(signals: dict[str, Any]) -> list[dict[str, Any
     ]
 
 
-def _analyze_tool(organization) -> Tool:
+def _analyze_tool(organization, mission_id: str | None = None) -> Tool:
     def func(args: dict[str, Any]) -> ToolResult:
-        signals = content_opportunity_signals(organization)
+        signals = content_opportunity_signals(organization, mission_id=mission_id)
         proposals = propose_content_opportunities(signals)
         return ToolResult(ok=True, output={"signals": signals, "proposals": proposals})
 
@@ -89,7 +106,7 @@ def _get_or_create_campaign(organization, name: str) -> Campaign:
     )
 
 
-def _create_brief_tool(organization, creator_id: str) -> Tool:
+def _create_brief_tool(organization, creator_id: str, mission_id: str | None = None) -> Tool:
     def func(args: dict[str, Any]) -> ToolResult:
         creator = get_user_model().objects.filter(id=creator_id).first()
         if creator is None:
@@ -97,11 +114,14 @@ def _create_brief_tool(organization, creator_id: str) -> Tool:
         if not Membership.objects.filter(user=creator, organization=organization).exists():
             return ToolResult(ok=False, error="creator is not a member of this organization.")
 
-        signals = content_opportunity_signals(organization)
+        signals = content_opportunity_signals(organization, mission_id=mission_id)
         proposals = propose_content_opportunities(signals)
         proposal = proposals[0] if proposals else {"topic": "Gear selection", "reasons": []}
         top_industry = (signals.get("top_industries") or [{}])[0].get("industry", "")
-        campaign = _get_or_create_campaign(organization, "Content Strategy")
+        campaign = _get_or_create_campaign(
+            organization,
+            f"Content Strategy: {mission_id}" if mission_id else "Content Strategy",
+        )
         brief = create_content_brief(
             organization=organization,
             campaign=campaign,
@@ -142,10 +162,12 @@ def _create_brief_tool(organization, creator_id: str) -> Tool:
     )
 
 
-def build_content_strategy_tools(organization, creator_id: str | None = None) -> list[Tool]:
-    tools = [_analyze_tool(organization)]
+def build_content_strategy_tools(
+    organization, creator_id: str | None = None, mission_id: str | None = None
+) -> list[Tool]:
+    tools = [_analyze_tool(organization, mission_id=mission_id)]
     if creator_id:
-        tools.append(_create_brief_tool(organization, creator_id))
+        tools.append(_create_brief_tool(organization, creator_id, mission_id=mission_id))
     return tools
 
 
@@ -193,7 +215,9 @@ def run_content_strategy_agent(
             "max_steps": 5,
         },
     )
-    tools = ToolRegistry(build_content_strategy_tools(organization, creator_id=creator_id))
+    tools = ToolRegistry(
+        build_content_strategy_tools(organization, creator_id=creator_id, mission_id=mission_id)
+    )
     execution = resolve_run_execution(run=run, fallback=fallback, allow_llm=True)
     return continue_agent_run(
         run=run,

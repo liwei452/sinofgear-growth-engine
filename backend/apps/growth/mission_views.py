@@ -238,6 +238,12 @@ class MissionStartOutreachView(APIView):
             organization=request.organization,
             status=DiscoveryCandidate.Status.ACCEPTED,
         )
+        link_mission_entity(
+            mission=mission,
+            entity=candidate,
+            lane=MissionEntityLink.Lane.ACQUISITION,
+            actor=request.user,
+        )
         run_proactive_acquisition(
             organization=request.organization, candidate_id=str(candidate.id)
         )

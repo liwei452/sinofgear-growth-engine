@@ -15,10 +15,8 @@ const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
 const drawerOpen = ref(false)
 
 function receiptTotal(receipt: MetricReceipt): number {
-  return ["views", "impressions", "clicks", "replies", "inquiries"].reduce((sum, field) => {
-    const value = receipt.payload[field]
-    return sum + (typeof value === "number" && value >= 0 ? value : 0)
-  }, 0)
+  const reach = receipt.payload.views ?? receipt.payload.impressions
+  return typeof reach === "number" && reach >= 0 ? reach : 0
 }
 
 const recordedReceipts = computed(() => (workspaceQuery.data.value?.metric_receipts ?? [])

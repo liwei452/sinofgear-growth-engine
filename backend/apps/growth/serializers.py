@@ -589,6 +589,13 @@ class ChannelPackageSerializer(serializers.ModelSerializer):
         return "MANUAL_ONLY"
 
 
+METRIC_CHANNELS = {"FACEBOOK", "INSTAGRAM", "LINKEDIN", "TIKTOK", "YOUTUBE"}
+METRIC_NUMERIC_FIELDS = {
+    "views", "impressions", "plays", "clicks", "replies", "inquiries",
+    "likes", "comments", "shares",
+}
+
+
 class MetricReceiptSerializer(serializers.ModelSerializer):
     class Meta:
         model = MetricReceipt
@@ -598,7 +605,20 @@ class MetricReceiptSerializer(serializers.ModelSerializer):
     def validate_payload(self, value):
         if not isinstance(value, dict):
             raise serializers.ValidationError("Metrics must be a JSON object.")
+        for field in METRIC_NUMERIC_FIELDS:
+            if field in value:
+                item = value[field]
+                if isinstance(item, bool) or not isinstance(item, (int, float)) or item < 0:
+                    raise serializers.ValidationError(
+                        f"{field} must be a non-negative number."
+                    )
         return value
+
+    def validate_channel(self, value):
+        normalized = str(value).strip().upper()
+        if normalized not in METRIC_CHANNELS:
+            raise serializers.ValidationError("Unsupported channel.")
+        return normalized
 
     def validate(self, attrs):
         attrs = super().validate(attrs)

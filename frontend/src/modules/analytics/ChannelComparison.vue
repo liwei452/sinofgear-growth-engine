@@ -10,16 +10,24 @@ function metric(item: MetricReceipt, name: string): number | null {
   return typeof value === "number" && value >= 0 ? value : null
 }
 
-const rows = computed(() => props.receipts
-  .filter(item => !item.is_demo)
-  .slice(0, 5)
-  .map(item => ({
-    id: item.id,
-    channel: item.channel,
-    reach: metric(item, "views") ?? metric(item, "impressions"),
-    clicks: metric(item, "clicks"),
-    inquiries: metric(item, "inquiries"),
-  })))
+const rows = computed(() => {
+  const byChannel = new Map<string, {
+    channel: string
+    reach: number
+    clicks: number
+    inquiries: number
+  }>()
+  for (const item of props.receipts) {
+    if (item.is_demo) continue
+    const channel = item.channel
+    const current = byChannel.get(channel) ?? { channel, reach: 0, clicks: 0, inquiries: 0 }
+    current.reach += metric(item, "views") ?? metric(item, "impressions") ?? 0
+    current.clicks += metric(item, "clicks") ?? 0
+    current.inquiries += metric(item, "inquiries") ?? 0
+    byChannel.set(channel, current)
+  }
+  return [...byChannel.values()]
+})
 </script>
 
 <template>
@@ -28,7 +36,7 @@ const rows = computed(() => props.receipts
     <div v-if="rows.length" class="comparison-table">
       <table>
         <thead><tr><th scope="col">渠道</th><th scope="col">触达</th><th scope="col">点击</th><th scope="col">询盘</th></tr></thead>
-        <tbody><tr v-for="row in rows" :key="row.id"><th scope="row">{{ row.channel }}</th><td>{{ row.reach ?? "无数据" }}</td><td>{{ row.clicks ?? "无数据" }}</td><td>{{ row.inquiries ?? "无数据" }}</td></tr></tbody>
+        <tbody><tr v-for="row in rows" :key="row.channel"><th scope="row">{{ row.channel }}</th><td>{{ row.reach }}</td><td>{{ row.clicks }}</td><td>{{ row.inquiries }}</td></tr></tbody>
       </table>
     </div>
     <p v-else>尚未记录渠道结果，暂不生成比较。</p>

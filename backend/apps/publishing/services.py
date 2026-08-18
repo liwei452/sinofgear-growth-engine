@@ -432,6 +432,15 @@ def create_publish_task(
         raise PublishingConflict("Account connector credential has expired.")
     if AccountCapability.PUBLISH not in resolve_account_capabilities(locked_account.id):
         raise PublishingConflict("Account connector does not have publishing capability.")
+    limit = getattr(locked_content.organization, "daily_publish_limit", None)
+    if limit:
+        start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        published_today = PublishedPost.objects.filter(
+            organization_id=locked_content.organization_id,
+            published_at__gte=start,
+        ).count()
+        if published_today >= limit:
+            raise PublishingConflict("Daily publishing limit reached.")
     status = PublishTask.Status.SCHEDULED if scheduled_at else PublishTask.Status.QUEUED
     try:
         with transaction.atomic():

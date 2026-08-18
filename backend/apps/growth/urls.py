@@ -58,6 +58,7 @@ from .mission_views import (
     MissionStatusView,
     MissionTimelineView,
 )
+from .mission_attribution_views import MissionAttributionView
 from .work_item_views import WorkItemListView
 
 urlpatterns = [
@@ -242,4 +243,5 @@ urlpatterns = [
         name="growth-mission-start-content-strategy",
     ),
     path("growth/work-items", WorkItemListView.as_view(), name="growth-work-items"),
+    path("growth/attribution", MissionAttributionView.as_view(), name="growth-attribution"),
 ]

@@ -2,6 +2,7 @@
 defineProps<{
   eyebrow?: string
   title: string
+  titleId?: string
   description?: string
 }>()
 </script>
@@ -10,7 +11,7 @@ defineProps<{
   <header class="workspace-header">
     <div class="workspace-header-copy">
       <p v-if="eyebrow" class="workspace-eyebrow">{{ eyebrow }}</p>
-      <h1>{{ title }}</h1>
+      <h1 :id="titleId">{{ title }}</h1>
       <p v-if="description" class="workspace-description">{{ description }}</p>
       <div v-if="$slots.meta" class="workspace-meta"><slot name="meta" /></div>
     </div>

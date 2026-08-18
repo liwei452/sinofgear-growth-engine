@@ -106,13 +106,17 @@ def test_one_click_publish_api_is_idempotent_and_retries_only_failure(growth_pub
     assert first.status_code == 201
     assert replay.status_code == 200
     assert replay.data["id"] == first.data["id"]
-    assert first.data["status"] == "PARTIAL_SUCCESS"
+    assert first.data["status"] == "CONFIGURATION_REQUIRED"
     assert first.data["is_demo"] is True
     assert first.data["data_label"] == "Demo / Fake 发布结果"
     assert {item["channel"] for item in first.data["items"]} == {
         "LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK",
     }
-    assert next(item for item in first.data["items"] if item["channel"] == "TIKTOK")["error_code"] == "PROVIDER_ERROR"
+    assert all(
+        item["error_code"] == "DEMO_ONLY_NO_EXTERNAL_PUBLISH"
+        for item in first.data["items"]
+    )
+    assert all(item["status"] == "SKIPPED" for item in first.data["items"])
 
     retried = client.post(
         f"/api/v1/growth/publish-batches/{first.data['id']}/retry-failed", {}, format="json",
@@ -121,13 +125,13 @@ def test_one_click_publish_api_is_idempotent_and_retries_only_failure(growth_pub
     workspace = client.get("/api/v1/growth/workspace")
 
     assert retried.status_code == 200
-    assert retried.data["status"] == "SUCCEEDED"
+    assert retried.data["status"] == "CONFIGURATION_REQUIRED"
     assert detail.data == retried.data
     assert workspace.data["publish_batches"][0] == retried.data
     attempts = {item["channel"]: item["attempt_number"] for item in retried.data["items"]}
-    assert attempts == {"FACEBOOK": 1, "INSTAGRAM": 1, "LINKEDIN": 1, "TIKTOK": 2}
+    assert attempts == {"FACEBOOK": 0, "INSTAGRAM": 0, "LINKEDIN": 0, "TIKTOK": 0}
     assert all(
-        item["external_post_url"].startswith("https://example.invalid/demo-post/")
+        item["external_post_url"] == ""
         for item in retried.data["items"]
     )
 

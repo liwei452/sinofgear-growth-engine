@@ -15,6 +15,7 @@ from .mission_planning import (
     approve_mission_plan,
     generate_mission_plan,
 )
+from .mission_timeline import project_mission_timeline
 from .mission_serializers import (
     GrowthMissionInputSerializer,
     GrowthMissionSerializer,
@@ -184,3 +185,28 @@ class MissionStatusView(APIView):
         except ValidationError as exc:
             return Response({"detail": exc.message_dict}, status=400)
         return Response(_serialize(request, mission))
+
+
+class MissionTimelineView(APIView):
+    permission_classes = [CanReadMissions]
+
+    @extend_schema(tags=["Growth missions"], responses={200: dict})
+    def get(self, request, mission_id):
+        mission = get_object_or_404(
+            GrowthMission, id=mission_id, organization=request.organization
+        )
+        items = project_mission_timeline(mission=mission)
+        return Response(
+            [
+                {
+                    "occurred_at": item.occurred_at.isoformat(),
+                    "lane": item.lane,
+                    "state": item.state,
+                    "title": item.title,
+                    "summary": item.summary,
+                    "evidence_type": item.evidence_type,
+                    "evidence_id": item.evidence_id,
+                }
+                for item in items
+            ]
+        )

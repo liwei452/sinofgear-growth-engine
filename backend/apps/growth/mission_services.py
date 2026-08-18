@@ -6,7 +6,21 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count
 
-from .models import GrowthMission, MissionEntityLink, MissionPlan
+from apps.campaigns.models import Campaign
+
+from .models import (
+    AgentRun,
+    ChannelPackage,
+    DiscoveryRun,
+    GrowthMission,
+    GrowthPublishBatch,
+    MetricReceipt,
+    MissionEntityLink,
+    MissionPlan,
+    OutreachDraft,
+    SalesDeal,
+    TargetAccount,
+)
 
 
 _TERMINAL = {GrowthMission.Status.COMPLETED, GrowthMission.Status.TERMINATED}
@@ -120,3 +134,66 @@ def mission_lane_counts(mission: GrowthMission) -> dict[str, int]:
     for row in rows:
         counts[row["lane"]] = row["total"]
     return counts
+
+
+def _entity_type_for(entity) -> str:
+    registry = (
+        (TargetAccount, MissionEntityLink.EntityType.TARGET_ACCOUNT),
+        (DiscoveryRun, MissionEntityLink.EntityType.DISCOVERY_RUN),
+        (AgentRun, MissionEntityLink.EntityType.AGENT_RUN),
+        (OutreachDraft, MissionEntityLink.EntityType.OUTREACH_DRAFT),
+        (Campaign, MissionEntityLink.EntityType.CAMPAIGN),
+        (ChannelPackage, MissionEntityLink.EntityType.CHANNEL_PACKAGE),
+        (GrowthPublishBatch, MissionEntityLink.EntityType.PUBLISH_BATCH),
+        (MetricReceipt, MissionEntityLink.EntityType.METRIC_RECEIPT),
+        (SalesDeal, MissionEntityLink.EntityType.SALES_DEAL),
+    )
+    for model, entity_type in registry:
+        if isinstance(entity, model):
+            return entity_type
+    raise ValidationError("Unsupported mission entity type.")
+
+
+def link_mission_entity(*, mission, entity, lane, actor=None) -> MissionEntityLink:
+    if entity.organization_id != mission.organization_id:
+        raise ValidationError("Entity organization must match the mission organization.")
+    entity_type = _entity_type_for(entity)
+    link, _ = MissionEntityLink.objects.get_or_create(
+        organization=mission.organization,
+        mission=mission,
+        entity_type=entity_type,
+        entity_id=entity.id,
+        defaults={"lane": lane, "linked_by": actor},
+    )
+    return link
+
+
+_STEP_LINK_MAP = (
+    ("account_id", TargetAccount, MissionEntityLink.Lane.ACQUISITION),
+    ("draft_id", OutreachDraft, MissionEntityLink.Lane.OUTREACH),
+    ("campaign_id", Campaign, MissionEntityLink.Lane.SOCIAL),
+    ("package_id", ChannelPackage, MissionEntityLink.Lane.SOCIAL),
+    ("batch_id", GrowthPublishBatch, MissionEntityLink.Lane.SOCIAL),
+)
+
+
+def sync_mission_links_from_agent_run(*, run, actor=None):
+    link = MissionEntityLink.objects.filter(
+        mission__organization=run.organization,
+        entity_type=MissionEntityLink.EntityType.AGENT_RUN,
+        entity_id=run.id,
+    ).first()
+    if link is None:
+        return
+    mission = link.mission
+    for step in run.steps.filter(outcome="succeeded"):
+        output = step.output or {}
+        for key, model, lane in _STEP_LINK_MAP:
+            raw_id = output.get(key)
+            if not raw_id:
+                continue
+            try:
+                entity = model.objects.get(organization=run.organization, id=raw_id)
+            except model.DoesNotExist:
+                continue
+            link_mission_entity(mission=mission, entity=entity, lane=lane, actor=actor)

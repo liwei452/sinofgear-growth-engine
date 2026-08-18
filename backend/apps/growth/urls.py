@@ -54,7 +54,9 @@ from .mission_views import (
     MissionGeneratePlanView,
     MissionListCreateView,
     MissionStatusView,
+    MissionTimelineView,
 )
+from .work_item_views import WorkItemListView
 
 urlpatterns = [
     path("growth/workspace", GrowthWorkspaceView.as_view(), name="growth-workspace"),
@@ -222,4 +224,10 @@ urlpatterns = [
         MissionStatusView.as_view(),
         name="growth-mission-status",
     ),
+    path(
+        "growth/missions/<uuid:mission_id>/timeline",
+        MissionTimelineView.as_view(),
+        name="growth-mission-timeline",
+    ),
+    path("growth/work-items", WorkItemListView.as_view(), name="growth-work-items"),
 ]

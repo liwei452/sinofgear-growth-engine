@@ -1018,3 +1018,216 @@ class AgentRunStep(OrganizationOwnedModel):
                 name="growth_unique_agent_run_step_index",
             ),
         ]
+
+
+def _normalize_mission_list(value, *, uppercase):
+    if value is None:
+        return []
+    normalized = []
+    for entry in value:
+        if not isinstance(entry, str):
+            entry = str(entry)
+        entry = entry.strip()
+        if uppercase:
+            entry = entry.upper()
+        normalized.append(entry)
+    return normalized
+
+
+class GrowthMission(OrganizationOwnedModel):
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT", "Draft"
+        PENDING_APPROVAL = "PENDING_APPROVAL", "Pending approval"
+        RUNNING = "RUNNING", "Running"
+        PAUSED = "PAUSED", "Paused"
+        COMPLETED = "COMPLETED", "Completed"
+        TERMINATED = "TERMINATED", "Terminated"
+
+    class Health(models.TextChoices):
+        NORMAL = "NORMAL", "Normal"
+        ACTION_REQUIRED = "ACTION_REQUIRED", "Action required"
+        CHANNEL_BLOCKED = "CHANNEL_BLOCKED", "Channel blocked"
+        BUDGET_BLOCKED = "BUDGET_BLOCKED", "Budget blocked"
+        DATA_INSUFFICIENT = "DATA_INSUFFICIENT", "Data insufficient"
+        FAILED = "FAILED", "Failed"
+
+    title = models.CharField(max_length=255)
+    objective = models.TextField()
+    target_countries = models.JSONField(default=list)
+    target_industries = models.JSONField(default=list)
+    customer_profile = models.TextField(blank=True)
+    primary_product = models.ForeignKey(
+        "catalog.Product",
+        on_delete=models.PROTECT,
+        related_name="growth_missions",
+    )
+    start_date = models.DateField()
+    end_date = models.DateField()
+    target_account_count = models.PositiveIntegerField(default=0)
+    target_reply_count = models.PositiveIntegerField(default=0)
+    target_rfq_count = models.PositiveIntegerField(default=0)
+    budget_micros = models.PositiveBigIntegerField(default=0)
+    allowed_channels = models.JSONField(default=list)
+    attribution_code = models.CharField(max_length=64)
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.DRAFT)
+    health_status = models.CharField(
+        max_length=24, choices=Health.choices, default=Health.DATA_INSUFFICIENT
+    )
+    health_reason = models.CharField(max_length=500, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_growth_missions",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "attribution_code"],
+                name="growth_unique_mission_attribution",
+            ),
+        ]
+
+    def clean(self):
+        errors = {}
+        self.title = (self.title or "").strip()
+        self.objective = (self.objective or "").strip()
+        self.customer_profile = (self.customer_profile or "").strip()
+        self.target_countries = _normalize_mission_list(self.target_countries, uppercase=True)
+        self.target_industries = _normalize_mission_list(self.target_industries, uppercase=False)
+        self.allowed_channels = _normalize_mission_list(self.allowed_channels, uppercase=True)
+
+        for field in ("target_countries", "target_industries", "allowed_channels"):
+            value = getattr(self, field) or []
+            if not value:
+                errors[field] = "At least one entry is required."
+                continue
+            if any(not entry for entry in value):
+                errors[field] = "Entries must not be blank."
+            if len({entry.lower() for entry in value}) != len(value):
+                errors[field] = "Entries must not contain duplicates."
+
+        if not self.title:
+            errors["title"] = "Title is required."
+        if not self.objective:
+            errors["objective"] = "Objective is required."
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            errors["end_date"] = "End date must not be before start date."
+
+        if self.primary_product_id:
+            from apps.catalog.models import Product
+
+            product = Product.objects.filter(pk=self.primary_product_id).first()
+            if product is None or product.organization_id != self.organization_id:
+                errors["primary_product"] = (
+                    "Primary product must belong to the mission organization."
+                )
+            elif product.status != Product.Status.ACTIVE:
+                errors["primary_product"] = "Primary product must be active."
+        else:
+            errors["primary_product"] = "Primary product is required."
+
+        if errors:
+            raise ValidationError(errors)
+
+
+class MissionPlan(OrganizationOwnedModel):
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT", "Draft"
+        APPROVED = "APPROVED", "Approved"
+        SUPERSEDED = "SUPERSEDED", "Superseded"
+
+    class GenerationMode(models.TextChoices):
+        AUTOMATION = "AUTOMATION", "Automation"
+        AI_GENERATION = "AI_GENERATION", "AI generation"
+
+    mission = models.ForeignKey(
+        GrowthMission, on_delete=models.PROTECT, related_name="plans"
+    )
+    version = models.PositiveIntegerField()
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    snapshot = models.JSONField(default=dict)
+    generation_mode = models.CharField(max_length=24, choices=GenerationMode.choices)
+    provider = models.CharField(max_length=32, blank=True)
+    model = models.CharField(max_length=64, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_mission_plans",
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="approved_mission_plans",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["mission", "version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["mission", "version"],
+                name="growth_unique_plan_version",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["organization", "status", "created_at"],
+                name="mission_plan_status_idx",
+            ),
+        ]
+
+
+class MissionEntityLink(OrganizationOwnedModel):
+    class EntityType(models.TextChoices):
+        TARGET_ACCOUNT = "TARGET_ACCOUNT", "Target account"
+        DISCOVERY_RUN = "DISCOVERY_RUN", "Discovery run"
+        AGENT_RUN = "AGENT_RUN", "Agent run"
+        OUTREACH_DRAFT = "OUTREACH_DRAFT", "Outreach draft"
+        CAMPAIGN = "CAMPAIGN", "Campaign"
+        CHANNEL_PACKAGE = "CHANNEL_PACKAGE", "Channel package"
+        PUBLISH_BATCH = "PUBLISH_BATCH", "Publish batch"
+        METRIC_RECEIPT = "METRIC_RECEIPT", "Metric receipt"
+        SALES_DEAL = "SALES_DEAL", "Sales deal"
+
+    class Lane(models.TextChoices):
+        ACQUISITION = "ACQUISITION", "Acquisition"
+        OUTREACH = "OUTREACH", "Outreach"
+        SOCIAL = "SOCIAL", "Social"
+        ATTRIBUTION = "ATTRIBUTION", "Attribution"
+
+    mission = models.ForeignKey(
+        GrowthMission, on_delete=models.PROTECT, related_name="entity_links"
+    )
+    entity_type = models.CharField(max_length=32, choices=EntityType.choices)
+    entity_id = models.UUIDField()
+    lane = models.CharField(max_length=16, choices=Lane.choices)
+    linked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="growth_mission_links",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "mission", "entity_type", "entity_id"],
+                name="growth_unique_mission_entity_link",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["mission", "lane"],
+                name="mission_link_lane_idx",
+            ),
+            models.Index(
+                fields=["entity_type", "entity_id"],
+                name="mission_link_entity_idx",
+            ),
+        ]

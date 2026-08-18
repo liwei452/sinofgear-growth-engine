@@ -87,6 +87,16 @@ def test_reviewer_cannot_manage_connector_credentials(
 
 
 @pytest.mark.django_db
+def test_builtin_roles_receive_mission_permissions() -> None:
+    assert "missions.manage" in Role.objects.create_administrator().permissions
+    assert "missions.review" in Role.objects.create_administrator().permissions
+    assert "missions.manage" not in Role.objects.create_operator().permissions
+    assert "missions.review" not in Role.objects.create_reviewer().permissions
+    assert Role.objects.create_read_only().permissions.count("missions.read") == 1
+    assert "missions.manage" not in Role.objects.create_read_only().permissions
+
+
+@pytest.mark.django_db
 def test_seed_initial_organization_creates_roles_and_administrator(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SEED_ADMIN_PASSWORD", "strong-test-password")
     monkeypatch.setenv("SEED_ADMIN_USERNAME", "bootstrap-admin")

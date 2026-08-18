@@ -95,6 +95,7 @@ class Role(models.Model):
                 PermissionCode.LEADS_READ,
                 PermissionCode.LEADS_MANAGE,
                 PermissionCode.METRICS_READ,
+                PermissionCode.MISSIONS_READ,
             ),
         ),
         Code.REVIEWER: (
@@ -115,6 +116,7 @@ class Role(models.Model):
                 PermissionCode.AGENTS_APPROVE,
                 PermissionCode.LEADS_READ,
                 PermissionCode.METRICS_READ,
+                PermissionCode.MISSIONS_READ,
             ),
         ),
         Code.READ_ONLY: (
@@ -130,6 +132,7 @@ class Role(models.Model):
                 PermissionCode.PUBLISHING_READ,
                 PermissionCode.TRACKING_READ,
                 PermissionCode.METRICS_READ,
+                PermissionCode.MISSIONS_READ,
             ),
         ),
     }

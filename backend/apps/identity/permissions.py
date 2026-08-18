@@ -33,6 +33,9 @@ class PermissionCode(StrEnum):
     LEADS_READ = "leads.read"
     LEADS_MANAGE = "leads.manage"
     METRICS_READ = "metrics.read"
+    MISSIONS_READ = "missions.read"
+    MISSIONS_MANAGE = "missions.manage"
+    MISSIONS_REVIEW = "missions.review"
 
 
 class HasOrganizationPermission(BasePermission):

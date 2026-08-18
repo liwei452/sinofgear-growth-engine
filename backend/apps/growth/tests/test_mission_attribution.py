@@ -73,23 +73,41 @@ def mission_data(db, organization, mission, user):
         lane=MissionEntityLink.Lane.ACQUISITION,
         actor=user,
     )
-    OutreachMessage.objects.create(
+    message = OutreachMessage.objects.create(
         organization=organization,
         account=account,
         status=OutreachMessage.Status.REPLIED,
         provider="smtp",
     )
-    InboundRfq.objects.create(
+    link_mission_entity(
+        mission=mission,
+        entity=message,
+        lane=MissionEntityLink.Lane.OUTREACH,
+        actor=user,
+    )
+    rfq = InboundRfq.objects.create(
         organization=organization,
         account=account,
         company_name="Acme",
         email="buyer@example.com",
     )
-    SalesDeal.objects.create(
+    link_mission_entity(
+        mission=mission,
+        entity=rfq,
+        lane=MissionEntityLink.Lane.ATTRIBUTION,
+        actor=user,
+    )
+    deal = SalesDeal.objects.create(
         organization=organization,
         account=account,
         stage=SalesDeal.Stage.WON,
         quote_amount=Decimal("12500.00"),
+    )
+    link_mission_entity(
+        mission=mission,
+        entity=deal,
+        lane=MissionEntityLink.Lane.ATTRIBUTION,
+        actor=user,
     )
     receipt = MetricReceipt.objects.create(
         organization=organization,

@@ -22,37 +22,40 @@ def _linked_account_ids(mission: GrowthMission):
     )
 
 
-def _linked_receipt_ids(mission: GrowthMission):
+def _linked_entity_ids(mission: GrowthMission, entity_type):
     return set(
         MissionEntityLink.objects.filter(
             mission=mission,
-            entity_type=MissionEntityLink.EntityType.METRIC_RECEIPT,
+            entity_type=entity_type,
         ).values_list("entity_id", flat=True)
     )
 
 
 def build_mission_attribution(*, mission: GrowthMission) -> dict:
     account_ids = _linked_account_ids(mission)
-    receipt_ids = _linked_receipt_ids(mission)
+    message_ids = _linked_entity_ids(mission, MissionEntityLink.EntityType.OUTREACH_MESSAGE)
+    rfq_ids = _linked_entity_ids(mission, MissionEntityLink.EntityType.INBOUND_RFQ)
+    deal_ids = _linked_entity_ids(mission, MissionEntityLink.EntityType.SALES_DEAL)
+    receipt_ids = _linked_entity_ids(mission, MissionEntityLink.EntityType.METRIC_RECEIPT)
     email_connected = email_delivery_readiness() == "CONNECTED"
 
-    replies = OutreachMessage.objects.filter(
+    confirmed_replies = OutreachMessage.objects.filter(
         organization=mission.organization,
-        account_id__in=account_ids,
+        id__in=message_ids,
         status=OutreachMessage.Status.REPLIED,
     )
-    rfqs = InboundRfq.objects.filter(
+    confirmed_rfqs = InboundRfq.objects.filter(
         organization=mission.organization,
-        account_id__in=account_ids,
+        id__in=rfq_ids,
     )
     won_deals = SalesDeal.objects.filter(
         organization=mission.organization,
-        account_id__in=account_ids,
+        id__in=deal_ids,
         stage=SalesDeal.Stage.WON,
     )
     sent = OutreachMessage.objects.filter(
         organization=mission.organization,
-        account_id__in=account_ids,
+        id__in=message_ids,
         status=OutreachMessage.Status.SENT,
     )
     receipts = MetricReceipt.objects.filter(
@@ -70,13 +73,13 @@ def build_mission_attribution(*, mission: GrowthMission) -> dict:
     won_total = won_deals.aggregate(total=Sum("quote_amount"))["total"] or 0
 
     traces: list[dict] = []
-    for reply in replies:
+    for reply in confirmed_replies:
         traces.append({
             "confidence": "CONFIRMED",
             "type": "email_reply",
             "source_id": str(reply.id),
         })
-    for rfq in rfqs:
+    for rfq in confirmed_rfqs:
         traces.append({
             "confidence": "CONFIRMED",
             "type": "rfq",
@@ -95,11 +98,33 @@ def build_mission_attribution(*, mission: GrowthMission) -> dict:
             "source_id": str(receipt.id),
         })
 
+    assisted_replies = OutreachMessage.objects.filter(
+        organization=mission.organization,
+        account_id__in=account_ids,
+        status=OutreachMessage.Status.REPLIED,
+    ).exclude(id__in=message_ids)
+    assisted_rfqs = InboundRfq.objects.filter(
+        organization=mission.organization,
+        account_id__in=account_ids,
+    ).exclude(id__in=rfq_ids)
+    for reply in assisted_replies:
+        traces.append({
+            "confidence": "ASSISTED",
+            "type": "email_reply",
+            "source_id": str(reply.id),
+        })
+    for rfq in assisted_rfqs:
+        traces.append({
+            "confidence": "ASSISTED",
+            "type": "rfq",
+            "source_id": str(rfq.id),
+        })
+
     return {
         "outcomes": {
             "emails_sent": sent.count() if email_connected else None,
-            "confirmed_replies": replies.count(),
-            "confirmed_rfqs": rfqs.count(),
+            "confirmed_replies": confirmed_replies.count(),
+            "confirmed_rfqs": confirmed_rfqs.count(),
             "won_revenue": {"amount": f"{won_total:.2f}"},
             "cost_per_result": None,
         },

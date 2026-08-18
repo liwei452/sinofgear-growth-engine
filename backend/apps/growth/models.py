@@ -1184,13 +1184,19 @@ class MissionPlan(OrganizationOwnedModel):
 class MissionEntityLink(OrganizationOwnedModel):
     class EntityType(models.TextChoices):
         TARGET_ACCOUNT = "TARGET_ACCOUNT", "Target account"
+        DISCOVERY_CANDIDATE = "DISCOVERY_CANDIDATE", "Discovery candidate"
         DISCOVERY_RUN = "DISCOVERY_RUN", "Discovery run"
         AGENT_RUN = "AGENT_RUN", "Agent run"
         OUTREACH_DRAFT = "OUTREACH_DRAFT", "Outreach draft"
+        OUTREACH_MESSAGE = "OUTREACH_MESSAGE", "Outreach message"
         CAMPAIGN = "CAMPAIGN", "Campaign"
+        CONTENT_BRIEF = "CONTENT_BRIEF", "Content brief"
+        MASTER_CONTENT = "MASTER_CONTENT", "Master content"
+        PLATFORM_CONTENT = "PLATFORM_CONTENT", "Platform content"
         CHANNEL_PACKAGE = "CHANNEL_PACKAGE", "Channel package"
         PUBLISH_BATCH = "PUBLISH_BATCH", "Publish batch"
         METRIC_RECEIPT = "METRIC_RECEIPT", "Metric receipt"
+        INBOUND_RFQ = "INBOUND_RFQ", "Inbound RFQ"
         SALES_DEAL = "SALES_DEAL", "Sales deal"
 
     class Lane(models.TextChoices):

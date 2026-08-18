@@ -284,32 +284,59 @@ def _project_configuration_blocks(items, organization, mission):
         status=GrowthMission.Status.RUNNING,
     )
     for current in running:
+        if not _include(mission, str(current.id)):
+            continue
         has_approved = MissionPlan.objects.filter(
             mission=current,
             status=MissionPlan.Status.APPROVED,
         ).exists()
-        if has_approved:
-            continue
-        if not _include(mission, str(current.id)):
-            continue
-        items.append(
-            WorkItemProjection(
-                id=f"CONFIGURATION_BLOCK:{current.id}",
-                mission_id=str(current.id),
-                mission_title=current.title,
-                kind="CONFIGURATION_BLOCK",
-                title="缺少已批准的执行计划",
-                summary="运行中的任务没有已批准的执行计划。",
-                priority="HIGH",
-                source_type="growth_mission",
-                source_id=str(current.id),
-                source_ids=(str(current.id),),
-                action_type="OPEN_SETTINGS",
-                action_label="前往配置",
-                preview={},
-                created_at=current.created_at,
+        if not has_approved:
+            items.append(
+                WorkItemProjection(
+                    id=f"CONFIGURATION_BLOCK:{current.id}:plan",
+                    mission_id=str(current.id),
+                    mission_title=current.title,
+                    kind="CONFIGURATION_BLOCK",
+                    title="缺少已批准的执行计划",
+                    summary="运行中的任务没有已批准的执行计划。",
+                    priority="HIGH",
+                    source_type="growth_mission",
+                    source_id=str(current.id),
+                    source_ids=(str(current.id),),
+                    action_type="OPEN_SETTINGS",
+                    action_label="前往配置",
+                    preview={},
+                    created_at=current.created_at,
+                )
             )
-        )
+        if current.primary_product_id and not _has_verified_fact(current.primary_product_id):
+            items.append(
+                WorkItemProjection(
+                    id=f"CONFIGURATION_BLOCK:{current.id}:facts",
+                    mission_id=str(current.id),
+                    mission_title=current.title,
+                    kind="CONFIGURATION_BLOCK",
+                    title="补全企业知识",
+                    summary="主推产品缺少已验证事实，先生成补全资料工作项。",
+                    priority="HIGH",
+                    source_type="growth_mission",
+                    source_id=str(current.id),
+                    source_ids=(str(current.id),),
+                    action_type="OPEN_SETTINGS",
+                    action_label="补全企业知识",
+                    preview={},
+                    created_at=current.created_at,
+                )
+            )
+
+
+def _has_verified_fact(product_id) -> bool:
+    from apps.assets.models import ProductEvidenceFact
+
+    return ProductEvidenceFact.objects.filter(
+        product_id=product_id,
+        review_status=ProductEvidenceFact.ReviewStatus.VERIFIED,
+    ).exists()
 
 
 def project_work_items(*, organization, mission=None) -> list[WorkItemProjection]:

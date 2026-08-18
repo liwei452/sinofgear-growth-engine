@@ -83,11 +83,17 @@ def test_mission_plan_work_items_and_attribution_flow(organization, manager, pro
         lane=MissionEntityLink.Lane.ACQUISITION,
         actor=manager,
     )
-    InboundRfq.objects.create(
+    rfq = InboundRfq.objects.create(
         organization=organization,
         account=account,
         company_name="Acme",
         email="buyer@example.com",
+    )
+    link_mission_entity(
+        mission=mission,
+        entity=rfq,
+        lane=MissionEntityLink.Lane.ATTRIBUTION,
+        actor=manager,
     )
 
     run = AgentRun.objects.create(

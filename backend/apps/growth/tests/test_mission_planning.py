@@ -4,7 +4,11 @@ import pytest
 from django.contrib.auth import get_user_model
 
 from apps.catalog.models import Product
-from apps.growth.mission_planning import approve_mission_plan, generate_mission_plan
+from apps.growth.mission_planning import (
+    MissionPlanGenerationError,
+    approve_mission_plan,
+    generate_mission_plan,
+)
 from apps.growth.models import GrowthMission, MissionPlan
 from apps.identity.models import Organization
 
@@ -70,3 +74,52 @@ def test_approved_plan_starts_mission_and_supersedes_old_draft(mission, operator
     assert approved.status == MissionPlan.Status.APPROVED
     assert first.status == MissionPlan.Status.SUPERSEDED
     assert mission.status == GrowthMission.Status.RUNNING
+
+
+def test_ai_plan_with_wrong_attribution_is_rejected(mission, operator, monkeypatch):
+    from apps.ai.provider_config import ProductAIRuntime
+    from apps.growth import mission_planning
+
+    class Provider:
+        last_usage = None
+
+        def generate(self, *, prompt, schema):
+            return {
+                "summary": "x",
+                "customer_development": {
+                    "daily_discovery_volume": 20,
+                    "qualification_evidence": ["x"],
+                    "outreach_angle": "x",
+                    "approval_policy": "EVERY_EMAIL",
+                    "stop_conditions": ["REPLIED", "UNSUBSCRIBED", "HARD_BOUNCE"],
+                },
+                "social_growth": {
+                    "channels": ["LINKEDIN"],
+                    "weekly_cadence": 3,
+                    "content_themes": ["x"],
+                    "approval_policy": "CONTENT_GROUP",
+                },
+                "attribution": {
+                    "attribution_code": "gm-wrong",
+                    "utm_campaign": "x",
+                    "confidence_labels": ["CONFIRMED", "ASSISTED", "UNATTRIBUTED"],
+                },
+                "risks": ["x"],
+            }
+
+    monkeypatch.setattr(
+        mission_planning,
+        "resolve_product_ai",
+        lambda org: ProductAIRuntime(
+            mode="CONFIGURED_AI",
+            provider_label="DeepSeek",
+            provider_code="deepseek",
+            model="deepseek-chat",
+            configured=True,
+            real_requests_enabled=True,
+            provider=Provider(),
+        ),
+    )
+
+    with pytest.raises(MissionPlanGenerationError):
+        generate_mission_plan(mission=mission, actor=operator)

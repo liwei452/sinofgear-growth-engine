@@ -147,6 +147,18 @@ def _mission_prompt(mission: GrowthMission) -> str:
     )
 
 
+def _validate_mission_plan_semantics(mission: GrowthMission, snapshot: dict) -> None:
+    allowed_social = {
+        channel for channel in (mission.allowed_channels or []) if channel != "EMAIL"
+    }
+    channels = set(snapshot.get("social_growth", {}).get("channels", []))
+    if channels and allowed_social and not channels.issubset(allowed_social):
+        raise MissionPlanGenerationError("Plan channels are outside the mission's allowed channels.")
+    attribution_code = snapshot.get("attribution", {}).get("attribution_code", "")
+    if mission.attribution_code and attribution_code != mission.attribution_code:
+        raise MissionPlanGenerationError("Plan attribution code does not match the mission.")
+
+
 @transaction.atomic
 def generate_mission_plan(*, mission: GrowthMission, actor) -> MissionPlan:
     locked_mission = GrowthMission.objects.select_for_update().get(pk=mission.pk)
@@ -187,6 +199,8 @@ def generate_mission_plan(*, mission: GrowthMission, actor) -> MissionPlan:
         generation_mode = MissionPlan.GenerationMode.AI_GENERATION
         provider = runtime.provider_code
         model = runtime.model
+
+    _validate_mission_plan_semantics(locked_mission, snapshot)
 
     plan = MissionPlan.objects.create(
         organization=locked_mission.organization,

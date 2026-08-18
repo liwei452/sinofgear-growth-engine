@@ -43,4 +43,15 @@ class WorkItemListView(APIView):
                 GrowthMission, id=mission_id, organization=request.organization
             )
         items = project_work_items(organization=request.organization, mission=mission)
-        return Response([_projection_payload(item) for item in items])
+        limit = _positive_int(request.query_params.get("limit"), 100)
+        offset = _positive_int(request.query_params.get("offset"), 0)
+        page = items[offset:offset + limit]
+        return Response([_projection_payload(item) for item in page])
+
+
+def _positive_int(value, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0, parsed)

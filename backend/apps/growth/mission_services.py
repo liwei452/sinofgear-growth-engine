@@ -6,18 +6,22 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count
 
-from apps.campaigns.models import Campaign
+from apps.campaigns.models import Campaign, ContentBrief
+from apps.content.models import MasterContent, PlatformContent
 
 from .models import (
     AgentRun,
     ChannelPackage,
+    DiscoveryCandidate,
     DiscoveryRun,
     GrowthMission,
     GrowthPublishBatch,
+    InboundRfq,
     MetricReceipt,
     MissionEntityLink,
     MissionPlan,
     OutreachDraft,
+    OutreachMessage,
     SalesDeal,
     TargetAccount,
 )
@@ -139,13 +143,19 @@ def mission_lane_counts(mission: GrowthMission) -> dict[str, int]:
 def _entity_type_for(entity) -> str:
     registry = (
         (TargetAccount, MissionEntityLink.EntityType.TARGET_ACCOUNT),
+        (DiscoveryCandidate, MissionEntityLink.EntityType.DISCOVERY_CANDIDATE),
         (DiscoveryRun, MissionEntityLink.EntityType.DISCOVERY_RUN),
         (AgentRun, MissionEntityLink.EntityType.AGENT_RUN),
         (OutreachDraft, MissionEntityLink.EntityType.OUTREACH_DRAFT),
+        (OutreachMessage, MissionEntityLink.EntityType.OUTREACH_MESSAGE),
         (Campaign, MissionEntityLink.EntityType.CAMPAIGN),
+        (ContentBrief, MissionEntityLink.EntityType.CONTENT_BRIEF),
+        (MasterContent, MissionEntityLink.EntityType.MASTER_CONTENT),
+        (PlatformContent, MissionEntityLink.EntityType.PLATFORM_CONTENT),
         (ChannelPackage, MissionEntityLink.EntityType.CHANNEL_PACKAGE),
         (GrowthPublishBatch, MissionEntityLink.EntityType.PUBLISH_BATCH),
         (MetricReceipt, MissionEntityLink.EntityType.METRIC_RECEIPT),
+        (InboundRfq, MissionEntityLink.EntityType.INBOUND_RFQ),
         (SalesDeal, MissionEntityLink.EntityType.SALES_DEAL),
     )
     for model, entity_type in registry:
@@ -170,10 +180,16 @@ def link_mission_entity(*, mission, entity, lane, actor=None) -> MissionEntityLi
 
 _STEP_LINK_MAP = (
     ("account_id", TargetAccount, MissionEntityLink.Lane.ACQUISITION),
+    ("candidate_id", DiscoveryCandidate, MissionEntityLink.Lane.ACQUISITION),
     ("draft_id", OutreachDraft, MissionEntityLink.Lane.OUTREACH),
+    ("message_id", OutreachMessage, MissionEntityLink.Lane.OUTREACH),
     ("campaign_id", Campaign, MissionEntityLink.Lane.SOCIAL),
+    ("brief_id", ContentBrief, MissionEntityLink.Lane.SOCIAL),
+    ("master_content_id", MasterContent, MissionEntityLink.Lane.SOCIAL),
+    ("platform_content_id", PlatformContent, MissionEntityLink.Lane.SOCIAL),
     ("package_id", ChannelPackage, MissionEntityLink.Lane.SOCIAL),
     ("batch_id", GrowthPublishBatch, MissionEntityLink.Lane.SOCIAL),
+    ("rfq_id", InboundRfq, MissionEntityLink.Lane.ATTRIBUTION),
 )
 
 

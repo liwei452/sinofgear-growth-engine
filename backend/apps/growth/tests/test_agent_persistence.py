@@ -130,8 +130,16 @@ def test_pipeline_judge_tool_is_org_scoped(organization):
 def test_proactive_acquisition_runs_end_to_end_with_approval(organization, monkeypatch):
     from apps.growth.agent.acquisition import run_proactive_acquisition
     from apps.growth.agent import acquisition as acq
+    from apps.growth import outreach_events
 
     monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
+
+    class ConnectedProvider:
+        def send(self, *, email, subject, body):
+            return {"provider": "smtp", "message_id": "smtp-real-id", "status": "SENT"}
+
+    monkeypatch.setattr(outreach_events, "email_delivery_readiness", lambda: "CONNECTED")
+    monkeypatch.setattr(outreach_events, "get_delivery_provider", lambda: ConnectedProvider())
 
     candidate = DiscoveryCandidate.objects.create(
         organization=organization,
@@ -185,8 +193,16 @@ def test_proactive_acquisition_runs_end_to_end_with_approval(organization, monke
 def test_proactive_acquisition_day_delivers_review_queue_and_is_idempotent(organization, monkeypatch):
     from apps.growth.agent.acquisition import run_proactive_acquisition_day
     from apps.growth.agent import acquisition as acq
+    from apps.growth import outreach_events
 
     monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
+
+    class ConnectedProvider:
+        def send(self, *, email, subject, body):
+            return {"provider": "smtp", "message_id": "smtp-real-id", "status": "SENT"}
+
+    monkeypatch.setattr(outreach_events, "email_delivery_readiness", lambda: "CONNECTED")
+    monkeypatch.setattr(outreach_events, "get_delivery_provider", lambda: ConnectedProvider())
 
     candidates = []
     for index in range(3):

@@ -5,7 +5,11 @@ from __future__ import annotations
 from django.db import transaction
 from django.utils import timezone
 
-from .email_delivery import get_delivery_provider
+from .email_delivery import (
+    EmailDeliveryUnavailable,
+    email_delivery_readiness,
+    get_delivery_provider,
+)
 from .growth_events import (
     EVENT_EMAIL_BOUNCED,
     EVENT_EMAIL_FAILED,
@@ -20,24 +24,27 @@ from .outreach_stages import transition_stage
 
 @transaction.atomic
 def record_sent(*, account, draft, email: str) -> OutreachMessage:
+    if email_delivery_readiness() != "CONNECTED":
+        raise EmailDeliveryUnavailable("Email delivery is not connected.")
     result = get_delivery_provider().send(
         email=email,
         subject="",
         body=draft.english_draft if draft else "",
     )
     status = str(result.get("status", "SENT"))
+    message_id = str(result.get("message_id", "") or "")
+    sent = status == "SENT" and bool(message_id)
     message = OutreachMessage.objects.create(
         organization=account.organization,
         account=account,
         draft=draft,
         provider=result.get("provider", "unknown"),
-        provider_message_id=result.get("message_id", ""),
-        status=OutreachMessage.Status.SENT
-        if status == "SENT" else OutreachMessage.Status.FAILED,
+        provider_message_id=message_id,
+        status=OutreachMessage.Status.SENT if sent else OutreachMessage.Status.FAILED,
         payload=result,
-        sent_at=timezone.now() if status == "SENT" else None,
+        sent_at=timezone.now() if sent else None,
     )
-    if status != "SENT":
+    if not sent:
         emit_growth_event(
             organization=account.organization,
             event_type=EVENT_EMAIL_FAILED,

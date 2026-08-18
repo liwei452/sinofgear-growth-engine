@@ -194,6 +194,14 @@ def test_discover_maps_tool_creates_candidates(organization):
 
 def test_proactive_acquisition_website_path_end_to_end(organization, monkeypatch):
     from apps.growth.agent.acquisition import run_proactive_acquisition
+    from apps.growth import outreach_events
+
+    class ConnectedProvider:
+        def send(self, *, email, subject, body):
+            return {"provider": "smtp", "message_id": "smtp-real-id", "status": "SENT"}
+
+    monkeypatch.setattr(outreach_events, "email_delivery_readiness", lambda: "CONNECTED")
+    monkeypatch.setattr(outreach_events, "get_delivery_provider", lambda: ConnectedProvider())
 
     candidate = DiscoveryCandidate.objects.create(
         organization=organization,

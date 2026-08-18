@@ -14,6 +14,10 @@ class EmailDeliveryProvider(Protocol):
     def send(self, *, email: str, subject: str, body: str) -> dict: ...
 
 
+class EmailDeliveryUnavailable(RuntimeError):
+    pass
+
+
 class MockEmailDeliveryProvider:
     def send(self, *, email: str, subject: str, body: str) -> dict:
         return {
@@ -49,3 +53,10 @@ def get_delivery_provider() -> EmailDeliveryProvider:
     if factory_path:
         return import_string(factory_path)()
     return MockEmailDeliveryProvider()
+
+
+def email_delivery_readiness() -> str:
+    provider = get_delivery_provider()
+    if isinstance(provider, MockEmailDeliveryProvider):
+        return "NOT_CONNECTED"
+    return "CONNECTED"

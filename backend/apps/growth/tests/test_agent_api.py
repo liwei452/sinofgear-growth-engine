@@ -44,8 +44,17 @@ def _candidate(organization):
 
 def test_list_detail_and_approve_agent_run(organization, monkeypatch):
     from apps.growth.agent import acquisition as acq
+    from apps.growth import outreach_events
 
     monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
+
+    class ConnectedProvider:
+        def send(self, *, email, subject, body):
+            return {"provider": "smtp", "message_id": "smtp-real-id", "status": "SENT"}
+
+    monkeypatch.setattr(outreach_events, "email_delivery_readiness", lambda: "CONNECTED")
+    monkeypatch.setattr(outreach_events, "get_delivery_provider", lambda: ConnectedProvider())
+
     candidate = _candidate(organization)
     run_proactive_acquisition(organization=organization, candidate_id=str(candidate.id))
     client = _client(organization)

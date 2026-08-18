@@ -56,7 +56,7 @@ def publish_context(db):
     return organization, user, packages, accounts
 
 
-def test_one_click_publishes_eligible_channels_and_is_idempotent(publish_context):
+def test_one_click_demo_packages_are_truthfully_skipped_and_idempotent(publish_context):
     organization, user, packages, _accounts = publish_context
 
     first = create_publish_batch(
@@ -75,14 +75,17 @@ def test_one_click_publishes_eligible_channels_and_is_idempotent(publish_context
     assert first.id == second.id
     assert first.items.count() == 4
     assert set(first.items.values_list("channel", flat=True)) == set(CHANNELS)
-    assert first.status == GrowthPublishBatch.Status.PARTIAL_SUCCESS
-    succeeded = first.items.exclude(status=GrowthPublishItem.Status.FAILED)
-    assert succeeded.count() == 3
-    assert all(item.external_post_url.startswith("https://example.invalid/demo-post/") for item in succeeded)
-    assert first.items.get(channel="TIKTOK").last_error["code"] == "PROVIDER_ERROR"
+    assert first.status == GrowthPublishBatch.Status.CONFIGURATION_REQUIRED
+    assert all(
+        item.status == GrowthPublishItem.Status.SKIPPED for item in first.items.all()
+    )
+    assert all(
+        item.last_error["code"] == "DEMO_ONLY_NO_EXTERNAL_PUBLISH"
+        for item in first.items.all()
+    )
 
 
-def test_retry_reexecutes_only_failed_channels(publish_context):
+def test_retry_does_not_reexecute_demo_skipped_channels(publish_context):
     organization, user, packages, _accounts = publish_context
     batch = create_publish_batch(
         organization=organization,
@@ -90,19 +93,15 @@ def test_retry_reexecutes_only_failed_channels(publish_context):
         package_ids=[package.id for package in packages],
         idempotency_key="publish-demo-retry",
     )
-    original_successes = {
-        item.channel: (item.attempt_number, item.external_post_id)
-        for item in batch.items.filter(status=GrowthPublishItem.Status.SUCCEEDED)
-    }
+    original = {item.channel: item.attempt_number for item in batch.items.all()}
 
     retried = retry_failed_items(batch=batch, actor=user)
 
-    assert retried.status == GrowthPublishBatch.Status.SUCCEEDED
-    assert retried.items.get(channel="TIKTOK").attempt_number == 2
-    assert retried.items.get(channel="TIKTOK").status == GrowthPublishItem.Status.SUCCEEDED
-    for channel, expected in original_successes.items():
+    assert retried.status == GrowthPublishBatch.Status.CONFIGURATION_REQUIRED
+    for channel, expected in original.items():
         item = retried.items.get(channel=channel)
-        assert (item.attempt_number, item.external_post_id) == expected
+        assert item.attempt_number == expected
+        assert item.status == GrowthPublishItem.Status.SKIPPED
 
 
 def test_unapproved_and_unconnected_channels_are_explicitly_skipped(publish_context):
@@ -207,10 +206,6 @@ def test_official_account_uses_registry_and_never_calls_fake(monkeypatch, db):
         "apps.growth.publishing.get_connector_registry",
         lambda: ConnectorRegistry(official_connectors={"LINKEDIN": connector}),
     )
-    monkeypatch.setattr(
-        "apps.growth.publishing.simulate_publish",
-        lambda **_kwargs: pytest.fail("Official accounts must never call Fake publishing."),
-    )
 
     batch = create_publish_batch(
         organization=organization,
@@ -253,11 +248,6 @@ def test_official_connector_configuration_failure_does_not_fall_back_to_fake(mon
         status="APPROVED",
         is_demo=False,
     )
-    monkeypatch.setattr(
-        "apps.growth.publishing.simulate_publish",
-        lambda **_kwargs: pytest.fail("Configuration failure must not use Fake publishing."),
-    )
-
     batch = create_publish_batch(
         organization=organization,
         actor=user,

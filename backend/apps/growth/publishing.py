@@ -9,7 +9,6 @@ from apps.platforms.models import SocialAccount
 from apps.publishing.models import PublishedPost, PublishTask
 from apps.publishing.services import PublishingConflict, create_publish_task
 from integrations.platforms.base import ConnectorConfigurationRequired, OfficialPublishRequest
-from integrations.platforms.manual_fake import simulate_publish
 from integrations.platforms.registry import ConnectorRegistry
 from integrations.platforms.runtime import get_social_provider_runtime
 
@@ -94,11 +93,9 @@ def _preflight_error(account: SocialAccount, package: ChannelPackage) -> dict | 
     if not connection_kind and metadata.get("fixture") == "phase-a-e2e":
         connection_kind = "demo_fake"
     if connection_kind == "demo_fake":
-        if package.is_demo:
-            return None
         return {
-            "code": "CONNECTOR_MODE_MISMATCH",
-            "message": "真实内容不能通过 Demo / Fake 连接器发布。",
+            "code": "DEMO_ONLY_NO_EXTERNAL_PUBLISH",
+            "message": "Demo/Fake connectors cannot create formal external posts.",
             "retryable": False,
             "retry_after_seconds": None,
         }
@@ -179,21 +176,15 @@ def _execute_item(item_id) -> None:
         if not connection_kind and metadata.get("fixture") == "phase-a-e2e":
             connection_kind = "demo_fake"
         if connection_kind == "demo_fake":
-            receipt = simulate_publish(
-                channel=item.channel,
-                payload=item.payload_snapshot,
-                item_id=str(item.id),
-                attempt_number=item.attempt_number,
-                outcome=metadata.get("mock_outcome", "provider_error"),
-                is_demo=item.channel_package.is_demo,
-            )
-            succeeded = receipt.succeeded
-            external_id = receipt.external_id
-            external_url = receipt.external_url
-            error_code = receipt.error_code
-            error_message = receipt.error_message
-            retryable = receipt.error_code in {"PROVIDER_ERROR", "RATE_LIMITED"}
-            retry_after_seconds = None
+            item.status = GrowthPublishItem.Status.SKIPPED
+            item.last_error = {
+                "code": "DEMO_ONLY_NO_EXTERNAL_PUBLISH",
+                "message": "Demo/Fake connectors cannot create formal external posts.",
+                "retryable": False,
+                "retry_after_seconds": None,
+            }
+            item.save(update_fields=["status", "last_error", "updated_at"])
+            return
         else:
             try:
                 connector = get_connector_registry().resolve(account)

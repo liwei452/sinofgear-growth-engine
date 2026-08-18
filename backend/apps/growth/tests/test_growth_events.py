@@ -68,7 +68,16 @@ def test_inbound_rfq_emits_rfq_and_routing_events(organization):
     assert "lead.routed" in types
 
 
-def test_send_emits_email_sent_event(organization):
+def test_send_emits_email_sent_event(organization, monkeypatch):
+    from apps.growth import outreach_events
+
+    class ConnectedProvider:
+        def send(self, *, email, subject, body):
+            return {"provider": "smtp", "message_id": "smtp-real-id", "status": "SENT"}
+
+    monkeypatch.setattr(outreach_events, "email_delivery_readiness", lambda: "CONNECTED")
+    monkeypatch.setattr(outreach_events, "get_delivery_provider", lambda: ConnectedProvider())
+
     account = TargetAccount.objects.create(organization=organization, name="ABC", country="VN")
     draft = OutreachDraft.objects.create(
         organization=organization,

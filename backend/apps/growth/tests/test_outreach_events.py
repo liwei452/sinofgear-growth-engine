@@ -15,6 +15,18 @@ def organization(db):
     return Organization.objects.create(name="Outreach", slug="outreach")
 
 
+class _ConnectedProvider:
+    def send(self, *, email, subject, body):
+        return {"provider": "smtp", "message_id": "smtp-real-id", "status": "SENT"}
+
+
+def _patch_connected(monkeypatch, provider):
+    from apps.growth import outreach_events
+
+    monkeypatch.setattr(outreach_events, "email_delivery_readiness", lambda: "CONNECTED")
+    monkeypatch.setattr(outreach_events, "get_delivery_provider", lambda: provider)
+
+
 def _account_and_draft(organization):
     account = TargetAccount.objects.create(
         organization=organization,
@@ -31,7 +43,8 @@ def _account_and_draft(organization):
     return account, draft
 
 
-def test_send_reply_bounce_unsubscribe_state_machine(organization):
+def test_send_reply_bounce_unsubscribe_state_machine(organization, monkeypatch):
+    _patch_connected(monkeypatch, _ConnectedProvider())
     account, draft = _account_and_draft(organization)
     message = record_sent(account=account, draft=draft, email="a@example.com")
     assert message.status == OutreachMessage.Status.SENT
@@ -76,6 +89,7 @@ def test_send_failure_is_not_recorded_as_sent(organization, monkeypatch):
         def send(self, *, email, subject, body):
             return {"provider": "smtp", "message_id": "smtp-x", "status": "FAILED"}
 
+    monkeypatch.setattr(outreach_events, "email_delivery_readiness", lambda: "CONNECTED")
     monkeypatch.setattr(outreach_events, "get_delivery_provider", lambda: FailingProvider())
 
     message = record_sent(account=account, draft=draft, email="a@example.com")
@@ -83,3 +97,13 @@ def test_send_failure_is_not_recorded_as_sent(organization, monkeypatch):
     assert message.status == OutreachMessage.Status.FAILED
     assert message.sent_at is None
     assert FollowUp.objects.get(account=account).stage == FollowUp.Stage.QUALIFIED
+
+
+def test_default_mock_provider_cannot_advance_stage(organization):
+    from apps.growth.email_delivery import EmailDeliveryUnavailable
+
+    account, draft = _account_and_draft(organization)
+    with pytest.raises(EmailDeliveryUnavailable, match="not connected"):
+        record_sent(account=account, draft=draft, email="buyer@example.com")
+    assert not OutreachMessage.objects.filter(account=account).exists()
+    assert FollowUp.objects.get(account=account).stage != FollowUp.Stage.EMAIL_1_SENT

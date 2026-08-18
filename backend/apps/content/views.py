@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.ai.models import PromptVersion
-from apps.ai.runtime import product_ai_status
+from apps.ai.provider_config import resolve_product_ai
 from apps.campaigns.models import ContentBrief, ContentBriefPlatform
 from apps.campaigns.services import build_content_generation_input
 from django.core.exceptions import ValidationError
@@ -71,8 +71,8 @@ class ContentRecommendationListCreateView(APIView):
         serializer = EmptySerializer(data=request.data)
         if not serializer.is_valid():
             return Response({"errors": serializer.errors}, status=400)
-        provider_status = product_ai_status()
-        if provider_status["mode"] == "CONFIGURATION_REQUIRED":
+        runtime = resolve_product_ai(request.organization)
+        if runtime.mode == "CONFIGURATION_REQUIRED":
             return Response({
                 "code": "CONFIGURATION_REQUIRED",
                 "message": "AI provider is not configured.",
@@ -119,7 +119,7 @@ class ContentRecommendationListCreateView(APIView):
                 input_snapshot=snapshot,
                 provider_mode=(
                     ContentRecommendation.ProviderMode.FAKE_OFFLINE
-                    if provider_status["mode"] == "FAKE_OFFLINE"
+                    if not runtime.real_requests_enabled
                     else ContentRecommendation.ProviderMode.CONFIGURED_AI
                 ),
                 created_by=request.user,
@@ -188,12 +188,12 @@ class ContentRecommendationSelectView(APIView):
         })
 
 
-def _generation_job_response(job, provider_status):
+def _generation_job_response(job, runtime):
     latest_run = job.ai_runs.order_by("-job_attempt", "-created_at").first()
     fake_mode = (
         latest_run.provider == "fake"
         if latest_run is not None
-        else provider_status["mode"] == "FAKE_OFFLINE"
+        else not runtime.real_requests_enabled
     )
     return Response({
         "job_id": job.id,
@@ -515,8 +515,8 @@ class GenerateMasterView(APIView):
             raise Http404 from exc
         if brief.status != ContentBrief.Status.READY:
             return _error(ContentStateError("Content brief must be READY."))
-        provider_status = product_ai_status()
-        if provider_status["mode"] == "CONFIGURATION_REQUIRED":
+        runtime = resolve_product_ai(request.organization)
+        if runtime.mode == "CONFIGURATION_REQUIRED":
             return Response({
                 "code": "CONFIGURATION_REQUIRED",
                 "message": "DeepSeek API key is not configured.",
@@ -534,7 +534,7 @@ class GenerateMasterView(APIView):
             idempotency_key=idempotency_key,
         ).first()
         if existing_job is not None:
-            return _generation_job_response(existing_job, provider_status)
+            return _generation_job_response(existing_job, runtime)
         snapshot = build_content_generation_input(brief.id).to_dict()
         job = JobService.create(
             organization=request.organization,
@@ -546,4 +546,4 @@ class GenerateMasterView(APIView):
         transaction.on_commit(
             lambda: generate_master_content_job.delay(str(job.id), str(prompt.id))
         )
-        return _generation_job_response(job, provider_status)
+        return _generation_job_response(job, runtime)

@@ -1,12 +1,24 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
 import { render, screen, waitFor, within } from "@testing-library/vue"
+import { config } from "@vue/test-utils"
 import userEvent from "@testing-library/user-event"
-import { expect, it, vi } from "vitest"
+import { afterAll, beforeAll, expect, it, vi } from "vitest"
 
+import { createTestRouter } from "../../test/testRouter"
 import CompanyPage from "./CompanyPage.vue"
 import EffectivenessPage from "./EffectivenessPage.vue"
 import OpportunitiesPage from "./OpportunitiesPage.vue"
 import PromotionPage from "./PromotionPage.vue"
+
+const testRouter = createTestRouter()
+beforeAll(async () => {
+  config.global.plugins.push(testRouter)
+  await testRouter.push("/")
+  await testRouter.isReady()
+})
+afterAll(() => {
+  config.global.plugins = config.global.plugins.filter((plugin) => plugin !== testRouter)
+})
 
 it("shows real content actions without a fabricated channel package in an empty workspace", () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })

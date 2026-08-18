@@ -424,7 +424,6 @@ function submitStart(): void {
         </div>
       </template>
     </section>
-
   </main>
 </template>
 

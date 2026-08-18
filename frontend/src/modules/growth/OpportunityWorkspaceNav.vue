@@ -58,7 +58,7 @@ button {
   background: transparent;
   color: var(--sg-muted);
   font: inherit;
-  font-size: .82rem;
+  font-size: .875rem;
   font-weight: 800;
   cursor: pointer;
 }

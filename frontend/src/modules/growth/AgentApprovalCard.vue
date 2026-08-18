@@ -82,9 +82,9 @@ const pendingAction = computed(() => {
 .approval-card__header h2 { margin: 8px 0 0; font-size: 1.08rem; }
 .approval-card__header time { flex: 0 0 auto; color: var(--sg-muted); font-size: .74rem; }
 .approval-card__status { display: inline-flex; border-radius: 999px; background: #fff3df; padding: 4px 8px; color: #8a5900; font-size: .72rem; font-weight: 850; }
-.approval-card__decision { border-left: 3px solid var(--sg-copper, #b86b3d); border-radius: 8px; background: #fff9f2; padding: 12px 14px; }
+.approval-card__decision { border-left: 3px solid var(--sg-accent); border-radius: 8px; background: #fff9f2; padding: 12px 14px; }
 .approval-card__prompt { margin: 0; color: var(--sg-ink); font-weight: 850; }
-.approval-card__reason { margin: 6px 0 0; color: var(--sg-muted); font-size: .82rem; line-height: 1.55; }
+.approval-card__reason { margin: 6px 0 0; color: var(--sg-muted); font-size: .875rem; line-height: 1.55; }
 .approval-card__draft { border: 1px solid #dce8f4; border-radius: 12px; background: #f8fbff; padding: 16px; }
 .approval-card__draft h3 { margin: 0 0 8px; font-size: .86rem; }
 .approval-card__draft p { margin: 0; white-space: pre-wrap; line-height: 1.65; }

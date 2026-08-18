@@ -49,7 +49,8 @@ defineProps<{
 .today-action-title { display: flex; align-items: center; gap: 8px; }
 .today-action-title strong { font-size: .95rem; }
 .today-action-title b { display: inline-grid; min-width: 23px; height: 23px; place-items: center; border-radius: 999px; background: var(--sg-brand); color: white; font-size: .75rem; }
-.today-action small { display: block; margin-top: 6px; color: var(--sg-muted); font-size: .82rem; line-height: 1.45; }
+.today-action small { display: block; margin-top: 6px; color: var(--sg-muted); font-size: .875rem; line-height: 1.45; }
 .today-action-arrow { color: var(--sg-muted); font-size: 1.15rem; }
 @media (max-width: 980px) { .today-actions { grid-template-columns: 1fr; }.today-action { min-height: 84px; } }
+@media (max-width: 420px) { .today-action { grid-template-columns: auto minmax(0, 1fr); }.today-action-arrow { display: none; } }
 </style>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue"
+import { RouterLink } from "vue-router"
 
 import type { ChannelPackage, PlatformConnection } from "./api"
 
@@ -98,12 +99,14 @@ const batchReviewConfirmed = computed({
       <ul class="readiness-list">
         <li v-for="item in channelReadiness" :key="item.channel">
           <span>{{ channelLabel(item.channel) }} · {{ item.label }}</span>
-          <a
+          <RouterLink
             v-if="item.issue === 'MISSING_PACKAGE' || item.issue === 'FORMAT'"
             class="readiness-action"
-            href="/reviews"
+            to="/reviews"
             :aria-label="item.issue === 'FORMAT' ? `补全 ${channelLabel(item.channel)} 发布格式` : `准备 ${channelLabel(item.channel)} 内容包`"
-          >{{ item.issue === 'FORMAT' ? '去补全' : '准备内容' }}</a>
+          >
+            {{ item.issue === 'FORMAT' ? '去补全' : '准备内容' }}
+          </RouterLink>
           <button
             v-else-if="item.issue === 'REVIEW' || item.issue === 'CONNECTION'"
             class="readiness-action"

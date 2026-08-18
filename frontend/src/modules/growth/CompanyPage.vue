@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
 import { computed, ref } from "vue"
+import { RouterLink } from "vue-router"
 
 import {
   growthQueryKeys,
@@ -85,7 +86,7 @@ async function verify(fact: FactRow): Promise<void> {
       </div>
       <p v-if="verificationError" role="alert" class="approval-status">{{ verificationError }}</p>
     </section>
-    <section class="growth-card suggestions"><h2>建议补充</h2><ul><li>可公开的检测设备与报告摘要</li><li>标准交付周期和加急边界</li><li>可公开的包装机械应用案例</li></ul><a class="button button-primary" href="/assets">上传资料并提取事实</a></section>
+    <section class="growth-card suggestions"><h2>建议补充</h2><ul><li>可公开的检测设备与报告摘要</li><li>标准交付周期和加急边界</li><li>可公开的包装机械应用案例</li></ul><RouterLink class="button button-primary" to="/assets">上传资料并提取事实</RouterLink></section>
   </div>
 </template>
 <style scoped src="./growth-pages.css"></style>

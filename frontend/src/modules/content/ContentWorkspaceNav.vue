@@ -52,7 +52,7 @@ a {
   min-height: 44px;
   border-radius: 9px;
   color: var(--sg-muted);
-  font-size: .82rem;
+  font-size: .875rem;
   font-weight: 800;
   text-decoration: none;
 }

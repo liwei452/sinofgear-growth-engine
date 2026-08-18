@@ -95,6 +95,7 @@ it("imports a permitted public source and selects the persisted conservative opp
   renderPage()
 
   expect(await screen.findByText("人工审核后跟进")).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "名单导入" }))
   await user.click(screen.getByRole("button", { name: "导入公开线索" }))
   expect(screen.getByText(/系统不会访问该网页，也不会自动联系客户/)).toBeInTheDocument()
   await fillImportForm(user)
@@ -142,6 +143,7 @@ it("keeps the form values and shows field guidance when an import fails", async 
   renderPage()
 
   await screen.findByText("人工审核后跟进")
+  await user.click(screen.getByRole("button", { name: "名单导入" }))
   await user.click(screen.getByRole("button", { name: "导入公开线索" }))
   await fillImportForm(user)
   await user.click(screen.getByRole("button", { name: "保存为待核实机会" }))

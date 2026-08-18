@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue"
+import { RouterLink } from "vue-router"
 
 import type { PromotionPlan } from "./api"
 
@@ -48,7 +49,7 @@ function channelLabel(code: string): string {
     <div class="plan-summary-actions">
       <button v-if="!approved" class="button button-primary" type="button" @click="emit('approve')">确认推广计划</button>
       <p v-else class="plan-approved" role="status">计划已确认，可以开始创建内容。</p>
-      <a v-if="approved" class="button button-primary" href="/content-factory">去创建内容</a>
+      <RouterLink v-if="approved" class="button button-primary" to="/content-factory">去创建内容</RouterLink>
       <button class="button button-secondary" type="button" @click="emit('regenerate')">重新生成</button>
     </div>
   </section>

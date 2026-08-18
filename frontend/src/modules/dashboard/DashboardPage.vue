@@ -340,7 +340,7 @@ function toggleEvidence(id: string) {
 .opportunity-list, .insight-column { display: grid; gap: 16px; }
 .opportunity-list { margin-top: 16px; }
 .opportunity-card { display: grid; grid-template-columns: 150px 1fr; gap: 20px; border: 1px solid var(--sg-line); border-radius: 12px; padding: 18px; }
-.company-block { display: grid; align-content: start; gap: 6px; border-right: 1px solid var(--sg-line); padding-right: 18px; color: var(--sg-muted); font-size: .82rem; }
+.company-block { display: grid; align-content: start; gap: 6px; border-right: 1px solid var(--sg-line); padding-right: 18px; color: var(--sg-muted); font-size: .875rem; }
 .company-block strong { color: var(--sg-ink); font-size: .95rem; }
 .company-avatar { display: grid; width: 44px; height: 44px; place-items: center; margin-bottom: 6px; border-radius: 50%; background: var(--sg-brand-soft); color: var(--sg-brand); font-weight: 900; }
 .signal-block h3 { margin: 12px 0 8px; font-size: 1rem; }
@@ -348,12 +348,12 @@ function toggleEvidence(id: string) {
 .signal-meta { display: flex; flex-wrap: wrap; gap: 18px; margin: 14px 0; }
 .signal-meta div { display: grid; gap: 3px; }
 .signal-meta dt { color: var(--sg-muted); font-size: .72rem; }
-.signal-meta dd { margin: 0; font-size: .82rem; font-weight: 700; }
+.signal-meta dd { margin: 0; font-size: .875rem; font-weight: 700; }
 .opportunity-actions { justify-content: flex-start; flex-wrap: wrap; }
 .evidence-button { min-height: 44px; border: 0; background: transparent; color: var(--sg-brand); font-weight: 750; cursor: pointer; }
 .evidence-box { margin-top: 14px; border-left: 3px solid var(--sg-brand); border-radius: 6px; background: #f6f9fc; padding: 12px 14px; }
-.evidence-box p { margin: 5px 0 0; font-size: .82rem; line-height: 1.55; }
-.safe-note { margin: 9px 0 0; color: var(--sg-muted); font-size: .8rem; text-align: center; }
+.evidence-box p { margin: 5px 0 0; font-size: .875rem; line-height: 1.55; }
+.safe-note { margin: 9px 0 0; color: var(--sg-muted); font-size: .875rem; text-align: center; }
 .channel-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; margin-top: 16px; }
 .channel-grid article { min-width: 0; border: 1px solid var(--sg-line); border-radius: 10px; padding: 11px; }
 .channel-grid article > strong { font-size: .8rem; }

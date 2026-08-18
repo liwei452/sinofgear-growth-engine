@@ -1,11 +1,23 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
 import { render, screen } from "@testing-library/vue"
+import { config } from "@vue/test-utils"
 import userEvent from "@testing-library/user-event"
-import { afterEach, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest"
+import { createTestRouter } from "../../test/testRouter"
 import { currentUserQueryOptions } from "../auth/auth"
 import PlatformAccountsPage from "./PlatformAccountsPage.vue"
 
-it("shows safe connection summaries and manager actions",async()=>{vi.stubGlobal("fetch",vi.fn((path:string)=>Promise.resolve(new Response(JSON.stringify(path==="/api/v1/platforms"?{results:[{id:"p1",code:"linkedin",name:"LinkedIn",capabilities:["PUBLISH"]}]}:{results:[{id:"a1",platform_id:"p1",display_name:"Global LinkedIn",publish_mode:"MANUAL",status:"ACTIVE",effective_capabilities:["PUBLISH"],credential_configured:false}]}),{status:200,headers:{"Content-Type":"application/json"}}))));const client=new QueryClient({defaultOptions:{queries:{retry:false}}});client.setQueryData(currentUserQueryOptions().queryKey,{user:{id:1,username:"admin"},organization:{id:"o1",name:"Org",slug:"org"},membership:{id:"m",role:"ADMINISTRATOR",status:"ACTIVE",permissions:["publishing.read","credentials.manage"]}});render(PlatformAccountsPage,{global:{plugins:[[VueQueryPlugin,{queryClient:client}]]}});expect(await screen.findByText("Global LinkedIn")).toBeInTheDocument();expect(screen.getByRole("button",{name:"连接平台账户"})).toBeInTheDocument();expect(screen.queryByText(/secret/i)).not.toBeInTheDocument()})
+const testRouter = createTestRouter()
+beforeAll(async () => {
+  config.global.plugins.push(testRouter)
+  await testRouter.push("/")
+  await testRouter.isReady()
+})
+afterAll(() => {
+  config.global.plugins = config.global.plugins.filter((plugin) => plugin !== testRouter)
+})
+
+it("shows safe connection summaries and manager actions",async()=>{vi.stubGlobal("fetch",vi.fn((path:string)=>Promise.resolve(new Response(JSON.stringify(path==="/api/v1/platforms"?{results:[{id:"p1",code:"linkedin",name:"LinkedIn",capabilities:["PUBLISH"]}]}:{results:[{id:"a1",platform_id:"p1",display_name:"Global LinkedIn",publish_mode:"MANUAL",status:"ACTIVE",effective_capabilities:["PUBLISH"],credential_configured:false}]}),{status:200,headers:{"Content-Type":"application/json"}}))));const client=new QueryClient({defaultOptions:{queries:{retry:false}}});client.setQueryData(currentUserQueryOptions().queryKey,{user:{id:1,username:"admin"},organization:{id:"o1",name:"Org",slug:"org"},membership:{id:"m",role:"ADMINISTRATOR",status:"ACTIVE",permissions:["publishing.read","credentials.manage"]}});render(PlatformAccountsPage,{global:{plugins:[[VueQueryPlugin,{queryClient:client}]]}});expect(await screen.findByText("Global LinkedIn")).toBeInTheDocument();expect(screen.getByRole("navigation",{name:"内容与发布工作区"})).toBeInTheDocument();expect(screen.getByRole("button",{name:"连接平台账户"})).toBeInTheDocument();expect(screen.queryByText(/secret/i)).not.toBeInTheDocument()})
 
 afterEach(()=>vi.unstubAllGlobals())
 function renderAccounts(permissions:string[],fetch:ReturnType<typeof vi.fn>){vi.stubGlobal("fetch",fetch);const client=new QueryClient({defaultOptions:{queries:{retry:false}}});client.setQueryData(currentUserQueryOptions().queryKey,{user:{id:1,username:"reader"},organization:{id:"o1",name:"Org",slug:"org"},membership:{id:"m",role:"READ_ONLY",status:"ACTIVE",permissions}});return{...render(PlatformAccountsPage,{global:{plugins:[[VueQueryPlugin,{queryClient:client}]]}}),client}}

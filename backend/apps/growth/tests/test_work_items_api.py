@@ -42,3 +42,19 @@ def test_read_only_user_cannot_view_work_items(organization):
     assert client.login(username=user.username, password="password")
     response = client.get("/api/v1/growth/work-items")
     assert response.status_code == 403
+
+
+def test_channel_package_batch_prepare_validates_input(organization, operator_client):
+    empty = operator_client.post(
+        "/api/v1/growth/channel-packages/prepare-all",
+        {"platform_content_ids": []},
+        format="json",
+    )
+    assert empty.status_code == 400
+
+    missing = operator_client.post(
+        "/api/v1/growth/channel-packages/prepare-all",
+        {"platform_content_ids": ["11111111-1111-4111-8111-111111111111"]},
+        format="json",
+    )
+    assert missing.status_code == 404

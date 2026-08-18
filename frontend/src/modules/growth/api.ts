@@ -196,6 +196,17 @@ export async function prepareChannelPackage(platformContentId: string): Promise<
   return result
 }
 
+export async function prepareChannelPackages(
+  platformContentIds: string[],
+): Promise<ChannelPackage[]> {
+  const result = await apiRequest<ChannelPackage[]>(
+    "/api/v1/growth/channel-packages/prepare-all",
+    { method: "POST", body: { platform_content_ids: platformContentIds } },
+  )
+  if (!result) throw new Error("发布准备响应为空。")
+  return result
+}
+
 export type MetricReceipt = {
   id: string
   channel: string

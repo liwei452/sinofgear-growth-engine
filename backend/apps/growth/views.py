@@ -81,6 +81,7 @@ from .manual_imports import import_manual_opportunity
 from .market_pilots import market_pilot_summary, market_profiles_for
 from .serializers import (
     ChannelPackageBatchApproveSerializer,
+    ChannelPackageBatchPrepareSerializer,
     FourChannelManualExportSerializer,
     ChannelPackageSerializer,
     CandidateListImportResultSerializer,
@@ -1277,6 +1278,29 @@ class ChannelPackageFromPlatformContentView(APIView):
             ChannelPackageSerializer(package).data,
             status=201 if created else 200,
         )
+
+
+class ChannelPackageBatchPrepareView(APIView):
+    permission_classes = [CanManagePublishing]
+
+    @extend_schema(tags=["Growth workspace"], responses={201: ChannelPackageSerializer(many=True)})
+    def post(self, request):
+        serializer = ChannelPackageBatchPrepareSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        packages = []
+        for content_id in serializer.validated_data["platform_content_ids"]:
+            content = get_object_or_404(
+                PlatformContent, id=content_id, organization=request.organization
+            )
+            try:
+                package, _created = prepare_channel_package_from_platform_content(content=content)
+            except ChannelPackagePreparationBlocked as error:
+                return Response({
+                    "code": "CHANNEL_PACKAGE_PREPARATION_BLOCKED",
+                    "message": str(error),
+                }, status=409)
+            packages.append(package)
+        return Response(ChannelPackageSerializer(packages, many=True).data, status=201)
 
 
 class ChannelPackageManualExportView(APIView):

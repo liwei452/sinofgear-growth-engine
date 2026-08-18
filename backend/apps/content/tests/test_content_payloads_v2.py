@@ -189,3 +189,15 @@ def test_generated_output_accepts_numeric_claim_backed_by_verified_fact():
     cleaned = payloads.validate_generated_content_output(output, snapshot)
 
     assert cleaned["body"] == "Our gears are available with 20 teeth."
+
+
+def test_numeric_grounding_does_not_match_substring_of_larger_number():
+    snapshot = {
+        **_snapshot(),
+        "verified_product_facts": [{"fact_id": "fact-1", "value": "20"}],
+    }
+    output = _output()
+    output["body"] = "Our gears run at 1200 rpm."
+
+    with pytest.raises(ValueError, match="numeric claim"):
+        payloads.validate_generated_content_output(output, snapshot)

@@ -411,6 +411,12 @@ def _numeric_claim_sentences(cleaned):
     return sentences
 
 
+def _fact_value_matches(value: str, sentence: str) -> bool:
+    if value.isdigit():
+        return bool(re.search(rf"(?<!\d){re.escape(value)}(?!\d)", sentence))
+    return value in sentence
+
+
 def _assert_numeric_claims_grounded(cleaned, snapshot):
     """Require numeric/spec claims to trace back to a verified fact value."""
     claim_sentences = _numeric_claim_sentences(cleaned)
@@ -419,7 +425,7 @@ def _assert_numeric_claims_grounded(cleaned, snapshot):
     fact_values = _grounding_fact_values(snapshot)
     for sentence in claim_sentences:
         folded = sentence.casefold()
-        if not any(value in folded for value in fact_values):
+        if not any(_fact_value_matches(value, folded) for value in fact_values):
             raise ValueError("Generated content contains a numeric claim without a verified fact.")
 
 

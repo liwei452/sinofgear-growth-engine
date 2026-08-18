@@ -6,6 +6,7 @@ from django.utils import timezone
 from apps.ai.models import AIRun, OrganizationAIProviderConfig, PromptVersion, ai_audit_writes
 from apps.ai.services import (
     AIBudgetExceeded,
+    BudgetedAIProvider,
     PromptVersionService,
     assert_ai_budget_available,
     estimate_deepseek_cost_micros,
@@ -195,3 +196,34 @@ def test_estimated_usd_budget_rejects_before_reserving(organization):
 
     config.refresh_from_db()
     assert config.daily_reserved_micros == 0
+
+
+@pytest.mark.django_db
+def test_budgeted_provider_reserves_and_settles_cost(organization):
+    config = OrganizationAIProviderConfig.objects.create(
+        organization=organization,
+        model="deepseek-chat",
+        daily_budget_micros=2_000_000,
+    )
+
+    class FakeProvider:
+        def __init__(self):
+            self.last_usage = None
+
+        def generate(self, *, prompt, schema):
+            self.last_usage = {"prompt_tokens": 10, "completion_tokens": 5}
+            return {"ok": True}
+
+    provider = FakeProvider()
+    budgeted = BudgetedAIProvider(
+        organization=organization,
+        model="deepseek-chat",
+        provider=provider,
+    )
+
+    result = budgeted.generate(prompt="hello world", schema={"type": "object"})
+
+    assert result == {"ok": True}
+    config.refresh_from_db()
+    assert config.daily_reserved_micros == 0
+    assert config.daily_spent_micros > 0

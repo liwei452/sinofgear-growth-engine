@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from apps.ai.provider_config import resolve_product_ai
+from apps.ai.services import BudgetedAIProvider
 
 from ..models import AgentRun
 from .planner import LLMPlanner, Planner
@@ -29,7 +30,13 @@ def resolve_agent_execution(*, organization, fallback: Planner, allow_llm: bool)
             mode=AgentRun.ExecutionMode.AI_AGENT,
             provider=runtime.provider_code,
             model=runtime.model,
-            planner=LLMPlanner(provider=runtime.provider),
+            planner=LLMPlanner(
+                provider=BudgetedAIProvider(
+                    organization=organization,
+                    model=runtime.model,
+                    provider=runtime.provider,
+                ),
+            ),
         )
     return AgentExecution(
         mode=AgentRun.ExecutionMode.AUTOMATION,
@@ -73,5 +80,11 @@ def resolve_run_execution(
         mode=run.execution_mode,
         provider=run.planner_provider,
         model=run.planner_model,
-        planner=LLMPlanner(provider=runtime.provider),
+        planner=LLMPlanner(
+            provider=BudgetedAIProvider(
+                organization=run.organization,
+                model=run.planner_model,
+                provider=runtime.provider,
+            ),
+        ),
     )

@@ -17,6 +17,32 @@ class AIBudgetExceeded(RuntimeError):
 
 
 AI_CALL_RESERVATION_TOKENS = 4000
+AI_PLANNER_OUTPUT_TOKEN_ESTIMATE = 512
+
+
+class BudgetedAIProvider:
+    def __init__(self, *, organization, model: str, provider):
+        self._organization = organization
+        self._model = model
+        self._provider = provider
+
+    def generate(self, *, prompt: str, schema: dict) -> dict:
+        input_estimate = max(1, (len(prompt) + 3) // 4)
+        reserved_micros = reserve_ai_cost(
+            self._organization,
+            model=self._model,
+            input_tokens=input_estimate,
+            output_tokens=AI_PLANNER_OUTPUT_TOKEN_ESTIMATE,
+        )
+        try:
+            return self._provider.generate(prompt=prompt, schema=schema)
+        finally:
+            settle_ai_cost(
+                self._organization,
+                reserved_micros=reserved_micros,
+                model=self._model,
+                usage=getattr(self._provider, "last_usage", None),
+            )
 
 
 def estimate_deepseek_cost_micros(
@@ -211,6 +237,7 @@ class PromptVersionService:
 
 __all__ = [
     "AIBudgetExceeded",
+    "BudgetedAIProvider",
     "PromptVersionService",
     "assert_ai_budget_available",
     "estimate_deepseek_cost_micros",

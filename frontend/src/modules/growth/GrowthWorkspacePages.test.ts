@@ -26,6 +26,11 @@ it("keeps growth objects distinct and does not invent an opportunity for an empt
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(OpportunitiesPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
+  const workspaceNav = screen.getByRole("navigation", { name: "客户工作区" })
+  expect(within(workspaceNav).getByRole("button", { name: "机会队列" })).toHaveAttribute("aria-current", "page")
+  expect(within(workspaceNav).getByRole("button", { name: "客户发现" })).toBeInTheDocument()
+  expect(within(workspaceNav).getByRole("button", { name: "名单导入" })).toBeInTheDocument()
+  expect(within(workspaceNav).getByRole("button", { name: "老客激活" })).toBeInTheDocument()
   for (const objectName of ["目标公司", "联系人", "需求信号", "入站线索"]) {
     expect(screen.getByText(objectName, { selector: "dt" })).toBeInTheDocument()
   }
@@ -681,6 +686,8 @@ it("sorts and switches the opportunity queue without sharing follow-up state", a
   render(OpportunitiesPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
   expect(await screen.findByRole("heading", { name: "API Opportunity GmbH" })).toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "客户列表" })).toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "客户详情" })).toBeInTheDocument()
   expect(screen.getByText("Purchasing team", { exact: false })).toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "加入跟进" }))
   await waitFor(() => expect(screen.getByRole("button", { name: "已加入跟进" })).toBeDisabled())

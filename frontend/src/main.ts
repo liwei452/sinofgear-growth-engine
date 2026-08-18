@@ -11,6 +11,8 @@ import CompanyPage from "./modules/growth/CompanyPage.vue"
 import EffectivenessPage from "./modules/growth/EffectivenessPage.vue"
 import OpportunitiesPage from "./modules/growth/OpportunitiesPage.vue"
 import AgentApprovalsPage from "./modules/growth/AgentApprovalsPage.vue"
+import GrowthMissionsPage from "./modules/missions/GrowthMissionsPage.vue"
+import GrowthMissionDetailPage from "./modules/missions/GrowthMissionDetailPage.vue"
 import PlaceholderPage from "./shared/components/PlaceholderPage.vue"
 import "./styles/tokens.css"
 import "./styles/base.css"
@@ -24,6 +26,8 @@ const router = createAppRouter(queryClient, {
     Opportunities: OpportunitiesPage,
     AgentApprovals: AgentApprovalsPage,
     AgentWorkspace: defineAsyncComponent(() => import("./modules/agents/AgentWorkspacePage.vue")),
+    Missions: GrowthMissionsPage,
+    MissionDetail: GrowthMissionDetailPage,
     Company: CompanyPage,
     Settings: defineAsyncComponent(() => import("./modules/settings/SettingsCenterPage.vue")),
     AIModelSettings: defineAsyncComponent(() => import("./modules/settings/AIModelSettingsPage.vue")),

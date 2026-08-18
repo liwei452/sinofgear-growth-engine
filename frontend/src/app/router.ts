@@ -15,6 +15,8 @@ export type AppRouteComponents = {
   Opportunities: Component
   AgentApprovals: Component
   AgentWorkspace: Component
+  Missions: Component
+  MissionDetail: Component
   Company: Component
   Settings: Component
   AIModelSettings: Component
@@ -68,6 +70,8 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
     { path: "opportunities", name: "opportunities", component: options.components.Opportunities, meta: { title: "客户机会", requiredPermission: "leads.read" } },
     { path: "agent-approvals", name: "agent-approvals", component: options.components.AgentApprovals, meta: { title: "待我审核", requiredPermission: "agents.approve" } },
     { path: "agent-workspace", name: "agent-workspace", component: options.components.AgentWorkspace, meta: { title: "Agent 工作台", requiredPermission: "agents.run" } },
+    { path: "missions", name: "missions", component: options.components.Missions, meta: { title: "增长任务", requiredPermission: "missions.read" } },
+    { path: "missions/:missionId", name: "mission-detail", component: options.components.MissionDetail, meta: { title: "增长任务详情", requiredPermission: "missions.read" } },
     { path: "company", name: "company", component: options.components.Company, meta: { title: "我的公司" } },
     { path: "settings", name: "settings", component: options.components.Settings, meta: { title: "设置中心" } },
     { path: "settings/ai-model", name: "ai-model-settings", component: options.components.AIModelSettings, meta: { title: "AI 模型", requiredRole: "ADMINISTRATOR", requiredPermission: "credentials.manage" } },

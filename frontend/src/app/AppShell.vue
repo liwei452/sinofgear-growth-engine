@@ -43,7 +43,6 @@ const menuButtonElement = ref<HTMLButtonElement | null>(null)
 const userMenuButtonElement = ref<HTMLButtonElement | null>(null)
 const contentElement = ref<HTMLElement | null>(null)
 const drawerClosed = computed(() => isNarrowViewport.value && !navOpen.value)
-const pageTitle = computed(() => String(route.meta.title ?? "工作台"))
 const logoutMutation = useMutation({
   mutationFn: logout,
   onSuccess: async () => {
@@ -232,10 +231,7 @@ onBeforeUnmount(() => {
           >
             <AppIcon name="panel-left" :size="20" />
           </button>
-          <div>
-            <p class="topbar-label">当前位置</p>
-            <strong>{{ pageTitle }}</strong>
-          </div>
+          <span class="topbar-context">增长工作台</span>
         </div>
         <RouterLink
           v-if="canApprove"

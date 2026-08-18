@@ -19,6 +19,7 @@ export type IconName =
   | "panel-left"
   | "chevron-down"
   | "log-out"
+  | "inbox"
 
 const props = withDefaults(defineProps<{
   name: IconName
@@ -47,6 +48,7 @@ const iconPaths: Record<IconName, string[]> = {
   "panel-left": ["M3 3h18v18H3Z", "M9 3v18", "m15 9-3 3 3 3"],
   "chevron-down": ["m6 9 6 6 6-6"],
   "log-out": ["M10 17l5-5-5-5M15 12H3", "M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"],
+  "inbox": ["M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z", "M2 14h5l2 3h6l2-3h5"],
 }
 
 const paths = computed(() => iconPaths[props.name])

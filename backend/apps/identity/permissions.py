@@ -28,6 +28,11 @@ class PermissionCode(StrEnum):
     PUBLISHING_MANAGE = "publishing.manage"
     TRACKING_READ = "tracking.read"
     TRACKING_MANAGE = "tracking.manage"
+    AGENTS_RUN = "agents.run"
+    AGENTS_APPROVE = "agents.approve"
+    LEADS_READ = "leads.read"
+    LEADS_MANAGE = "leads.manage"
+    METRICS_READ = "metrics.read"
 
 
 class HasOrganizationPermission(BasePermission):
@@ -59,6 +64,26 @@ class CanManageMemberships(HasOrganizationPermission):
 
 class CanManageCredentials(HasOrganizationPermission):
     permission_code = PermissionCode.CREDENTIALS_MANAGE
+
+
+class CanRunAgents(HasOrganizationPermission):
+    permission_code = PermissionCode.AGENTS_RUN
+
+
+class CanApproveAgents(HasOrganizationPermission):
+    permission_code = PermissionCode.AGENTS_APPROVE
+
+
+class CanReadLeads(HasOrganizationPermission):
+    permission_code = PermissionCode.LEADS_READ
+
+
+class CanManageLeads(HasOrganizationPermission):
+    permission_code = PermissionCode.LEADS_MANAGE
+
+
+class CanReadMetrics(HasOrganizationPermission):
+    permission_code = PermissionCode.METRICS_READ
 
 
 class CanReadKnowledge(HasOrganizationPermission):

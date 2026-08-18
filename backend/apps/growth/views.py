@@ -14,7 +14,13 @@ from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
 from apps.content.models import PlatformContent
-from apps.identity.permissions import CanManageCampaigns, CanManagePublishing, CanReadCampaigns
+from apps.identity.permissions import (
+    CanManageCampaigns,
+    CanManageLeads,
+    CanManagePublishing,
+    CanReadCampaigns,
+    CanReadLeads,
+)
 from apps.platforms.connection_status import connection_summary
 from integrations.platforms.runtime import get_social_provider_runtime
 from integrations.sources.base import SourceAdapterError
@@ -265,7 +271,7 @@ def discovery_summary(profile):
 
 
 class GrowthWorkspaceView(APIView):
-    permission_classes = [CanReadCampaigns]
+    permission_classes = [CanReadLeads]
 
     @extend_schema(tags=["Growth workspace"])
     def get(self, request):
@@ -463,7 +469,7 @@ class InboundRfqView(APIView):
 
 
 class DiscoveryRunView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(
         tags=["Growth workspace"],
@@ -494,7 +500,7 @@ class DiscoveryRunView(APIView):
 
 
 class CandidateListImportView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(
         tags=["Growth workspace"],
@@ -520,7 +526,7 @@ class CandidateListImportView(APIView):
 
 
 class DiscoveryCandidateReviewView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(
         tags=["Growth workspace"],
@@ -565,7 +571,7 @@ class DiscoveryCandidateReviewView(APIView):
 
 
 class CandidateEnrichmentPrepareView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(
         tags=["Growth workspace"],
@@ -593,7 +599,7 @@ class CandidateEnrichmentPrepareView(APIView):
 
 
 class CandidateWebsiteEnrichmentView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(
         tags=["Growth workspace"],
@@ -633,7 +639,7 @@ class CandidateWebsiteEnrichmentView(APIView):
 
 
 class CandidateEnrichmentFollowUpView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(tags=["Growth workspace"], request=None)
     def post(self, request, candidate_id):
@@ -866,7 +872,7 @@ class TradeIndicatorView(APIView):
 
 
 class ReactivationCreateView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(tags=["Growth workspace"], request=ReactivationCreateSerializer)
     def post(self, request):
@@ -892,7 +898,7 @@ class ReactivationCreateView(APIView):
 
 
 class ReactivationDraftView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(tags=["Growth workspace"], request=None)
     def post(self, request, reactivation_id):
@@ -917,7 +923,7 @@ class ReactivationDraftView(APIView):
 
 
 class ReactivationApproveView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(tags=["Growth workspace"], request=None)
     def post(self, request, reactivation_id):
@@ -940,7 +946,7 @@ class ReactivationApproveView(APIView):
 
 
 class DiscoveryProfileView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanReadLeads]
 
     @extend_schema(
         tags=["Growth workspace"],
@@ -978,7 +984,7 @@ def maps_config_payload(config):
 
 
 class GoogleMapsDiscoveryConfigView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(
         tags=["Growth workspace"],
@@ -1016,7 +1022,7 @@ class GoogleMapsDiscoveryConfigView(APIView):
 
 
 class GoogleMapsDiscoveryRunView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(
         tags=["Growth workspace"],
@@ -1061,7 +1067,7 @@ class GoogleMapsDiscoveryRunView(APIView):
 
 
 class GoogleMapsDiscoveryTestView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(
         tags=["Growth workspace"],
@@ -1075,7 +1081,7 @@ class GoogleMapsDiscoveryTestView(APIView):
 
 
 class ManualOpportunityImportView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(
         tags=["Growth workspace"],
@@ -1110,7 +1116,7 @@ class ManualOpportunityImportView(APIView):
 
 
 class FollowUpView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(tags=["Growth workspace"])
     def post(self, request, account_id):
@@ -1120,7 +1126,7 @@ class FollowUpView(APIView):
 
 
 class OutreachDraftView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(tags=["Growth workspace"])
     def post(self, request, account_id):
@@ -1136,7 +1142,7 @@ class OutreachDraftView(APIView):
 
 
 class OpportunityReviewView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(
         tags=["Growth workspace"],
@@ -1161,7 +1167,7 @@ class OpportunityReviewView(APIView):
 
 
 class CRMHandoffView(APIView):
-    permission_classes = [CanManageCampaigns]
+    permission_classes = [CanManageLeads]
 
     @extend_schema(
         tags=["Growth workspace"],

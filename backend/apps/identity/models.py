@@ -87,6 +87,11 @@ class Role(models.Model):
                 PermissionCode.PUBLISHING_MANAGE,
                 PermissionCode.TRACKING_READ,
                 PermissionCode.TRACKING_MANAGE,
+                PermissionCode.AGENTS_RUN,
+                PermissionCode.AGENTS_APPROVE,
+                PermissionCode.LEADS_READ,
+                PermissionCode.LEADS_MANAGE,
+                PermissionCode.METRICS_READ,
             ),
         ),
         Code.REVIEWER: (
@@ -104,6 +109,9 @@ class Role(models.Model):
                 PermissionCode.CONTENT_REVIEW,
                 PermissionCode.PUBLISHING_READ,
                 PermissionCode.TRACKING_READ,
+                PermissionCode.AGENTS_APPROVE,
+                PermissionCode.LEADS_READ,
+                PermissionCode.METRICS_READ,
             ),
         ),
         Code.READ_ONLY: (
@@ -118,6 +126,7 @@ class Role(models.Model):
                 PermissionCode.CONTENT_READ,
                 PermissionCode.PUBLISHING_READ,
                 PermissionCode.TRACKING_READ,
+                PermissionCode.METRICS_READ,
             ),
         ),
     }

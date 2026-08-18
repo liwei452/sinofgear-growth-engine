@@ -7,7 +7,11 @@ from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.identity.permissions import CanManageCampaigns, CanReadCampaigns
+from apps.identity.permissions import (
+    CanManageCampaigns,
+    CanReadCampaigns,
+    PermissionCode,
+)
 from apps.identity.services import get_active_membership, require_permission
 
 from .agent.resume import resume_agent_run
@@ -35,7 +39,7 @@ TOOL_PERMISSIONS = {
     "trigger_master_generation": "content.manage",
     "create_platform_variants": "content.manage",
     "schedule_social_post": "publishing.manage",
-    "send_email": "campaigns.manage",
+    "send_email": "leads.manage",
 }
 
 
@@ -189,6 +193,7 @@ class AgentRunApproveView(APIView):
         run = get_object_or_404(AgentRun, id=run_id, organization=request.organization)
         if run.status != AgentRun.Status.WAITING_APPROVAL:
             return Response({"message": "Run is not waiting for approval."}, status=409)
+        _require(request, PermissionCode.AGENTS_APPROVE)
 
         decision = request.data.get("decision", "approve")
         comment = str(request.data.get("comment") or "").strip()
@@ -234,6 +239,7 @@ class AgentRunStartView(APIView):
         agent_type = request.data.get("agent_type")
         if agent_type not in AGENT_PERMISSIONS:
             return Response({"message": f"Unknown agent type {agent_type!r}."}, status=400)
+        _require(request, PermissionCode.AGENTS_RUN)
         _require(request, AGENT_PERMISSIONS[agent_type])
         organization = request.organization
         actor_id = str(request.user.id)

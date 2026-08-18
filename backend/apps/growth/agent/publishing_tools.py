@@ -45,7 +45,9 @@ def _summarize_performance(organization) -> dict[str, Any]:
     from apps.publishing.models import PostMetric
 
     posts = PublishedPost.objects.filter(organization=organization)
-    metric_totals = PostMetric.objects.filter(post__organization=organization).aggregate(
+    metric_totals = PostMetric.objects.filter(
+        post__organization=organization
+    ).exclude(source="demo").aggregate(
         impressions=Sum("impressions"),
         plays=Sum("plays"),
         likes=Sum("likes"),

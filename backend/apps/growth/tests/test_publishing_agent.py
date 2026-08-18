@@ -66,6 +66,9 @@ def test_analyze_post_performance_summary(monkeypatch):
         def filter(self, **kwargs):
             return self
 
+        def exclude(self, **kwargs):
+            return self
+
         def count(self):
             return self._count
 
@@ -111,6 +114,9 @@ def test_analyze_post_performance_emits_gap_recommendations(monkeypatch):
             self._count = count
 
         def filter(self, **kwargs):
+            return self
+
+        def exclude(self, **kwargs):
             return self
 
         def count(self):

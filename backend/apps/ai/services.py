@@ -20,7 +20,7 @@ def organization_daily_token_usage(organization_id, *, now=None) -> int:
     runs = AIRun.objects.filter(
         organization_id=organization_id,
         started_at__gte=start,
-        status=AIRun.Status.SUCCEEDED,
+        status__in=[AIRun.Status.SUCCEEDED, AIRun.Status.FAILED],
     )
     for run in runs:
         metadata = run.provider_metadata

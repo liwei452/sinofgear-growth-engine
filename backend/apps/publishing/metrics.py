@@ -1,5 +1,6 @@
 import hashlib
 
+from django.conf import settings
 from django.utils import timezone
 
 from .models import PostMetric, PublishedPost, publishing_writes
@@ -28,6 +29,8 @@ def _demo_metrics(post) -> dict:
 
 
 def sync_post_metrics(*, organization, now=None) -> int:
+    if not getattr(settings, "DEMO_POST_METRICS_ENABLED", False):
+        return 0
     now = now or timezone.now()
     collected_on = now.date()
     posts = (

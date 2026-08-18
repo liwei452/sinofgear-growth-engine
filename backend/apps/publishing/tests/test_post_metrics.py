@@ -1,6 +1,7 @@
 import uuid
 
 import pytest
+from django.test import override_settings
 from django.utils import timezone
 
 from apps.publishing.metrics import sync_post_metrics
@@ -18,6 +19,7 @@ from apps.publishing.services import (
 )
 
 
+@override_settings(DEMO_POST_METRICS_ENABLED=True)
 def test_sync_post_metrics_creates_and_updates_daily_metrics(publishing_context):
     context = publishing_context
     task = create_publish_task(
@@ -36,6 +38,12 @@ def test_sync_post_metrics_creates_and_updates_daily_metrics(publishing_context)
 
     assert sync_post_metrics(organization=context["organization"]) == 0
     assert PostMetric.objects.filter(post=post).count() == 1
+
+
+def test_sync_post_metrics_skips_demo_when_disabled(publishing_context):
+    context = publishing_context
+    assert sync_post_metrics(organization=context["organization"]) == 0
+    assert PostMetric.objects.count() == 0
 
 
 def test_daily_publish_limit_blocks_extra_scheduling(publishing_context):

@@ -3,9 +3,14 @@ from uuid import uuid4
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
-from apps.ai.models import AIRun, PromptVersion
-from apps.ai.orchestration import GenerationPreflightError, execute_generation_job
+from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
+from apps.ai.orchestration import (
+    GenerationError,
+    GenerationPreflightError,
+    execute_generation_job,
+)
 from apps.ai.services import PromptVersionService, scrub_secrets
 from apps.content.payloads import CONTENT_OUTPUT_SCHEMA_V2
 from apps.identity.models import Organization
@@ -596,3 +601,43 @@ def test_task8_snapshot_organization_must_match_job_and_ontology(
         execute_generation_job(job.id, prompt_version_id=prompt.id)
 
     assert error.value.code == "generation_input_organization_mismatch"
+
+
+@pytest.mark.django_db
+def test_generation_job_enforces_org_daily_budget(organization, frozen_input, prompt):
+    organization.ai_daily_token_budget = 10
+    organization.save(update_fields=["ai_daily_token_budget"])
+
+    prior_job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot={"brief_id": "prior"},
+    )
+    with ai_audit_writes():
+        AIRun.objects.create(
+            organization=organization,
+            job=prior_job,
+            job_attempt=1,
+            prompt_version=prompt,
+            provider="fake",
+            model="fake-v1",
+            input_snapshot={},
+            status=AIRun.Status.SUCCEEDED,
+            started_at=timezone.now(),
+            provider_metadata={
+                "provider_code": "fake",
+                "usage": {"total_tokens": 10},
+            },
+        )
+
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+    with pytest.raises(GenerationError, match="budget"):
+        execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    job.refresh_from_db()
+    assert job.status == Job.Status.FAILED
+    assert job.error["code"] == "ai_budget_exceeded"

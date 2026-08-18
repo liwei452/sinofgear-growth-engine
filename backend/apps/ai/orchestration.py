@@ -288,7 +288,7 @@ def execute_generation_job(
         raise JobConflictError(f"Job in status {job.status} cannot be claimed.")
     token = claimed.claim_token
     try:
-        assert_ai_budget_available(claimed)
+        assert_ai_budget_available(claimed.organization)
     except AIBudgetExceeded as exc:
         JobService.fail(
             claimed.id,

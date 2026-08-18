@@ -12,6 +12,7 @@ from apps.publishing.models import PublishedPost
 from apps.publishing.services import PublishingConflict, create_publish_task
 
 from .persistent import continue_agent_run
+from .execution import resolve_agent_execution, resolve_run_execution
 from .planner import DeterministicPlanner, Plan
 from .tools import Tool, ToolRegistry, ToolResult
 from ..models import AgentRun
@@ -185,27 +186,7 @@ def run_social_ops_agent(
     idempotency_key: str | None = None,
     approvals: set[str] | None = None,
 ) -> Any:
-    run, _ = AgentRun.objects.get_or_create(
-        organization=organization,
-        idempotency_key=(
-            idempotency_key
-            or f"social-ops:{content_id}:{account_id}:{scheduled_at or 'immediate'}"
-        ),
-        defaults={
-            "goal": "social publishing",
-            "agent_type": "social_ops",
-            "resume_args": {
-                "content_id": content_id,
-                "account_id": account_id,
-                "scheduled_at": scheduled_at,
-                "timezone_name": timezone_name,
-                "idempotency_key": idempotency_key,
-            },
-            "max_steps": 5,
-        },
-    )
-    tools = ToolRegistry(build_social_ops_tools(organization))
-    planner = DeterministicPlanner(
+    fallback = DeterministicPlanner(
         [
             Plan(
                 reasoning="summarize published post performance",
@@ -227,7 +208,45 @@ def run_social_ops_agent(
                     "timezone_name": timezone_name,
                     "idempotency_key": idempotency_key,
                 },
-            )
+            ),
         ]
     )
-    return continue_agent_run(run=run, planner=planner, tools=tools, approvals=approvals)
+    proposed_execution = resolve_agent_execution(
+        organization=organization,
+        fallback=fallback,
+        allow_llm=True,
+    )
+    run, _ = AgentRun.objects.get_or_create(
+        organization=organization,
+        idempotency_key=(
+            idempotency_key
+            or f"social-ops:{content_id}:{account_id}:{scheduled_at or 'immediate'}"
+        ),
+        defaults={
+            "goal": "social publishing",
+            "agent_type": "social_ops",
+            "execution_mode": proposed_execution.mode,
+            "planner_provider": proposed_execution.provider,
+            "planner_model": proposed_execution.model,
+            "resume_args": {
+                "content_id": content_id,
+                "account_id": account_id,
+                "scheduled_at": scheduled_at,
+                "timezone_name": timezone_name,
+                "idempotency_key": idempotency_key,
+            },
+            "max_steps": 5,
+        },
+    )
+    tools = ToolRegistry(build_social_ops_tools(organization))
+    execution = resolve_run_execution(
+        run=run,
+        fallback=fallback,
+        allow_llm=True,
+    )
+    return continue_agent_run(
+        run=run,
+        planner=execution.planner,
+        tools=tools,
+        approvals=approvals,
+    )

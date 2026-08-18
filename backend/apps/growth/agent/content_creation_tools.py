@@ -296,6 +296,7 @@ def run_content_creation_agent(
         defaults={
             "goal": "content creation",
             "agent_type": "content_creation",
+            "execution_mode": AgentRun.ExecutionMode.AI_GENERATION,
             "resume_args": {
                 "brief_id": brief_id,
                 "actor_id": actor_id,
@@ -338,6 +339,7 @@ def run_platform_variants_agent(
         defaults={
             "goal": "platform variants",
             "agent_type": "platform_variants",
+            "execution_mode": AgentRun.ExecutionMode.AUTOMATION,
             "resume_args": {"master_id": master_id, "actor_id": actor_id},
             "created_by_id": _user_id(actor_id),
             "max_steps": 5,

@@ -1,6 +1,12 @@
 """Bounded self-directing agent runtime for the growth engine."""
 
 from .memory import AgentStep, Memory
+from .execution import (
+    AgentExecution,
+    PlannerConfigurationUnavailable,
+    resolve_agent_execution,
+    resolve_run_execution,
+)
 from .planner import (
     DeterministicPlanner,
     LLMPlanner,
@@ -44,12 +50,14 @@ from .resume import resume_agent_run
 __all__ = [
     "AgentRunError",
     "AgentRunResult",
+    "AgentExecution",
     "AgentRuntime",
     "AgentStep",
     "DeterministicPlanner",
     "LLMPlanner",
     "Memory",
     "PendingApproval",
+    "PlannerConfigurationUnavailable",
     "Plan",
     "Planner",
     "Tool",
@@ -73,6 +81,8 @@ __all__ = [
     "run_platform_variants_agent",
     "run_social_ops_agent",
     "resume_agent_run",
+    "resolve_agent_execution",
+    "resolve_run_execution",
     "continue_agent_run",
     "load_run_memory",
     "proactive_acquisition_plan",

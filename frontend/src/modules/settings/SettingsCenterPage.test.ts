@@ -84,8 +84,9 @@ it("shows administrator-only advanced destinations without inventing provider st
   ])
 
   const advanced = screen.getByRole("region", { name: "高级管理" })
+  expect(within(advanced).getByRole("link", { name: "AI 模型" })).toHaveAttribute("href", "/settings/ai-model")
   expect(within(advanced).getByRole("link", { name: "知识库" })).toHaveAttribute("href", "/knowledge")
   expect(within(advanced).getByRole("link", { name: "高级数据" })).toHaveAttribute("href", "/admin/analytics")
-  expect(within(advanced).getByText("Provider 管理尚未配置")).toBeInTheDocument()
+  expect(within(advanced).getByText("真实模型与预算仅由管理员管理")).toBeInTheDocument()
   expect(within(advanced).queryByRole("button", { name: /配置 Provider/ })).not.toBeInTheDocument()
 })

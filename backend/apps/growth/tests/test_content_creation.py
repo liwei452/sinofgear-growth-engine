@@ -16,6 +16,7 @@ from apps.growth.agent.content_creation_tools import (
     run_content_creation_agent,
 )
 from apps.growth.agent.tools import ToolRegistry
+from apps.growth.models import AgentRun
 from apps.identity.models import Membership, Organization, Role
 from apps.jobs.models import Job
 from apps.platforms.models import Platform
@@ -113,6 +114,12 @@ def test_content_creation_agent_marks_ready_and_triggers(organization, monkeypat
         organization=organization,
         type=Job.Type.CONTENT_GENERATE,
     ).exists()
+    run_record = AgentRun.objects.get(
+        organization=organization,
+        idempotency_key=f"content-creation:{brief.id}",
+    )
+    assert run_record.execution_mode == AgentRun.ExecutionMode.AI_GENERATION
+    assert run_record.planner_provider == ""
 
 
 def test_platform_variants_tool_creates_per_platform(organization, monkeypatch):
@@ -161,6 +168,11 @@ def test_platform_variants_tool_creates_per_platform(organization, monkeypatch):
     assert calls == ["LINKEDIN", "FACEBOOK"]
     variants = result.steps[-1].output["variants"]
     assert {variant["platform_code"] for variant in variants} == {"LINKEDIN", "FACEBOOK"}
+    run_record = AgentRun.objects.get(
+        organization=organization,
+        idempotency_key="platform-variants:m1",
+    )
+    assert run_record.execution_mode == AgentRun.ExecutionMode.AUTOMATION
 
 
 def test_content_creation_enrich_tool_binds_assets(organization):

@@ -236,7 +236,7 @@ onBeforeUnmount(() => {
         <RouterLink
           v-if="canApprove"
           class="approval-badge"
-          to="/agent-approvals"
+          :to="{ path: '/agent-workspace', query: { view: 'approvals' } }"
           :aria-label="`待我审核 ${pendingApprovalCount}`"
         >
           <AppIcon name="circle-check" :size="18" />

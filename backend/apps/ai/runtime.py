@@ -1,31 +1,12 @@
-import os
-
-from django.conf import settings
+from .provider_config import resolve_product_ai
 
 
-def product_ai_status() -> dict[str, object]:
-    provider = settings.PRODUCT_AI_PROVIDER
-    model = settings.PRODUCT_AI_MODEL
-    if provider == "fake":
-        return {
-            "mode": "FAKE_OFFLINE",
-            "provider_label": "Fake / 离线演示",
-            "model": model,
-            "configured": False,
-            "real_requests_enabled": False,
-        }
-    if provider == "deepseek" and os.environ.get("DEEPSEEK_API_KEY", "").strip():
-        return {
-            "mode": "CONFIGURED_AI",
-            "provider_label": "DeepSeek 官方 API",
-            "model": model,
-            "configured": True,
-            "real_requests_enabled": True,
-        }
+def product_ai_status(organization=None) -> dict[str, object]:
+    runtime = resolve_product_ai(organization)
     return {
-        "mode": "CONFIGURATION_REQUIRED",
-        "provider_label": "真实 AI 尚未配置",
-        "model": model,
-        "configured": False,
-        "real_requests_enabled": False,
+        "mode": runtime.mode,
+        "provider_label": runtime.provider_label,
+        "model": runtime.model,
+        "configured": runtime.configured,
+        "real_requests_enabled": runtime.real_requests_enabled,
     }

@@ -19,7 +19,7 @@ defineProps<{
 <template>
   <section class="today-actions" aria-label="今日优先事项">
     <RouterLink
-      v-for="item in items"
+      v-for="item in items.slice(0, 5)"
       :key="item.id"
       :to="item.to"
       class="today-action"

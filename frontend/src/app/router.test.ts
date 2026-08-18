@@ -22,8 +22,10 @@ const LegacyAnalytics = defineComponent({ name: "LegacyAnalyticsStub", template:
 const Promotion = defineComponent({ name: "PromotionStub", template: "<p>工厂推广工作区</p>" })
 const Opportunities = defineComponent({ name: "OpportunitiesStub", template: "<p>证据化客户机会</p>" })
 const AgentApprovals = defineComponent({ name: "AgentApprovalsStub", template: "<p>Agent 审批</p>" })
+const AgentWorkspace = defineComponent({ name: "AgentWorkspaceStub", template: "<p>Agent 工作台</p>" })
 const Company = defineComponent({ name: "CompanyStub", template: "<p>公司事实资料</p>" })
 const Settings = defineComponent({ name: "SettingsStub", template: "<p>统一设置中心</p>" })
+const AIModelSettings = defineComponent({ name: "AIModelSettingsStub", template: "<p>AI 模型设置</p>" })
 const MapsDiscovery = defineComponent({ name: "MapsDiscoveryStub", template: "<p>谷歌地图获客</p>" })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
@@ -42,7 +44,7 @@ function router(client = queryClient(), initialPath?: string) {
   if (initialPath) history.push(initialPath)
   return createAppRouter(client, {
     history,
-    components: { Login, Shell, Dashboard, Promotion, Opportunities, AgentApprovals, Company, Settings, MapsDiscovery, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LegacyAnalytics, Placeholder },
+    components: { Login, Shell, Dashboard, Promotion, Opportunities, AgentApprovals, AgentWorkspace, Company, Settings, AIModelSettings, MapsDiscovery, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LegacyAnalytics, Placeholder },
   })
 }
 
@@ -108,15 +110,41 @@ describe("protected routing", () => {
   it("lets an approver open the approval center without campaign permission", async () => {
     const client = queryClient()
     client.setQueryData(["auth", "me"], {
-      user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["agents.approve"] },
+      user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["agents.approve", "agents.run"] },
     })
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
 
     await appRouter.push("/agent-approvals")
 
-    expect(appRouter.currentRoute.value.name).toBe("agent-approvals")
-    expect(await screen.findByText("Agent 审批")).toBeInTheDocument()
+    expect(appRouter.currentRoute.value.name).toBe("agent-workspace")
+    expect(appRouter.currentRoute.value.query.view).toBe("approvals")
+    expect(await screen.findByText("Agent 工作台")).toBeInTheDocument()
+  })
+
+  it("lets an agent operator open the agent workspace and applies business-facing titles", async () => {
+    const client = queryClient()
+    client.setQueryData(["auth", "me"], {
+      user: {},
+      organization: {},
+      membership: {
+        role: "OPERATOR",
+        permissions: ["agents.run", "publishing.read", "metrics.read"],
+      },
+    })
+    const appRouter = router(client)
+    render(Root, { global: { plugins: [appRouter] } })
+
+    await appRouter.push("/agent-workspace")
+    expect(appRouter.currentRoute.value.name).toBe("agent-workspace")
+    expect(appRouter.currentRoute.value.meta.requiredPermission).toBe("agents.run")
+    expect(await screen.findByText("Agent 工作台")).toBeInTheDocument()
+
+    await appRouter.push("/promotion")
+    expect(appRouter.currentRoute.value.meta.title).toBe("社媒运营")
+
+    await appRouter.push("/analytics")
+    expect(appRouter.currentRoute.value.meta.title).toBe("经营效果")
   })
 
   it("mounts all four distinct publishing operations workspaces", async () => {
@@ -132,7 +160,11 @@ describe("protected routing", () => {
 
   it("mounts the five ordinary-user workspaces on task-language paths", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { permissions: ["leads.read"] } })
+    client.setQueryData(["auth", "me"], {
+      user: {},
+      organization: {},
+      membership: { permissions: ["leads.read", "publishing.read"] },
+    })
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
     for (const [path, label] of [
@@ -165,6 +197,27 @@ describe("protected routing", () => {
 
     expect(appRouter.currentRoute.value.name).toBe("settings")
     expect(appRouter.currentRoute.value.query.blocked).toBe("administrator")
+  })
+
+  it("keeps AI model configuration administrator-only", async () => {
+    const operatorClient = queryClient()
+    operatorClient.setQueryData(["auth", "me"], {
+      user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["credentials.manage"] },
+    })
+    const operatorRouter = router(operatorClient)
+
+    await operatorRouter.push("/settings/ai-model")
+    expect(operatorRouter.currentRoute.value.name).toBe("settings")
+    expect(operatorRouter.currentRoute.value.query.blocked).toBe("administrator")
+
+    const adminClient = queryClient()
+    adminClient.setQueryData(["auth", "me"], {
+      user: {}, organization: {}, membership: { role: "ADMINISTRATOR", permissions: ["credentials.manage"] },
+    })
+    const adminRouter = router(adminClient)
+    render(Root, { global: { plugins: [adminRouter] } })
+    await adminRouter.push("/settings/ai-model")
+    expect(await screen.findByText("AI 模型设置")).toBeInTheDocument()
   })
 
   it.each([401, 403])("redirects status %s to login with the local target", async (status) => {

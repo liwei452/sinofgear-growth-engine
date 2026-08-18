@@ -13,6 +13,7 @@ from apps.campaigns.services import create_campaign, create_content_brief
 from apps.identity.models import Membership
 
 from .persistent import continue_agent_run
+from .execution import resolve_agent_execution, resolve_run_execution
 from .planner import DeterministicPlanner, Plan
 from .tools import Tool, ToolRegistry, ToolResult
 from ..models import AgentRun, DiscoveryCandidate, InboundRfq
@@ -156,18 +157,6 @@ def run_content_strategy_agent(
         creator_id_value = int(creator_id) if creator_id else None
     except (TypeError, ValueError):
         creator_id_value = None
-    run, _ = AgentRun.objects.get_or_create(
-        organization=organization,
-        idempotency_key=f"content-strategy:{organization.id}:{timezone.now().date()}",
-        defaults={
-            "goal": "content strategy",
-            "agent_type": "content_strategy",
-            "resume_args": {"creator_id": creator_id},
-            "created_by_id": creator_id_value,
-            "max_steps": 5,
-        },
-    )
-    tools = ToolRegistry(build_content_strategy_tools(organization, creator_id=creator_id))
     actions = [
         Plan(
             reasoning="analyze content opportunities",
@@ -179,5 +168,31 @@ def run_content_strategy_agent(
         actions.append(
             Plan(reasoning="create content brief", tool_name="create_content_brief", tool_args={})
         )
-    planner = DeterministicPlanner(actions)
-    return continue_agent_run(run=run, planner=planner, tools=tools, approvals=approvals)
+    fallback = DeterministicPlanner(actions)
+    proposed_execution = resolve_agent_execution(
+        organization=organization,
+        fallback=fallback,
+        allow_llm=True,
+    )
+    run, _ = AgentRun.objects.get_or_create(
+        organization=organization,
+        idempotency_key=f"content-strategy:{organization.id}:{timezone.now().date()}",
+        defaults={
+            "goal": "content strategy",
+            "agent_type": "content_strategy",
+            "execution_mode": proposed_execution.mode,
+            "planner_provider": proposed_execution.provider,
+            "planner_model": proposed_execution.model,
+            "resume_args": {"creator_id": creator_id},
+            "created_by_id": creator_id_value,
+            "max_steps": 5,
+        },
+    )
+    tools = ToolRegistry(build_content_strategy_tools(organization, creator_id=creator_id))
+    execution = resolve_run_execution(run=run, fallback=fallback, allow_llm=True)
+    return continue_agent_run(
+        run=run,
+        planner=execution.planner,
+        tools=tools,
+        approvals=approvals,
+    )

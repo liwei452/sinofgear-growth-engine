@@ -10,6 +10,7 @@ from apps.campaigns.generation_schema import CONTENT_GENERATION_INPUT_SCHEMA
 from apps.common.security import normalize_persisted_error
 
 from .models import AIRun
+from .provider_config import DEEPSEEK_MODELS
 
 
 _MAX_AUDIT_DEPTH = 6
@@ -42,6 +43,20 @@ _PROVIDER_METADATA_SCHEMA = {
         "output_tokens": {"type": "integer"},
         "total_tokens": {"type": "integer"},
         "latency_ms": {"type": "number"},
+        "price_table_version": {"type": "string"},
+        "estimated_cost_micros": {"type": "integer"},
+        "usage": {
+            "type": "object",
+            "properties": {
+                "model": {"type": "string"},
+                "request_id": {"type": "string"},
+                "finish_reason": {"type": "string"},
+                "prompt_tokens": {"type": "integer"},
+                "completion_tokens": {"type": "integer"},
+                "total_tokens": {"type": "integer"},
+                "latency_seconds": {"type": "number"},
+            },
+        },
     },
 }
 
@@ -260,3 +275,43 @@ class ProductAIStatusSerializer(serializers.Serializer):
     model = serializers.CharField()
     configured = serializers.BooleanField()
     real_requests_enabled = serializers.BooleanField()
+
+
+class AIProviderConfigWriteSerializer(serializers.Serializer):
+    provider = serializers.ChoiceField(choices=["deepseek"])
+    model = serializers.ChoiceField(choices=DEEPSEEK_MODELS)
+    api_key = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=False,
+        min_length=8,
+        max_length=512,
+        trim_whitespace=True,
+    )
+    enabled = serializers.BooleanField()
+    daily_budget_micros = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+        max_value=1_000_000_000,
+    )
+
+
+class AIProviderConfigSerializer(serializers.Serializer):
+    provider = serializers.ChoiceField(choices=["deepseek"])
+    model = serializers.ChoiceField(choices=DEEPSEEK_MODELS)
+    configured = serializers.BooleanField()
+    enabled = serializers.BooleanField()
+    daily_budget_micros = serializers.IntegerField(allow_null=True)
+    daily_spent_micros = serializers.IntegerField()
+    daily_reserved_micros = serializers.IntegerField()
+    price_table_version = serializers.CharField()
+    last_tested_at = serializers.DateTimeField(allow_null=True)
+    last_success_at = serializers.DateTimeField(allow_null=True)
+    last_error_code = serializers.CharField(allow_blank=True)
+
+
+class AIProviderConnectionTestSerializer(serializers.Serializer):
+    ok = serializers.BooleanField()
+    latency_ms = serializers.IntegerField(required=False)
+    error_code = serializers.CharField(required=False)

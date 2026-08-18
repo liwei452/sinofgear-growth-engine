@@ -117,9 +117,10 @@ const groups: SettingsGroup[] = [
   {
     title: "高级管理",
     description: "仅管理员可访问知识与高级数据入口。",
-    status: "Provider 管理尚未配置",
+    status: "真实模型与预算仅由管理员管理",
     administratorOnly: true,
     destinations: [
+      { label: "AI 模型", to: "/settings/ai-model" },
       { label: "知识库", to: "/knowledge", permission: "knowledge.read" },
       { label: "高级数据", to: "/admin/analytics", permission: "tracking.read" },
     ],

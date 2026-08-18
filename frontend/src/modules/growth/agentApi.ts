@@ -16,6 +16,10 @@ export type AgentRunStep = {
 export type AgentRun = {
   id: string
   goal: string
+  agent_type?: string
+  execution_mode?: "AI_AGENT" | "AI_GENERATION" | "AUTOMATION"
+  planner_provider?: string
+  planner_model?: string
   status: "RUNNING" | "WAITING_APPROVAL" | "COMPLETED" | "BUDGET_EXCEEDED" | "FAILED" | "REJECTED"
   terminal_reason: string | null
   created_at: string

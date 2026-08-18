@@ -53,6 +53,10 @@ def test_list_detail_and_approve_agent_run(organization, monkeypatch):
     listing = client.get(RUNS_URL)
     assert listing.status_code == 200
     assert listing.data[0]["status"] == "WAITING_APPROVAL"
+    assert listing.data[0]["agent_type"] == "proactive"
+    assert listing.data[0]["execution_mode"] == "AUTOMATION"
+    assert listing.data[0]["planner_provider"] == ""
+    assert listing.data[0]["planner_model"] == ""
     assert listing.data[0]["pending_approval"]["tool_name"] == "send_email"
 
     run_id = listing.data[0]["id"]

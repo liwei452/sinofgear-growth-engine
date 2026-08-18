@@ -11,6 +11,30 @@ from django.db import models
 _audit_write: ContextVar[bool] = ContextVar("ai_audit_write", default=False)
 
 
+class OrganizationAIProviderConfig(models.Model):
+    organization = models.OneToOneField(
+        "identity.Organization",
+        on_delete=models.PROTECT,
+        related_name="ai_provider_config",
+    )
+    provider = models.CharField(max_length=32, default="deepseek")
+    model = models.CharField(max_length=64, default="deepseek-chat")
+    encrypted_api_key = models.TextField(blank=True, default="")
+    enabled = models.BooleanField(default=False)
+    daily_budget_micros = models.PositiveBigIntegerField(null=True, blank=True)
+    daily_spent_micros = models.PositiveBigIntegerField(default=0)
+    daily_reserved_micros = models.PositiveBigIntegerField(default=0)
+    spent_on = models.DateField(null=True, blank=True)
+    last_tested_at = models.DateTimeField(null=True, blank=True)
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    last_error_code = models.CharField(max_length=64, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["organization_id"]
+
+
 @contextmanager
 def ai_audit_writes():
     token = _audit_write.set(True)

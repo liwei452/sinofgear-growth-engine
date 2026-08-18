@@ -46,8 +46,12 @@ class Planner(Protocol):
 
 
 class LLMPlanner:
-    def __init__(self, provider_code: str) -> None:
-        self._provider = provider_registry.get(provider_code)
+    def __init__(self, provider_code: str | None = None, *, provider=None) -> None:
+        if provider is None:
+            if provider_code is None:
+                raise ValueError("An AI provider is required for LLM planning.")
+            provider = provider_registry.get(provider_code)
+        self._provider = provider
 
     def plan(
         self,

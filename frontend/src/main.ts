@@ -11,7 +11,6 @@ import CompanyPage from "./modules/growth/CompanyPage.vue"
 import EffectivenessPage from "./modules/growth/EffectivenessPage.vue"
 import OpportunitiesPage from "./modules/growth/OpportunitiesPage.vue"
 import AgentApprovalsPage from "./modules/growth/AgentApprovalsPage.vue"
-import PromotionPage from "./modules/growth/PromotionPage.vue"
 import PlaceholderPage from "./shared/components/PlaceholderPage.vue"
 import "./styles/tokens.css"
 import "./styles/base.css"
@@ -21,11 +20,13 @@ const router = createAppRouter(queryClient, {
     Login: LoginPage,
     Shell: AppShell,
     Dashboard: DashboardPage,
-    Promotion: PromotionPage,
+    Promotion: defineAsyncComponent(() => import("./modules/social/SocialOperationsPage.vue")),
     Opportunities: OpportunitiesPage,
     AgentApprovals: AgentApprovalsPage,
+    AgentWorkspace: defineAsyncComponent(() => import("./modules/agents/AgentWorkspacePage.vue")),
     Company: CompanyPage,
     Settings: defineAsyncComponent(() => import("./modules/settings/SettingsCenterPage.vue")),
+    AIModelSettings: defineAsyncComponent(() => import("./modules/settings/AIModelSettingsPage.vue")),
     MapsDiscovery: defineAsyncComponent(() => import("./modules/growth/GoogleMapsDiscoverySettings.vue")),
     Products: defineAsyncComponent(() => import("./modules/products/ProductLibraryPage.vue")),
     Knowledge: defineAsyncComponent(() => import("./modules/knowledge/KnowledgeLibraryPage.vue")),

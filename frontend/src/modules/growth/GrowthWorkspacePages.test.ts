@@ -43,6 +43,7 @@ it("keeps growth objects distinct and does not invent an opportunity for an empt
   expect(within(workspaceNav).getByRole("button", { name: "客户发现" })).toBeInTheDocument()
   expect(within(workspaceNav).getByRole("button", { name: "名单导入" })).toBeInTheDocument()
   expect(within(workspaceNav).getByRole("button", { name: "老客激活" })).toBeInTheDocument()
+  expect(within(workspaceNav).getByRole("button", { name: "转化漏斗" })).toBeInTheDocument()
   for (const objectName of ["目标公司", "联系人", "需求信号", "入站线索"]) {
     expect(screen.getByText(objectName, { selector: "dt" })).toBeInTheDocument()
   }
@@ -92,15 +93,15 @@ it("shows no channel success metrics until a result has actually been recorded",
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(EffectivenessPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
-  expect(screen.getByRole("heading", { name: "推广效果" })).toBeInTheDocument()
-  expect(await screen.findByText("尚未回填渠道结果")).toBeInTheDocument()
+  expect(screen.getByRole("heading", { name: "经营效果" })).toBeInTheDocument()
+  expect(await screen.findByText("有效客户")).toBeInTheDocument()
   expect(screen.queryByText("26.5%")).not.toBeInTheDocument()
   expect(screen.queryByText("3 个询盘")).not.toBeInTheDocument()
-  const summary = screen.getByRole("region", { name: "渠道回填摘要" })
-  expect(within(summary).getByText("尚未发生 / 无数据")).toBeInTheDocument()
+  expect(screen.getAllByText("无数据")).toHaveLength(4)
+  expect(screen.queryByRole("form", { name: "手工回填渠道结果" })).not.toBeInTheDocument()
 })
 
-it("shows persisted account approval in the effectiveness attribution panel", async () => {
+it("shows persisted account approval in the opportunity funnel", async () => {
   const workspace = {
     target_accounts: [{ id: "account-pack", name: "PackTech GmbH", country: "Germany", industry: "Packaging machinery", employee_range: "51-200", website: "", is_demo: false, data_label: "Owned CRM record" }],
     contacts: [], inbound_leads: [], follow_ups: [], outreach_drafts: [], opportunity_reviews: [], crm_handoffs: [],
@@ -117,8 +118,10 @@ it("shows persisted account approval in the effectiveness attribution panel", as
   }
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(workspace), { status: 200, headers: { "Content-Type": "application/json" } })))
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(EffectivenessPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+  const user = userEvent.setup()
+  render(OpportunitiesPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
+  await user.click(screen.getByRole("button", { name: "转化漏斗" }))
   const panel = await screen.findByRole("region", { name: "账户获客漏斗" })
   expect(within(panel).getByRole("article", { name: "PackTech GmbH 归因记录" })).toHaveTextContent("人工批准")
   expect(within(panel).getByText("已批准，尚未发送")).toBeInTheDocument()
@@ -147,8 +150,9 @@ it("requires provenance before saving a verified manual channel result", async (
   const user = userEvent.setup()
   render(EffectivenessPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
 
-  await screen.findByText("尚未回填渠道结果")
+  await screen.findByText("有效客户")
   expect(screen.queryByLabelText("数据性质")).not.toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "录入数据" }))
   expect(screen.getByLabelText("播放或访问")).toHaveValue(0)
   expect(screen.queryByText("Demo / Fake")).not.toBeInTheDocument()
   await user.type(screen.getByLabelText("数据来源说明"), "LinkedIn Page analytics checked by owner")
@@ -163,8 +167,7 @@ it("requires provenance before saving a verified manual channel result", async (
       observed_at: "2026-08-15T09:30",
     },
   })
-  expect(await screen.findByText("LinkedIn Page analytics checked by owner")).toBeInTheDocument()
-  expect(screen.getByText(/观察时间.*2026-08-15T09:30/)).toBeInTheDocument()
+  expect(await screen.findByRole("status")).toHaveTextContent("指标已保存")
 })
 
 it("persists content-package approval and manual metric backfill", async () => {
@@ -234,6 +237,8 @@ it("persists content-package approval and manual metric backfill", async () => {
   render(EffectivenessPage, {
     global: { plugins: [[VueQueryPlugin, { queryClient: effectivenessClient }]] },
   })
+  await screen.findByText("有效客户")
+  await user.click(screen.getByRole("button", { name: "录入数据" }))
   await user.clear(screen.getByLabelText("播放或访问"))
   await user.type(screen.getByLabelText("播放或访问"), "7000")
   await user.clear(screen.getByLabelText("点击"))

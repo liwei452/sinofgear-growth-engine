@@ -138,42 +138,46 @@ class DeepSeekAIProvider:
     max_response_bytes = 1_000_000
 
     def __init__(
-        self, *, opener=urlopen, timeout_seconds: int = 30,
+        self, *, api_key: str | None = None, model: str | None = None,
+        opener=urlopen, timeout_seconds: int = 30,
         max_attempts: int = 2, sleeper=time.sleep,
     ):
+        self._api_key = api_key
+        self.model = model
         self._opener = opener
         self._timeout_seconds = timeout_seconds
         self._max_attempts = max(1, min(max_attempts, 2))
         self._sleeper = sleeper
         self.last_usage = None
 
-    def generate(self, *, prompt: str, schema: dict) -> dict:
-        api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    def _credentials(self) -> tuple[str, str]:
+        api_key = (
+            self._api_key
+            if self._api_key is not None
+            else os.environ.get("DEEPSEEK_API_KEY", "").strip()
+        )
         if not api_key:
             raise RuntimeError("DeepSeek API key is not configured.")
-        model = os.environ.get("PRODUCT_AI_MODEL", "deepseek-chat").strip() or "deepseek-chat"
+        model = (
+            self.model
+            if self.model is not None
+            else os.environ.get("PRODUCT_AI_MODEL", "deepseek-chat").strip()
+        ) or "deepseek-chat"
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", model):
             raise RuntimeError("DeepSeek model configuration is invalid.")
-        schema_text = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
-        payload = json.dumps({
-            "model": model,
-            "messages": [
-                {"role": "system", "content": (
-                    "Return one JSON object matching the supplied JSON schema. "
-                    "Use only facts present in the user input. Never invent certifications, "
-                    "performance, customers, prices, lead times, or capacity."
-                )},
-                {"role": "user", "content": f"JSON schema: {schema_text}\nInput: {prompt}"},
-            ],
-            "response_format": {"type": "json_object"},
-            "stream": False,
-            "max_tokens": 2_000,
-        }, ensure_ascii=False).encode("utf-8")
-        request = Request(self.endpoint, data=payload, headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }, method="POST")
+        return api_key, model
+
+    def _request(self, payload: dict, *, api_key: str) -> tuple[dict, float]:
+        request = Request(
+            self.endpoint,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
         raw = None
         started = time.monotonic()
         for attempt in range(self._max_attempts):
@@ -195,6 +199,45 @@ class DeepSeekAIProvider:
             raise RuntimeError("DeepSeek response exceeded the size limit.")
         try:
             envelope = json.loads(raw.decode("utf-8"))
+        except (TypeError, ValueError, UnicodeDecodeError) as exc:
+            raise RuntimeError("DeepSeek returned an invalid JSON response.") from exc
+        if not isinstance(envelope, dict):
+            raise RuntimeError("DeepSeek returned an invalid JSON response.")
+        return envelope, time.monotonic() - started
+
+    def test_connection(self) -> dict[str, object]:
+        api_key, model = self._credentials()
+        envelope, latency = self._request({
+            "model": model,
+            "messages": [{"role": "user", "content": "Return one empty JSON object."}],
+            "response_format": {"type": "json_object"},
+            "stream": False,
+            "max_tokens": 1,
+        }, api_key=api_key)
+        choices = envelope.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError("DeepSeek returned an invalid JSON response.")
+        return {"ok": True, "latency_ms": round(latency * 1000)}
+
+    def generate(self, *, prompt: str, schema: dict) -> dict:
+        api_key, model = self._credentials()
+        schema_text = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": (
+                    "Return one JSON object matching the supplied JSON schema. "
+                    "Use only facts present in the user input. Never invent certifications, "
+                    "performance, customers, prices, lead times, or capacity."
+                )},
+                {"role": "user", "content": f"JSON schema: {schema_text}\nInput: {prompt}"},
+            ],
+            "response_format": {"type": "json_object"},
+            "stream": False,
+            "max_tokens": 2_000,
+        }
+        envelope, latency = self._request(payload, api_key=api_key)
+        try:
             content = envelope["choices"][0]["message"]["content"]
             result = json.loads(content)
         except (KeyError, IndexError, TypeError, ValueError, UnicodeDecodeError) as exc:
@@ -208,7 +251,7 @@ class DeepSeekAIProvider:
             "prompt_tokens": usage.get("prompt_tokens"),
             "completion_tokens": usage.get("completion_tokens"),
             "total_tokens": usage.get("total_tokens"),
-            "latency_seconds": round(time.monotonic() - started, 3),
+            "latency_seconds": round(latency, 3),
         }
         if not isinstance(result, dict):
             raise RuntimeError("DeepSeek returned an invalid JSON response.")

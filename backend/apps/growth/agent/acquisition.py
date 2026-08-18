@@ -5,13 +5,13 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-from django.conf import settings
 from django.utils import timezone
 
 from integrations.sources.base import SourceAdapterError
 
 from .persistent import continue_agent_run
-from .planner import DeterministicPlanner, Plan, build_planner
+from .execution import resolve_agent_execution, resolve_run_execution
+from .planner import DeterministicPlanner, Plan
 from .tools import Tool, ToolRegistry, ToolResult
 from ..email_verification import verify_email
 from ..enrichment import add_candidate_to_follow_up, prepare_candidate_enrichment
@@ -362,19 +362,31 @@ def run_proactive_acquisition(
     approvals: set[str] | None = None,
     website_transport=None,
 ) -> Any:
-    provider_code = getattr(settings, "PRODUCT_AI_PROVIDER", "fake")
     candidate = DiscoveryCandidate.objects.filter(
         organization=organization,
         id=candidate_id,
     ).first()
     if candidate is None:
         raise DiscoveryCandidate.DoesNotExist
+    fallback = DeterministicPlanner(
+        proactive_acquisition_website_plan(candidate_id)
+        if candidate.website
+        else proactive_acquisition_plan(candidate_id)
+    )
+    proposed_execution = resolve_agent_execution(
+        organization=organization,
+        fallback=fallback,
+        allow_llm=True,
+    )
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
         idempotency_key=f"proactive:{candidate_id}",
         defaults={
             "goal": f"proactive acquisition for candidate {candidate_id}",
             "agent_type": "proactive",
+            "execution_mode": proposed_execution.mode,
+            "planner_provider": proposed_execution.provider,
+            "planner_model": proposed_execution.model,
             "resume_args": {"candidate_id": candidate_id},
             "max_steps": 20,
         },
@@ -382,14 +394,17 @@ def run_proactive_acquisition(
     tools = ToolRegistry(
         build_proactive_acquisition_tools(organization, website_transport=website_transport)
     )
-    plan = (
-        proactive_acquisition_website_plan(candidate_id)
-        if candidate.website
-        else proactive_acquisition_plan(candidate_id)
+    execution = resolve_run_execution(
+        run=run,
+        fallback=fallback,
+        allow_llm=True,
     )
-    fallback = DeterministicPlanner(plan)
-    planner = build_planner(provider_code=provider_code, fallback=fallback)
-    return continue_agent_run(run=run, planner=planner, tools=tools, approvals=approvals)
+    return continue_agent_run(
+        run=run,
+        planner=execution.planner,
+        tools=tools,
+        approvals=approvals,
+    )
 
 
 def resume_proactive_acquisition(
@@ -412,10 +427,11 @@ def resume_proactive_acquisition(
         if candidate.website
         else proactive_acquisition_plan(candidate_id)
     )
-    planner = DeterministicPlanner(plan)
+    fallback = DeterministicPlanner(plan)
+    execution = resolve_run_execution(run=run, fallback=fallback, allow_llm=True)
     return continue_agent_run(
         run=run,
-        planner=planner,
+        planner=execution.planner,
         tools=tools,
         approvals={approval_token},
     )

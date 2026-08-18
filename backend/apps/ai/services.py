@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal, ROUND_CEILING
 
 from django.db import transaction
 from django.utils import timezone
@@ -7,7 +8,8 @@ from jsonschema import Draft202012Validator
 from apps.common.security import scrub_secrets
 from apps.identity.models import Organization
 
-from .models import AIRun, PromptVersion, ai_audit_writes
+from .models import AIRun, OrganizationAIProviderConfig, PromptVersion, ai_audit_writes
+from .provider_config import DEEPSEEK_USD_PER_MILLION
 
 
 class AIBudgetExceeded(RuntimeError):
@@ -15,6 +17,108 @@ class AIBudgetExceeded(RuntimeError):
 
 
 AI_CALL_RESERVATION_TOKENS = 4000
+
+
+def estimate_deepseek_cost_micros(
+    model: str,
+    *,
+    input_tokens: int,
+    output_tokens: int,
+) -> int:
+    prices = DEEPSEEK_USD_PER_MILLION.get(model)
+    if prices is None:
+        raise ValueError("Unsupported DeepSeek model for cost estimation.")
+    if input_tokens < 0 or output_tokens < 0:
+        raise ValueError("Token estimates must not be negative.")
+    microdollars = (
+        Decimal(str(prices["input"])) * input_tokens
+        + Decimal(str(prices["output"])) * output_tokens
+    )
+    return int(microdollars.to_integral_value(rounding=ROUND_CEILING))
+
+
+def _reset_cost_day(config: OrganizationAIProviderConfig, today) -> None:
+    if config.spent_on != today:
+        config.spent_on = today
+        config.daily_spent_micros = 0
+        config.daily_reserved_micros = 0
+
+
+@transaction.atomic
+def reserve_ai_cost(
+    organization,
+    *,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+) -> int:
+    config = OrganizationAIProviderConfig.objects.select_for_update().filter(
+        organization=organization
+    ).first()
+    if not config or not config.daily_budget_micros:
+        return 0
+    estimate = estimate_deepseek_cost_micros(
+        model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+    _reset_cost_day(config, timezone.now().date())
+    if (
+        config.daily_spent_micros
+        + config.daily_reserved_micros
+        + estimate
+        > config.daily_budget_micros
+    ):
+        raise AIBudgetExceeded(
+            "Organization daily estimated AI cost budget would be exceeded."
+        )
+    config.daily_reserved_micros += estimate
+    config.save(update_fields=[
+        "daily_spent_micros", "daily_reserved_micros", "spent_on", "updated_at",
+    ])
+    return estimate
+
+
+@transaction.atomic
+def settle_ai_cost(
+    organization,
+    *,
+    reserved_micros: int,
+    model: str,
+    usage: dict | None = None,
+    charge_on_unknown: bool = True,
+) -> int:
+    if reserved_micros <= 0:
+        return 0
+    config = OrganizationAIProviderConfig.objects.select_for_update().filter(
+        organization=organization
+    ).first()
+    if not config:
+        return 0
+    _reset_cost_day(config, timezone.now().date())
+    prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+    completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    if (
+        isinstance(prompt_tokens, int)
+        and prompt_tokens >= 0
+        and isinstance(completion_tokens, int)
+        and completion_tokens >= 0
+    ):
+        actual = estimate_deepseek_cost_micros(
+            model,
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+        )
+    else:
+        actual = reserved_micros if charge_on_unknown else 0
+    config.daily_reserved_micros = max(
+        0, config.daily_reserved_micros - reserved_micros
+    )
+    config.daily_spent_micros += actual
+    config.save(update_fields=[
+        "daily_spent_micros", "daily_reserved_micros", "spent_on", "updated_at",
+    ])
+    return actual
 
 
 def organization_daily_token_usage(organization_id, *, now=None) -> int:
@@ -105,4 +209,15 @@ class PromptVersionService:
             )
 
 
-__all__ = ["PromptVersionService", "scrub_secrets"]
+__all__ = [
+    "AIBudgetExceeded",
+    "PromptVersionService",
+    "assert_ai_budget_available",
+    "estimate_deepseek_cost_micros",
+    "organization_daily_token_usage",
+    "reserve_ai_budget",
+    "reserve_ai_cost",
+    "scrub_secrets",
+    "settle_ai_budget",
+    "settle_ai_cost",
+]

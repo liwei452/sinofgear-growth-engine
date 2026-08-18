@@ -925,6 +925,11 @@ class LeadWebsiteVisit(OrganizationOwnedModel):
 
 
 class AgentRun(OrganizationOwnedModel):
+    class ExecutionMode(models.TextChoices):
+        AUTOMATION = "AUTOMATION", "Automation"
+        AI_AGENT = "AI_AGENT", "AI agent"
+        AI_GENERATION = "AI_GENERATION", "AI generation"
+
     class Status(models.TextChoices):
         RUNNING = "RUNNING", "Running"
         WAITING_APPROVAL = "WAITING_APPROVAL", "Waiting approval"
@@ -936,6 +941,13 @@ class AgentRun(OrganizationOwnedModel):
     idempotency_key = models.CharField(max_length=128)
     goal = models.CharField(max_length=500)
     agent_type = models.CharField(max_length=32, blank=True)
+    execution_mode = models.CharField(
+        max_length=24,
+        choices=ExecutionMode.choices,
+        default=ExecutionMode.AUTOMATION,
+    )
+    planner_provider = models.CharField(max_length=32, blank=True, default="")
+    planner_model = models.CharField(max_length=64, blank=True, default="")
     resume_args = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.RUNNING)
     terminal_reason = models.CharField(max_length=500, blank=True)

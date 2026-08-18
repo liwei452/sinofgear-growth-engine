@@ -917,7 +917,7 @@ export async function exportFourChannelPackage(
 
 export async function createMetricReceipt(input: {
   channel: string
-  payload: Record<string, number>
+  payload: Record<string, number | string>
   is_demo: boolean
 }): Promise<MetricReceipt> {
   const result = await apiRequest<MetricReceipt>("/api/v1/growth/metric-receipts", {

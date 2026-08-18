@@ -47,6 +47,53 @@ def test_deepseek_provider_uses_bounded_official_json_request(monkeypatch):
     assert "test-secret-never-log" not in captured["request"].data.decode()
 
 
+def test_deepseek_provider_accepts_explicit_organization_credentials(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "wrong-environment-key")
+    monkeypatch.setenv("PRODUCT_AI_MODEL", "wrong-environment-model")
+    captured = {}
+
+    def opener(request, *, timeout):
+        captured.update(request=request, timeout=timeout)
+        return _Response(json.dumps({
+            "choices": [{"message": {"content": "{}"}}],
+        }).encode())
+
+    provider = DeepSeekAIProvider(
+        api_key="organization-key",
+        model="deepseek-reasoner",
+        opener=opener,
+    )
+    provider.generate(prompt="input", schema={"type": "object"})
+
+    assert captured["request"].get_header("Authorization") == "Bearer organization-key"
+    assert json.loads(captured["request"].data)["model"] == "deepseek-reasoner"
+
+
+def test_deepseek_connection_test_is_bounded_to_the_official_host():
+    captured = {}
+
+    def opener(request, *, timeout):
+        captured.update(request=request, timeout=timeout)
+        return _Response(json.dumps({
+            "id": "test-request",
+            "choices": [{"message": {"content": "{}"}, "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }).encode())
+
+    result = DeepSeekAIProvider(
+        api_key="organization-key",
+        model="deepseek-chat",
+        opener=opener,
+    ).test_connection()
+
+    payload = json.loads(captured["request"].data)
+    assert captured["request"].full_url == "https://api.deepseek.com/chat/completions"
+    assert payload["max_tokens"] == 1
+    assert payload["stream"] is False
+    assert result["ok"] is True
+    assert set(result) == {"ok", "latency_ms"}
+
+
 def test_deepseek_provider_records_usage_metadata(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     content = json.dumps({"title": "T", "body": "B"})

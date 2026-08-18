@@ -5,7 +5,7 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
+from apps.ai.models import AIRun, OrganizationAIProviderConfig, PromptVersion, ai_audit_writes
 from apps.ai.orchestration import (
     GenerationError,
     GenerationPreflightError,
@@ -17,6 +17,7 @@ from apps.identity.models import Organization
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
 from integrations.ai.providers import FakeAIProvider, provider_registry
+from integrations.secrets import encrypt_secret
 
 
 OUTPUT_SCHEMA = {
@@ -136,6 +137,85 @@ def test_fake_generation_quotes_only_verified_fact_snapshot(
     run = execute_generation_job(job.id, prompt_version_id=prompt.id)
 
     assert "Verified facts: process=Gear grinding." in run.output_json["body"]
+
+
+@pytest.mark.django_db
+def test_generation_resolves_the_organization_deepseek_config_and_settles_cost(
+    organization, frozen_input, prompt, monkeypatch
+):
+    config = OrganizationAIProviderConfig.objects.create(
+        organization=organization,
+        provider="deepseek",
+        model="deepseek-chat",
+        encrypted_api_key=encrypt_secret("organization-generation-key"),
+        enabled=True,
+        daily_budget_micros=10_000,
+    )
+
+    def generate(provider, *, prompt, schema):
+        provider.last_usage = {
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+        }
+        return {
+            "title": "Configured model",
+            "body": "Configured body",
+            "cta": "Request a quote",
+            "concept_codes": ["ALPHA", "ZETA"],
+        }
+
+    monkeypatch.setattr("integrations.ai.providers.DeepSeekAIProvider.generate", generate)
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+
+    run = execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert run.status == AIRun.Status.SUCCEEDED
+    assert run.provider == "deepseek"
+    assert run.model == "deepseek-chat"
+    assert run.provider_metadata["price_table_version"] == "deepseek-usd-2026-08-18"
+    assert run.provider_metadata["estimated_cost_micros"] == 49
+    config.refresh_from_db()
+    assert config.daily_reserved_micros == 0
+    assert config.daily_spent_micros == 49
+
+
+@pytest.mark.django_db
+def test_estimated_cost_budget_blocks_before_provider_network_access(
+    organization, frozen_input, prompt, monkeypatch
+):
+    config = OrganizationAIProviderConfig.objects.create(
+        organization=organization,
+        provider="deepseek",
+        model="deepseek-chat",
+        encrypted_api_key=encrypt_secret("organization-generation-key"),
+        enabled=True,
+        daily_budget_micros=1,
+    )
+    called = False
+
+    def forbidden(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("provider must not be called")
+
+    monkeypatch.setattr("integrations.ai.providers.DeepSeekAIProvider.generate", forbidden)
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+
+    with pytest.raises(GenerationError, match="cost budget"):
+        execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert called is False
+    config.refresh_from_db()
+    assert config.daily_reserved_micros == 0
 
 
 class CapturingContentProvider:

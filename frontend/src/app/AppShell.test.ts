@@ -75,14 +75,27 @@ afterEach(() => {
 it("groups navigation by task and hides entries the role cannot use", async () => {
   await renderShell("/")
 
-  for (const label of ["今天", "产品库", "我的公司", "设置中心"]) {
+  for (const label of ["今天", "产品库", "公司资料", "设置中心"]) {
     expect(screen.getByRole("link", { name: label })).toBeInTheDocument()
   }
-  for (const internalLabel of ["客户机会", "AI 内容工厂", "效果", "知识库", "素材库", "平台账号"]) {
+  for (const internalLabel of ["客户机会", "Agent 工作台", "内容工厂", "经营效果", "知识库", "素材库", "平台账户"]) {
     expect(screen.queryByRole("link", { name: internalLabel })).not.toBeInTheDocument()
   }
   expect(screen.getByText("示例组织")).toBeInTheDocument()
   expect(screen.getByText("operator")).toBeInTheDocument()
+})
+
+it("exposes agent, social, and effectiveness workspaces to an authorized operator", async () => {
+  await renderShell("/", {
+    permissions: ["agents.run", "publishing.read", "metrics.read"],
+  })
+
+  expect(screen.getByRole("link", { name: "Agent 工作台" })).toHaveAttribute(
+    "href",
+    "/agent-workspace",
+  )
+  expect(screen.getByRole("link", { name: "社媒运营" })).toHaveAttribute("href", "/promotion")
+  expect(screen.getByRole("link", { name: "经营效果" })).toHaveAttribute("href", "/analytics")
 })
 
 it("uses real SVG navigation icons and keeps approval available to approvers", async () => {
@@ -94,7 +107,7 @@ it("uses real SVG navigation icons and keeps approval available to approvers", a
 
   const todayLink = screen.getByRole("link", { name: "今天" })
   expect(within(todayLink).getByTestId("icon-calendar-days")).toHaveAttribute("aria-hidden", "true")
-  expect(screen.getByRole("link", { name: "待我审核 0" })).toHaveAttribute("href", "/agent-approvals")
+  expect(screen.getByRole("link", { name: "待我审核 0" })).toHaveAttribute("href", "/agent-workspace?view=approvals")
   expect(screen.getByTestId("sidebar-utilities")).toContainElement(
     screen.getByRole("link", { name: "设置中心" }),
   )

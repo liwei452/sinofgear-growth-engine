@@ -114,7 +114,7 @@ function formatTime(value: string) { return value ? new Intl.DateTimeFormat("zh-
       <article v-for="item in visibleRows" :key="`${item.kind}-${item.id}`" :aria-label="`${item.name} ${item.kind === 'ACCOUNT' ? '归因记录' : '候选记录'}`">
         <div class="attribution-record-title"><div><small>{{ item.kind === "ACCOUNT" ? "目标账户" : "候选公司" }} · {{ item.country }}</small><h3>{{ item.name }}</h3></div><span class="verified">许可 / 人工记录</span></div>
         <dl><div><dt>当前阶段</dt><dd>{{ item.stageLabel }}</dd></div><div><dt>事件状态</dt><dd>{{ item.statusNote }}</dd></div><div><dt>证据 / 来源</dt><dd>{{ item.evidence }}</dd></div><div><dt>记录时间</dt><dd>{{ formatTime(item.eventTime) }}</dd></div></dl>
-        <p><strong>AI 建议下一步：</strong>{{ item.nextAction }}</p>
+        <p><strong>系统建议下一步：</strong>{{ item.nextAction }}</p>
       </article>
     </div>
     <p v-else class="attribution-empty">当前筛选下没有已记录账户或候选证据；不会补造样例结果。</p>

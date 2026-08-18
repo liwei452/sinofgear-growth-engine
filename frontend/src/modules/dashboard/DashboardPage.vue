@@ -11,6 +11,11 @@ import {
   growthQueryKeys,
   growthWorkspaceQueryOptions,
 } from "../growth/api"
+import { agentRunsQueryOptions } from "../growth/agentApi"
+import { getProductAIStatus } from "../settings/api"
+import DashboardKpiStrip from "./DashboardKpiStrip.vue"
+import DashboardSideRail, { type DashboardChannelIssue } from "./DashboardSideRail.vue"
+import DashboardTrendCard from "./DashboardTrendCard.vue"
 import TodayActionList from "./TodayActionList.vue"
 
 type Opportunity = {
@@ -29,6 +34,12 @@ type Opportunity = {
 
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
+const agentRunsQuery = useQuery(agentRunsQueryOptions())
+const providerQuery = useQuery({
+  queryKey: ["ai", "provider-status"],
+  queryFn: getProductAIStatus,
+  staleTime: 15_000,
+})
 const locallyFollowed = ref(new Set<string>())
 const actionError = ref("")
 const draftFor = ref<{
@@ -41,9 +52,13 @@ const evidenceFor = ref(new Set<string>())
 const countryLabels: Record<string, string> = {
   Germany: "德国", Italy: "意大利", Sweden: "瑞典", China: "中国", USA: "美国",
 }
-const channelLabels: Record<string, string> = {
-  LINKEDIN: "LinkedIn", FACEBOOK: "Facebook", INSTAGRAM: "Instagram", TIKTOK: "TikTok", YOUTUBE: "YouTube",
-}
+const channelNames = {
+  FACEBOOK: "Facebook",
+  INSTAGRAM: "Instagram",
+  LINKEDIN: "LinkedIn",
+  TIKTOK: "TikTok",
+  YOUTUBE: "YouTube",
+} as const
 
 function isDemoLabel(value: string | undefined): boolean {
   return /demo|fake/i.test(value ?? "")
@@ -80,22 +95,61 @@ const opportunities = computed<Opportunity[]>(() => {
     }]
   })
 })
-const channelMetrics = computed(() => {
-  const receipts = (workspaceQuery.data.value?.metric_receipts ?? []).filter(receipt => !receipt.is_demo)
-  const seen = new Set<string>()
-  return receipts.flatMap((receipt) => {
-    if (seen.has(receipt.channel)) return []
-    seen.add(receipt.channel)
-    const candidates = [
-      ["播放或访问", recordedNumber(receipt.payload, "views")],
-      ["点击", recordedNumber(receipt.payload, "clicks")],
-      ["回复", recordedNumber(receipt.payload, "replies")],
-      ["询盘", recordedNumber(receipt.payload, "inquiries")],
-    ] as const
-    const metric = candidates.find(([, value]) => value !== null)
-    if (!metric) return []
-    return [{ name: channelLabels[receipt.channel] ?? receipt.channel, metric: metric[0], value: metric[1] as number }]
+const dashboardKpis = computed(() => {
+  const workspace = workspaceQuery.data.value
+  const runs = agentRunsQuery.data.value
+  const recordedInquiries = (workspace?.metric_receipts ?? [])
+    .filter(receipt => !receipt.is_demo)
+    .map(receipt => recordedNumber(receipt.payload, "inquiries"))
+    .filter((value): value is number => value !== null)
+  return {
+    opportunities: workspaceQuery.isSuccess.value ? opportunities.value.length : null,
+    approvals: agentRunsQuery.isSuccess.value
+      ? (runs ?? []).filter(run => run.status === "WAITING_APPROVAL").length
+      : null,
+    readyToPublish: workspaceQuery.isSuccess.value
+      ? (workspace?.channel_packages ?? []).filter(item => !item.is_demo && item.status === "APPROVED").length
+      : null,
+    inquiries: recordedInquiries.length
+      ? recordedInquiries.reduce((total, value) => total + value, 0)
+      : null,
+  }
+})
+
+const pendingRuns = computed(() => (agentRunsQuery.data.value ?? [])
+  .filter(run => run.status === "WAITING_APPROVAL")
+  .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+  .slice(0, 3))
+
+const completedRuns = computed(() => (agentRunsQuery.data.value ?? [])
+  .filter(run => run.status === "COMPLETED")
+  .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+  .slice(0, 3))
+
+const channelIssues = computed<DashboardChannelIssue[]>(() => {
+  if (!workspaceQuery.isSuccess.value) return []
+  const connectors = workspaceQuery.data.value?.connectors ?? []
+  return Object.entries(channelNames).flatMap(([code, name]) => {
+    const connection = connectors.find(item => item.channel === code)
+    if (connection?.status === "CONNECTED" && connection.mode === "OFFICIAL") return []
+    return [{
+      code,
+      name,
+      status: connection?.connection_label || "未配置",
+      recovery: connection?.recovery_action || "请管理员完成平台配置",
+    }]
   })
+})
+
+const todayLabel = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric", month: "long", day: "numeric", weekday: "long",
+}).format(new Date())
+const greeting = computed(() => {
+  const hour = new Date().getHours()
+  if (hour < 9) return "早上好"
+  if (hour < 12) return "上午好"
+  if (hour < 18) return "下午好"
+  return "晚上好"
 })
 
 const todayActions = computed(() => {
@@ -179,133 +233,110 @@ function toggleEvidence(id: string) {
 <template>
   <div class="today-page">
     <WorkspaceHeader
-      eyebrow="今日工作台"
-      title="今天先做这三件事"
-      description="按业务价值和人工决策优先级排列；所有数量都来自已保存、可追溯的数据。"
+      :eyebrow="todayLabel"
+      :title="`${greeting}，今天先处理最重要的增长任务`"
+      description="先完成需要你判断的事项；所有数量均来自已保存、可追溯的数据。"
     />
 
-    <TodayActionList :items="todayActions" />
+    <DashboardKpiStrip
+      :opportunities="dashboardKpis.opportunities"
+      :approvals="dashboardKpis.approvals"
+      :ready-to-publish="dashboardKpis.readyToPublish"
+      :inquiries="dashboardKpis.inquiries"
+    />
 
     <p v-if="workspaceQuery.isPending.value" class="workspace-state" role="status">正在读取可持久化工作区…</p>
     <p v-else-if="workspaceQuery.isError.value" class="workspace-state" role="alert">暂时无法读取工作区，请稍后重试；页面不会使用演示数据替代。</p>
     <p v-if="actionError" class="workspace-state action-error" role="alert">{{ actionError }}</p>
 
-    <div class="today-grid">
-      <section class="workspace-card opportunities-panel" aria-labelledby="today-opportunities">
-        <div class="panel-heading">
-          <div>
-            <h2 id="today-opportunities">今天发现的采购机会</h2>
-            <p>按证据完整度和当前需求排序，不等同于已确认采购。</p>
-          </div>
-          <RouterLink to="/opportunities">查看全部</RouterLink>
-        </div>
+    <div class="dashboard-workbench">
+      <div class="dashboard-main">
+        <TodayActionList :items="todayActions" />
 
-        <div v-if="opportunities.length" class="opportunity-list">
-          <article
-            v-for="opportunity in opportunities"
-            :key="opportunity.id"
-            class="opportunity-card"
-            :aria-label="`${opportunity.company} 采购机会`"
-          >
-            <div class="company-block">
-              <span class="company-avatar" aria-hidden="true">{{ opportunity.company.slice(0, 1) }}</span>
-              <strong>{{ opportunity.company }}</strong>
-              <span>{{ opportunity.country }}</span>
-              <span>{{ opportunity.profile }}</span>
-            </div>
-            <div class="signal-block">
-              <div class="signal-topline">
-                <span class="demo-badge">{{ opportunity.dataLabel }}</span>
-                <span class="intent-badge">{{ opportunity.intent }}</span>
-              </div>
-              <h3>{{ opportunity.need }}</h3>
-              <p>{{ opportunity.summary }}</p>
-              <dl class="signal-meta">
-                <div><dt>信号来源</dt><dd>{{ opportunity.source }}</dd></div>
-                <div><dt>发现时间</dt><dd>{{ opportunity.discovered }}</dd></div>
-              </dl>
-              <div class="opportunity-actions">
-                <button
-                  class="button button-primary"
-                  type="button"
-                  :disabled="isFollowed(opportunity.id) || followUpMutation.isPending.value"
-                  @click="addFollowUp(opportunity.id)"
-                >
-                  {{ isFollowed(opportunity.id) ? "已加入跟进" : "加入跟进" }}
-                </button>
-                <button
-                  class="button button-secondary" type="button"
-                  :disabled="draftMutation.isPending.value" @click="generateDraft(opportunity)"
-                >
-                  {{ draftMutation.isPending.value ? "正在生成…" : "生成联系草稿" }}
-                </button>
-                <button class="evidence-button" type="button" @click="toggleEvidence(opportunity.id)">
-                  {{ evidenceFor.has(opportunity.id) ? "收起证据" : "查看证据" }}
-                </button>
-              </div>
-              <div
-                v-if="evidenceFor.has(opportunity.id)"
-                class="evidence-box"
-                role="region"
-                :aria-label="`${opportunity.company} 原始证据`"
-              >
-                <strong>原始证据摘要</strong>
-                <p>{{ opportunity.evidence }}</p>
-                <p>完整来源、观察时间与许可信息请在客户机会页复核。</p>
-              </div>
-            </div>
-          </article>
-        </div>
-        <EmptyState
-          v-else
-          icon="users-round"
-          title="今天还没有已验证的采购机会"
-          description="只有带真实来源与观察时间、并通过人工核实的需求信号才会出现在这里。"
-        >
-          <RouterLink class="button button-primary" to="/opportunities">选择市场或导入合法名单</RouterLink>
-        </EmptyState>
-      </section>
-
-      <div class="insight-column">
-        <section class="workspace-card visibility-panel" aria-labelledby="visibility-title">
+        <section class="workspace-card opportunities-panel" aria-labelledby="today-opportunities">
           <div class="panel-heading">
             <div>
-              <h2 id="visibility-title">AI 品牌与搜索曝光</h2>
-              <p>评分可解释，不代表搜索平台官方排名。</p>
+              <h2 id="today-opportunities">今天发现的采购机会</h2>
+              <p>按证据完整度和当前需求排序，不等同于已确认采购。</p>
             </div>
+            <RouterLink to="/opportunities">查看全部</RouterLink>
           </div>
-          <EmptyState
-            icon="chart-column"
-            title="还没有真实 AI 可见度监测记录"
-            description="该实验模块需要完整回答、平台、模型、地区、引用 URL 和观察时间；没有记录时不生成评分。"
-          >
-            <RouterLink class="button button-primary button-block" to="/company">补充公司事实</RouterLink>
-          </EmptyState>
-        </section>
 
-        <section class="workspace-card channels-panel" aria-labelledby="channel-performance">
-          <div class="panel-heading">
-            <div>
-              <h2 id="channel-performance">渠道表现</h2>
-              <p>只显示人工保存的真实渠道结果。</p>
-            </div>
-          </div>
-          <div v-if="channelMetrics.length" class="channel-grid">
-            <article v-for="channel in channelMetrics" :key="channel.name" :aria-label="`${channel.name} 渠道表现`">
-              <strong>{{ channel.name }}</strong>
-              <p>{{ channel.metric }} <b>{{ channel.value.toLocaleString() }}</b></p>
+          <div v-if="opportunities.length" class="opportunity-list">
+            <article
+              v-for="opportunity in opportunities.slice(0, 5)"
+              :key="opportunity.id"
+              class="opportunity-card"
+              :aria-label="`${opportunity.company} 采购机会`"
+            >
+              <div class="company-block">
+                <span class="company-avatar" aria-hidden="true">{{ opportunity.company.slice(0, 1) }}</span>
+                <strong>{{ opportunity.company }}</strong>
+                <span>{{ opportunity.country }}</span>
+                <span>{{ opportunity.profile }}</span>
+              </div>
+              <div class="signal-block">
+                <div class="signal-topline">
+                  <span class="demo-badge">{{ opportunity.dataLabel }}</span>
+                  <span class="intent-badge">{{ opportunity.intent }}</span>
+                </div>
+                <h3>{{ opportunity.need }}</h3>
+                <p>{{ opportunity.summary }}</p>
+                <dl class="signal-meta">
+                  <div><dt>信号来源</dt><dd>{{ opportunity.source }}</dd></div>
+                  <div><dt>发现时间</dt><dd>{{ opportunity.discovered }}</dd></div>
+                </dl>
+                <div class="opportunity-actions">
+                  <button
+                    class="button button-primary"
+                    type="button"
+                    :disabled="isFollowed(opportunity.id) || followUpMutation.isPending.value"
+                    @click="addFollowUp(opportunity.id)"
+                  >
+                    {{ isFollowed(opportunity.id) ? "已加入跟进" : "加入跟进" }}
+                  </button>
+                  <button
+                    class="button button-secondary" type="button"
+                    :disabled="draftMutation.isPending.value" @click="generateDraft(opportunity)"
+                  >
+                    {{ draftMutation.isPending.value ? "正在生成…" : "生成联系草稿" }}
+                  </button>
+                  <button class="evidence-button" type="button" @click="toggleEvidence(opportunity.id)">
+                    {{ evidenceFor.has(opportunity.id) ? "收起证据" : "查看证据" }}
+                  </button>
+                </div>
+                <div
+                  v-if="evidenceFor.has(opportunity.id)"
+                  class="evidence-box"
+                  role="region"
+                  :aria-label="`${opportunity.company} 原始证据`"
+                >
+                  <strong>原始证据摘要</strong>
+                  <p>{{ opportunity.evidence }}</p>
+                  <p>完整来源、观察时间与许可信息请在客户机会页复核。</p>
+                </div>
+              </div>
             </article>
           </div>
           <EmptyState
             v-else
-            icon="chart-column"
-            title="还没有人工回填的渠道结果"
-            description="发布、点击、回复和询盘只有在人工保存后才会展示。"
+            icon="users-round"
+            title="今天还没有已验证的采购机会"
+            description="只有带真实来源与观察时间、并通过人工核实的需求信号才会出现在这里。"
           >
-            <RouterLink class="button button-primary" to="/analytics">回填渠道结果</RouterLink>
+            <RouterLink class="button button-primary" to="/opportunities">选择市场或导入合法名单</RouterLink>
           </EmptyState>
         </section>
+
+        <DashboardTrendCard :receipts="workspaceQuery.data.value?.metric_receipts ?? []" />
       </div>
+
+      <DashboardSideRail
+        :model-status="providerQuery.data.value ?? null"
+        :pending-runs="pendingRuns"
+        :channel-issues="channelIssues"
+        :completed-runs="completedRuns"
+      />
     </div>
 
     <div v-if="draftFor" class="modal-backdrop" @click.self="draftFor = null">
@@ -330,7 +361,8 @@ function toggleEvidence(id: string) {
 .demo-badge, .intent-badge { display: inline-flex; border-radius: 999px; padding: 5px 9px; font-size: .72rem; font-weight: 800; white-space: nowrap; }
 .demo-badge { background: #eef2f6; color: #4f5d6c; }
 .intent-badge { background: #e7f8ed; color: #14733c; }
-.today-grid { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(430px, .92fr); gap: 22px; align-items: start; }
+.dashboard-workbench { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
+.dashboard-main { display: grid; min-width: 0; gap: 18px; }
 .workspace-card { border: 1px solid var(--sg-line); border-radius: 14px; background: white; padding: 22px; box-shadow: 0 3px 16px rgb(23 34 49 / 4%); }
 .workspace-empty { display: grid; gap: 10px; justify-items: start; border: 1px dashed var(--sg-line); border-radius: 12px; padding: 20px; background: #fbfcfd; }
 .workspace-empty h3, .workspace-empty p { margin: 0; }.workspace-empty p { color: var(--sg-muted); line-height: 1.6; }
@@ -363,6 +395,6 @@ function toggleEvidence(id: string) {
 .modal-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; background: rgb(17 31 47 / 48%); padding: 20px; }
 .draft-dialog { width: min(100%, 620px); max-height: 90vh; overflow-y: auto; border-radius: 14px; background: white; padding: 26px; box-shadow: var(--sg-shadow); }
 .draft-dialog h2 { margin: 10px 0 0; }.draft-dialog h3 { margin: 20px 0 6px; font-size: .95rem; }.draft-dialog p { line-height: 1.65; }.draft-dialog .safe-note { text-align: left; }
-@media (max-width: 1180px) { .today-grid { grid-template-columns: 1fr; }.opportunities-panel { order: 1; }.insight-column { order: 2; } }
+@media (max-width: 1100px) { .dashboard-workbench { grid-template-columns: 1fr; } }
 @media (max-width: 680px) { .panel-heading { align-items: flex-start; flex-direction: column; }.workspace-card { padding: 16px; }.opportunity-card { grid-template-columns: 1fr; }.company-block { grid-template-columns: auto 1fr; border-right: 0; border-bottom: 1px solid var(--sg-line); padding: 0 0 14px; }.company-avatar { grid-row: span 3; }.knowledge-grid { grid-template-columns: 1fr; }.channel-grid { grid-template-columns: repeat(2, 1fr); } }
 </style>

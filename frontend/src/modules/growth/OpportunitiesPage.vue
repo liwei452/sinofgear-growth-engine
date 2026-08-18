@@ -19,6 +19,7 @@ import DiscoveryCandidateQueue from "./DiscoveryCandidateQueue.vue"
 import MarketPilotComparison from "./MarketPilotComparison.vue"
 import OpportunityWorkspaceNav, { type OpportunityWorkspace } from "./OpportunityWorkspaceNav.vue"
 import ReactivationWorkbench from "./ReactivationWorkbench.vue"
+import AccountAttributionPanel from "./AccountAttributionPanel.vue"
 
 const queryClient = useQueryClient()
 const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
@@ -332,6 +333,13 @@ async function handleImported(accountId: string): Promise<void> {
         v-if="workspaceQuery.data.value"
         :accounts="sortedAccounts"
         :reactivations="formalReactivations"
+      />
+    </section>
+
+    <section v-else-if="activeWorkspace === 'funnel'" class="workspace-tab-panel" aria-label="转化漏斗">
+      <AccountAttributionPanel
+        v-if="workspaceQuery.data.value"
+        :workspace="workspaceQuery.data.value"
       />
     </section>
 

@@ -15,6 +15,7 @@ from apps.identity.permissions import (
 from apps.identity.services import get_active_membership, require_permission
 
 from .agent.resume import resume_agent_run
+from .agent.execution import PlannerConfigurationUnavailable
 from .agent.content_creation_tools import (
     run_content_creation_agent,
     run_platform_variants_agent,
@@ -86,6 +87,10 @@ class AgentRunSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "goal",
+            "agent_type",
+            "execution_mode",
+            "planner_provider",
+            "planner_model",
             "status",
             "terminal_reason",
             "created_at",
@@ -221,6 +226,11 @@ class AgentRunApproveView(APIView):
         run.save(update_fields=["approved_by", "approved_at", "approval_comment", "updated_at"])
         try:
             resume_agent_run(run=run, approval_token=pending.approval_token)
+        except PlannerConfigurationUnavailable as exc:
+            return Response({
+                "code": "planner_configuration_unavailable",
+                "message": str(exc),
+            }, status=409)
         except (KeyError, ValueError) as exc:
             return Response({"message": str(exc)}, status=409)
         run.refresh_from_db()

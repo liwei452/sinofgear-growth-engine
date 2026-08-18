@@ -3,7 +3,7 @@ import { RouterLink } from "vue-router"
 
 import AppIcon, { type IconName } from "../../shared/components/AppIcon.vue"
 
-type ContentWorkspace = "create" | "review" | "calendar" | "accounts"
+type ContentWorkspace = "create" | "review" | "social" | "calendar" | "accounts"
 
 defineProps<{
   active: ContentWorkspace
@@ -12,6 +12,7 @@ defineProps<{
 const items: Array<{ id: ContentWorkspace; label: string; to: string; icon: IconName }> = [
   { id: "create", label: "创建内容", to: "/content-factory", icon: "sparkles" },
   { id: "review", label: "审核内容", to: "/reviews", icon: "clipboard-check" },
+  { id: "social", label: "社媒运营", to: "/promotion", icon: "send" },
   { id: "calendar", label: "发布日历", to: "/publishing-calendar", icon: "calendar-clock" },
   { id: "accounts", label: "平台账户", to: "/platform-accounts", icon: "share-2" },
 ]
@@ -35,7 +36,7 @@ const items: Array<{ id: ContentWorkspace; label: string; to: string; icon: Icon
 <style scoped>
 .content-workspace-nav {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
   border: 1px solid var(--sg-line);
   border-radius: 14px;

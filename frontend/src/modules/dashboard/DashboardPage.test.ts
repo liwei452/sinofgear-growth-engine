@@ -2,9 +2,11 @@ import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
 import { render, screen, waitFor, within } from "@testing-library/vue"
 import userEvent from "@testing-library/user-event"
 import { createMemoryHistory, createRouter } from "vue-router"
-import { expect, it, vi } from "vitest"
+import { afterEach, expect, it, vi } from "vitest"
 
 import DashboardPage from "./DashboardPage.vue"
+
+afterEach(() => vi.unstubAllGlobals())
 
 async function renderDashboard() {
   const router = createRouter({
@@ -18,6 +20,9 @@ async function renderDashboard() {
       { path: "/reviews", component: { template: "<p>审核页</p>" } },
       { path: "/company", component: { template: "<p>公司资料页</p>" } },
       { path: "/analytics", component: { template: "<p>效果页</p>" } },
+      { path: "/agent-workspace", component: { template: "<p>Agent 工作台</p>" } },
+      { path: "/platform-accounts", component: { template: "<p>平台账户页</p>" } },
+      { path: "/settings", component: { template: "<p>设置页</p>" } },
     ],
   })
   await router.push("/")
@@ -31,7 +36,7 @@ async function renderDashboard() {
 it("shows real next steps without fabricated dashboard content in an empty workspace", async () => {
   const { container } = await renderDashboard()
 
-  expect(screen.getByRole("heading", { level: 1, name: "今天先做这三件事" })).toBeInTheDocument()
+  expect(screen.getByRole("heading", { level: 1, name: /今天先处理最重要的增长任务/ })).toBeInTheDocument()
   const priorities = screen.getByRole("region", { name: "今日优先事项" })
   expect(within(priorities).getByRole("link", { name: /发现潜在客户/ })).toHaveAttribute("href", "/opportunities")
   expect(within(priorities).getByRole("link", { name: /创建第一批专业内容/ })).toHaveAttribute("href", "/content-factory")
@@ -40,22 +45,44 @@ it("shows real next steps without fabricated dashboard content in an empty works
   expect(screen.getByRole("heading", { name: "今天发现的采购机会" })).toBeInTheDocument()
   expect(screen.getByText("今天还没有已验证的采购机会")).toBeInTheDocument()
   expect(screen.getByRole("link", { name: "选择市场或导入合法名单" })).toHaveAttribute("href", "/opportunities")
-  expect(screen.getByText("还没有真实 AI 可见度监测记录")).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "补充公司事实" })).toHaveAttribute("href", "/company")
-  expect(screen.getByText("还没有人工回填的渠道结果")).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "回填渠道结果" })).toHaveAttribute("href", "/analytics")
+  expect(screen.getByText("还没有近七天业务记录")).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "查看经营效果" })).toHaveAttribute("href", "/analytics")
   expect(screen.queryByText(/PackTech|ISO 9001|72 \/ 100|6,820/)).not.toBeInTheDocument()
   expect(container.querySelector(".sparkline")).not.toBeInTheDocument()
 })
 
+it("organizes today around four honest KPIs and a compact status rail", async () => {
+  await renderDashboard()
+
+  const coreStatus = screen.getByRole("region", { name: "今日核心状态" })
+  for (const label of ["新机会", "等待审批", "待发布", "有效询盘"]) {
+    expect(within(coreStatus).getByText(label)).toBeVisible()
+  }
+  expect(within(coreStatus).getAllByText("无数据")).toHaveLength(4)
+
+  const rail = screen.getByRole("complementary", { name: "工作台状态" })
+  expect(within(rail).getByRole("heading", { name: "Agent 与模型" })).toBeVisible()
+  expect(within(rail).getByRole("link", { name: "检查模型设置" })).toHaveAttribute(
+    "href",
+    "/settings",
+  )
+})
+
 it("does not render Demo API records in the formal dashboard", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+  const workspace = {
     target_accounts: [{ id: "demo-account", name: "Demo Buyer Ltd", country: "Germany", industry: "Machinery", employee_range: "11-50", website: "", is_demo: true, data_label: "Demo / Fake" }],
     intent_signals: [{ id: "demo-signal", account_id: "demo-account", signal_type: "HIRING", source_label: "Demo", source_url: "", evidence_text: "Demo purchase signal", confidence: 99, observed_at: "2026-08-15T08:00:00Z", data_label: "Demo / Fake" }],
     contacts: [], inbound_leads: [], follow_ups: [], outreach_drafts: [], channel_packages: [],
     metric_receipts: [{ id: "demo-metric", channel: "TIKTOK", payload: { views: 99999 }, is_demo: true }],
     field_provenance: [], connectors: [],
-  }), { status: 200, headers: { "Content-Type": "application/json" } })))
+  }
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    const payload = path === "/api/v1/growth/workspace" ? workspace
+      : path === "/api/v1/growth/agent/runs" ? []
+        : { mode: "FAKE_OFFLINE", provider_label: "Fake / 离线演示", model: "fake-v1", configured: false, real_requests_enabled: false }
+    return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } })
+  }))
   await renderDashboard()
   expect(await screen.findByText("今天还没有已验证的采购机会")).toBeInTheDocument()
   expect(screen.queryByText(/Demo Buyer|Demo purchase signal|99,999/)).not.toBeInTheDocument()
@@ -83,6 +110,15 @@ it("loads opportunities and persists follow-up and draft actions through the gro
     const path = String(input)
     if (path === "/api/v1/growth/workspace") {
       return new Response(JSON.stringify(workspace), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/growth/agent/runs") {
+      return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    if (path === "/api/v1/ai/provider-status") {
+      return new Response(JSON.stringify({
+        mode: "FAKE_OFFLINE", provider_label: "Fake / 离线演示", model: "fake-v1",
+        configured: false, real_requests_enabled: false,
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
     }
     if (path.endsWith("/follow-up")) {
       return new Response(JSON.stringify({ id: "follow-1", status: "OPEN" }), { status: 201, headers: { "Content-Type": "application/json" } })

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import AppIcon, { type IconName } from "../../shared/components/AppIcon.vue"
 
-export type OpportunityWorkspace = "queue" | "discovery" | "import" | "reactivation"
+export type OpportunityWorkspace = "queue" | "discovery" | "import" | "reactivation" | "funnel"
 
 defineProps<{
   active: OpportunityWorkspace
@@ -16,6 +16,7 @@ const items: Array<{ id: OpportunityWorkspace; label: string; icon: IconName }> 
   { id: "discovery", label: "客户发现", icon: "map-pinned" },
   { id: "import", label: "名单导入", icon: "inbox" },
   { id: "reactivation", label: "老客激活", icon: "circle-check" },
+  { id: "funnel", label: "转化漏斗", icon: "chart-column" },
 ]
 </script>
 
@@ -38,7 +39,7 @@ const items: Array<{ id: OpportunityWorkspace; label: string; icon: IconName }> 
 <style scoped>
 .opportunity-workspace-nav {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
   border: 1px solid var(--sg-line);
   border-radius: 14px;

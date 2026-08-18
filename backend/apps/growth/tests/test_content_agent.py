@@ -1,8 +1,11 @@
 import pytest
 
+from apps.ai.models import OrganizationAIProviderConfig
+from apps.growth.agent.execution import PlannerConfigurationUnavailable
 from apps.growth.agent.content_tools import run_content_strategy_agent
-from apps.growth.models import DiscoveryCandidate, InboundRfq
-from apps.identity.models import Organization
+from apps.growth.models import AgentRun, DiscoveryCandidate, InboundRfq
+from apps.identity.models import Membership, Organization, Role
+from integrations.secrets import encrypt_secret
 
 
 @pytest.fixture
@@ -125,3 +128,68 @@ def test_content_strategy_agent_key_is_scoped_to_calendar_day(organization, monk
     assert AgentRun.objects.filter(
         organization=organization, agent_type="content_strategy"
     ).count() == 2
+
+
+def test_configured_content_strategy_persists_truthful_ai_execution(organization, monkeypatch):
+    OrganizationAIProviderConfig.objects.create(
+        organization=organization,
+        provider="deepseek",
+        model="deepseek-chat",
+        encrypted_api_key=encrypt_secret("organization-planner-key"),
+        enabled=True,
+    )
+
+    def generate(_provider, *, prompt, schema):
+        assert "Choose the next bounded action" in prompt
+        return {
+            "reasoning": "inspect evidence before choosing a topic",
+            "tool_name": "analyze_content_opportunities",
+            "tool_args": {},
+            "terminal_reason": None,
+        } if '"step_index": 0' in prompt else {
+            "reasoning": "analysis is complete",
+            "tool_name": None,
+            "tool_args": None,
+            "terminal_reason": "complete",
+        }
+
+    monkeypatch.setattr("integrations.ai.providers.DeepSeekAIProvider.generate", generate)
+
+    result = run_content_strategy_agent(organization=organization)
+
+    assert result.status == "completed"
+    run = AgentRun.objects.get(organization=organization, agent_type="content_strategy")
+    assert run.execution_mode == "AI_AGENT"
+    assert run.planner_provider == "deepseek"
+    assert run.planner_model == "deepseek-chat"
+
+
+def test_ai_agent_resume_refuses_a_silent_model_switch(organization, monkeypatch, django_user_model):
+    config = OrganizationAIProviderConfig.objects.create(
+        organization=organization,
+        provider="deepseek",
+        model="deepseek-chat",
+        encrypted_api_key=encrypt_secret("organization-planner-key"),
+        enabled=True,
+    )
+    user = django_user_model.objects.create_user(username="ai-planner-reviewer")
+    Membership.objects.create(user=user, organization=organization, role=Role.objects.create_operator())
+
+    def generate(_provider, *, prompt, schema):
+        if '"step_index": 0' in prompt:
+            return {"reasoning": "analyze", "tool_name": "analyze_content_opportunities", "tool_args": {}, "terminal_reason": None}
+        return {"reasoning": "draft", "tool_name": "create_content_brief", "tool_args": {}, "terminal_reason": None}
+
+    monkeypatch.setattr("integrations.ai.providers.DeepSeekAIProvider.generate", generate)
+    first = run_content_strategy_agent(organization=organization, creator_id=str(user.id))
+    assert first.status == "waiting_approval"
+
+    config.model = "deepseek-reasoner"
+    config.save(update_fields=["model", "updated_at"])
+
+    with pytest.raises(PlannerConfigurationUnavailable, match="planner configuration"):
+        run_content_strategy_agent(
+            organization=organization,
+            creator_id=str(user.id),
+            approvals={first.pending_approval.approval_token},
+        )

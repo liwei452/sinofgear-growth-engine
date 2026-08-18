@@ -14,8 +14,10 @@ export type AppRouteComponents = {
   Promotion: Component
   Opportunities: Component
   AgentApprovals: Component
+  AgentWorkspace: Component
   Company: Component
   Settings: Component
+  AIModelSettings: Component
   MapsDiscovery: Component
   Products: Component
   Knowledge: Component
@@ -62,11 +64,13 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
       component: options.components.Dashboard,
       meta: { title: "今天" },
     },
-    { path: "promotion", name: "promotion", component: options.components.Promotion, meta: { title: "推广" } },
+    { path: "promotion", name: "promotion", component: options.components.Promotion, meta: { title: "社媒运营", requiredPermission: "publishing.read" } },
     { path: "opportunities", name: "opportunities", component: options.components.Opportunities, meta: { title: "客户机会", requiredPermission: "leads.read" } },
-    { path: "agent-approvals", name: "agent-approvals", component: options.components.AgentApprovals, meta: { title: "待我审核", requiredPermission: "agents.approve" } },
+    { path: "agent-approvals", name: "agent-approvals", redirect: { path: "/agent-workspace", query: { view: "approvals" } }, meta: { title: "待我审核", requiredPermission: "agents.approve" } },
+    { path: "agent-workspace", name: "agent-workspace", component: options.components.AgentWorkspace, meta: { title: "Agent 工作台", requiredPermission: "agents.run" } },
     { path: "company", name: "company", component: options.components.Company, meta: { title: "我的公司" } },
     { path: "settings", name: "settings", component: options.components.Settings, meta: { title: "设置中心" } },
+    { path: "settings/ai-model", name: "ai-model-settings", component: options.components.AIModelSettings, meta: { title: "AI 模型", requiredRole: "ADMINISTRATOR", requiredPermission: "credentials.manage" } },
     { path: "maps-discovery", name: "maps-discovery", component: options.components.MapsDiscovery, meta: { title: "谷歌地图获客", requiredPermission: "leads.manage" } },
     {
       path: "products",
@@ -95,7 +99,7 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
     { path: "assets", name: "assets", component: options.components.Assets, meta: { title: "素材库", requiredPermission: "assets.read" } },
     { path: "publishing-calendar", name: "publishing-calendar", component: options.components.PublishingCalendar, meta: { title: "发布日历", requiredPermission: "publishing.read" } },
     { path: "platform-accounts", name: "platform-accounts", component: options.components.PlatformAccounts, meta: { title: "平台账户", requiredPermission: "publishing.read" } },
-    { path: "analytics", name: "analytics", component: options.components.Analytics, meta: { title: "效果", requiredPermission: "metrics.read" } },
+    { path: "analytics", name: "analytics", component: options.components.Analytics, meta: { title: "经营效果", requiredPermission: "metrics.read" } },
     { path: "admin/analytics", name: "admin-analytics", component: options.components.LegacyAnalytics, meta: { title: "高级数据看板", requiredRole: "ADMINISTRATOR" } },
   ]
   const router = createRouter({

@@ -11,7 +11,14 @@ from apps.campaigns.generation_schema import generation_input_errors
 from apps.common.security import normalize_persisted_error, scrub_secrets
 from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService
-from apps.ai.services import AIBudgetExceeded, reserve_ai_budget, settle_ai_budget
+from apps.ai.provider_config import PRICE_TABLE_VERSION, resolve_product_ai
+from apps.ai.services import (
+    AIBudgetExceeded,
+    reserve_ai_budget,
+    reserve_ai_cost,
+    settle_ai_budget,
+    settle_ai_cost,
+)
 from apps.content.recommendations import (
     ContentRecommendationError,
     validate_recommendation_snapshot,
@@ -147,21 +154,47 @@ def _create_run(*, job: Job, prompt: PromptVersion, provider: str, model: str | 
 def _record_success(
     run_id, *, job_id, claim_token, output: dict, result_writer=None,
     provider_metadata: dict | None = None,
+    cost_reserved_micros: int = 0,
+    cost_model: str = "deepseek-chat",
+    usage: dict | None = None,
 ) -> AIRun:
     job = Job.objects.select_for_update().get(pk=job_id)
     run = AIRun.objects.select_for_update().get(pk=run_id)
     if run.status != AIRun.Status.RUNNING:
+        settle_ai_budget(job.organization)
+        settle_ai_cost(
+            job.organization,
+            reserved_micros=cost_reserved_micros,
+            model=cost_model,
+            charge_on_unknown=False,
+        )
         return run
     if job.status == Job.Status.CANCELED:
-        return _record_canceled_run(run)
+        canceled_run = _record_canceled_run(run)
+        settle_ai_budget(job.organization)
+        settle_ai_cost(
+            job.organization,
+            reserved_micros=cost_reserved_micros,
+            model=cost_model,
+            usage=usage,
+        )
+        return canceled_run
     run.status = AIRun.Status.SUCCEEDED
     run.output_json = output
     run.confidence = Decimal("1.0000")
-    run.provider_metadata = (
-        provider_metadata
-        if provider_metadata is not None
-        else {"provider_code": run.provider}
+    metadata = dict(provider_metadata or {"provider_code": run.provider})
+    actual_cost_micros = settle_ai_cost(
+        job.organization,
+        reserved_micros=cost_reserved_micros,
+        model=cost_model,
+        usage=usage,
     )
+    if cost_reserved_micros:
+        metadata.update({
+            "price_table_version": PRICE_TABLE_VERSION,
+            "estimated_cost_micros": actual_cost_micros,
+        })
+    run.provider_metadata = metadata
     run.error = None
     run.finished_at = timezone.now()
     with ai_audit_writes():
@@ -186,20 +219,56 @@ def _record_success(
 
 
 @transaction.atomic
-def _record_failure(run_id, *, job_id, claim_token, error: dict) -> AIRun:
+def _record_failure(
+    run_id, *, job_id, claim_token, error: dict,
+    cost_reserved_micros: int = 0,
+    cost_model: str = "deepseek-chat",
+    usage: dict | None = None,
+) -> AIRun:
     job = Job.objects.select_for_update().get(pk=job_id)
     run = AIRun.objects.select_for_update().get(pk=run_id)
     if run.status != AIRun.Status.RUNNING:
+        settle_ai_budget(job.organization)
+        settle_ai_cost(
+            job.organization,
+            reserved_micros=cost_reserved_micros,
+            model=cost_model,
+            charge_on_unknown=False,
+        )
         return run
     if job.status == Job.Status.CANCELED:
-        return _record_canceled_run(run)
+        canceled_run = _record_canceled_run(run)
+        settle_ai_budget(job.organization)
+        settle_ai_cost(
+            job.organization,
+            reserved_micros=cost_reserved_micros,
+            model=cost_model,
+            usage=usage,
+        )
+        return canceled_run
     run.status = AIRun.Status.FAILED
     run.output_json = None
+    actual_cost_micros = settle_ai_cost(
+        job.organization,
+        reserved_micros=cost_reserved_micros,
+        model=cost_model,
+        usage=usage,
+    )
+    if cost_reserved_micros:
+        run.provider_metadata = {
+            "provider_code": run.provider,
+            "price_table_version": PRICE_TABLE_VERSION,
+            "estimated_cost_micros": actual_cost_micros,
+        }
+        if isinstance(usage, dict):
+            run.provider_metadata["usage"] = scrub_secrets(usage)
     normalized_error = normalize_persisted_error(error)
     run.error = normalized_error
     run.finished_at = timezone.now()
     with ai_audit_writes():
-        run.save(update_fields=["status", "output_json", "error", "finished_at"])
+        run.save(update_fields=[
+            "status", "output_json", "provider_metadata", "error", "finished_at",
+        ])
     JobService.fail(job_id, claim_token=claim_token, error=normalized_error)
     settle_ai_budget(job.organization)
     return run
@@ -253,13 +322,24 @@ def execute_generation_job(
             "prompt_purpose_mismatch",
             "Prompt purpose is not compatible with the job type.",
         )
-    provider_name = provider_code or prompt.provider
-    try:
-        provider = provider_registry.get(provider_name)
-    except (TypeError, ValueError) as exc:
-        raise GenerationPreflightError(
-            "provider_not_available", "AI provider is not available."
-        ) from exc
+    if provider_code is None:
+        runtime = resolve_product_ai(job.organization)
+        provider_name = runtime.provider_code
+        resolved_model = runtime.model
+        provider = runtime.provider
+        if runtime.mode == "CONFIGURATION_REQUIRED":
+            raise GenerationPreflightError(
+                "provider_not_configured", "Real AI provider is not configured or enabled."
+            )
+    else:
+        provider_name = provider_code
+        resolved_model = provider_model or prompt.model
+        try:
+            provider = provider_registry.get(provider_name)
+        except (TypeError, ValueError) as exc:
+            raise GenerationPreflightError(
+                "provider_not_available", "AI provider is not available."
+            ) from exc
     if not callable(getattr(provider, "generate", None)):
         raise GenerationPreflightError(
             "provider_not_available", "AI provider is not available."
@@ -298,13 +378,37 @@ def execute_generation_job(
             error={"code": "ai_budget_exceeded", "message": str(exc)},
         )
         raise GenerationError("ai_budget_exceeded", str(exc)) from exc
+    cost_reserved_micros = 0
+    if provider_name == "deepseek":
+        estimated_input_tokens = max(1, (len(rendered) + 3) // 4)
+        try:
+            cost_reserved_micros = reserve_ai_cost(
+                claimed.organization,
+                model=resolved_model,
+                input_tokens=estimated_input_tokens,
+                output_tokens=2000,
+            )
+        except AIBudgetExceeded as exc:
+            settle_ai_budget(claimed.organization)
+            JobService.fail(
+                claimed.id,
+                claim_token=token,
+                error={"code": "ai_cost_budget_exceeded", "message": str(exc)},
+            )
+            raise GenerationError("ai_cost_budget_exceeded", str(exc)) from exc
     try:
         run = _create_run(
-            job=claimed, prompt=prompt, provider=provider_name, model=provider_model,
+            job=claimed, prompt=prompt, provider=provider_name, model=resolved_model,
         )
     except Exception as exc:
         logger.exception("AI audit run could not start.")
         settle_ai_budget(claimed.organization)
+        settle_ai_cost(
+            claimed.organization,
+            reserved_micros=cost_reserved_micros,
+            model=resolved_model,
+            charge_on_unknown=False,
+        )
         JobService.fail(
             claimed.id,
             claim_token=token,
@@ -314,7 +418,15 @@ def execute_generation_job(
             "ai_run_start_failed", "AI audit run could not start."
         ) from exc
     if run.status != AIRun.Status.RUNNING:
+        settle_ai_budget(claimed.organization)
+        settle_ai_cost(
+            claimed.organization,
+            reserved_micros=cost_reserved_micros,
+            model=resolved_model,
+            charge_on_unknown=False,
+        )
         return run
+    usage = None
     try:
         output = scrub_secrets(provider.generate(prompt=rendered, schema=prompt.output_schema))
         if not isinstance(output, dict):
@@ -346,6 +458,9 @@ def execute_generation_job(
                 output=output,
                 result_writer=result_writer,
                 provider_metadata=provider_metadata,
+                cost_reserved_micros=cost_reserved_micros,
+                cost_model=resolved_model,
+                usage=usage,
             )
         except Exception:
             logger.exception("Generated content could not be finalized.")
@@ -353,6 +468,13 @@ def execute_generation_job(
                 "code": "content_finalize_failed",
                 "message": "Generated content could not be finalized.",
             }
+    usage = getattr(provider, "last_usage", usage)
     return _record_failure(
-        run.id, job_id=claimed.id, claim_token=token, error=error
+        run.id,
+        job_id=claimed.id,
+        claim_token=token,
+        error=error,
+        cost_reserved_micros=cost_reserved_micros,
+        cost_model=resolved_model,
+        usage=usage,
     )

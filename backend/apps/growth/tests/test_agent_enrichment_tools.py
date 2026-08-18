@@ -286,3 +286,55 @@ def test_send_email_tool_respects_outreach_cooldown(organization, monkeypatch):
     assert result.ok is False
     assert "cooldown" in result.error
     assert calls == []
+
+
+def test_send_email_tool_uses_contact_email_not_placeholder(organization, monkeypatch):
+    from apps.growth.agent import acquisition as acq
+
+    candidate = SimpleNamespace(id="candidate-email")
+    draft = SimpleNamespace(id="draft-1", english_draft="Draft")
+    account = SimpleNamespace(
+        id="account-email",
+        outreach_drafts=SimpleNamespace(order_by=lambda *a, **k: SimpleNamespace(first=lambda: draft)),
+        outreach_messages=SimpleNamespace(filter=lambda **k: SimpleNamespace(exists=lambda: False)),
+    )
+    monkeypatch.setattr(acq, "_candidate", lambda org, args: candidate)
+    monkeypatch.setattr(acq, "_account_for_candidate", lambda org, candidate: account)
+    monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
+    calls = []
+    monkeypatch.setattr(
+        acq,
+        "record_sent",
+        lambda **kwargs: calls.append(kwargs)
+        or SimpleNamespace(provider_message_id="m1", provider="mock", status="SENT"),
+    )
+
+    tools = ToolRegistry(acq.build_proactive_acquisition_tools(organization))
+    result = tools.get("send_email").func({"candidate_id": "candidate-email"})
+
+    assert result.ok is True
+    assert calls[0]["email"] == "buyer@example.com"
+
+
+def test_send_email_tool_fails_without_contact_email(organization, monkeypatch):
+    from apps.growth.agent import acquisition as acq
+
+    candidate = SimpleNamespace(id="candidate-no-email")
+    draft = SimpleNamespace(id="draft-1", english_draft="Draft")
+    account = SimpleNamespace(
+        id="account-no-email",
+        outreach_drafts=SimpleNamespace(order_by=lambda *a, **k: SimpleNamespace(first=lambda: draft)),
+        outreach_messages=SimpleNamespace(filter=lambda **k: SimpleNamespace(exists=lambda: False)),
+    )
+    monkeypatch.setattr(acq, "_candidate", lambda org, args: candidate)
+    monkeypatch.setattr(acq, "_account_for_candidate", lambda org, candidate: account)
+    monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: None)
+    calls = []
+    monkeypatch.setattr(acq, "record_sent", lambda **kwargs: calls.append(kwargs))
+
+    tools = ToolRegistry(acq.build_proactive_acquisition_tools(organization))
+    result = tools.get("send_email").func({"candidate_id": "candidate-no-email"})
+
+    assert result.ok is False
+    assert "contact email" in result.error
+    assert calls == []

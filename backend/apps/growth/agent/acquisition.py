@@ -258,6 +258,17 @@ def _draft_tool(organization) -> Tool:
     )
 
 
+def _contact_email_for_candidate(candidate) -> str | None:
+    snapshot = CandidateEnrichmentSnapshot.objects.filter(candidate=candidate).first()
+    if snapshot is not None:
+        for path in snapshot.public_contact_paths or []:
+            if isinstance(path, dict):
+                label = str(path.get("label") or "").strip()
+                if "@" in label:
+                    return label
+    return None
+
+
 def _send_tool(organization) -> Tool:
     def func(args: dict[str, Any]) -> ToolResult:
         candidate = _candidate(organization, args)
@@ -275,7 +286,9 @@ def _send_tool(organization) -> Tool:
             sent_at__gte=cooldown_cutoff,
         ).exists():
             return ToolResult(ok=False, error="account is within outreach cooldown.")
-        email = args.get("email") or "outreach@example.com"
+        email = args.get("email") or _contact_email_for_candidate(candidate)
+        if not email:
+            return ToolResult(ok=False, error="no contact email found for candidate.")
         message = record_sent(account=account, draft=draft, email=email)
         return ToolResult(
             ok=True,

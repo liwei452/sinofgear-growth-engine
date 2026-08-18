@@ -11,7 +11,12 @@ from rest_framework.views import APIView
 
 from .models import Membership
 from .permissions import CanManageMemberships, CanReadMemberships
-from .serializers import CurrentUserSerializer, LoginSerializer, MembershipSerializer
+from .serializers import (
+    CurrentUserSerializer,
+    LoginSerializer,
+    MembershipSerializer,
+    MembershipStatusSerializer,
+)
 
 
 @method_decorator(csrf_protect, name="dispatch")
@@ -76,11 +81,11 @@ class MembershipDetailView(APIView):
     def get(self, request: Request, membership_id: str) -> Response:
         return Response(MembershipSerializer(self.get_object(request, membership_id)).data)
 
-    @extend_schema(request=MembershipSerializer, responses={200: MembershipSerializer})
+    @extend_schema(request=MembershipStatusSerializer, responses={200: MembershipSerializer})
     def patch(self, request: Request, membership_id: str) -> Response:
-        serializer = MembershipSerializer(
+        serializer = MembershipStatusSerializer(
             self.get_object(request, membership_id), data=request.data, partial=True
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(serializer.data)
+        return Response(MembershipSerializer(serializer.instance).data)

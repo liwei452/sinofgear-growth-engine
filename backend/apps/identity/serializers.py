@@ -24,7 +24,13 @@ class MembershipSerializer(serializers.ModelSerializer):
     class Meta:
         model = Membership
         fields = ["id", "user", "organization", "role", "status"]
-        read_only_fields = ["id", "user", "organization"]
+        read_only_fields = ["id", "user", "organization", "role"]
+
+
+class MembershipStatusSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Membership
+        fields = ["status"]
 
 
 class CurrentUserSerializer(serializers.Serializer):

@@ -93,6 +93,7 @@ def test_publish_official_uses_converted_payload(monkeypatch):
     def fake_publish(request):
         captured["payload"] = request.payload
         captured["account_external_id"] = request.account_external_id
+        captured["idempotency_key"] = request.idempotency_key
         return SimpleNamespace(
             status="SUCCEEDED",
             external_id="post-1",
@@ -123,6 +124,7 @@ def test_publish_official_uses_converted_payload(monkeypatch):
     assert result.status == "SUCCEEDED"
     assert captured["payload"] == {"commentary": "Hello team"}
     assert captured["account_external_id"] == "ext-1"
+    assert captured["idempotency_key"] == "t1"
 
 
 def test_e2e_approved_content_to_official_connector(publishing_context, monkeypatch):

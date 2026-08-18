@@ -54,6 +54,27 @@ def test_read_only_member_cannot_execute_membership_write_action(
 
 
 @pytest.mark.django_db
+def test_operator_cannot_escalate_membership_role(
+    organization: Organization, roles: dict[str, Role]
+) -> None:
+    membership = create_membership(
+        organization=organization, role=roles[Role.Code.OPERATOR], username="operator"
+    )
+    client = APIClient()
+    assert client.login(username="operator", password="correct-horse-battery-staple")
+
+    response = client.patch(
+        f"/api/v1/memberships/{membership.id}",
+        {"role": str(roles[Role.Code.ADMINISTRATOR].id)},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    membership.refresh_from_db()
+    assert membership.role.code == Role.Code.OPERATOR
+
+
+@pytest.mark.django_db
 def test_reviewer_cannot_manage_connector_credentials(
     organization: Organization, roles: dict[str, Role]
 ) -> None:

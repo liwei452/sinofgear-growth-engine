@@ -742,7 +742,7 @@ def _publish_official(task, attempt_number):
             if task.social_account.credential else ""
         ),
         payload=payload,
-        idempotency_key=f"{task.id}:{attempt_number}",
+        idempotency_key=str(task.id),
         consent=consent,
     ))
 

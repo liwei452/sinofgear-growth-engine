@@ -35,6 +35,20 @@ const visibleNavigation = computed(() =>
     }))
     .filter((section) => section.items.length > 0),
 )
+const visibleUtilityNavigation = computed(() =>
+  utilityNavigation.filter((item) => {
+    if (item.requiredRole && currentUser.data.value?.membership.role !== item.requiredRole) {
+      return false
+    }
+    if (
+      item.requiresPermission
+      && !currentUser.data.value?.membership.permissions.includes(item.requiresPermission)
+    ) {
+      return false
+    }
+    return true
+  }),
+)
 const navOpen = ref(false)
 const userMenuOpen = ref(false)
 const isNarrowViewport = ref(false)
@@ -197,7 +211,7 @@ onBeforeUnmount(() => {
       </nav>
       <nav class="sidebar-utilities" data-testid="sidebar-utilities" aria-label="账户与设置">
         <RouterLink
-          v-for="item in utilityNavigation"
+          v-for="item in visibleUtilityNavigation"
           :key="item.to"
           :to="item.to"
           class="nav-link"
@@ -236,7 +250,7 @@ onBeforeUnmount(() => {
         <RouterLink
           v-if="canApprove"
           class="approval-badge"
-          :to="{ path: '/agent-workspace', query: { view: 'approvals' } }"
+          :to="{ path: '/', query: { view: 'approvals' } }"
           :aria-label="`待我审核 ${pendingApprovalCount}`"
         >
           <AppIcon name="circle-check" :size="18" />

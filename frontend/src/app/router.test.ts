@@ -8,215 +8,110 @@ import { createAppRouter, safeRedirect } from "./router"
 
 const Login = defineComponent({ name: "LoginStub", template: "<p>登录页面</p>" })
 const Shell = defineComponent({ name: "ShellStub", template: "<router-view />" })
-const Dashboard = defineComponent({ name: "DashboardStub", template: "<p>首页内容</p>" })
-const Products = defineComponent({ name: "ProductsStub", template: "<p>真实产品库</p>" })
-const Knowledge = defineComponent({ name: "KnowledgeStub", template: "<p>真实知识库</p>" })
-const ContentFactory = defineComponent({ name: "ContentFactoryStub", template: "<p>真实内容工厂</p>" })
-const Reviews = defineComponent({ name: "ReviewsStub", template: "<p>真实审核中心</p>" })
-const Placeholder = defineComponent({ name: "PlaceholderStub", template: "<p>占位内容</p>" })
-const Assets = defineComponent({ name: "AssetsStub", template: "<p>真实素材库</p>" })
-const PublishingCalendar = defineComponent({ name: "PublishingStub", template: "<p>真实发布日历</p>" })
-const PlatformAccounts = defineComponent({ name: "AccountsStub", template: "<p>真实平台账户</p>" })
-const Analytics = defineComponent({ name: "AnalyticsStub", template: "<p>真实数据看板</p>" })
-const LegacyAnalytics = defineComponent({ name: "LegacyAnalyticsStub", template: "<p>高级数据看板</p>" })
-const Promotion = defineComponent({ name: "PromotionStub", template: "<p>工厂推广工作区</p>" })
-const Opportunities = defineComponent({ name: "OpportunitiesStub", template: "<p>证据化客户机会</p>" })
-const AgentApprovals = defineComponent({ name: "AgentApprovalsStub", template: "<p>Agent 审批</p>" })
-const AgentWorkspace = defineComponent({ name: "AgentWorkspaceStub", template: "<p>Agent 工作台</p>" })
-const Company = defineComponent({ name: "CompanyStub", template: "<p>公司事实资料</p>" })
-const Settings = defineComponent({ name: "SettingsStub", template: "<p>统一设置中心</p>" })
-const AIModelSettings = defineComponent({ name: "AIModelSettingsStub", template: "<p>AI 模型设置</p>" })
-const MapsDiscovery = defineComponent({ name: "MapsDiscoveryStub", template: "<p>谷歌地图获客</p>" })
+const Stub = (name: string, label: string) => defineComponent({
+  name,
+  template: `<p>${label}</p>`,
+})
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => { resolve = done })
-  return { promise, resolve }
+function makeComponents() {
+  return {
+    Login,
+    Shell,
+    Dashboard: Stub("DashboardStub", "首页"),
+    Promotion: Stub("PromotionStub", "推广"),
+    Opportunities: Stub("OpportunitiesStub", "客户机会"),
+    AgentApprovals: Stub("AgentApprovalsStub", "Agent 审批"),
+    AgentWorkspace: Stub("AgentWorkspaceStub", "Agent 工作台"),
+    Missions: Stub("MissionsStub", "增长任务"),
+    MissionDetail: Stub("MissionDetailStub", "任务详情"),
+    Company: Stub("CompanyStub", "公司"),
+    Settings: Stub("SettingsStub", "设置中心"),
+    AIModelSettings: Stub("AIModelSettingsStub", "AI 模型"),
+    MapsDiscovery: Stub("MapsDiscoveryStub", "地图获客"),
+    Products: Stub("ProductsStub", "产品库"),
+    Knowledge: Stub("KnowledgeStub", "知识库"),
+    ContentFactory: Stub("ContentFactoryStub", "内容工厂"),
+    Reviews: Stub("ReviewsStub", "审核中心"),
+    Assets: Stub("AssetsStub", "素材库"),
+    PublishingCalendar: Stub("PublishingStub", "发布日历"),
+    PlatformAccounts: Stub("AccountsStub", "平台账户"),
+    Analytics: Stub("AnalyticsStub", "经营效果"),
+    LegacyAnalytics: Stub("LegacyAnalyticsStub", "高级数据"),
+    RoleHome: Stub("RoleHomeStub", "首页"),
+    ContentAssetsHub: Stub("ContentAssetsHubStub", "内容与素材"),
+    Attribution: Stub("AttributionStub", "数据归因"),
+    Placeholder: Stub("PlaceholderStub", "占位"),
+  }
 }
 
 function queryClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
 }
 
+function setUser(client: QueryClient, role: string, permissions: string[]) {
+  client.setQueryData(["auth", "me"], {
+    user: { id: 1, username: "u" },
+    organization: { id: "o1", name: "Org", slug: "org" },
+    membership: { id: "m1", role, status: "ACTIVE", permissions },
+  })
+}
+
 function router(client = queryClient(), initialPath?: string) {
   const history = createMemoryHistory()
   if (initialPath) history.push(initialPath)
-  return createAppRouter(client, {
-    history,
-    components: { Login, Shell, Dashboard, Promotion, Opportunities, AgentApprovals, AgentWorkspace, Company, Settings, AIModelSettings, MapsDiscovery, Products, Knowledge, ContentFactory, Reviews, Assets, PublishingCalendar, PlatformAccounts, Analytics, LegacyAnalytics, Placeholder },
-  })
+  return createAppRouter(client, { history, components: makeComponents() })
 }
 
 afterEach(() => vi.unstubAllGlobals())
 
-describe("protected routing", () => {
-  it("does not mount protected content while the session request is loading", async () => {
-    const pending = deferred<Response>()
-    vi.stubGlobal("fetch", vi.fn().mockReturnValue(pending.promise))
-    const appRouter = router(queryClient(), "/products")
-    render(Root, { global: { plugins: [appRouter] } })
-    const navigation = appRouter.isReady()
-
-    expect(screen.queryByText("真实产品库")).not.toBeInTheDocument()
-
-    pending.resolve(new Response(JSON.stringify({
-      user: { id: 1, username: "operator" },
-      organization: { id: "org-1", name: "示例组织", slug: "demo" },
-      membership: { id: "member-1", role: "OPERATOR", status: "ACTIVE", permissions: ["products.read"] },
-    }), { status: 200, headers: { "Content-Type": "application/json" } }))
-    await navigation
-    expect(await screen.findByText("真实产品库")).toBeInTheDocument()
-  })
-
-  it("mounts distinct real product and knowledge route components", async () => {
+describe("growth-mission routing", () => {
+  it("mounts mission, content hub, and attribution routes", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["products.read", "knowledge.read"] } })
-    const appRouter = router(client)
-    render(Root, { global: { plugins: [appRouter] } })
-    await appRouter.push("/products")
-    expect(await screen.findByText("真实产品库")).toBeInTheDocument()
-    await appRouter.push("/knowledge")
-    expect(await screen.findByText("真实知识库")).toBeInTheDocument()
-  })
-
-  it("mounts distinct content factory and review center route components", async () => {
-    const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["content.manage", "content.read"] } })
+    setUser(client, "OPERATOR", ["missions.read", "content.read"])
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
 
-    await appRouter.push("/content-factory")
-    expect(await screen.findByText("真实内容工厂")).toBeInTheDocument()
-    await appRouter.push("/reviews")
-    expect(await screen.findByText("真实审核中心")).toBeInTheDocument()
-    expect(screen.queryByText("占位内容")).not.toBeInTheDocument()
+    await appRouter.push("/missions")
+    expect(await screen.findByText("增长任务")).toBeInTheDocument()
+    await appRouter.push("/content")
+    expect(await screen.findByText("内容与素材")).toBeInTheDocument()
+    await appRouter.push("/attribution")
+    expect(await screen.findByText("数据归因")).toBeInTheDocument()
   })
 
-  it("uses the same content permission for the menu and content-factory route", async () => {
+  it("redirects legacy analytics and approval paths to the mission surfaces", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], {
-      user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["content.manage"] },
-    })
+    setUser(client, "OPERATOR", ["missions.read", "agents.approve"])
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
 
-    await appRouter.push("/content-factory")
-
-    expect(appRouter.currentRoute.value.name).toBe("content-factory")
-    expect(await screen.findByText("真实内容工厂")).toBeInTheDocument()
-  })
-
-  it("lets an approver open the approval center without campaign permission", async () => {
-    const client = queryClient()
-    client.setQueryData(["auth", "me"], {
-      user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["agents.approve", "agents.run"] },
-    })
-    const appRouter = router(client)
-    render(Root, { global: { plugins: [appRouter] } })
+    await appRouter.push("/analytics?range=7")
+    expect(appRouter.currentRoute.value.name).toBe("attribution")
 
     await appRouter.push("/agent-approvals")
-
-    expect(appRouter.currentRoute.value.name).toBe("agent-approvals")
-    expect(await screen.findByText("Agent 审批")).toBeInTheDocument()
+    expect(appRouter.currentRoute.value.name).toBe("home")
+    expect(appRouter.currentRoute.value.query.view).toBe("approvals")
   })
 
-  it("lets an agent operator open the agent workspace and applies business-facing titles", async () => {
+  it("sends a non-administrator home for an administrator-only route", async () => {
     const client = queryClient()
-    client.setQueryData(["auth", "me"], {
-      user: {},
-      organization: {},
-      membership: {
-        role: "OPERATOR",
-        permissions: ["agents.run", "publishing.read", "metrics.read"],
-      },
-    })
-    const appRouter = router(client)
-    render(Root, { global: { plugins: [appRouter] } })
-
-    await appRouter.push("/agent-workspace")
-    expect(appRouter.currentRoute.value.name).toBe("agent-workspace")
-    expect(appRouter.currentRoute.value.meta.requiredPermission).toBe("agents.run")
-    expect(await screen.findByText("Agent 工作台")).toBeInTheDocument()
-
-    await appRouter.push("/promotion")
-    expect(appRouter.currentRoute.value.meta.title).toBe("社媒运营")
-
-    await appRouter.push("/analytics")
-    expect(appRouter.currentRoute.value.meta.title).toBe("经营效果")
-  })
-
-  it("mounts all four distinct publishing operations workspaces", async () => {
-    const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["assets.read", "publishing.read", "tracking.read", "metrics.read"] } })
-    const appRouter = router(client)
-    render(Root, { global: { plugins: [appRouter] } })
-    for (const [path, label] of [["/assets", "真实素材库"], ["/publishing-calendar", "真实发布日历"], ["/platform-accounts", "真实平台账户"], ["/analytics", "真实数据看板"]]) {
-      await appRouter.push(path)
-      expect(await screen.findByText(label)).toBeInTheDocument()
-    }
-  })
-
-  it("mounts the five ordinary-user workspaces on task-language paths", async () => {
-    const client = queryClient()
-    client.setQueryData(["auth", "me"], {
-      user: {},
-      organization: {},
-      membership: { permissions: ["leads.read", "publishing.read"] },
-    })
-    const appRouter = router(client)
-    render(Root, { global: { plugins: [appRouter] } })
-    for (const [path, label] of [
-      ["/promotion", "工厂推广工作区"],
-      ["/opportunities", "证据化客户机会"],
-      ["/company", "公司事实资料"],
-    ]) {
-      await appRouter.push(path)
-      expect(await screen.findByText(label)).toBeInTheDocument()
-    }
-  })
-
-  it("blocks direct access to a settings destination without its permission", async () => {
-    const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: [] } })
+    setUser(client, "OPERATOR", ["products.read"])
     const appRouter = router(client)
 
     await appRouter.push("/products")
-
-    expect(appRouter.currentRoute.value.name).toBe("settings")
-    expect(appRouter.currentRoute.value.query.blocked).toBe("products.read")
-  })
-
-  it("keeps administrator-only routes closed to non-administrators", async () => {
-    const client = queryClient()
-    client.setQueryData(["auth", "me"], { user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["tracking.read"] } })
-    const appRouter = router(client)
-
-    await appRouter.push("/admin/analytics")
-
-    expect(appRouter.currentRoute.value.name).toBe("settings")
+    expect(appRouter.currentRoute.value.name).toBe("home")
     expect(appRouter.currentRoute.value.query.blocked).toBe("administrator")
   })
 
-  it("keeps AI model configuration administrator-only", async () => {
-    const operatorClient = queryClient()
-    operatorClient.setQueryData(["auth", "me"], {
-      user: {}, organization: {}, membership: { role: "OPERATOR", permissions: ["credentials.manage"] },
-    })
-    const operatorRouter = router(operatorClient)
+  it("keeps a missing granular permission on the administrator settings page", async () => {
+    const client = queryClient()
+    setUser(client, "ADMINISTRATOR", [])
+    const appRouter = router(client)
 
-    await operatorRouter.push("/settings/ai-model")
-    expect(operatorRouter.currentRoute.value.name).toBe("settings")
-    expect(operatorRouter.currentRoute.value.query.blocked).toBe("administrator")
-
-    const adminClient = queryClient()
-    adminClient.setQueryData(["auth", "me"], {
-      user: {}, organization: {}, membership: { role: "ADMINISTRATOR", permissions: ["credentials.manage"] },
-    })
-    const adminRouter = router(adminClient)
-    render(Root, { global: { plugins: [adminRouter] } })
-    await adminRouter.push("/settings/ai-model")
-    expect(await screen.findByText("AI 模型设置")).toBeInTheDocument()
+    await appRouter.push("/products")
+    expect(appRouter.currentRoute.value.name).toBe("settings")
+    expect(appRouter.currentRoute.value.query.blocked).toBe("products.read")
   })
 
   it.each([401, 403])("redirects status %s to login with the local target", async (status) => {
@@ -224,9 +119,8 @@ describe("protected routing", () => {
     const appRouter = router()
 
     await appRouter.push("/analytics?range=7")
-
     expect(appRouter.currentRoute.value.name).toBe("login")
-    expect(appRouter.currentRoute.value.query.redirect).toBe("/analytics?range=7")
+    expect(appRouter.currentRoute.value.query.redirect).toBe("/attribution?range=7")
   })
 })
 

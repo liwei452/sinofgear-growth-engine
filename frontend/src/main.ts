@@ -7,12 +7,15 @@ import { queryClient } from "./app/queryClient"
 import { createAppRouter } from "./app/router"
 import LoginPage from "./modules/auth/LoginPage.vue"
 import DashboardPage from "./modules/dashboard/DashboardPage.vue"
+import RoleHomePage from "./modules/dashboard/RoleHomePage.vue"
 import CompanyPage from "./modules/growth/CompanyPage.vue"
 import EffectivenessPage from "./modules/growth/EffectivenessPage.vue"
 import OpportunitiesPage from "./modules/growth/OpportunitiesPage.vue"
 import AgentApprovalsPage from "./modules/growth/AgentApprovalsPage.vue"
 import GrowthMissionsPage from "./modules/missions/GrowthMissionsPage.vue"
 import GrowthMissionDetailPage from "./modules/missions/GrowthMissionDetailPage.vue"
+import ExecutiveAttributionPage from "./modules/attribution/ExecutiveAttributionPage.vue"
+import ContentAssetsHubPage from "./modules/content/ContentAssetsHubPage.vue"
 import PlaceholderPage from "./shared/components/PlaceholderPage.vue"
 import "./styles/tokens.css"
 import "./styles/base.css"
@@ -22,6 +25,7 @@ const router = createAppRouter(queryClient, {
     Login: LoginPage,
     Shell: AppShell,
     Dashboard: DashboardPage,
+    RoleHome: RoleHomePage,
     Promotion: defineAsyncComponent(() => import("./modules/growth/PromotionPage.vue")),
     Opportunities: OpportunitiesPage,
     AgentApprovals: AgentApprovalsPage,
@@ -41,6 +45,8 @@ const router = createAppRouter(queryClient, {
     PlatformAccounts: defineAsyncComponent(() => import("./modules/platformAccounts/PlatformAccountsPage.vue")),
     Analytics: EffectivenessPage,
     LegacyAnalytics: defineAsyncComponent(() => import("./modules/analytics/AnalyticsPage.vue")),
+    Attribution: ExecutiveAttributionPage,
+    ContentAssetsHub: ContentAssetsHubPage,
     Placeholder: PlaceholderPage,
   },
 })

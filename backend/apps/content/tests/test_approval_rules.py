@@ -116,6 +116,24 @@ def test_platform_generation_requires_approved_master_and_selected_platform(
     assert duplicate.pk == platform_content.pk
 
 
+def test_platform_approval_auto_prepares_channel_package(content_provenance, monkeypatch):
+    _, actor, brief, job, run = content_provenance
+    selected = brief.platform_links.get().platform
+    master = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)
+    approved = approve_content(master, actor=actor)
+    platform_content = create_platform_content(approved, platform=selected, actor=actor)
+
+    calls = []
+    monkeypatch.setattr(
+        "apps.growth.services.prepare_channel_package_from_platform_content",
+        lambda *, content: calls.append(content) or (None, True),
+    )
+
+    approve_content(platform_content, actor=actor)
+
+    assert [content.pk for content in calls] == [platform_content.pk]
+
+
 def test_approval_history_rejects_direct_base_bulk_and_delete(content_provenance):
     _, actor, brief, job, run = content_provenance
     content = create_generated_master(brief=brief, job=job, ai_run=run, actor=actor)

@@ -1,4 +1,5 @@
 import uuid
+import logging
 
 from django.db import transaction
 from django.utils import timezone
@@ -13,6 +14,8 @@ from .payloads import (
     validate_content_payload,
     validate_generated_content_output,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ContentStateError(ValueError):
@@ -379,7 +382,18 @@ def transition_content(content, *, action, actor, comment=""):
         before_metadata=before,
         after_metadata={"status": target},
     )
+    if model is PlatformContent and target == PlatformContent.Status.APPROVED:
+        _auto_prepare_channel_package(locked)
     return locked
+
+
+def _auto_prepare_channel_package(content) -> None:
+    try:
+        from apps.growth.services import prepare_channel_package_from_platform_content
+
+        prepare_channel_package_from_platform_content(content=content)
+    except Exception:
+        logger.exception("Auto channel-package preparation failed.")
 
 
 @transaction.atomic

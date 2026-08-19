@@ -24,14 +24,12 @@ const currentUserQuery = useQuery(currentUserQueryOptions())
 const missionQuery = useQuery(missionQueryOptions(missionId.value))
 const timelineQuery = useQuery(missionTimelineQueryOptions(missionId.value))
 const candidatesQuery = useQuery({
-  queryKey: ["growth", "workspace", "mission-candidates"],
+  queryKey: ["growth", "missions", missionId.value, "candidates"],
   queryFn: async () => {
-    const workspace = await apiRequest<{
-      discovery?: { candidates?: Array<{ id: string; company_name: string; status: string }> }
-    }>("/api/v1/growth/workspace")
-    return (workspace?.discovery?.candidates ?? []).filter(
-      candidate => candidate.status === "ACCEPTED",
+    const candidates = await apiRequest<Array<{ id: string; company_name: string }>>(
+      `/api/v1/growth/missions/${missionId.value}/candidates`,
     )
+    return candidates ?? []
   },
   staleTime: 30_000,
   retry: false,

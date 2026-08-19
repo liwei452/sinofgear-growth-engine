@@ -49,7 +49,7 @@ function renderDetail(permissions: string[]) {
     const path = String(input)
     let body: unknown = []
     if (path.includes("/timeline")) body = []
-    else if (path.includes("/workspace")) body = { discovery: { candidates: [] } }
+    else if (path.includes("/candidates")) body = []
     else body = mission
     return Promise.resolve(new Response(JSON.stringify(body), {
       status: 200,

@@ -257,3 +257,45 @@ def test_draft_mission_cannot_start_outreach(administrator_client, mission):
         f"{MISSIONS_URL}/{mission.id}/start-content-strategy", {}, format="json"
     )
     assert response.status_code == 409
+
+
+def test_mission_candidates_endpoint_returns_linked_candidates(
+    administrator_client, mission
+):
+    from apps.growth.mission_services import link_mission_entity
+    from apps.growth.models import DiscoveryCandidate, MissionEntityLink
+
+    linked = DiscoveryCandidate.objects.create(
+        organization=mission.organization,
+        company_name="Linked Mining Co",
+        country="ZA",
+        website="",
+        industry="mining",
+        status=DiscoveryCandidate.Status.ACCEPTED,
+        import_format="GOOGLE_MAPS",
+        raw_record={},
+        record_hash="mission-candidates-hash",
+        is_demo=False,
+    )
+    DiscoveryCandidate.objects.create(
+        organization=mission.organization,
+        company_name="Unlinked Co",
+        country="DE",
+        website="",
+        industry="machinery",
+        status=DiscoveryCandidate.Status.ACCEPTED,
+        import_format="GOOGLE_MAPS",
+        raw_record={},
+        record_hash="mission-candidates-unlinked",
+        is_demo=False,
+    )
+    link_mission_entity(
+        mission=mission,
+        entity=linked,
+        lane=MissionEntityLink.Lane.ACQUISITION,
+    )
+
+    response = administrator_client.get(f"{MISSIONS_URL}/{mission.id}/candidates")
+
+    assert response.status_code == 200
+    assert [candidate["company_name"] for candidate in response.data] == ["Linked Mining Co"]

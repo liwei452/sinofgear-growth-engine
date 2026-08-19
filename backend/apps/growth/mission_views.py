@@ -266,6 +266,29 @@ class MissionStartOutreachView(APIView):
         return Response(AgentRunSerializer(run).data)
 
 
+class MissionCandidatesView(APIView):
+    permission_classes = [CanReadMissions]
+
+    @extend_schema(tags=["Growth missions"], responses={200: dict})
+    def get(self, request, mission_id):
+        mission = get_object_or_404(
+            GrowthMission, id=mission_id, organization=request.organization
+        )
+        candidate_ids = MissionEntityLink.objects.filter(
+            mission=mission,
+            entity_type=MissionEntityLink.EntityType.DISCOVERY_CANDIDATE,
+        ).values_list("entity_id", flat=True)
+        candidates = DiscoveryCandidate.objects.filter(
+            organization=request.organization,
+            id__in=candidate_ids,
+            status=DiscoveryCandidate.Status.ACCEPTED,
+        ).order_by("-score", "company_name")
+        return Response([
+            {"id": str(candidate.id), "company_name": candidate.company_name}
+            for candidate in candidates
+        ])
+
+
 class MissionStartContentStrategyView(APIView):
     permission_classes = [CanRunAgents]
 

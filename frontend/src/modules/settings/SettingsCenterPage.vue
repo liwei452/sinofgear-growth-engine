@@ -84,7 +84,7 @@ const groups: SettingsGroup[] = [
     description: "选择市场并导入有许可的名单或公开线索。",
     destinations: [
       { label: "谷歌地图自动获客", to: "/maps-discovery" },
-      { label: "市场与客户来源", to: "/opportunities" },
+      { label: "市场与客户来源", to: "/missions" },
     ],
   },
   {
@@ -92,8 +92,7 @@ const groups: SettingsGroup[] = [
     description: "查看真实连接状态；未连接时使用人工发布包。",
     destinations: [
       { label: "渠道账户", to: "/platform-accounts", permission: "publishing.read" },
-      { label: "发布日历", to: "/publishing-calendar", permission: "publishing.read" },
-      { label: "手工发布包", to: "/promotion" },
+      { label: "内容审核与发布", to: "/missions", permission: "publishing.read" },
     ],
   },
   {
@@ -122,7 +121,7 @@ const groups: SettingsGroup[] = [
     destinations: [
       { label: "AI 模型", to: "/settings/ai-model" },
       { label: "知识库", to: "/knowledge", permission: "knowledge.read" },
-      { label: "高级数据", to: "/admin/analytics", permission: "tracking.read" },
+      { label: "数据归因", to: "/attribution", permission: "missions.read" },
     ],
   },
 ]

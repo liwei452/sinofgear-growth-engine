@@ -44,7 +44,7 @@ it("shows only real permission-backed destinations and truthful unconfigured sta
   expect(screen.getByRole("link", { name: "产品库" })).toHaveAttribute("href", "/products")
   expect(screen.getByRole("link", { name: "素材与资料理解" })).toHaveAttribute("href", "/assets")
   expect(screen.getByRole("link", { name: "渠道账户" })).toHaveAttribute("href", "/platform-accounts")
-  expect(screen.getByRole("link", { name: "发布日历" })).toHaveAttribute("href", "/publishing-calendar")
+  expect(screen.getByRole("link", { name: "内容审核与发布" })).toHaveAttribute("href", "/missions")
   expect(await screen.findByText("尚未添加渠道账户；手工发布包仍可用")).toBeInTheDocument()
   expect(await screen.findByText("Fake / 离线演示 · 未启用真实请求")).toBeInTheDocument()
 
@@ -80,13 +80,13 @@ it("summarizes saved channel accounts without claiming a real connection", async
 
 it("shows administrator-only advanced destinations without inventing provider status", async () => {
   await renderSettings("ADMINISTRATOR", [
-    "knowledge.read", "tracking.read", "products.read", "assets.read", "publishing.read",
+    "knowledge.read", "tracking.read", "missions.read", "products.read", "assets.read", "publishing.read",
   ])
 
   const advanced = screen.getByRole("region", { name: "高级管理" })
   expect(within(advanced).getByRole("link", { name: "AI 模型" })).toHaveAttribute("href", "/settings/ai-model")
   expect(within(advanced).getByRole("link", { name: "知识库" })).toHaveAttribute("href", "/knowledge")
-  expect(within(advanced).getByRole("link", { name: "高级数据" })).toHaveAttribute("href", "/admin/analytics")
+  expect(within(advanced).getByRole("link", { name: "数据归因" })).toHaveAttribute("href", "/attribution")
   expect(within(advanced).getByText("真实模型与预算仅由管理员管理")).toBeInTheDocument()
   expect(within(advanced).queryByRole("button", { name: /配置 Provider/ })).not.toBeInTheDocument()
 })

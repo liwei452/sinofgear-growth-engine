@@ -76,6 +76,7 @@ INSTALLED_APPS = [
     "apps.publishing.apps.PublishingConfig",
     "apps.tracking.apps.TrackingConfig",
     "apps.growth.apps.GrowthConfig",
+    "apps.sources.apps.SourcesConfig",
 ]
 
 MIDDLEWARE = [

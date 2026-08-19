@@ -221,10 +221,10 @@ it("moves an approved platform version into one-click publishing preparation", a
   await user.click(await screen.findByRole("tab", { name: "平台版本" }))
   await user.selectOptions(screen.getByLabelText("内容状态"), "APPROVED")
   await user.click(await screen.findByRole("button", { name: "查看详情" }))
-  await user.click(screen.getByRole("button", { name: "加入一键发布" }))
+  await user.click(screen.getByRole("button", { name: "查看发布包" }))
 
   await waitFor(() => expect(handoffRequest).toMatchObject({ method: "POST" }))
-  expect(await screen.findByText("已加入推广页的一键发布准备，仍需逐渠道审核。"))
+  expect(await screen.findByText("发布包已自动生成，可前往推广页发布。"))
     .toBeInTheDocument()
   expect(screen.getByRole("link", { name: "前往推广页" })).toHaveAttribute("href", "/promotion")
 })

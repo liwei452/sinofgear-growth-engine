@@ -212,7 +212,7 @@ async function preparePublishing(): Promise<void> {
   try {
     await prepareChannelPackage(props.item.id)
     packagePrepared.value = true
-    notice.value = "已加入推广页的一键发布准备，仍需逐渠道审核。"
+    notice.value = "发布包已自动生成，可前往推广页发布。"
   } catch (error) {
     alert.value = safeError(error)
   } finally { busy.value = false }
@@ -252,7 +252,7 @@ async function preparePublishing(): Promise<void> {
 
           <form v-if="rejecting" class="reject-form" @submit.prevent="act('reject')"><label>驳回原因（必填）<textarea v-model="rejectionReason" aria-label="驳回原因（必填）" rows="3" /></label><div class="dialog-actions"><button type="button" @click="rejecting = false">取消</button><button type="submit">确认驳回</button></div></form>
           <section v-if="platformPicker" class="platform-picker"><h3>为已选平台生成版本</h3><p v-if="!selectedPlatforms.length">源需求没有可用平台。</p><button v-for="platform in selectedPlatforms" :key="platform.id" type="button" :disabled="busy" @click="generate(platform)">为 {{ platform.name }} 生成</button></section>
-          <footer class="dialog-actions"><button v-if="canRevise" type="button" @click="editing = true">创建修改版</button><button v-if="canSubmit" type="button" @click="act('submit-review')">提交审核</button><button v-if="canReview" class="primary-action" type="button" @click="act('approve')">通过</button><button v-if="canReview" type="button" @click="rejecting = true; alert = ''">驳回</button><button v-if="canArchive" type="button" @click="act('archive')">归档</button><button v-if="canGeneratePlatform" type="button" @click="choosePlatform">生成平台版本</button><button v-if="canPreparePublishing" class="primary-action" type="button" :disabled="busy || packagePrepared" @click="preparePublishing">{{ packagePrepared ? '已加入发布准备' : '加入一键发布' }}</button><RouterLink v-if="packagePrepared" to="/promotion">前往推广页</RouterLink></footer>
+<footer class="dialog-actions"><button v-if="canRevise" type="button" @click="editing = true">创建修改版</button><button v-if="canSubmit" type="button" @click="act('submit-review')">提交审核</button><button v-if="canReview" class="primary-action" type="button" @click="act('approve')">通过</button><button v-if="canReview" type="button" @click="rejecting = true; alert = ''">驳回</button><button v-if="canArchive" type="button" @click="act('archive')">归档</button><button v-if="canGeneratePlatform" type="button" @click="choosePlatform">生成平台版本</button><button v-if="canPreparePublishing" class="primary-action" type="button" :disabled="busy || packagePrepared" @click="preparePublishing">{{ packagePrepared ? '发布包已就绪' : '查看发布包' }}</button><RouterLink v-if="packagePrepared" to="/promotion">前往推广页</RouterLink></footer>
         </template>
       </section>
     </div>

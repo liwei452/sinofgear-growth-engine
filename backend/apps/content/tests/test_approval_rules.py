@@ -299,14 +299,15 @@ def test_auto_approved_generated_master_records_auto_approve_audit(fresh_generat
     assert "not a human review" in approval.comment
 
 
-def test_auto_approve_without_actor_still_creates_master(fresh_generation):
+def test_auto_approve_without_actor_is_rejected(fresh_generation):
     _, _, brief, job, run = fresh_generation
 
-    master = create_generated_master(
-        brief=brief, job=job, ai_run=run, actor=None, auto_approve=True,
-    )
+    with pytest.raises(ContentStateError, match="auditable actor"):
+        create_generated_master(
+            brief=brief, job=job, ai_run=run, actor=None, auto_approve=True,
+        )
 
-    assert master.status == MasterContent.Status.APPROVED
+    assert not MasterContent.objects.filter(generation_job=job).exists()
     assert not ApprovalRecord.objects.filter(
-        object_id=master.id, action="AUTO_APPROVE"
+        action="AUTO_APPROVE"
     ).exists()

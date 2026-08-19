@@ -2,6 +2,7 @@ from apps.growth.agent.memory import Memory
 from apps.growth.agent.planner import DeterministicPlanner, Plan
 from apps.growth.agent.runtime import AgentRuntime, action_key
 from apps.growth.agent.tools import Tool, ToolRegistry, ToolResult
+from apps.ai.services import AIBudgetExceeded
 
 
 def _read_tool(name: str) -> Tool:
@@ -82,6 +83,22 @@ def test_budget_exceeded_when_planner_never_terminates():
 
     assert result.status == "budget_exceeded"
     assert len(result.steps) == 3
+
+
+def test_ai_cost_budget_exceeded_surfaces_as_budget_status():
+    tools = ToolRegistry([_read_tool("ping")])
+
+    class BudgetBlockedPlanner:
+        def plan(self, *, goal, memory, tools, step_index):
+            raise AIBudgetExceeded(
+                "Organization daily estimated AI cost budget would be exceeded."
+            )
+
+    runtime = AgentRuntime(planner=BudgetBlockedPlanner(), tools=tools)
+    result = runtime.run(goal="plan with AI", memory=Memory())
+
+    assert result.status == "budget_exceeded"
+    assert "cost budget exceeded" in result.terminal_reason
 
 
 def test_unknown_tool_fails_gracefully():

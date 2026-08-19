@@ -1,6 +1,7 @@
 import uuid
 import logging
 
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
@@ -210,24 +211,20 @@ def create_generated_master(
             created_by=actor,
         )
     if auto_approve and final_status == MasterContent.Status.APPROVED:
-        if actor is not None:
-            record_review_transition(
-                organization=brief.organization,
-                object_type="content.MasterContent",
-                object_id=master.id,
-                action="AUTO_APPROVE",
-                status=MasterContent.Status.APPROVED,
-                object_version=master.version,
-                actor=actor,
-                comment="Auto-approved by the AI generation pipeline; not a human review.",
-                before_metadata={"status": "GENERATED"},
-                after_metadata={"status": MasterContent.Status.APPROVED},
-            )
-        else:
-            logger.warning(
-                "Auto-approved generated master content %s without an auditable actor.",
-                master.id,
-            )
+        if actor is None:
+            raise ContentStateError("Auto-approve requires an auditable actor.")
+        record_review_transition(
+            organization=brief.organization,
+            object_type="content.MasterContent",
+            object_id=master.id,
+            action="AUTO_APPROVE",
+            status=MasterContent.Status.APPROVED,
+            object_version=master.version,
+            actor=actor,
+            comment="Auto-approved by the AI generation pipeline; not a human review.",
+            before_metadata={"status": "GENERATED"},
+            after_metadata={"status": MasterContent.Status.APPROVED},
+        )
     return master
 
 
@@ -237,11 +234,16 @@ def finalize_master_result(run, output):
     brief = ContentBrief.objects.get(
         pk=run.input_snapshot.get("brief_id"), organization=run.organization
     )
+    actor = run.job.created_by
+    if actor is None:
+        actor, _ = get_user_model().objects.get_or_create(
+            username="system-auto-approve",
+        )
     master = create_generated_master(
         brief=brief,
         job=run.job,
         ai_run=run,
-        actor=run.job.created_by,
+        actor=actor,
         auto_approve=True,
     )
     _link_content_lineage_to_mission(master)

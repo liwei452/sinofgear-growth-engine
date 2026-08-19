@@ -7,6 +7,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from apps.ai.services import AIBudgetExceeded
+
 from .memory import AgentStep, Memory
 from .planner import Planner
 from .tools import Tool, ToolRegistry, ToolResult
@@ -67,12 +69,19 @@ class AgentRuntime:
         recorded_index = start_index
 
         for planner_step in range(self._max_steps):
-            plan = self._planner.plan(
-                goal=goal,
-                memory=memory.snapshot(),
-                tools=self._tools.descriptors(),
-                step_index=planner_step,
-            )
+            try:
+                plan = self._planner.plan(
+                    goal=goal,
+                    memory=memory.snapshot(),
+                    tools=self._tools.descriptors(),
+                    step_index=planner_step,
+                )
+            except AIBudgetExceeded as error:
+                return self._result(
+                    status="budget_exceeded",
+                    memory=memory,
+                    terminal_reason=f"AI cost budget exceeded: {error}",
+                )
             if plan.is_terminal:
                 return self._result(
                     status="completed",

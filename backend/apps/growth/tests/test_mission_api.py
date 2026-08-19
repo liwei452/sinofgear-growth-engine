@@ -340,3 +340,36 @@ def test_mission_candidates_endpoint_returns_linked_candidates(
 
     assert response.status_code == 200
     assert [candidate["company_name"] for candidate in response.data] == ["Linked Mining Co"]
+
+
+def test_mission_publish_creates_linked_batch(administrator_client, mission):
+    from apps.growth.mission_services import link_mission_entity
+    from apps.growth.models import ChannelPackage
+
+    _approve_plan(administrator_client, mission)
+    for channel in ("LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK"):
+        package = ChannelPackage.objects.create(
+            organization=mission.organization,
+            channel=channel,
+            payload={"title": channel},
+            status="AWAITING_REVIEW",
+            is_demo=True,
+        )
+        link_mission_entity(
+            mission=mission,
+            entity=package,
+            lane=MissionEntityLink.Lane.SOCIAL,
+        )
+
+    response = administrator_client.post(
+        f"{MISSIONS_URL}/{mission.id}/publish",
+        {},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["is_demo"] is True
+    assert MissionEntityLink.objects.filter(
+        mission=mission,
+        entity_type=MissionEntityLink.EntityType.PUBLISH_BATCH,
+    ).exists()

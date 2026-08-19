@@ -14,6 +14,7 @@ import {
   missionOutreachSummaryQueryOptions,
   missionQueryOptions,
   missionTimelineQueryOptions,
+  publishMission,
   startMissionContentStrategy,
   startMissionOutreach,
   transitionMission,
@@ -95,6 +96,13 @@ const outreachMutation = useMutation({
 const strategyMutation = useMutation({
   mutationFn: () => startMissionContentStrategy(missionId.value),
   onSuccess: refresh,
+})
+
+const publishMutation = useMutation({
+  mutationFn: () => publishMission(missionId.value),
+  onSuccess: async () => {
+    await refreshContentSummary()
+  },
 })
 
 const outreachApproveMutation = useMutation({
@@ -300,6 +308,38 @@ async function reviewConflict(): Promise<void> {
         </ol>
       </section>
 
+      <section v-if="view === 'social'" class="panel">
+        <h2>发布准备</h2>
+        <p v-if="!contentSummary?.channel_packages.length">还没有渠道内容包。先在“总览”里审核平台内容。</p>
+        <ul v-else class="content-list">
+          <li v-for="packageItem in contentSummary.channel_packages" :key="packageItem.id">
+            <span>{{ packageItem.channel }}</span>
+            <span class="chip">{{ packageItem.status }}</span>
+          </li>
+        </ul>
+        <div v-if="canManage && mission.status === 'RUNNING' && contentSummary?.channel_packages.length" class="actions">
+          <button
+            class="button button-primary"
+            type="button"
+            :disabled="publishMutation.isPending.value"
+            @click="publishMutation.mutate()"
+          >
+            批准并发布
+          </button>
+        </div>
+        <div v-if="contentSummary?.publish_batches.length" class="publish-batches">
+          <h3>发布结果</h3>
+          <article v-for="batch in contentSummary.publish_batches" :key="batch.id">
+            <p><span class="chip">{{ batch.status }}</span> · {{ batch.data_label }}</p>
+            <ul>
+              <li v-for="item in batch.items" :key="item.id">
+                {{ item.channel }} · {{ item.status }}<template v-if="item.error_code"> · {{ item.error_code }}</template>
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
       <section v-if="view === 'timeline'" class="panel">
         <h2>执行时间线</h2>
         <ol class="timeline">
@@ -364,6 +404,11 @@ async function reviewConflict(): Promise<void> {
 .draft-en { margin: 0; color: var(--sg-ink); font-size: .82rem; white-space: pre-wrap; }
 .draft-zh { margin: 0; color: var(--sg-muted); font-size: .76rem; }
 .outreach-actions { display: flex; gap: 8px; }
+.publish-batches { display: grid; gap: 10px; border-top: 1px solid var(--sg-line); padding-top: 10px; }
+.publish-batches h3 { margin: 0; font-size: .8rem; }
+.publish-batches article { display: grid; gap: 6px; }
+.publish-batches p { margin: 0; font-size: .76rem; }
+.publish-batches ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: .74rem; color: var(--sg-muted); }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .timeline { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .timeline li { display: grid; gap: 3px; border-left: 2px solid var(--sg-line); padding-left: 12px; }

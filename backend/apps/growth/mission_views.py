@@ -41,10 +41,18 @@ from .models import (
     ChannelPackage,
     DiscoveryCandidate,
     GrowthMission,
+    GrowthPublishBatch,
     MissionEntityLink,
     MissionPlan,
     TargetAccount,
 )
+from .publishing import (
+    PublishBatchConflict,
+    PublishPackageSelectionInvalid,
+    create_publish_batch,
+)
+from .serializers import GrowthPublishBatchSerializer
+from .services import approve_channel_package
 
 
 def _available_actions(request, mission):
@@ -389,12 +397,21 @@ class MissionContentSummaryView(APIView):
                 entity_type=MissionEntityLink.EntityType.CHANNEL_PACKAGE,
             ).values_list("entity_id", flat=True)
         )
+        batch_ids = set(
+            MissionEntityLink.objects.filter(
+                mission=mission,
+                entity_type=MissionEntityLink.EntityType.PUBLISH_BATCH,
+            ).values_list("entity_id", flat=True)
+        )
         platforms = PlatformContent.objects.filter(
             organization=request.organization, id__in=platform_ids
         ).select_related("platform")
         packages = ChannelPackage.objects.filter(
             organization=request.organization, id__in=package_ids
         )
+        batches = GrowthPublishBatch.objects.filter(
+            organization=request.organization, id__in=batch_ids
+        ).order_by("-created_at", "-id")[:5]
         return Response({
             "platform_contents": [
                 {
@@ -409,7 +426,60 @@ class MissionContentSummaryView(APIView):
                 {"id": str(p.id), "channel": p.channel, "status": p.status}
                 for p in packages
             ],
+            "publish_batches": GrowthPublishBatchSerializer(batches, many=True).data,
         })
+
+
+class MissionPublishView(APIView):
+    permission_classes = [CanManageMissions]
+
+    @extend_schema(tags=["Growth missions"], responses={200: dict})
+    def post(self, request, mission_id):
+        mission = get_object_or_404(
+            GrowthMission, id=mission_id, organization=request.organization
+        )
+        if mission.status != GrowthMission.Status.RUNNING:
+            return Response(
+                {"detail": "Only running missions can publish."}, status=409
+            )
+        package_ids = list(
+            MissionEntityLink.objects.filter(
+                mission=mission,
+                entity_type=MissionEntityLink.EntityType.CHANNEL_PACKAGE,
+            ).values_list("entity_id", flat=True)
+        )
+        packages = list(
+            ChannelPackage.objects.filter(
+                organization=request.organization, id__in=package_ids
+            ).order_by("channel", "id")
+        )
+        if not packages:
+            return Response(
+                {
+                    "code": "NO_CHANNEL_PACKAGES",
+                    "message": "还没有可发布的渠道内容包。",
+                },
+                status=409,
+            )
+        for package in packages:
+            approve_channel_package(package=package)
+        key = request.headers.get("Idempotency-Key", "").strip() or f"mission-publish:{mission.id}"
+        try:
+            batch = create_publish_batch(
+                organization=request.organization,
+                actor=request.user,
+                package_ids=[str(package.id) for package in packages],
+                idempotency_key=key,
+            )
+        except (PublishBatchConflict, PublishPackageSelectionInvalid) as error:
+            return Response({"code": "PUBLISH_FAILED", "message": str(error)}, status=409)
+        link_mission_entity(
+            mission=mission,
+            entity=batch,
+            lane=MissionEntityLink.Lane.SOCIAL,
+            actor=request.user,
+        )
+        return Response(GrowthPublishBatchSerializer(batch).data)
 
 
 class MissionStartContentStrategyView(APIView):

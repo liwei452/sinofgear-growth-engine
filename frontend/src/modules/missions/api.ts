@@ -121,6 +121,29 @@ export function missionTimelineQueryOptions(id: string) {
 export type MissionContentSummary = {
   platform_contents: Array<{ id: string; platform_code: string; status: string; title: string }>
   channel_packages: Array<{ id: string; channel: string; status: string }>
+  publish_batches: MissionPublishBatch[]
+}
+
+export type MissionPublishItem = {
+  id: string
+  channel: string
+  status: string
+  attempt_number: number
+  external_post_url: string
+  mode: string
+  error_code: string
+  retryable: boolean
+  recovery_action: string
+}
+
+export type MissionPublishBatch = {
+  id: string
+  status: string
+  is_demo: boolean
+  data_label: string
+  created_at: string
+  updated_at: string
+  items: MissionPublishItem[]
 }
 
 export type MissionOutreachItem = {
@@ -231,4 +254,13 @@ export async function startMissionContentStrategy(
     `/api/v1/growth/missions/${missionId}/start-content-strategy`,
     { method: "POST", body: {} },
   ) ?? {}
+}
+
+export async function publishMission(missionId: string): Promise<MissionPublishBatch> {
+  const batch = await apiRequest<MissionPublishBatch>(
+    `/api/v1/growth/missions/${missionId}/publish`,
+    { method: "POST", body: {} },
+  )
+  if (!batch) throw new Error("发布响应为空。")
+  return batch
 }

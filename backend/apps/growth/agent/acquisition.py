@@ -295,6 +295,7 @@ def _send_tool(organization) -> Tool:
             output={
                 "account_id": str(account.id),
                 "draft_id": str(draft.id),
+                "outreach_message_id": str(message.id),
                 "message_id": message.provider_message_id,
                 "provider": message.provider,
                 "status": message.status,

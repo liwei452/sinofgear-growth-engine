@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
 import { computed } from "vue"
+import { useRouter } from "vue-router"
 
 import { executeWorkItemAction, workItemsQueryOptions, type WorkItem } from "./api"
 import WorkItemCard from "./WorkItemCard.vue"
 
 const queryClient = useQueryClient()
+const router = useRouter()
 const itemsQuery = useQuery(workItemsQueryOptions())
 
 const items = computed(() => itemsQuery.data.value ?? [])
@@ -20,6 +22,14 @@ const actionMutation = useMutation({
 })
 
 function runAction(item: WorkItem): void {
+  if (item.action_type === "OPEN_SETTINGS") {
+    void router.push("/settings")
+    return
+  }
+  if (item.action_type === "OPEN_CUSTOMER") {
+    void router.push("/opportunities")
+    return
+  }
   actionMutation.mutate(item)
 }
 </script>

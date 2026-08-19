@@ -95,6 +95,21 @@ def _payload(product):
     }
 
 
+def _approve_plan(administrator_client, mission):
+    generated = administrator_client.post(
+        f"{MISSIONS_URL}/{mission.id}/generate-plan", {}, format="json"
+    )
+    assert generated.status_code == 201
+    approved = administrator_client.post(
+        f"{MISSIONS_URL}/{mission.id}/approve-plan",
+        {"plan_id": generated.data["id"]},
+        format="json",
+    )
+    assert approved.status_code == 200
+    mission.refresh_from_db()
+    return mission
+
+
 def test_manager_creates_and_lists_growth_mission(administrator_client, product):
     response = administrator_client.post(MISSIONS_URL, _payload(product), format="json")
     assert response.status_code == 201
@@ -195,6 +210,7 @@ def test_pause_and_resume_mission(administrator_client, mission):
 
 
 def test_start_content_strategy_links_mission(administrator_client, mission):
+    _approve_plan(administrator_client, mission)
     response = administrator_client.post(
         f"{MISSIONS_URL}/{mission.id}/start-content-strategy", {}, format="json"
     )
@@ -209,6 +225,7 @@ def test_start_content_strategy_links_mission(administrator_client, mission):
 def test_start_outreach_links_mission(administrator_client, mission, monkeypatch):
     from apps.growth.agent import acquisition as acq
 
+    _approve_plan(administrator_client, mission)
     monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
     candidate = DiscoveryCandidate.objects.create(
         organization=mission.organization,
@@ -233,3 +250,10 @@ def test_start_outreach_links_mission(administrator_client, mission, monkeypatch
         entity_type=MissionEntityLink.EntityType.AGENT_RUN,
         lane=MissionEntityLink.Lane.OUTREACH,
     ).exists()
+
+
+def test_draft_mission_cannot_start_outreach(administrator_client, mission):
+    response = administrator_client.post(
+        f"{MISSIONS_URL}/{mission.id}/start-content-strategy", {}, format="json"
+    )
+    assert response.status_code == 409

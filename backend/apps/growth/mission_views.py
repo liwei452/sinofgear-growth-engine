@@ -232,6 +232,10 @@ class MissionStartOutreachView(APIView):
         mission = get_object_or_404(
             GrowthMission, id=mission_id, organization=request.organization
         )
+        if mission.status != GrowthMission.Status.RUNNING:
+            return Response(
+                {"detail": "Only running missions can start outreach."}, status=409
+            )
         candidate = get_object_or_404(
             DiscoveryCandidate,
             id=candidate_id,
@@ -270,6 +274,10 @@ class MissionStartContentStrategyView(APIView):
         mission = get_object_or_404(
             GrowthMission, id=mission_id, organization=request.organization
         )
+        if mission.status != GrowthMission.Status.RUNNING:
+            return Response(
+                {"detail": "Only running missions can start content strategy."}, status=409
+            )
         run_content_strategy_agent(
             organization=request.organization,
             creator_id=str(request.user.id),

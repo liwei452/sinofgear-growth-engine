@@ -311,11 +311,13 @@ def test_send_email_tool_uses_contact_email_not_placeholder(organization, monkey
     monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
     calls = []
     monkeypatch.setattr(
-        acq,
-        "record_sent",
-        lambda **kwargs: calls.append(kwargs)
-        or SimpleNamespace(provider_message_id="m1", provider="mock", status="SENT"),
-    )
+            acq,
+            "record_sent",
+            lambda **kwargs: calls.append(kwargs)
+            or SimpleNamespace(
+                id="message-1", provider_message_id="m1", provider="mock", status="SENT"
+            ),
+        )
 
     tools = ToolRegistry(acq.build_proactive_acquisition_tools(organization))
     result = tools.get("send_email").func({"candidate_id": "candidate-email"})

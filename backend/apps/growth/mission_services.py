@@ -182,7 +182,7 @@ _STEP_LINK_MAP = (
     ("account_id", TargetAccount, MissionEntityLink.Lane.ACQUISITION),
     ("candidate_id", DiscoveryCandidate, MissionEntityLink.Lane.ACQUISITION),
     ("draft_id", OutreachDraft, MissionEntityLink.Lane.OUTREACH),
-    ("message_id", OutreachMessage, MissionEntityLink.Lane.OUTREACH),
+    ("outreach_message_id", OutreachMessage, MissionEntityLink.Lane.OUTREACH),
     ("campaign_id", Campaign, MissionEntityLink.Lane.SOCIAL),
     ("brief_id", ContentBrief, MissionEntityLink.Lane.SOCIAL),
     ("master_content_id", MasterContent, MissionEntityLink.Lane.SOCIAL),

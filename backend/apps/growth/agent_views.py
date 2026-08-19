@@ -238,6 +238,7 @@ class AgentRunApproveView(APIView):
         except (KeyError, ValueError) as exc:
             return Response({"message": str(exc)}, status=409)
         run.refresh_from_db()
+        sync_mission_links_from_agent_run(run=run, actor=request.user)
         return Response(AgentRunSerializer(run).data)
 
 

@@ -167,6 +167,7 @@ const strategyMutation = useMutation({
       </section>
 
       <MissionLaneBoard
+        v-if="['overview', 'customer', 'social'].includes(view)"
         :mission="mission"
         :can-run="canRun"
         :candidates="candidatesQuery.data.value ?? []"

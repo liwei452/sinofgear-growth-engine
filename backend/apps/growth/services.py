@@ -1,4 +1,5 @@
 import json
+import logging
 
 from django.db import transaction
 
@@ -16,6 +17,8 @@ from .models import (
     OutreachDraft,
     TargetAccount,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PackageReviewRequired(RuntimeError):
@@ -139,7 +142,7 @@ def prepare_channel_package_from_platform_content(
             "hashtags": [],
             "utm": "utm_source=tiktok&utm_medium=organic&utm_campaign=manual-review",
         })
-    return ChannelPackage.objects.get_or_create(
+    package, created = ChannelPackage.objects.get_or_create(
         organization=content.organization,
         source_platform_content=content,
         defaults={
@@ -150,6 +153,28 @@ def prepare_channel_package_from_platform_content(
             or any(item["is_demo"] for item in facts),
         },
     )
+    _link_channel_package_to_mission(package)
+    return package, created
+
+
+def _link_channel_package_to_mission(package) -> None:
+    try:
+        from .mission_services import link_mission_entity
+        from .models import MissionEntityLink
+
+        link = MissionEntityLink.objects.filter(
+            organization=package.organization,
+            entity_type=MissionEntityLink.EntityType.PLATFORM_CONTENT,
+            entity_id=package.source_platform_content_id,
+        ).first()
+        if link is not None:
+            link_mission_entity(
+                mission=link.mission,
+                entity=package,
+                lane=MissionEntityLink.Lane.SOCIAL,
+            )
+    except Exception:
+        logger.exception("Channel package mission linking failed.")
 
 
 class OpportunityHandoffBlocked(RuntimeError):

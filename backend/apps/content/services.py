@@ -223,7 +223,36 @@ def finalize_master_result(run, output):
         actor=run.job.created_by,
         auto_approve=True,
     )
+    _link_content_lineage_to_mission(master)
     return {"type": "master_content", "id": str(master.id), "version": master.version}
+
+
+def _link_content_lineage_to_mission(content) -> None:
+    try:
+        from apps.growth.mission_services import link_mission_entity
+        from apps.growth.models import MissionEntityLink
+
+        if isinstance(content, MasterContent):
+            parent_type = MissionEntityLink.EntityType.CONTENT_BRIEF
+            parent_id = content.brief_id
+        elif isinstance(content, PlatformContent):
+            parent_type = MissionEntityLink.EntityType.MASTER_CONTENT
+            parent_id = content.master_content_id
+        else:
+            return
+        link = MissionEntityLink.objects.filter(
+            organization=content.organization,
+            entity_type=parent_type,
+            entity_id=parent_id,
+        ).first()
+        if link is not None:
+            link_mission_entity(
+                mission=link.mission,
+                entity=content,
+                lane=MissionEntityLink.Lane.SOCIAL,
+            )
+    except Exception:
+        logger.exception("Content mission linking failed.")
 
 
 @transaction.atomic
@@ -297,7 +326,7 @@ def create_platform_content(master, *, platform, actor=None):
     )
     payload = _validated_platform_payload(payload, platform.code)
     with content_writes():
-        return PlatformContent.objects.create(
+        platform_content = PlatformContent.objects.create(
             id=content_id,
             organization=master.organization,
             master_content=master,
@@ -309,6 +338,8 @@ def create_platform_content(master, *, platform, actor=None):
             status=PlatformContent.Status.IN_REVIEW,
             created_by=actor,
         )
+        _link_content_lineage_to_mission(platform_content)
+        return platform_content
 
 
 def _validated_platform_payload(payload, platform_code):

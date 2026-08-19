@@ -947,19 +947,15 @@ it("keeps an approved outreach draft in the real follow-up flow without exposing
 it("loads company provenance and persists human verification", async () => {
   document.cookie = "csrftoken=company-page-test-token"
   const factId = "10000000-0000-4000-8000-000000001403"
-  const workspace = {
-    target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [], follow_ups: [],
-    outreach_drafts: [], channel_packages: [], metric_receipts: [], connectors: [],
-    field_provenance: [{
-      id: factId, field_name: "accuracy_grade", field_value: "DIN 6",
-      source_label: "Product library", verification_status: "NEEDS_EVIDENCE",
-      source_cost_micros: 20000, created_at: "2026-08-14T08:00:00Z", updated_at: "2026-08-14T08:00:00Z",
-    }],
-  }
+  const facts = [{
+    id: factId, field_name: "accuracy_grade", field_value: "DIN 6",
+    source_label: "Product library", verification_status: "NEEDS_EVIDENCE",
+    source_cost_micros: 20000, created_at: "2026-08-14T08:00:00Z", updated_at: "2026-08-14T08:00:00Z",
+  }]
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input)
-    if (path === "/api/v1/growth/workspace") {
-      return new Response(JSON.stringify(workspace), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path === "/api/v1/growth/company-facts") {
+      return new Response(JSON.stringify(facts), { status: 200, headers: { "Content-Type": "application/json" } })
     }
     if (path.endsWith("/verify")) {
       return new Response(JSON.stringify({ id: factId, verification_status: "VERIFIED" }), { status: 200, headers: { "Content-Type": "application/json" } })

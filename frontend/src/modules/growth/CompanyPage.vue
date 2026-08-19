@@ -4,8 +4,8 @@ import { computed, ref } from "vue"
 import { RouterLink } from "vue-router"
 
 import {
-  growthQueryKeys,
-  growthWorkspaceQueryOptions,
+  companyFactsQueryKeys,
+  companyFactsQueryOptions,
   type FieldProvenance,
   verifyCompanyFact,
 } from "./api"
@@ -21,7 +21,7 @@ type FactRow = {
 }
 
 const queryClient = useQueryClient()
-const workspaceQuery = useQuery(growthWorkspaceQueryOptions())
+const factsQuery = useQuery(companyFactsQueryOptions())
 const locallyVerified = ref(new Set<string>())
 const verificationError = ref("")
 
@@ -45,14 +45,14 @@ function apiFactRow(fact: FieldProvenance): FactRow {
   }
 }
 
-const facts = computed(() => workspaceQuery.data.value?.field_provenance
-  .filter(fact => !fact.is_demo).map(apiFactRow) ?? [])
+const facts = computed(() => (factsQuery.data.value ?? [])
+  .filter(fact => !fact.is_demo).map(apiFactRow))
 
 const verifyMutation = useMutation({
   mutationFn: verifyCompanyFact,
   onSuccess: async (_result, factId) => {
     locallyVerified.value = new Set([...locallyVerified.value, factId])
-    await queryClient.invalidateQueries({ queryKey: growthQueryKeys.workspace })
+    await queryClient.invalidateQueries({ queryKey: companyFactsQueryKeys.all })
   },
   onError: () => { verificationError.value = "公司事实暂时无法确认，请稍后重试。" },
 })

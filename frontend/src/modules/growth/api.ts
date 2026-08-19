@@ -493,6 +493,22 @@ export function growthWorkspaceQueryOptions() {
   })
 }
 
+export const companyFactsQueryKeys = {
+  all: ["growth", "company-facts"] as const,
+}
+
+export function companyFactsQueryOptions() {
+  return queryOptions({
+    queryKey: companyFactsQueryKeys.all,
+    queryFn: async () => {
+      const facts = await apiRequest<FieldProvenance[]>("/api/v1/growth/company-facts")
+      if (!facts) throw new Error("公司事实响应为空。")
+      return facts
+    },
+    staleTime: 15_000,
+  })
+}
+
 export async function addOpportunityFollowUp(accountId: string): Promise<FollowUp> {
   const result = await apiRequest<FollowUp>(
     `/api/v1/growth/opportunities/${accountId}/follow-up`, { method: "POST", body: {} },

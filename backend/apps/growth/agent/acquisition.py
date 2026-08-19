@@ -360,6 +360,7 @@ def run_proactive_acquisition(
     *,
     organization,
     candidate_id: str,
+    mission_id: str | None = None,
     approvals: set[str] | None = None,
     website_transport=None,
 ) -> Any:
@@ -379,16 +380,21 @@ def run_proactive_acquisition(
         fallback=fallback,
         allow_llm=True,
     )
+    idempotency_key = (
+        f"proactive:{mission_id}:{candidate_id}"
+        if mission_id
+        else f"proactive:{candidate_id}"
+    )
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
-        idempotency_key=f"proactive:{candidate_id}",
+        idempotency_key=idempotency_key,
         defaults={
             "goal": f"proactive acquisition for candidate {candidate_id}",
             "agent_type": "proactive",
             "execution_mode": proposed_execution.mode,
             "planner_provider": proposed_execution.provider,
             "planner_model": proposed_execution.model,
-            "resume_args": {"candidate_id": candidate_id},
+            "resume_args": {"candidate_id": candidate_id, "mission_id": mission_id},
             "max_steps": 20,
         },
     )
@@ -412,13 +418,19 @@ def resume_proactive_acquisition(
     *,
     organization,
     candidate_id: str,
+    mission_id: str | None = None,
     approval_token: str,
     website_transport=None,
 ) -> Any:
     candidate = DiscoveryCandidate.objects.get(organization=organization, id=candidate_id)
+    idempotency_key = (
+        f"proactive:{mission_id}:{candidate_id}"
+        if mission_id
+        else f"proactive:{candidate_id}"
+    )
     run = AgentRun.objects.get(
         organization=organization,
-        idempotency_key=f"proactive:{candidate_id}",
+        idempotency_key=idempotency_key,
     )
     tools = ToolRegistry(
         build_proactive_acquisition_tools(organization, website_transport=website_transport)

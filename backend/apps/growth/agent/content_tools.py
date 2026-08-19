@@ -11,6 +11,7 @@ from django.utils import timezone
 from apps.campaigns.models import Campaign
 from apps.campaigns.services import create_campaign, create_content_brief
 from apps.identity.models import Membership
+from apps.platforms.models import Platform
 
 from .persistent import continue_agent_run
 from .execution import resolve_agent_execution, resolve_run_execution
@@ -132,6 +133,11 @@ def _create_brief_tool(organization, creator_id: str, mission_id: str | None = N
             return ToolResult(ok=False, error="creator is not a member of this organization.")
 
         mission_context = _mission_context(organization, mission_id)
+        platform_codes = mission_context.get("channels", [])
+        platforms = list(
+            Platform.objects.filter(code__in=platform_codes).order_by("code")
+        )
+        platform_ids = tuple(platform.id for platform in platforms)
         signals = content_opportunity_signals(organization, mission_id=mission_id)
         proposals = propose_content_opportunities(signals)
         proposal = proposals[0] if proposals else {"topic": "Gear selection", "reasons": []}
@@ -160,7 +166,7 @@ def _create_brief_tool(organization, creator_id: str, mission_id: str | None = N
             },
             product_ids=tuple(mission_context.get("product_ids", ())),
             asset_ids=(),
-            platform_ids=(),
+            platform_ids=platform_ids,
             concept_links=(),
         )
         return ToolResult(

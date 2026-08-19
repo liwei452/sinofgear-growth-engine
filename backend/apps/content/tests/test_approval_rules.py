@@ -228,10 +228,16 @@ def fresh_generation(db):
 
     from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
     from apps.ai.services import PromptVersionService
-    from apps.campaigns.models import Campaign, ContentBrief, lifecycle_writes
+    from apps.campaigns.models import (
+        Campaign,
+        ContentBrief,
+        ContentBriefPlatform,
+        lifecycle_writes,
+    )
     from apps.identity.models import Organization
     from apps.jobs.models import Job
     from apps.jobs.services import JobService
+    from apps.platforms.models import Platform
 
     organization = Organization.objects.create(name="Auto Approve Org", slug="auto-approve-org")
     actor = get_user_model().objects.create_user(username="auto-approve-actor", password="x")
@@ -250,6 +256,10 @@ def fresh_generation(db):
         selling_points=["Quality"],
         advantages=["Speed"],
         keywords=["gear"],
+    )
+    platform = Platform.objects.create(code="LINKEDIN", name="LinkedIn")
+    ContentBriefPlatform.objects.create(
+        organization=organization, brief=brief, platform=platform
     )
     brief.status = ContentBrief.Status.READY
     with lifecycle_writes():
@@ -311,3 +321,19 @@ def test_auto_approve_without_actor_is_rejected(fresh_generation):
     assert not ApprovalRecord.objects.filter(
         action="AUTO_APPROVE"
     ).exists()
+
+
+def test_finalize_platform_variants_generates_selected_platforms(content_provenance):
+    from apps.content.models import PlatformContent
+    from apps.content.services import finalize_platform_variants
+
+    _, actor, brief, job, run = content_provenance
+    master = approve_content(
+        create_generated_master(brief=brief, job=job, ai_run=run, actor=actor),
+        actor=actor,
+    )
+
+    created = finalize_platform_variants(master, actor)
+
+    assert created
+    assert PlatformContent.objects.filter(master_content=master).count() == len(created)

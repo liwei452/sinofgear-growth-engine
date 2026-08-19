@@ -260,12 +260,14 @@ class MissionStartOutreachView(APIView):
             actor=request.user,
         )
         run_proactive_acquisition(
-            organization=request.organization, candidate_id=str(candidate.id)
+            organization=request.organization,
+            candidate_id=str(candidate.id),
+            mission_id=str(mission.id),
         )
         run = get_object_or_404(
             AgentRun,
             organization=request.organization,
-            idempotency_key=f"proactive:{candidate.id}",
+            idempotency_key=f"proactive:{mission.id}:{candidate.id}",
         )
         link_mission_entity(
             mission=mission,
@@ -329,7 +331,7 @@ class MissionOutreachSummaryView(APIView):
             latest_message = None
             run = AgentRun.objects.filter(
                 organization=request.organization,
-                idempotency_key=f"proactive:{candidate.id}",
+                idempotency_key=f"proactive:{mission.id}:{candidate.id}",
             ).first()
 
             if account is not None:

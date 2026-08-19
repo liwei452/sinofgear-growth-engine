@@ -373,3 +373,68 @@ def test_mission_publish_creates_linked_batch(administrator_client, mission):
         mission=mission,
         entity_type=MissionEntityLink.EntityType.PUBLISH_BATCH,
     ).exists()
+
+
+def test_same_candidate_gets_distinct_agent_runs_per_mission(
+    administrator_client, mission, monkeypatch
+):
+    from apps.growth.agent import acquisition as acq
+    from apps.growth.models import AgentRun
+
+    _approve_plan(administrator_client, mission)
+    monkeypatch.setattr(
+        acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com"
+    )
+    candidate = DiscoveryCandidate.objects.create(
+        organization=mission.organization,
+        company_name="Shared Candidate Co",
+        country="ZA",
+        website="",
+        industry="mining equipment",
+        status=DiscoveryCandidate.Status.ACCEPTED,
+        import_format="GOOGLE_MAPS",
+        raw_record={"primary_type": "mining"},
+        record_hash="mission-distinct-runs",
+        is_demo=False,
+    )
+
+    first = administrator_client.post(
+        f"{MISSIONS_URL}/{mission.id}/candidates/{candidate.id}/start-outreach",
+        {},
+        format="json",
+    )
+    assert first.status_code == 200
+
+    owner = get_user_model().objects.create_user(
+        username="mission-second-owner", password="x"
+    )
+    second_mission = GrowthMission.objects.create(
+        organization=mission.organization,
+        title="Second pilot",
+        objective="Obtain qualified replies",
+        target_countries=["DE"],
+        target_industries=["machinery"],
+        primary_product=mission.primary_product,
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 10, 1),
+        allowed_channels=["EMAIL"],
+        attribution_code="gm-second-mission",
+        created_by=owner,
+    )
+    _approve_plan(administrator_client, second_mission)
+
+    second = administrator_client.post(
+        f"{MISSIONS_URL}/{second_mission.id}/candidates/{candidate.id}/start-outreach",
+        {},
+        format="json",
+    )
+    assert second.status_code == 200
+
+    assert AgentRun.objects.filter(
+        organization=mission.organization,
+        idempotency_key=f"proactive:{mission.id}:{candidate.id}",
+    ).exists()
+    assert AgentRun.objects.filter(
+        organization=mission.organization,
+        idempotency_key=f"proactive:{second_mission.id}:{candidate.id}",
+    ).exists()

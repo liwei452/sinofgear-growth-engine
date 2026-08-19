@@ -8,6 +8,7 @@ from django.utils import timezone
 from apps.audit.services import record_review_transition
 from apps.campaigns.models import ContentBrief
 from apps.jobs.models import Job
+from apps.platforms.models import Platform
 
 from .models import MasterContent, PlatformContent, content_writes
 from .payloads import (
@@ -247,7 +248,27 @@ def finalize_master_result(run, output):
         auto_approve=True,
     )
     _link_content_lineage_to_mission(master)
-    return {"type": "master_content", "id": str(master.id), "version": master.version}
+    return {
+        "type": "master_content",
+        "id": str(master.id),
+        "version": master.version,
+    }
+
+
+def finalize_platform_variants(master: MasterContent, actor) -> list[PlatformContent]:
+    selected_platform_ids = list(
+        master.brief.platform_links.values_list("platform_id", flat=True)
+    )
+    created = []
+    for platform in Platform.objects.filter(id__in=selected_platform_ids).order_by("code"):
+        try:
+            platform_content = create_platform_content(
+                master, platform=platform, actor=actor
+            )
+        except ContentStateError:
+            continue
+        created.append(platform_content)
+    return created
 
 
 def _link_content_lineage_to_mission(content) -> None:

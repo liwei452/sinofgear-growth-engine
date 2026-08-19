@@ -769,12 +769,23 @@ def complete_publish_success(task_id, claim_token, result, *, actor=None):
     return post
 
 
+def _normalize_submission_id(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized or len(normalized) > 255:
+        return None
+    return normalized
+
+
 def _result_kind(result):
     if getattr(result, "succeeded", False):
         return "succeeded"
     if getattr(result, "submitted", False):
-        submission_id = str(getattr(result, "submission_id", "") or "")
-        return "submitted" if submission_id and len(submission_id) <= 255 else "unknown"
+        submission_id = _normalize_submission_id(
+            getattr(result, "submission_id", "")
+        )
+        return "submitted" if submission_id else "unknown"
     if getattr(result, "error_code", "") == "OUTCOME_UNKNOWN":
         return "unknown"
     return "failed"
@@ -782,10 +793,9 @@ def _result_kind(result):
 
 @transaction.atomic
 def complete_publish_submitted(task_id, claim_token, result):
-    submission_id = getattr(result, "submission_id", "")
-    if not isinstance(submission_id, str) or not submission_id.strip() or len(submission_id) > 255:
+    submission_id = _normalize_submission_id(getattr(result, "submission_id", ""))
+    if submission_id is None:
         raise PublishingConflict("Connector submission id is invalid.")
-    submission_id = submission_id.strip()
     task = PublishTask.objects.select_for_update().get(pk=task_id)
     attempt = PublishAttempt.objects.select_for_update().get(
         task=task, claim_token=claim_token

@@ -419,3 +419,29 @@ def test_tampered_provider_call_started_at_is_rejected(publishing_context):
         pk=claimed_task.pk
     )
     assert not publish_task_is_consistent(loaded)
+
+
+@pytest.mark.parametrize("submission_id", ["", "   ", 123, "x" * 256])
+def test_invalid_submission_id_routes_to_unknown(
+    publishing_context, monkeypatch, submission_id
+):
+    context = publishing_context
+    _patch_connector(
+        monkeypatch,
+        OfficialPublishResult(status="SUBMITTED", submission_id=submission_id),
+    )
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="async-bad-sub",
+        actor=context["actor"],
+    )
+
+    result = execute_publish_task(task.id)
+
+    assert result is None
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
+    assert not PublishedPost.objects.filter(task=task).exists()
+    with pytest.raises(PublishingConflict):
+        retry_publish_task(task)

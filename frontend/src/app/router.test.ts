@@ -62,25 +62,33 @@ function router(client = queryClient(), initialPath?: string) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe("growth-mission routing", () => {
-  it("mounts mission, content hub, and attribution routes", async () => {
+  it("mounts mission, assets, and attribution routes", async () => {
     const client = queryClient()
-    setUser(client, "OPERATOR", ["missions.read", "content.read"])
+    setUser(client, "OPERATOR", ["missions.read", "assets.read"])
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
 
     await appRouter.push("/missions")
     expect(await screen.findByText("增长任务")).toBeInTheDocument()
-    await appRouter.push("/content")
-    expect(await screen.findByText("内容与素材")).toBeInTheDocument()
+    await appRouter.push("/assets")
+    expect(await screen.findByText("素材库")).toBeInTheDocument()
     await appRouter.push("/attribution")
     expect(await screen.findByText("数据归因")).toBeInTheDocument()
   })
 
-  it("redirects legacy analytics and approval paths to the mission surfaces", async () => {
+  it("redirects legacy workflow paths to the mission surfaces", async () => {
     const client = queryClient()
-    setUser(client, "OPERATOR", ["missions.read", "agents.approve"])
+    setUser(client, "OPERATOR", ["missions.read", "agents.approve", "assets.read"])
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
+
+    for (const path of ["/promotion", "/opportunities", "/content-factory", "/reviews", "/publishing-calendar"]) {
+      await appRouter.push(path)
+      expect(appRouter.currentRoute.value.name).toBe("missions")
+    }
+
+    await appRouter.push("/content")
+    expect(appRouter.currentRoute.value.name).toBe("assets")
 
     await appRouter.push("/analytics?range=7")
     expect(appRouter.currentRoute.value.name).toBe("attribution")

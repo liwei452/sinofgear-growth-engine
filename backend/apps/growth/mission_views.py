@@ -319,7 +319,12 @@ class MissionContentSummaryView(APIView):
         )
         return Response({
             "platform_contents": [
-                {"id": str(c.id), "platform_code": c.platform.code, "status": c.status}
+                {
+                    "id": str(c.id),
+                    "platform_code": c.platform.code,
+                    "status": c.status,
+                    "title": (c.payload or {}).get("title", ""),
+                }
                 for c in platforms
             ],
             "channel_packages": [

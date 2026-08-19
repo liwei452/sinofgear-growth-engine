@@ -123,7 +123,15 @@ const strategyMutation = useMutation({
         </dl>
         <div v-if="contentSummary" class="content-summary">
           <h3>社媒内容</h3>
-          <p>平台版本 {{ contentSummary.platform_contents.length }} 条 · 发布包 {{ contentSummary.channel_packages.length }} 个</p>
+          <ul v-if="contentSummary.platform_contents.length" class="content-list">
+            <li v-for="content in contentSummary.platform_contents" :key="content.id">
+              <span>{{ content.platform_code }} · {{ content.title }}</span>
+              <span class="chip">{{ content.status }}</span>
+              <RouterLink v-if="content.status === 'IN_REVIEW'" :to="`/reviews?platform=${content.id}`">去审核</RouterLink>
+            </li>
+          </ul>
+          <p v-else>暂无平台版本。</p>
+          <p>发布包 {{ contentSummary.channel_packages.length }} 个</p>
         </div>
         <div class="actions">
           <button
@@ -218,6 +226,9 @@ const strategyMutation = useMutation({
 .content-summary { border-top: 1px solid var(--sg-line); padding-top: 10px; }
 .content-summary h3 { margin: 0 0 4px; font-size: .8rem; }
 .content-summary p { margin: 0; color: var(--sg-muted); font-size: .74rem; }
+.content-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.content-list li { display: flex; align-items: center; gap: 8px; font-size: .74rem; }
+.content-list .chip { border-radius: 999px; background: #eef2f6; padding: 2px 7px; color: #4f5d6c; font-size: .66rem; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .timeline { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .timeline li { display: grid; gap: 3px; border-left: 2px solid #bfd9f4; padding-left: 12px; }

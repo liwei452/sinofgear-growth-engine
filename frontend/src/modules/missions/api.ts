@@ -119,7 +119,7 @@ export function missionTimelineQueryOptions(id: string) {
 }
 
 export type MissionContentSummary = {
-  platform_contents: Array<{ id: string; platform_code: string; status: string }>
+  platform_contents: Array<{ id: string; platform_code: string; status: string; title: string }>
   channel_packages: Array<{ id: string; channel: string; status: string }>
 }
 

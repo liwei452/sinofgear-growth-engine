@@ -133,10 +133,22 @@ def _create_brief_tool(organization, creator_id: str, mission_id: str | None = N
             return ToolResult(ok=False, error="creator is not a member of this organization.")
 
         mission_context = _mission_context(organization, mission_id)
-        platform_codes = mission_context.get("channels", [])
+        platform_codes = [
+            code for code in mission_context.get("channels", []) if code
+        ]
         platforms = list(
             Platform.objects.filter(code__in=platform_codes).order_by("code")
         )
+        resolved_codes = {platform.code for platform in platforms}
+        missing = [code for code in platform_codes if code not in resolved_codes]
+        if missing:
+            return ToolResult(
+                ok=False,
+                error=(
+                    "Mission channels are missing platform definitions: "
+                    + ", ".join(missing)
+                ),
+            )
         platform_ids = tuple(platform.id for platform in platforms)
         signals = content_opportunity_signals(organization, mission_id=mission_id)
         proposals = propose_content_opportunities(signals)

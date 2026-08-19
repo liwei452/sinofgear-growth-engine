@@ -261,13 +261,9 @@ def finalize_platform_variants(master: MasterContent, actor) -> list[PlatformCon
     )
     created = []
     for platform in Platform.objects.filter(id__in=selected_platform_ids).order_by("code"):
-        try:
-            platform_content = create_platform_content(
-                master, platform=platform, actor=actor
-            )
-        except ContentStateError:
-            continue
-        created.append(platform_content)
+        created.append(
+            create_platform_content(master, platform=platform, actor=actor)
+        )
     return created
 
 

@@ -438,3 +438,114 @@ def test_same_candidate_gets_distinct_agent_runs_per_mission(
         organization=mission.organization,
         idempotency_key=f"proactive:{second_mission.id}:{candidate.id}",
     ).exists()
+
+
+def test_mission_outreach_approval_resumes_right_run(
+    administrator_client, mission, monkeypatch
+):
+    from apps.growth.agent import acquisition as acq
+    from apps.growth.models import AgentRun
+
+    _approve_plan(administrator_client, mission)
+    monkeypatch.setattr(
+        acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com"
+    )
+    candidate = DiscoveryCandidate.objects.create(
+        organization=mission.organization,
+        company_name="Approve Co",
+        country="ZA",
+        website="",
+        industry="mining equipment",
+        status=DiscoveryCandidate.Status.ACCEPTED,
+        import_format="GOOGLE_MAPS",
+        raw_record={"primary_type": "mining"},
+        record_hash="mission-approve-run",
+        is_demo=False,
+    )
+    started = administrator_client.post(
+        f"{MISSIONS_URL}/{mission.id}/candidates/{candidate.id}/start-outreach",
+        {},
+        format="json",
+    )
+    assert started.status_code == 200
+    run_id = started.data["id"]
+
+    approved = administrator_client.post(
+        f"/api/v1/growth/agent/runs/{run_id}/approve",
+        {"decision": "approve"},
+        format="json",
+    )
+
+    assert approved.status_code == 200
+    assert approved.data["status"] != AgentRun.Status.WAITING_APPROVAL
+
+
+def test_same_candidate_approval_resumes_each_mission_run(
+    administrator_client, mission, monkeypatch
+):
+    from apps.growth.agent import acquisition as acq
+    from apps.growth.models import AgentRun
+
+    _approve_plan(administrator_client, mission)
+    monkeypatch.setattr(
+        acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com"
+    )
+    candidate = DiscoveryCandidate.objects.create(
+        organization=mission.organization,
+        company_name="Dual Mission Co",
+        country="ZA",
+        website="",
+        industry="mining equipment",
+        status=DiscoveryCandidate.Status.ACCEPTED,
+        import_format="GOOGLE_MAPS",
+        raw_record={"primary_type": "mining"},
+        record_hash="mission-dual-approve",
+        is_demo=False,
+    )
+    first = administrator_client.post(
+        f"{MISSIONS_URL}/{mission.id}/candidates/{candidate.id}/start-outreach",
+        {},
+        format="json",
+    )
+    assert first.status_code == 200
+
+    owner = get_user_model().objects.create_user(
+        username="mission-approve-owner", password="x"
+    )
+    second_mission = GrowthMission.objects.create(
+        organization=mission.organization,
+        title="Second approve pilot",
+        objective="Obtain qualified replies",
+        target_countries=["DE"],
+        target_industries=["machinery"],
+        primary_product=mission.primary_product,
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 10, 1),
+        allowed_channels=["EMAIL"],
+        attribution_code="gm-second-approve",
+        created_by=owner,
+    )
+    _approve_plan(administrator_client, second_mission)
+    second = administrator_client.post(
+        f"{MISSIONS_URL}/{second_mission.id}/candidates/{candidate.id}/start-outreach",
+        {},
+        format="json",
+    )
+    assert second.status_code == 200
+    assert first.data["id"] != second.data["id"]
+
+    first_approved = administrator_client.post(
+        f"/api/v1/growth/agent/runs/{first.data['id']}/approve",
+        {"decision": "approve"},
+        format="json",
+    )
+    second_approved = administrator_client.post(
+        f"/api/v1/growth/agent/runs/{second.data['id']}/approve",
+        {"decision": "approve"},
+        format="json",
+    )
+
+    assert first_approved.status_code == 200
+    assert second_approved.status_code == 200
+    assert first_approved.data["status"] != AgentRun.Status.WAITING_APPROVAL
+    assert second_approved.data["status"] != AgentRun.Status.WAITING_APPROVAL

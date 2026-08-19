@@ -23,6 +23,7 @@ def resume_agent_run(*, run: AgentRun, approval_token: str):
         return resume_proactive_acquisition(
             organization=organization,
             candidate_id=args["candidate_id"],
+            mission_id=args.get("mission_id"),
             approval_token=approval_token,
         )
     if agent_type == "content_strategy":

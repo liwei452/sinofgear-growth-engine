@@ -193,3 +193,104 @@ def test_ai_agent_resume_refuses_a_silent_model_switch(organization, monkeypatch
             creator_id=str(user.id),
             approvals={first.pending_approval.approval_token},
         )
+
+
+def _mission_with_channels(organization, creator, channels):
+    from datetime import date
+
+    from apps.catalog.models import Product
+    from apps.growth.models import GrowthMission
+
+    product = Product.objects.create(
+        organization=organization,
+        name_en="Helical Gear",
+        module_min=1,
+        module_max=2,
+        tooth_count_min=10,
+        tooth_count_max=20,
+        pressure_angle=20,
+        moq=1,
+        status=Product.Status.ACTIVE,
+        manufacturing_capabilities=["Hobbing"],
+        inspection_capabilities=["CMM"],
+    )
+    return GrowthMission.objects.create(
+        organization=organization,
+        title="Platform mission",
+        objective="Leads",
+        target_countries=["DE"],
+        target_industries=["machinery"],
+        primary_product=product,
+        start_date=date(2026, 8, 1),
+        end_date=date(2026, 9, 1),
+        allowed_channels=channels,
+        attribution_code=f"gm-{channels[0].lower()}",
+        created_by=creator,
+    )
+
+
+def test_content_strategy_agent_selects_mission_platforms(organization, django_user_model):
+    from apps.campaigns.models import ContentBrief
+    from apps.platforms.models import Platform
+
+    user = django_user_model.objects.create_user(username="platform-creator")
+    Membership.objects.create(
+        user=user, organization=organization, role=Role.objects.create_operator()
+    )
+    Platform.objects.create(code="LINKEDIN", name="LinkedIn")
+    Platform.objects.create(code="FACEBOOK", name="Facebook")
+    mission = _mission_with_channels(
+        organization, user, ["LINKEDIN", "FACEBOOK"]
+    )
+
+    first = run_content_strategy_agent(
+        organization=organization, creator_id=str(user.id), mission_id=str(mission.id)
+    )
+    assert first.status == "waiting_approval"
+    result = run_content_strategy_agent(
+        organization=organization,
+        creator_id=str(user.id),
+        mission_id=str(mission.id),
+        approvals={first.pending_approval.approval_token},
+    )
+
+    assert result.status == "completed"
+    brief_step = next(
+        step
+        for step in result.steps
+        if step.tool_name == "create_content_brief" and step.outcome == "succeeded"
+    )
+    brief = ContentBrief.objects.get(id=brief_step.output["brief_id"])
+    assert set(brief.platform_links.values_list("platform__code", flat=True)) == {
+        "LINKEDIN",
+        "FACEBOOK",
+    }
+
+
+def test_content_strategy_agent_rejects_missing_platform_definition(
+    organization, django_user_model
+):
+    from apps.platforms.models import Platform
+
+    user = django_user_model.objects.create_user(username="missing-platform-creator")
+    Membership.objects.create(
+        user=user, organization=organization, role=Role.objects.create_operator()
+    )
+    Platform.objects.create(code="LINKEDIN", name="LinkedIn")
+    mission = _mission_with_channels(
+        organization, user, ["LINKEDIN", "MISSING_CHANNEL"]
+    )
+
+    first = run_content_strategy_agent(
+        organization=organization, creator_id=str(user.id), mission_id=str(mission.id)
+    )
+    assert first.status == "waiting_approval"
+    result = run_content_strategy_agent(
+        organization=organization,
+        creator_id=str(user.id),
+        mission_id=str(mission.id),
+        approvals={first.pending_approval.approval_token},
+    )
+
+    assert result.status == "failed"
+    assert "missing platform definitions" in result.terminal_reason

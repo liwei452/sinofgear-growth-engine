@@ -504,6 +504,8 @@ def create_publish_task(
                 PublishTask.Status.SCHEDULED,
                 PublishTask.Status.QUEUED,
                 PublishTask.Status.RUNNING,
+                PublishTask.Status.SUBMITTED,
+                PublishTask.Status.SUBMISSION_UNKNOWN,
             ],
         ).count()
         if published_today + pending >= limit:
@@ -749,7 +751,8 @@ def _result_kind(result):
     if getattr(result, "succeeded", False):
         return "succeeded"
     if getattr(result, "submitted", False):
-        return "submitted"
+        submission_id = str(getattr(result, "submission_id", "") or "")
+        return "submitted" if submission_id and len(submission_id) <= 255 else "unknown"
     if getattr(result, "error_code", "") == "OUTCOME_UNKNOWN":
         return "unknown"
     return "failed"
@@ -857,8 +860,13 @@ def reap_stale_publish_tasks(*, now=None) -> int:
     )
     for task in stale:
         token = task.claim_token
-        error = SAFE_PUBLISH_ERRORS["OUTCOME_UNKNOWN"]
-        task.status = PublishTask.Status.SUBMISSION_UNKNOWN
+        provider_called = task.provider_call_started_at is not None
+        if provider_called:
+            error = SAFE_PUBLISH_ERRORS["OUTCOME_UNKNOWN"]
+            task.status = PublishTask.Status.SUBMISSION_UNKNOWN
+        else:
+            error = SAFE_PUBLISH_ERRORS["STALE_WORKER"]
+            task.status = PublishTask.Status.FAILED
         task.last_error = error
         task.finished_at = now
         task.claim_token = None
@@ -869,8 +877,12 @@ def reap_stale_publish_tasks(*, now=None) -> int:
         if token:
             attempt = PublishAttempt.objects.filter(claim_token=token).first()
             if attempt is not None and attempt.status == PublishAttempt.Status.RUNNING:
-                attempt.status = PublishAttempt.Status.SUBMISSION_UNKNOWN
-                attempt.outcome = "OUTCOME_UNKNOWN"
+                if provider_called:
+                    attempt.status = PublishAttempt.Status.SUBMISSION_UNKNOWN
+                    attempt.outcome = "OUTCOME_UNKNOWN"
+                else:
+                    attempt.status = PublishAttempt.Status.FAILED
+                    attempt.outcome = "STALE_WORKER"
                 attempt.error = error
                 attempt.finished_at = now
                 with publishing_writes():
@@ -880,7 +892,7 @@ def reap_stale_publish_tasks(*, now=None) -> int:
     return len(stale)
 
 
-def _publish_mock(task, attempt_number) -> PublishResult:
+def _build_mock_call(task, attempt_number):
     request = PublishRequest(
         task_id=task.id,
         attempt_number=attempt_number,
@@ -889,7 +901,7 @@ def _publish_mock(task, attempt_number) -> PublishResult:
         content_payload=task.platform_content.payload,
         scheduled_at=task.scheduled_at,
     )
-    return get_connector(task.connector_code, task.social_account).publish(request)
+    return get_connector(task.connector_code, task.social_account), request
 
 
 def _prepare_tracking_url(task) -> str | None:
@@ -916,7 +928,7 @@ def _resolve_media(task):
         return None
 
 
-def _publish_official(task, attempt_number):
+def _build_official_call(task):
     content_payload = task.platform_content.payload or {}
     media = _resolve_media(task)
     payload = build_publish_payload(
@@ -930,7 +942,7 @@ def _publish_official(task, attempt_number):
     if not isinstance(consent, dict):
         consent = {}
     connector = get_social_provider_runtime().connector_registry.resolve(task.social_account)
-    return connector.publish(OfficialPublishRequest(
+    return connector, OfficialPublishRequest(
         channel=task.platform.code,
         account_external_id=task.social_account.external_id,
         credential_reference=(
@@ -940,7 +952,17 @@ def _publish_official(task, attempt_number):
         payload=payload,
         idempotency_key=str(task.id),
         consent=consent,
-    ))
+    )
+
+
+@transaction.atomic
+def _mark_provider_call_started(task, attempt):
+    now = timezone.now()
+    task.provider_call_started_at = now
+    attempt.provider_call_started_at = now
+    with publishing_writes():
+        task.save(update_fields=["provider_call_started_at", "updated_at"])
+        attempt.save(update_fields=["provider_call_started_at", "updated_at"])
 
 
 def _associate_pre_publish_tracking(task, post) -> None:
@@ -982,17 +1004,40 @@ def execute_publish_task(task_id):
 
     try:
         if connection_kind == "official_oauth":
-            result = _publish_official(task, attempt.number)
+            connector, request = _build_official_call(task)
         elif connection_kind == "demo_fake" or getattr(settings, "PUBLISHING_MOCK_ENABLED", False):
-            result = _publish_mock(task, attempt.number)
+            connector, request = _build_mock_call(task, attempt.number)
         else:
-            result = PublishResult(
-                succeeded=False,
-                error_code="PUBLISH_NOT_ELIGIBLE",
-                error_message="Social account is not connected via official OAuth.",
+            complete_publish_failure(
+                task.id, attempt.claim_token,
+                PublishResult(
+                    succeeded=False,
+                    error_code="PUBLISH_NOT_ELIGIBLE",
+                    error_message="Social account is not connected via official OAuth.",
+                ),
             )
+            return None
     except PublishPayloadError as exc:
-        result = PublishResult(succeeded=False, error_code="VALIDATION_REJECTED", error_message=str(exc))
+        complete_publish_failure(
+            task.id, attempt.claim_token,
+            PublishResult(succeeded=False, error_code="VALIDATION_REJECTED", error_message=str(exc)),
+        )
+        return None
+    except Exception:
+        logger.exception("Publishing preparation failed.")
+        complete_publish_failure(
+            task.id, attempt.claim_token,
+            PublishResult(
+                succeeded=False, error_code="PROVIDER_ERROR",
+                error_message="Publishing preparation failed.",
+            ),
+        )
+        return None
+
+    _mark_provider_call_started(task, attempt)
+
+    try:
+        result = connector.publish(request)
     except (TimeoutError, ConnectionError, OSError):
         logger.exception("Provider publish outcome is unknown.")
         result = PublishResult(
@@ -1006,6 +1051,7 @@ def execute_publish_task(task_id):
             succeeded=False, error_code="PROVIDER_ERROR",
             error_message="Provider rejected the publish request.",
         )
+
     kind = _result_kind(result)
     if kind == "succeeded":
         try:

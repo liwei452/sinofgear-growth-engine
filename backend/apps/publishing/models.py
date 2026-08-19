@@ -92,6 +92,7 @@ class PublishTask(ProtectedPublishingModel):
     retry_not_before = models.DateTimeField(null=True, blank=True)
     last_error = models.JSONField(null=True, blank=True)
     provider_submission_id = models.CharField(max_length=255, blank=True, default="")
+    provider_call_started_at = models.DateTimeField(null=True, blank=True)
     heartbeat_at = models.DateTimeField(null=True, blank=True)
     lease_expires_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
@@ -132,6 +133,7 @@ class PublishAttempt(ProtectedPublishingModel):
     retry_at = models.DateTimeField(null=True, blank=True)
     external_id = models.CharField(max_length=255, blank=True)
     provider_submission_id = models.CharField(max_length=255, blank=True, default="")
+    provider_call_started_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField()
     finished_at = models.DateTimeField(null=True, blank=True)
 

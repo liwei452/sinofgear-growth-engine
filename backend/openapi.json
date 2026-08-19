@@ -12391,6 +12391,14 @@ components:
         external_id:
           type: string
           readOnly: true
+        provider_submission_id:
+          type: string
+          readOnly: true
+        provider_call_started_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
         started_at:
           type: string
           format: date-time
@@ -12407,6 +12415,8 @@ components:
       - id
       - number
       - outcome
+      - provider_call_started_at
+      - provider_submission_id
       - retry_at
       - started_at
       - status
@@ -12546,6 +12556,14 @@ components:
         last_error:
           readOnly: true
           nullable: true
+        provider_submission_id:
+          type: string
+          readOnly: true
+        provider_call_started_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
         started_at:
           type: string
           format: date-time
@@ -12588,6 +12606,8 @@ components:
       - last_error
       - platform_content_id
       - platform_id
+      - provider_call_started_at
+      - provider_submission_id
       - published_post
       - requested_timezone
       - retry_not_before

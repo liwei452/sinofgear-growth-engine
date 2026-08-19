@@ -24,6 +24,25 @@ from apps.publishing.services import (
 from integrations.platforms.base import OfficialPublishResult, PublishResult
 
 
+def _patch_connector(monkeypatch, publish_result):
+    from apps.publishing import services
+
+    class FakeConnector:
+        def __init__(self, result):
+            self.result = result
+            self.calls = []
+
+        def publish(self, request):
+            self.calls.append(request)
+            if isinstance(self.result, Exception):
+                raise self.result
+            return self.result
+
+    connector = FakeConnector(publish_result)
+    monkeypatch.setattr(services, "get_connector", lambda code, account: connector)
+    return connector
+
+
 def test_provider_final_success_creates_post_and_publishes_content(publishing_context):
     context = publishing_context
     task = create_publish_task(
@@ -44,15 +63,10 @@ def test_provider_final_success_creates_post_and_publishes_content(publishing_co
 
 
 def test_provider_acceptance_stays_submitted(publishing_context, monkeypatch):
-    from apps.publishing import services
-
     context = publishing_context
-    monkeypatch.setattr(
-        services,
-        "_publish_mock",
-        lambda task, attempt_number: OfficialPublishResult(
-            status="SUBMITTED", submission_id="buffer-sub-1"
-        ),
+    _patch_connector(
+        monkeypatch,
+        OfficialPublishResult(status="SUBMITTED", submission_id="buffer-sub-1"),
     )
     task = create_publish_task(
         content=context["content"],
@@ -74,15 +88,10 @@ def test_provider_acceptance_stays_submitted(publishing_context, monkeypatch):
 
 
 def test_provider_outcome_unknown_stays_unknown(publishing_context, monkeypatch):
-    from apps.publishing import services
-
     context = publishing_context
-    monkeypatch.setattr(
-        services,
-        "_publish_mock",
-        lambda task, attempt_number: PublishResult(
-            succeeded=False, error_code="OUTCOME_UNKNOWN"
-        ),
+    _patch_connector(
+        monkeypatch,
+        PublishResult(succeeded=False, error_code="OUTCOME_UNKNOWN"),
     )
     task = create_publish_task(
         content=context["content"],
@@ -107,18 +116,11 @@ def test_provider_outcome_unknown_stays_unknown(publishing_context, monkeypatch)
 def test_duplicate_execution_does_not_call_connector_again(
     publishing_context, monkeypatch
 ):
-    from apps.publishing import services
-
     context = publishing_context
-    calls = []
-
-    def fake_publish(task, attempt_number):
-        calls.append(attempt_number)
-        return OfficialPublishResult(
-            status="SUBMITTED", submission_id="buffer-sub-1"
-        )
-
-    monkeypatch.setattr(services, "_publish_mock", fake_publish)
+    connector = _patch_connector(
+        monkeypatch,
+        OfficialPublishResult(status="SUBMITTED", submission_id="buffer-sub-1"),
+    )
     task = create_publish_task(
         content=context["content"],
         account=context["account"],
@@ -129,10 +131,10 @@ def test_duplicate_execution_does_not_call_connector_again(
     execute_publish_task(task.id)
     execute_publish_task(task.id)
 
-    assert len(calls) == 1
+    assert len(connector.calls) == 1
 
 
-def test_stale_worker_does_not_trigger_blind_retry(publishing_context):
+def test_stale_worker_before_provider_call_is_retryable(publishing_context):
     context = publishing_context
     task = create_publish_task(
         content=context["content"],
@@ -142,6 +144,32 @@ def test_stale_worker_does_not_trigger_blind_retry(publishing_context):
     )
     claimed = claim_publish_task(task.id)
     assert claimed is not None
+
+    expired = timezone.now() + timedelta(seconds=PUBLISH_LEASE_SECONDS + 1)
+    assert reap_stale_publish_tasks(now=expired) == 1
+
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.FAILED
+    assert task.last_error["code"] == "STALE_WORKER"
+    retry_publish_task(task)
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.QUEUED
+
+
+def test_stale_worker_after_provider_call_is_unknown(publishing_context):
+    context = publishing_context
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="async-e2",
+        actor=context["actor"],
+    )
+    claimed = claim_publish_task(task.id)
+    assert claimed is not None
+    claimed_task, attempt = claimed
+    from apps.publishing.services import _mark_provider_call_started
+
+    _mark_provider_call_started(claimed_task, attempt)
 
     expired = timezone.now() + timedelta(seconds=PUBLISH_LEASE_SECONDS + 1)
     assert reap_stale_publish_tasks(now=expired) == 1
@@ -187,15 +215,10 @@ def test_growth_item_stays_waiting_for_submitted_task(
         GrowthPublishItem,
     )
     from apps.growth.publishing import sync_publish_item_from_task
-    from apps.publishing import services
-
     context = publishing_context
-    monkeypatch.setattr(
-        services,
-        "_publish_mock",
-        lambda task, attempt_number: OfficialPublishResult(
-            status="SUBMITTED", submission_id="buffer-sub-1"
-        ),
+    _patch_connector(
+        monkeypatch,
+        OfficialPublishResult(status="SUBMITTED", submission_id="buffer-sub-1"),
     )
     task = create_publish_task(
         content=context["content"],
@@ -236,3 +259,80 @@ def test_growth_item_stays_waiting_for_submitted_task(
     item.refresh_from_db()
     assert item.status == GrowthPublishItem.Status.DELEGATED
     assert item.external_post_id == ""
+
+
+def test_submitted_without_submission_id_becomes_unknown(
+    publishing_context, monkeypatch
+):
+    context = publishing_context
+    _patch_connector(
+        monkeypatch,
+        OfficialPublishResult(status="SUBMITTED", submission_id=""),
+    )
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="async-empty-sub",
+        actor=context["actor"],
+    )
+
+    result = execute_publish_task(task.id)
+
+    assert result is None
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
+    assert publish_task_is_consistent(task)
+    with pytest.raises(PublishingConflict):
+        retry_publish_task(task)
+
+
+def test_submitted_counts_toward_daily_limit(publishing_context, monkeypatch):
+    context = publishing_context
+    context["organization"].daily_publish_limit = 1
+    context["organization"].save(update_fields=["daily_publish_limit"])
+    _patch_connector(
+        monkeypatch,
+        OfficialPublishResult(status="SUBMITTED", submission_id="sub-1"),
+    )
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="limit-sub-1",
+        actor=context["actor"],
+    )
+    execute_publish_task(task.id)
+
+    with pytest.raises(PublishingConflict, match="Daily publishing limit"):
+        create_publish_task(
+            content=context["content"],
+            account=context["account"],
+            idempotency_key="limit-sub-2",
+            actor=context["actor"],
+        )
+
+
+def test_serializers_expose_provider_submission_id(
+    publishing_context, monkeypatch
+):
+    from apps.publishing.serializers import PublishTaskSerializer
+
+    context = publishing_context
+    _patch_connector(
+        monkeypatch,
+        OfficialPublishResult(status="SUBMITTED", submission_id="buffer-sub-1"),
+    )
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="async-serializer",
+        actor=context["actor"],
+    )
+    execute_publish_task(task.id)
+    task.refresh_from_db()
+
+    data = PublishTaskSerializer(task).data
+
+    assert data["provider_submission_id"] == "buffer-sub-1"
+    assert data["provider_call_started_at"] is not None
+    assert data["attempts"][-1]["provider_submission_id"] == "buffer-sub-1"
+    assert data["attempts"][-1]["provider_call_started_at"] is not None

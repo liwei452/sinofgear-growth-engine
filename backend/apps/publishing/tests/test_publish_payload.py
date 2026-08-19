@@ -119,7 +119,8 @@ def test_publish_official_uses_converted_payload(monkeypatch):
             credential=SimpleNamespace(secret_reference="secret-ref"),
         ),
     )
-    result = publishing_services._publish_official(fake_task, 1)
+    connector, request = publishing_services._build_official_call(fake_task)
+    result = connector.publish(request)
 
     assert result.status == "SUCCEEDED"
     assert captured["payload"] == {"commentary": "Hello team"}
@@ -169,7 +170,8 @@ def test_e2e_approved_content_to_official_connector(publishing_context, monkeypa
         social_account=publishing_context["account"],
         created_by=publishing_context["actor"],
     )
-    result = publishing_services._publish_official(task, 1)
+    connector, request = publishing_services._build_official_call(task)
+    result = connector.publish(request)
 
     assert result.status == "SUCCEEDED"
     assert captured["payload"] == {

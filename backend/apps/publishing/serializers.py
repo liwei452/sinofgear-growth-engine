@@ -45,7 +45,8 @@ class PublishAttemptSerializer(serializers.ModelSerializer):
         model = PublishAttempt
         fields = [
             "id", "number", "status", "outcome", "error", "retry_at",
-            "external_id", "started_at", "finished_at",
+            "external_id", "provider_submission_id", "provider_call_started_at",
+            "started_at", "finished_at",
         ]
         read_only_fields = fields
 
@@ -69,8 +70,8 @@ class PublishTaskSerializer(serializers.ModelSerializer):
             "id", "platform_content_id", "content_version", "social_account_id",
             "platform_id", "connector_code", "status", "scheduled_at",
             "requested_timezone", "attempt_number", "retry_not_before", "last_error",
-            "started_at", "finished_at", "canceled_at", "created_at", "attempts",
-            "published_post",
+            "provider_submission_id", "provider_call_started_at", "started_at",
+            "finished_at", "canceled_at", "created_at", "attempts", "published_post",
         ]
         read_only_fields = fields
 

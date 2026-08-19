@@ -4,6 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.ai.provider_config import resolve_product_ai
+from apps.ai.services import BudgetedAIProvider
 
 from .models import MarketCountryProfile, PromotionPlanApproval
 
@@ -61,7 +62,12 @@ def generate_promotion_plan(organization) -> dict:
         "||INPUT:" + json.dumps(snapshot, ensure_ascii=False)
     )
     try:
-        return runtime.provider.generate(
+        provider = BudgetedAIProvider(
+            organization=organization,
+            model=runtime.model,
+            provider=runtime.provider,
+        )
+        return provider.generate(
             prompt=prompt,
             schema=PROMOTION_PLAN_SCHEMA,
         )

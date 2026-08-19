@@ -8,6 +8,7 @@ from django.db import transaction
 from django.db.models import Q
 
 from apps.ai.provider_config import resolve_product_ai
+from apps.ai.services import BudgetedAIProvider
 from apps.catalog.models import Product
 
 from .growth_events import EVENT_CUSTOMER_SERVICE_DECIDED, emit_growth_event
@@ -76,7 +77,12 @@ def _product_summary(product: Product) -> str:
 def draft_reply(organization, context: dict) -> str:
     runtime = resolve_product_ai(organization)
     if runtime.real_requests_enabled:
-        return _llm_reply(organization, context, runtime.provider)
+        provider = BudgetedAIProvider(
+            organization=organization,
+            model=runtime.model,
+            provider=runtime.provider,
+        )
+        return _llm_reply(organization, context, provider)
     return _template_reply(organization, context)
 
 

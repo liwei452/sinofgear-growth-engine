@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
 import json
+import socket
 from dataclasses import dataclass
 from json import JSONDecodeError
 from urllib.error import HTTPError, URLError
@@ -219,13 +221,29 @@ def build_social_provider_runtime(
 
 
 class UrlMediaLoader:
-    def __init__(self, opener=urlopen):
+    def __init__(self, opener=urlopen, resolver=socket.getaddrinfo):
         self._opener = opener
+        self._resolver = resolver
+
+    def _assert_public_host(self, hostname: str) -> None:
+        try:
+            infos = self._resolver(hostname, None)
+        except socket.gaierror as error:
+            raise ValueError("YouTube media host could not be resolved.") from error
+        for info in infos:
+            address = ipaddress.ip_address(info[4][0])
+            if not address.is_global:
+                raise ValueError(
+                    "YouTube media host must resolve to a public address."
+                )
 
     def load(self, media_url: str, max_bytes: int) -> bytes:
         parsed = urlsplit(media_url)
         if parsed.scheme != "https" or parsed.username or parsed.password:
             raise ValueError("YouTube media must be a public HTTPS URL.")
+        if not parsed.hostname:
+            raise ValueError("YouTube media URL must include a host.")
+        self._assert_public_host(parsed.hostname)
         request = Request(media_url, headers={"User-Agent": "SinofGear/1.0"}, method="GET")
         with self._opener(request, timeout=60) as response:
             data = response.read(max_bytes + 1)

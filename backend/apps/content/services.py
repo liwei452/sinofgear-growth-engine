@@ -188,8 +188,15 @@ def create_generated_master(
         id=content_id, lineage_id=content_id, organization=brief.organization,
         brief=brief, brief_version=brief.version, generation_job=job, ai_run=ai_run,
     )
+    final_status = (
+        MasterContent.Status.APPROVED
+        if auto_approve
+        else MasterContent.Status.IN_REVIEW
+        if submit_for_review
+        else MasterContent.Status.DRAFT
+    )
     with content_writes():
-        return MasterContent.objects.create(
+        master = MasterContent.objects.create(
             id=content_id,
             organization=brief.organization,
             brief=brief,
@@ -199,15 +206,29 @@ def create_generated_master(
             payload=payload,
             lineage_id=content_id,
             provenance=_master_provenance(provenance_source),
-            status=(
-                MasterContent.Status.APPROVED
-                if auto_approve
-                else MasterContent.Status.IN_REVIEW
-                if submit_for_review
-                else MasterContent.Status.DRAFT
-            ),
+            status=final_status,
             created_by=actor,
         )
+    if auto_approve and final_status == MasterContent.Status.APPROVED:
+        if actor is not None:
+            record_review_transition(
+                organization=brief.organization,
+                object_type="content.MasterContent",
+                object_id=master.id,
+                action="AUTO_APPROVE",
+                status=MasterContent.Status.APPROVED,
+                object_version=master.version,
+                actor=actor,
+                comment="Auto-approved by the AI generation pipeline; not a human review.",
+                before_metadata={"status": "GENERATED"},
+                after_metadata={"status": MasterContent.Status.APPROVED},
+            )
+        else:
+            logger.warning(
+                "Auto-approved generated master content %s without an auditable actor.",
+                master.id,
+            )
+    return master
 
 
 def finalize_master_result(run, output):
@@ -427,7 +448,14 @@ def _auto_prepare_channel_package(content) -> None:
 
         prepare_channel_package_from_platform_content(content=content)
     except Exception:
-        logger.exception("Auto channel-package preparation failed.")
+        # Best effort: the package can still be prepared explicitly from the
+        # review dialog or the promotion page, which surface real errors.
+        logger.exception(
+            "Auto channel-package preparation failed for platform content %s "
+            "(version %s).",
+            content.pk,
+            content.version,
+        )
 
 
 @transaction.atomic

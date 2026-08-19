@@ -11,7 +11,7 @@ from pypdf import PdfReader
 
 from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
 from apps.ai.provider_config import resolve_product_ai
-from apps.ai.services import PromptVersionService
+from apps.ai.services import BudgetedAIProvider, PromptVersionService
 from apps.common.security import normalize_persisted_error
 from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService
@@ -227,8 +227,13 @@ def _execute(job: Job, *, actor=None) -> UnderstandingResult:
         if asset.mime_type == "application/pdf":
             pages, extraction_warnings = _extract_pdf(data)
             if provider_code == "deepseek":
+                budgeted_provider = BudgetedAIProvider(
+                    organization=claimed.organization,
+                    model=runtime.model,
+                    provider=runtime.provider,
+                )
                 outcome = extract_candidate_facts(
-                    pages, provider=runtime.provider
+                    pages, provider=budgeted_provider
                 )
                 rows = list(outcome.rows)
                 provider_warnings = list(outcome.warnings)

@@ -61,9 +61,9 @@ it("shows the five ordinary destinations and hides legacy module links", async (
 
   expect(screen.getByRole("link", { name: "今日待办" })).toHaveAttribute("href", "/")
   expect(screen.getByRole("link", { name: "增长任务" })).toHaveAttribute("href", "/missions")
-  expect(screen.getByRole("link", { name: "客户与商机" })).toHaveAttribute("href", "/opportunities")
-  expect(screen.getByRole("link", { name: "内容与素材" })).toHaveAttribute("href", "/content")
   expect(screen.getByRole("link", { name: "数据归因" })).toHaveAttribute("href", "/attribution")
+  expect(screen.queryByRole("link", { name: "客户与商机" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "内容与素材" })).not.toBeInTheDocument()
   expect(screen.queryByRole("link", { name: "Agent 工作台" })).not.toBeInTheDocument()
   expect(screen.queryByRole("link", { name: "审核中心" })).not.toBeInTheDocument()
 })

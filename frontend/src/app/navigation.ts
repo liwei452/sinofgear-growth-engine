@@ -22,8 +22,6 @@ export const navigationSections: NavigationSection[] = [
     group: "增长",
     items: [
       { label: "增长任务", to: "/missions", icon: "clipboard-check", requiredPermission: "missions.read" },
-      { label: "客户与商机", to: "/opportunities", icon: "users-round", requiredPermission: "leads.read" },
-      { label: "内容与素材", to: "/content", icon: "sparkles", requiredPermission: "content.read" },
       { label: "数据归因", to: "/attribution", icon: "chart-column", requiredPermission: "missions.read" },
     ],
   },

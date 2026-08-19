@@ -66,6 +66,7 @@ class Job(ProtectedJobModel):
         CONTENT_GENERATE = "CONTENT_GENERATE", "Content generate"
         CONTENT_RECOMMEND = "CONTENT_RECOMMEND", "Content recommend"
         ASSET_UNDERSTAND = "ASSET_UNDERSTAND", "Asset understand"
+        CONTENT_PLATFORM_VARIANTS = "CONTENT_PLATFORM_VARIANTS", "Content platform variants"
 
     class Status(models.TextChoices):
         QUEUED = "QUEUED", "Queued"

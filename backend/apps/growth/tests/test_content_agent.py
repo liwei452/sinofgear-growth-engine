@@ -294,3 +294,27 @@ def test_content_strategy_agent_rejects_missing_platform_definition(
 
     assert result.status == "failed"
     assert "missing platform definitions" in result.terminal_reason
+
+
+def test_content_strategy_agent_rejects_email_only_mission(
+    organization, django_user_model
+):
+    user = django_user_model.objects.create_user(username="email-only-creator")
+    Membership.objects.create(
+        user=user, organization=organization, role=Role.objects.create_operator()
+    )
+    mission = _mission_with_channels(organization, user, ["EMAIL"])
+
+    first = run_content_strategy_agent(
+        organization=organization, creator_id=str(user.id), mission_id=str(mission.id)
+    )
+    assert first.status == "waiting_approval"
+    result = run_content_strategy_agent(
+        organization=organization,
+        creator_id=str(user.id),
+        mission_id=str(mission.id),
+        approvals={first.pending_approval.approval_token},
+    )
+
+    assert result.status == "failed"
+    assert "no social content channels" in result.terminal_reason

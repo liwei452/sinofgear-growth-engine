@@ -112,7 +112,7 @@ def master_with_two_platforms(db):
 def test_generate_master_content_job_creates_one_platform_per_selected(
     master_with_two_platforms,
 ):
-    _, _, master, job, prompt = master_with_two_platforms
+    organization, _, master, job, prompt = master_with_two_platforms
 
     generate_master_content_job(job.id, prompt.id)
 
@@ -125,16 +125,23 @@ def test_generate_master_content_job_creates_one_platform_per_selected(
     assert set(contents.values_list("status", flat=True)) == {
         PlatformContent.Status.IN_REVIEW,
     }
+    child = Job.objects.get(
+        organization=organization, type=Job.Type.CONTENT_PLATFORM_VARIANTS
+    )
+    assert child.status == Job.Status.SUCCEEDED
 
 
 @pytest.mark.django_db
 def test_generate_master_content_job_is_idempotent(master_with_two_platforms):
-    _, _, master, job, prompt = master_with_two_platforms
+    organization, _, master, job, prompt = master_with_two_platforms
 
     generate_master_content_job(job.id, prompt.id)
     generate_master_content_job(job.id, prompt.id)
 
     assert PlatformContent.objects.filter(master_content=master).count() == 2
+    assert Job.objects.filter(
+        organization=organization, type=Job.Type.CONTENT_PLATFORM_VARIANTS
+    ).count() == 1
 
 
 @pytest.mark.django_db
@@ -143,7 +150,7 @@ def test_generate_master_content_job_exposes_platform_failure(
 ):
     from apps.content import services
 
-    _, _, master, job, prompt = master_with_two_platforms
+    organization, _, _, job, prompt = master_with_two_platforms
 
     real_create = services.create_platform_content
 
@@ -156,3 +163,9 @@ def test_generate_master_content_job_exposes_platform_failure(
 
     with pytest.raises(services.ContentStateError, match="injected platform failure"):
         generate_master_content_job(job.id, prompt.id)
+
+    child = Job.objects.get(
+        organization=organization, type=Job.Type.CONTENT_PLATFORM_VARIANTS
+    )
+    assert child.status == Job.Status.FAILED
+    assert job.status == Job.Status.SUCCEEDED

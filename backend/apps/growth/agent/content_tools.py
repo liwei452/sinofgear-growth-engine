@@ -136,6 +136,11 @@ def _create_brief_tool(organization, creator_id: str, mission_id: str | None = N
         platform_codes = [
             code for code in mission_context.get("channels", []) if code
         ]
+        if mission_id and not platform_codes:
+            return ToolResult(
+                ok=False,
+                error="Mission has no social content channels.",
+            )
         platforms = list(
             Platform.objects.filter(code__in=platform_codes).order_by("code")
         )

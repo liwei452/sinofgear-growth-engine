@@ -270,3 +270,62 @@ def test_content_opportunity_signals_are_mission_scoped(mission, operator):
     )
     assert scoped["accepted_candidate_count"] == 1
     assert scoped["top_industries"][0]["industry"] == "mining equipment"
+
+
+def test_batch_prepare_atomic_links_mission(mission, operator, monkeypatch):
+    from apps.growth import views as growth_views
+
+    prepared = ChannelPackage.objects.create(
+        organization=mission.organization,
+        channel="LINKEDIN",
+        payload={"title": "post"},
+        status="AWAITING_REVIEW",
+        is_demo=False,
+    )
+    monkeypatch.setattr(
+        growth_views,
+        "prepare_channel_package_from_platform_content",
+        lambda *, content: (prepared, True),
+    )
+
+    view = growth_views.ChannelPackageBatchPrepareView()
+    packages = view._prepare_atomic([object()], operator, mission)
+
+    assert [package.id for package in packages] == [prepared.id]
+    assert MissionEntityLink.objects.filter(
+        mission=mission,
+        entity_type=MissionEntityLink.EntityType.CHANNEL_PACKAGE,
+        entity_id=prepared.id,
+        lane=MissionEntityLink.Lane.SOCIAL,
+    ).exists()
+
+
+def test_batch_prepare_atomic_rolls_back_on_failure(mission, operator, monkeypatch):
+    from apps.growth import views as growth_views
+    from apps.growth.services import ChannelPackagePreparationBlocked
+
+    def fake_prepare(*, content):
+        if content == "fail":
+            raise ChannelPackagePreparationBlocked("blocked")
+        return (
+            ChannelPackage.objects.create(
+                organization=mission.organization,
+                channel="LINKEDIN",
+                payload={"title": "post"},
+                status="AWAITING_REVIEW",
+                is_demo=False,
+            ),
+            True,
+        )
+
+    monkeypatch.setattr(
+        growth_views,
+        "prepare_channel_package_from_platform_content",
+        fake_prepare,
+    )
+
+    view = growth_views.ChannelPackageBatchPrepareView()
+    with pytest.raises(ChannelPackagePreparationBlocked):
+        view._prepare_atomic(["ok", "fail"], operator, None)
+
+    assert not ChannelPackage.objects.filter(organization=mission.organization).exists()

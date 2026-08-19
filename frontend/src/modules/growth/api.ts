@@ -198,10 +198,17 @@ export async function prepareChannelPackage(platformContentId: string): Promise<
 
 export async function prepareChannelPackages(
   platformContentIds: string[],
+  missionId?: string,
 ): Promise<ChannelPackage[]> {
   const result = await apiRequest<ChannelPackage[]>(
     "/api/v1/growth/channel-packages/prepare-all",
-    { method: "POST", body: { platform_content_ids: platformContentIds } },
+    {
+      method: "POST",
+      body: {
+        platform_content_ids: platformContentIds,
+        ...(missionId ? { mission_id: missionId } : {}),
+      },
+    },
   )
   if (!result) throw new Error("发布准备响应为空。")
   return result

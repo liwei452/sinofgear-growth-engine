@@ -1287,20 +1287,46 @@ class ChannelPackageBatchPrepareView(APIView):
     def post(self, request):
         serializer = ChannelPackageBatchPrepareSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        packages = []
-        for content_id in serializer.validated_data["platform_content_ids"]:
-            content = get_object_or_404(
-                PlatformContent, id=content_id, organization=request.organization
+        data = serializer.validated_data
+        contents = list(
+            PlatformContent.objects.filter(
+                organization=request.organization,
+                id__in=data["platform_content_ids"],
             )
-            try:
-                package, _created = prepare_channel_package_from_platform_content(content=content)
-            except ChannelPackagePreparationBlocked as error:
-                return Response({
-                    "code": "CHANNEL_PACKAGE_PREPARATION_BLOCKED",
-                    "message": str(error),
-                }, status=409)
-            packages.append(package)
+        )
+        if len(contents) != len(data["platform_content_ids"]):
+            return Response({"code": "PLATFORM_CONTENT_NOT_FOUND"}, status=404)
+        mission = None
+        if data.get("mission_id"):
+            mission = GrowthMission.objects.filter(
+                organization=request.organization, id=data["mission_id"]
+            ).first()
+            if mission is None:
+                return Response({"code": "MISSION_NOT_FOUND"}, status=404)
+        try:
+            packages = self._prepare_atomic(contents, request.user, mission)
+        except ChannelPackagePreparationBlocked as error:
+            return Response({
+                "code": "CHANNEL_PACKAGE_PREPARATION_BLOCKED",
+                "message": str(error),
+            }, status=409)
         return Response(ChannelPackageSerializer(packages, many=True).data, status=201)
+
+    @transaction.atomic
+    def _prepare_atomic(self, contents, actor, mission):
+        packages = []
+        for content in contents:
+            package, _created = prepare_channel_package_from_platform_content(content=content)
+            packages.append(package)
+        if mission is not None:
+            for package in packages:
+                link_mission_entity(
+                    mission=mission,
+                    entity=package,
+                    lane=MissionEntityLink.Lane.SOCIAL,
+                    actor=actor,
+                )
+        return packages
 
 
 class ChannelPackageManualExportView(APIView):

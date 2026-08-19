@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
-import { computed } from "vue"
+import { computed, ref } from "vue"
 import { useRoute } from "vue-router"
 
 import { apiRequest } from "../../api/client"
 import { currentUserQueryOptions } from "../auth/auth"
+import { getPlatformContent, listPlatforms, type PlatformContent } from "../content/api"
 import {
   approveMissionPlan,
   generateMissionPlan,
@@ -15,6 +16,7 @@ import {
   startMissionOutreach,
   transitionMission,
 } from "./api"
+import ContentReviewDialog from "../content/ContentReviewDialog.vue"
 import MissionLaneBoard from "./MissionLaneBoard.vue"
 
 const route = useRoute()
@@ -85,6 +87,40 @@ const strategyMutation = useMutation({
   mutationFn: () => startMissionContentStrategy(missionId.value),
   onSuccess: refresh,
 })
+
+const platformsQuery = useQuery({
+  queryKey: ["content", "platforms"],
+  queryFn: listPlatforms,
+  staleTime: 60_000,
+  retry: false,
+})
+
+const reviewingContent = ref<PlatformContent | null>(null)
+const reviewBusy = ref(false)
+
+async function openReview(contentId: string): Promise<void> {
+  reviewBusy.value = true
+  try {
+    reviewingContent.value = await getPlatformContent(contentId)
+  } finally {
+    reviewBusy.value = false
+  }
+}
+
+function closeReview(): void {
+  reviewingContent.value = null
+}
+
+async function refreshContentSummary(): Promise<void> {
+  await queryClient.invalidateQueries({
+    queryKey: ["growth", "missions", missionId.value, "content-summary"],
+  })
+}
+
+async function reviewConflict(): Promise<void> {
+  reviewingContent.value = null
+  await refreshContentSummary()
+}
 </script>
 
 <template>
@@ -127,7 +163,15 @@ const strategyMutation = useMutation({
             <li v-for="content in contentSummary.platform_contents" :key="content.id">
               <span>{{ content.platform_code }} · {{ content.title }}</span>
               <span class="chip">{{ content.status }}</span>
-              <RouterLink v-if="content.status === 'IN_REVIEW'" :to="`/reviews?platform=${content.id}`">去审核</RouterLink>
+              <button
+                v-if="content.status === 'IN_REVIEW'"
+                class="review-link"
+                type="button"
+                :disabled="reviewBusy"
+                @click="openReview(content.id)"
+              >
+                去审核
+              </button>
             </li>
           </ul>
           <p v-else>暂无平台版本。</p>
@@ -205,6 +249,19 @@ const strategyMutation = useMutation({
         <p>有效回复、RFQ、报价与订单的归因将在数据归因驾驶舱中呈现。</p>
       </section>
     </template>
+
+    <ContentReviewDialog
+      v-if="reviewingContent"
+      :item="reviewingContent"
+      kind="platform"
+      :permissions="permissions"
+      :current-head="reviewingContent.is_current_head"
+      :platforms="platformsQuery.data.value ?? []"
+      @close="closeReview"
+      @updated="refreshContentSummary"
+      @platform-generated="refreshContentSummary"
+      @conflict="reviewConflict"
+    />
   </main>
 </template>
 
@@ -229,6 +286,8 @@ const strategyMutation = useMutation({
 .content-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .content-list li { display: flex; align-items: center; gap: 8px; font-size: .74rem; }
 .content-list .chip { border-radius: 999px; background: #eef2f6; padding: 2px 7px; color: #4f5d6c; font-size: .66rem; }
+.review-link { border: 0; background: transparent; padding: 0; color: var(--sg-brand); cursor: pointer; font-size: .74rem; }
+.review-link:disabled { color: var(--sg-muted); cursor: default; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .timeline { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .timeline li { display: grid; gap: 3px; border-left: 2px solid #bfd9f4; padding-left: 12px; }

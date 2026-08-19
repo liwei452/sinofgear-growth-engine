@@ -11,6 +11,7 @@ from apps.ai.provider_config import resolve_product_ai
 from apps.ai.services import BudgetedAIProvider
 from apps.catalog.models import Product
 
+from .ai_disclosure import ai_fallback_metadata, ai_success_metadata
 from .growth_events import EVENT_CUSTOMER_SERVICE_DECIDED, emit_growth_event
 from .inbound_triage import inbound_evidence
 from .models import CustomerServiceTurn, InboundLead
@@ -74,7 +75,7 @@ def _product_summary(product: Product) -> str:
     return f"{name} (MOQ {product.moq}, lead time {lead_time}, capabilities: {capabilities})"
 
 
-def draft_reply(organization, context: dict) -> str:
+def draft_reply(organization, context: dict) -> tuple[str, dict]:
     runtime = resolve_product_ai(organization)
     if runtime.real_requests_enabled:
         provider = BudgetedAIProvider(
@@ -82,11 +83,19 @@ def draft_reply(organization, context: dict) -> str:
             model=runtime.model,
             provider=runtime.provider,
         )
-        return _llm_reply(organization, context, provider)
-    return _template_reply(organization, context)
+        return _llm_reply(
+            organization,
+            context,
+            provider,
+            provider_code=runtime.provider_code,
+            model=runtime.model,
+        )
+    return _template_reply(organization, context), ai_fallback_metadata(
+        runtime.provider_code, runtime.model, "real AI disabled"
+    )
 
 
-def _llm_reply(organization, context: dict, provider) -> str:
+def _llm_reply(organization, context: dict, provider, *, provider_code: str, model: str) -> tuple[str, dict]:
     knowledge = product_knowledge(organization, context["need_slug"])
     prompt = "Draft a short customer-service reply using only the supplied facts.\n||INPUT:" + json.dumps(
         {"context": context, "knowledge": knowledge},
@@ -94,9 +103,11 @@ def _llm_reply(organization, context: dict, provider) -> str:
     )
     try:
         result = provider.generate(prompt=prompt, schema=REPLY_SCHEMA)
-        return result["reply"]
-    except Exception:
-        return _template_reply(organization, context)
+        return result["reply"], ai_success_metadata(provider_code, model)
+    except Exception as error:
+        return _template_reply(organization, context), ai_fallback_metadata(
+            provider_code, model, str(error)
+        )
 
 
 def _template_reply(organization, context: dict) -> str:
@@ -128,15 +139,16 @@ def _reasoning(decision: str, context: dict) -> str:
 def record_customer_service_turn(*, lead: InboundLead, rfq) -> CustomerServiceTurn:
     context = lead_context(lead)
     decision = decide(context)
+    reply_text, reply_metadata = draft_reply(lead.organization, context)
     turn, _ = CustomerServiceTurn.objects.get_or_create(
         organization=lead.organization,
         rfq=rfq,
         defaults={
             "lead": lead,
             "decision": decision,
-            "draft_reply": draft_reply(lead.organization, context),
+            "draft_reply": reply_text,
             "reasoning": _reasoning(decision, context),
-            "evidence": context,
+            "evidence": {**context, "ai_execution": reply_metadata},
         },
     )
     emit_growth_event(

@@ -9,6 +9,7 @@ from integrations.platforms.manual_fake import ManualPackageFakeConnector, Manua
 from apps.ai.provider_config import resolve_product_ai
 from apps.ai.services import BudgetedAIProvider
 
+from .ai_disclosure import ai_fallback_metadata, ai_success_metadata
 from .models import (
     CRMHandoff,
     ChannelPackage,
@@ -193,10 +194,12 @@ OUTREACH_DRAFT_SCHEMA = {
 }
 
 
-def _outreach_draft_text(account: TargetAccount) -> str:
+def _outreach_draft_text(account: TargetAccount) -> tuple[str, dict]:
     runtime = resolve_product_ai(account.organization)
     if not runtime.real_requests_enabled:
-        return _template_outreach_draft(account)
+        return _template_outreach_draft(account), ai_fallback_metadata(
+            runtime.provider_code, runtime.model, "real AI disabled"
+        )
     signal = account.intent_signals.order_by("-observed_at", "-id").first()
     snapshot = {
         "company_name": account.name,
@@ -218,9 +221,11 @@ def _outreach_draft_text(account: TargetAccount) -> str:
             prompt=prompt,
             schema=OUTREACH_DRAFT_SCHEMA,
         )
-        return result["draft"]
-    except Exception:
-        return _template_outreach_draft(account)
+        return result["draft"], ai_success_metadata(runtime.provider_code, runtime.model)
+    except Exception as error:
+        return _template_outreach_draft(account), ai_fallback_metadata(
+            runtime.provider_code, runtime.model, str(error)
+        )
 
 
 def _template_outreach_draft(account: TargetAccount) -> str:
@@ -240,11 +245,17 @@ def create_outreach_draft(*, account: TargetAccount) -> tuple[OutreachDraft, boo
     existing = account.outreach_drafts.order_by("-created_at", "-id").first()
     if existing is not None:
         return existing, False
+    draft_text, metadata = _outreach_draft_text(account)
+    chinese_explanation = "仅建议询问对方是否愿意查看能力摘要；没有声称对方已经采购，也不会自动发送。"
+    if metadata["fallback_used"]:
+        chinese_explanation += (
+            f"（注意：本次未使用真实 AI，原因：{metadata['fallback_reason']}）"
+        )
     return OutreachDraft.objects.create(
         organization=account.organization,
         account=account,
-        english_draft=_outreach_draft_text(account),
-        chinese_explanation="仅建议询问对方是否愿意查看能力摘要；没有声称对方已经采购，也不会自动发送。",
+        english_draft=draft_text,
+        chinese_explanation=chinese_explanation,
     ), True
 
 

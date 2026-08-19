@@ -1,6 +1,8 @@
 import pytest
+from urllib.error import HTTPError
+from urllib.request import Request
 
-from integrations.platforms.runtime import UrlMediaLoader
+from integrations.platforms.runtime import UrlMediaLoader, _NoRedirectHandler
 
 
 class FakeResponse:
@@ -73,3 +75,27 @@ def test_media_loader_rejects_missing_host_and_plain_http():
         loader.load("http://cdn.example.com/video.mp4", 1024)
     with pytest.raises(ValueError, match="host"):
         loader.load("https:///video.mp4", 1024)
+
+
+def test_no_redirect_handler_blocks_redirects():
+    handler = _NoRedirectHandler()
+    request = Request("https://cdn.example.com/video.mp4")
+
+    with pytest.raises(HTTPError):
+        handler.redirect_request(
+            request,
+            None,
+            302,
+            "Found",
+            {"Location": "http://169.254.169.254/latest/meta-data/"},
+            "http://169.254.169.254/latest/meta-data/",
+        )
+
+
+def test_media_loader_pins_the_first_public_address():
+    loader = UrlMediaLoader(
+        opener=fake_opener,
+        resolver=resolver_for("93.184.216.34", "93.184.216.35"),
+    )
+
+    assert loader._resolve_public_ip("cdn.example.com") == "93.184.216.34"

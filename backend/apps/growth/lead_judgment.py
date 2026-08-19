@@ -3,6 +3,7 @@ import json
 from apps.ai.provider_config import resolve_product_ai
 from apps.ai.services import BudgetedAIProvider
 
+from .ai_disclosure import ai_fallback_metadata, ai_success_metadata
 from .grading import grade_candidate
 
 
@@ -24,7 +25,11 @@ LEAD_JUDGMENT_SCHEMA = {
 def judge_candidate(candidate, *, website_facts=None) -> dict:
     runtime = resolve_product_ai(candidate.organization)
     if not runtime.real_requests_enabled:
-        return _deterministic_judgment(candidate, website_facts)
+        result = _deterministic_judgment(candidate, website_facts)
+        result.update(
+            ai_fallback_metadata(runtime.provider_code, runtime.model, "real AI disabled")
+        )
+        return result
 
     snapshot = {
         "company_name": candidate.company_name,
@@ -44,12 +49,18 @@ def judge_candidate(candidate, *, website_facts=None) -> dict:
             model=runtime.model,
             provider=runtime.provider,
         )
-        return provider.generate(
+        result = provider.generate(
             prompt=prompt,
             schema=LEAD_JUDGMENT_SCHEMA,
         )
-    except Exception:
-        return _deterministic_judgment(candidate, website_facts)
+        result.update(ai_success_metadata(runtime.provider_code, runtime.model))
+        return result
+    except Exception as error:
+        result = _deterministic_judgment(candidate, website_facts)
+        result.update(
+            ai_fallback_metadata(runtime.provider_code, runtime.model, str(error))
+        )
+        return result
 
 
 def _deterministic_judgment(candidate, website_facts) -> dict:

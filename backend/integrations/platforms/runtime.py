@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import socket
@@ -7,7 +8,13 @@ from dataclasses import dataclass
 from json import JSONDecodeError
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import (
+    HTTPSHandler,
+    HTTPRedirectHandler,
+    Request,
+    build_opener,
+    urlopen,
+)
 
 from django.conf import settings
 from django.utils import timezone
@@ -220,22 +227,64 @@ def build_social_provider_runtime(
     )
 
 
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Reject redirects instead of silently following them to a new host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise HTTPError(req.full_url, code, msg, headers, fp)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connect to a pinned, already-validated IP while keeping the host for SNI."""
+
+    def __init__(self, hostname, port, pinned_ip, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, context=None, **kwargs):
+        super().__init__(hostname, port, timeout=timeout, context=context, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        self.sock = socket.create_connection(
+            (self._pinned_ip, self.port), self.timeout, self.source_address,
+        )
+        server_hostname = self._tunnel_host or self.host
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=server_hostname)
+
+
+class _PinnedHTTPSHandler(HTTPSHandler):
+    def __init__(self, pinned_ip):
+        self._pinned_ip = pinned_ip
+        super().__init__()
+
+    def https_open(self, req):
+        return self.do_open(self._connect, req)
+
+    def _connect(self, host, timeout):
+        return _PinnedHTTPSConnection(
+            host, 443, self._pinned_ip, timeout=timeout, context=self._context,
+        )
+
+
 class UrlMediaLoader:
-    def __init__(self, opener=urlopen, resolver=socket.getaddrinfo):
+    def __init__(self, opener=None, resolver=socket.getaddrinfo):
         self._opener = opener
         self._resolver = resolver
 
-    def _assert_public_host(self, hostname: str) -> None:
+    def _resolve_public_ip(self, hostname: str) -> str:
         try:
-            infos = self._resolver(hostname, None)
+            infos = self._resolver(hostname, 443)
         except socket.gaierror as error:
             raise ValueError("YouTube media host could not be resolved.") from error
+        pinned = None
         for info in infos:
             address = ipaddress.ip_address(info[4][0])
             if not address.is_global:
                 raise ValueError(
                     "YouTube media host must resolve to a public address."
                 )
+            if pinned is None:
+                pinned = str(address)
+        if pinned is None:
+            raise ValueError("YouTube media host could not be resolved.")
+        return pinned
 
     def load(self, media_url: str, max_bytes: int) -> bytes:
         parsed = urlsplit(media_url)
@@ -243,9 +292,14 @@ class UrlMediaLoader:
             raise ValueError("YouTube media must be a public HTTPS URL.")
         if not parsed.hostname:
             raise ValueError("YouTube media URL must include a host.")
-        self._assert_public_host(parsed.hostname)
+        pinned_ip = self._resolve_public_ip(parsed.hostname)
         request = Request(media_url, headers={"User-Agent": "SinofGear/1.0"}, method="GET")
-        with self._opener(request, timeout=60) as response:
+        opener = self._opener or build_opener(_PinnedHTTPSHandler(pinned_ip), _NoRedirectHandler())
+        if self._opener is None:
+            response = opener.open(request, timeout=60)
+        else:
+            response = opener(request, timeout=60)
+        with response:
             data = response.read(max_bytes + 1)
         if len(data) > max_bytes:
             raise ValueError("YouTube media exceeds the size limit.")

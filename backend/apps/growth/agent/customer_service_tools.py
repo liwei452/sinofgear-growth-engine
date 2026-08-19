@@ -74,9 +74,10 @@ def _draft_tool(organization) -> Tool:
         rfq = _rfq(organization, args.get("rfq_id", ""))
         if rfq is None or rfq.lead is None:
             return ToolResult(ok=False, error="rfq_id not found.")
+        reply_text, reply_metadata = draft_reply(organization, lead_context(rfq.lead))
         return ToolResult(
             ok=True,
-            output={"draft_reply": draft_reply(organization, lead_context(rfq.lead))},
+            output={"draft_reply": reply_text, "ai_execution": reply_metadata},
         )
 
     return Tool(

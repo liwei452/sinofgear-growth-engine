@@ -6,6 +6,7 @@ from django.utils import timezone
 from apps.ai.provider_config import resolve_product_ai
 from apps.ai.services import BudgetedAIProvider
 
+from .ai_disclosure import ai_fallback_metadata, ai_success_metadata
 from .models import MarketCountryProfile, PromotionPlanApproval
 
 
@@ -55,7 +56,11 @@ PROMOTION_PLAN_SCHEMA = {
 def generate_promotion_plan(organization) -> dict:
     runtime = resolve_product_ai(organization)
     if not runtime.real_requests_enabled:
-        return _deterministic_plan(organization)
+        result = _deterministic_plan(organization)
+        result.update(
+            ai_fallback_metadata(runtime.provider_code, runtime.model, "real AI disabled")
+        )
+        return result
     snapshot = _plan_input(organization)
     prompt = (
         "Create an industrial B2B promotion plan from the verified facts and market profiles.\n"
@@ -67,12 +72,18 @@ def generate_promotion_plan(organization) -> dict:
             model=runtime.model,
             provider=runtime.provider,
         )
-        return provider.generate(
+        result = provider.generate(
             prompt=prompt,
             schema=PROMOTION_PLAN_SCHEMA,
         )
-    except Exception:
-        return _deterministic_plan(organization)
+        result.update(ai_success_metadata(runtime.provider_code, runtime.model))
+        return result
+    except Exception as error:
+        result = _deterministic_plan(organization)
+        result.update(
+            ai_fallback_metadata(runtime.provider_code, runtime.model, str(error))
+        )
+        return result
 
 
 def promotion_plan_preview(organization) -> dict:

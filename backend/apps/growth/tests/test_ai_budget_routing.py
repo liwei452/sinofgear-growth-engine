@@ -51,7 +51,12 @@ def test_promotion_plan_generation_reserves_and_settles_budget(organization, mon
 
     result = promotion_plan.generate_promotion_plan(organization)
 
-    assert result == {"target_markets": [], "industries": [], "channels": []}
+    assert result["target_markets"] == []
+    assert result["industries"] == []
+    assert result["channels"] == []
+    assert result["fallback_used"] is False
+    assert result["provider"] == "deepseek"
+    assert result["model"] == "deepseek-chat"
     assert provider.calls == 1
     config.refresh_from_db()
     assert config.daily_spent_micros > 0
@@ -77,6 +82,8 @@ def test_promotion_plan_falls_back_when_budget_exceeded(organization, monkeypatc
     assert provider.calls == 0
     assert result["target_markets"] == []
     assert "channels" in result
+    assert result["fallback_used"] is True
+    assert result["fallback_reason"]
 
 
 @pytest.mark.django_db

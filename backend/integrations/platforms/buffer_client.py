@@ -1,0 +1,319 @@
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from json import JSONDecodeError
+
+import httpx
+
+from .buffer_types import (
+    BufferApiError,
+    BufferErrorCode,
+    BufferRateLimitResult,
+    BufferRateLimitWindow,
+)
+from .transport import HttpResponse
+
+
+BUFFER_GRAPHQL_ENDPOINT = "https://api.buffer.com"
+
+_ACCOUNT_QUERY = """
+query BufferAccount {
+  account {
+    id
+    name
+    organizations {
+      id
+      name
+    }
+  }
+}
+""".strip()
+
+_CHANNELS_QUERY = """
+query BufferChannels($organizationId: OrganizationId!) {
+  channels(input: { organizationId: $organizationId }) {
+    id
+    organizationId
+    service
+    serviceId
+    name
+    displayName
+    avatar
+    externalLink
+    type
+    isDisconnected
+    isLocked
+    isQueuePaused
+    allowedActions
+    products
+    scopes
+  }
+}
+""".strip()
+
+
+@dataclass(frozen=True)
+class BufferGraphQLResponse:
+    data: dict
+    rate_limit: BufferRateLimitResult
+
+
+class BufferResponseTooLarge(RuntimeError):
+    pass
+
+
+class BufferHttpTransport:
+    """Production transport pinned to strict TLS, no redirects, bounded reads."""
+
+    def __init__(self, *, max_response_bytes: int = 1_000_000, client_factory=None):
+        self._max_response_bytes = max_response_bytes
+        self._client_factory = client_factory if client_factory is not None else httpx.Client
+
+    def request(
+        self,
+        method,
+        url,
+        *,
+        headers,
+        json: dict | None,
+        timeout_seconds,
+        data: bytes | None = None,
+    ) -> HttpResponse:
+        if data is not None:
+            raise ValueError("Buffer transport only supports JSON bodies.")
+        timeout = min(max(int(timeout_seconds), 1), 20)
+        try:
+            with self._client_factory(
+                follow_redirects=False, verify=True, timeout=timeout
+            ) as client:
+                with client.stream(method, url, headers=headers, json=json) as response:
+                    raw = self._read_bounded(response)
+                    status_code = response.status_code
+                    response_headers = self._collect_headers(response.headers)
+        except httpx.HTTPError as error:
+            raise TimeoutError("Buffer request failed.") from error
+        return HttpResponse(
+            status_code=status_code,
+            json_body=self._parse_json(raw),
+            headers=response_headers,
+        )
+
+    def _read_bounded(self, response) -> bytes:
+        chunks = []
+        total = 0
+        for chunk in response.iter_bytes():
+            total += len(chunk)
+            if total > self._max_response_bytes:
+                raise BufferResponseTooLarge("Buffer response exceeded the size limit.")
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    def _collect_headers(self, headers) -> dict[str, str]:
+        grouped: dict[str, str] = {}
+        for key, value in headers.multi_items():
+            lowered = key.lower()
+            if lowered in grouped:
+                grouped[lowered] = f"{grouped[lowered]}, {value}"
+            else:
+                grouped[lowered] = value
+        return grouped
+
+    @staticmethod
+    def _parse_json(raw: bytes) -> dict:
+        if not raw:
+            return {}
+        try:
+            value = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+
+def _split_header_entries(value: str) -> list[str]:
+    parts = []
+    current = []
+    in_quotes = False
+    for char in value:
+        if char == '"':
+            in_quotes = not in_quotes
+            current.append(char)
+        elif char == "," and not in_quotes:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    if current:
+        parts.append("".join(current))
+    return parts
+
+
+_ENTRY_RE = re.compile(
+    r'^\s*(?:"(?P<quoted>[^"]*)"|(?P<bare>[^;\s]+))\s*(?:;(?P<params>.*))?$'
+)
+
+
+def _parse_entry(entry: str) -> tuple[str, dict[str, str]] | None:
+    match = _ENTRY_RE.match(entry.strip())
+    if not match:
+        return None
+    name = match.group("quoted") if match.group("quoted") is not None else match.group("bare")
+    params: dict[str, str] = {}
+    param_text = match.group("params")
+    if param_text:
+        for pair in param_text.split(";"):
+            pair = pair.strip()
+            if not pair or "=" not in pair:
+                continue
+            key, raw_value = pair.split("=", 1)
+            params[key.strip().lower()] = raw_value.strip().strip('"')
+    return name, params
+
+
+def _parse_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_rate_limits(
+    headers: dict[str, str], *, retry_after_seconds: int | None = None
+) -> BufferRateLimitResult:
+    policies: dict[str, dict[str, int | None]] = {}
+    for entry in _split_header_entries(headers.get("ratelimit-policy", "")):
+        parsed = _parse_entry(entry)
+        if parsed is None:
+            continue
+        name, params = parsed
+        window_seconds = _parse_int(params.get("w"))
+        quota = _parse_int(params.get("q"))
+        if window_seconds is None and quota is None:
+            continue
+        policies[name] = {"window_seconds": window_seconds, "quota": quota}
+
+    live: dict[str, dict[str, int | None]] = {}
+    for entry in _split_header_entries(headers.get("ratelimit", "")):
+        parsed = _parse_entry(entry)
+        if parsed is None:
+            continue
+        name, params = parsed
+        remaining = _parse_int(params.get("r"))
+        reset_after_seconds = _parse_int(params.get("t"))
+        if remaining is None and reset_after_seconds is None:
+            continue
+        live[name] = {
+            "remaining": remaining,
+            "reset_after_seconds": reset_after_seconds,
+        }
+
+    windows = []
+    for name in sorted(set(policies) | set(live)):
+        policy = policies.get(name, {})
+        live_window = live.get(name, {})
+        windows.append(
+            BufferRateLimitWindow(
+                window_seconds=policy.get("window_seconds"),
+                remaining=live_window.get("remaining"),
+                reset_after_seconds=live_window.get("reset_after_seconds"),
+                quota=policy.get("quota"),
+            )
+        )
+    return BufferRateLimitResult(
+        windows=tuple(windows),
+        retry_after_seconds=retry_after_seconds,
+    )
+
+
+class BufferGraphQLClient:
+    def __init__(
+        self,
+        transport,
+        *,
+        timeout_seconds: int = 20,
+    ) -> None:
+        self._transport = transport
+        self._timeout_seconds = timeout_seconds
+
+    def fetch_account(self, token: str) -> BufferGraphQLResponse:
+        return self._execute(token, _ACCOUNT_QUERY, {})
+
+    def fetch_channels(self, token: str, organization_id: str) -> BufferGraphQLResponse:
+        return self._execute(token, _CHANNELS_QUERY, {"organizationId": organization_id})
+
+    def _execute(self, token: str, query: str, variables: dict) -> BufferGraphQLResponse:
+        if not isinstance(token, str) or not token.strip():
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        try:
+            response = self._transport.request(
+                "POST",
+                BUFFER_GRAPHQL_ENDPOINT,
+                headers=headers,
+                json={"query": query, "variables": variables},
+                timeout_seconds=self._timeout_seconds,
+            )
+        except TimeoutError:
+            raise BufferApiError(BufferErrorCode.PROVIDER_UNAVAILABLE) from None
+        except BufferResponseTooLarge:
+            raise BufferApiError(
+                BufferErrorCode.CONTRACT_ERROR, message="Buffer 返回数据过大。"
+            ) from None
+
+        status_code = response.status_code
+        rate_limit = parse_rate_limits(response.headers)
+        if 300 <= status_code < 400:
+            raise BufferApiError(
+                BufferErrorCode.CONTRACT_ERROR, message="Buffer 返回了不安全的跳转。"
+            )
+        if status_code in (401, 403):
+            raise BufferApiError(BufferErrorCode.AUTHENTICATION_REQUIRED)
+        if status_code == 429:
+            retry_after = _parse_int(response.headers.get("retry-after"))
+            raise BufferApiError(
+                BufferErrorCode.RATE_LIMITED, retry_after_seconds=retry_after
+            )
+        if status_code >= 500:
+            raise BufferApiError(BufferErrorCode.PROVIDER_UNAVAILABLE)
+        if status_code != 200:
+            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+
+        body = response.json_body
+        if not isinstance(body, dict):
+            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+        errors = body.get("errors")
+        if errors:
+            self._raise_graphql_error(errors)
+        data = body.get("data")
+        if data is None:
+            raise BufferApiError(
+                BufferErrorCode.CONTRACT_ERROR, message="Buffer 返回了空数据。"
+            )
+        if not isinstance(data, dict):
+            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+        return BufferGraphQLResponse(data=data, rate_limit=rate_limit)
+
+    def _raise_graphql_error(self, errors) -> None:
+        code = None
+        if isinstance(errors, list) and errors:
+            first = errors[0]
+            if isinstance(first, dict):
+                extensions = first.get("extensions")
+                if isinstance(extensions, dict):
+                    raw_code = extensions.get("code")
+                    if isinstance(raw_code, str):
+                        code = raw_code.upper()
+        mapping = {
+            "UNAUTHORIZED": BufferErrorCode.AUTHENTICATION_REQUIRED,
+            "FORBIDDEN": BufferErrorCode.AUTHENTICATION_REQUIRED,
+            "RATE_LIMIT_EXCEEDED": BufferErrorCode.RATE_LIMITED,
+            "NOT_FOUND": BufferErrorCode.ORGANIZATION_NOT_FOUND,
+            "UNEXPECTED": BufferErrorCode.PROVIDER_UNAVAILABLE,
+        }
+        raise BufferApiError(mapping.get(code, BufferErrorCode.CONTRACT_ERROR))

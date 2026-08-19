@@ -5,8 +5,26 @@ from django.core.exceptions import ValidationError
 from django.db import models
 
 from apps.common.models import OrganizationScopedModel
+from apps.common.security import is_sensitive_key
 
 from .codes import AccountCapability, validate_capability_list
+
+
+def _find_sensitive_key(value):
+    """Return the first sensitive key found anywhere in a JSON-shaped value."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if is_sensitive_key(key):
+                return key
+            nested = _find_sensitive_key(item)
+            if nested is not None:
+                return nested
+    elif isinstance(value, list):
+        for item in value:
+            nested = _find_sensitive_key(item)
+            if nested is not None:
+                return nested
+    return None
 
 
 class Platform(models.Model):
@@ -154,6 +172,16 @@ class ProviderConnection(OrganizationScopedModel):
                 fields=["organization", "provider"],
                 name="platforms_unique_provider_connection",
             ),
+            models.CheckConstraint(
+                condition=(
+                    ~models.Q(connection_state="CONNECTED")
+                    | (
+                        ~models.Q(credential_reference="")
+                        & ~models.Q(external_id="")
+                    )
+                ),
+                name="platforms_provider_connection_connected_shape",
+            ),
         ]
         ordering = ["provider"]
 
@@ -172,6 +200,11 @@ class ProviderConnection(OrganizationScopedModel):
             })
         if not isinstance(self.provider_metadata, dict):
             raise ValidationError({"provider_metadata": "provider_metadata must be a dict."})
+        sensitive_key = _find_sensitive_key(self.provider_metadata)
+        if sensitive_key is not None:
+            raise ValidationError({
+                "provider_metadata": "provider_metadata must not contain sensitive keys."
+            })
         if self.connection_state == self.ConnectionState.CONNECTED:
             if not self.credential_reference.strip():
                 raise ValidationError({
@@ -260,7 +293,11 @@ class SocialAccount(OrganizationScopedModel):
                         provider_account_id="",
                     )
                     | (
-                        models.Q(provider="BUFFER", provider_connection__isnull=False)
+                        models.Q(
+                            provider="BUFFER",
+                            provider_connection__isnull=False,
+                            credential__isnull=True,
+                        )
                         & ~models.Q(provider_account_id="")
                     )
                 ),
@@ -271,6 +308,10 @@ class SocialAccount(OrganizationScopedModel):
 
     def clean(self) -> None:
         super().clean()
+        if not isinstance(self.provider_account_id, str):
+            raise ValidationError({
+                "provider_account_id": "provider_account_id must be a string."
+            })
         if self.credential_id and self.credential.organization_id != self.organization_id:
             raise ValidationError({"credential": "Credential must belong to the account organization."})
         if self.credential_id and self.credential.platform_id != self.platform_id:
@@ -289,9 +330,10 @@ class SocialAccount(OrganizationScopedModel):
                 raise ValidationError({
                     "provider_connection": "BUFFER accounts require a provider connection."
                 })
-            if not self.provider_account_id:
+            provider_account_id = self.provider_account_id.strip()
+            if not provider_account_id:
                 raise ValidationError({
-                    "provider_account_id": "BUFFER accounts require a provider account id."
+                    "provider_account_id": "BUFFER accounts require a non-empty provider account id."
                 })
             if self.credential_id:
                 raise ValidationError({
@@ -305,6 +347,7 @@ class SocialAccount(OrganizationScopedModel):
                 raise ValidationError({
                     "provider_connection": "Provider connection provider must match the account provider."
                 })
+            self.provider_account_id = provider_account_id
 
     def save(self, *args: object, **kwargs: object) -> None:
         self.full_clean()

@@ -269,3 +269,143 @@ def test_provider_connection_cannot_be_deleted_while_in_use():
     )
     with pytest.raises(IntegrityError), transaction.atomic():
         connection.delete()
+
+
+@pytest.mark.django_db
+def test_queryset_update_direct_to_buffer_raises_integrity_error():
+    org = _org()
+    platform = _platform()
+    credential = _credential(org, platform)
+    account = SocialAccount.objects.create(
+        organization=org,
+        platform=platform,
+        credential=credential,
+        external_id="page-1",
+        display_name="LinkedIn Page",
+    )
+    with pytest.raises(IntegrityError):
+        SocialAccount.objects.filter(pk=account.pk).update(
+            provider=SocialAccount.Provider.BUFFER
+        )
+
+
+@pytest.mark.django_db
+def test_bulk_create_connected_without_credential_reference_raises_integrity_error():
+    org = _org()
+    with pytest.raises(IntegrityError):
+        ProviderConnection.objects.bulk_create(
+            [
+                ProviderConnection(
+                    organization=org,
+                    provider=ProviderConnection.Provider.BUFFER,
+                    credential_reference="",
+                    external_id="buffer-workspace-1",
+                    connection_state=ProviderConnection.ConnectionState.CONNECTED,
+                )
+            ]
+        )
+
+
+@pytest.mark.django_db
+def test_bulk_create_connected_without_external_id_raises_integrity_error():
+    org = _org()
+    with pytest.raises(IntegrityError):
+        ProviderConnection.objects.bulk_create(
+            [
+                ProviderConnection(
+                    organization=org,
+                    provider=ProviderConnection.Provider.BUFFER,
+                    credential_reference="vault://buffer",
+                    external_id="",
+                    connection_state=ProviderConnection.ConnectionState.CONNECTED,
+                )
+            ]
+        )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "provider_metadata",
+    [
+        {"access_token": "x"},
+        {"refresh_token": "x"},
+        {"client_secret": "x"},
+        {"authorization": "x"},
+        {"password": "x"},
+        {"secret": "x"},
+        {"credential": "x"},
+        {"nested": {"access_token": "x"}},
+        {"list": [{"client_secret": "x"}]},
+    ],
+)
+def test_provider_metadata_rejects_sensitive_keys(provider_metadata):
+    org = _org()
+    with pytest.raises(ValidationError, match="sensitive"):
+        _buffer(org, provider_metadata=provider_metadata)
+
+
+@pytest.mark.django_db
+def test_buffer_account_rejects_whitespace_provider_account_id():
+    org = _org()
+    platform = _platform()
+    connection = _buffer(org)
+    with pytest.raises(ValidationError, match="provider account id"):
+        SocialAccount.objects.create(
+            organization=org,
+            platform=platform,
+            provider=SocialAccount.Provider.BUFFER,
+            provider_connection=connection,
+            provider_account_id="   ",
+            external_id="page-1",
+            display_name="LinkedIn Page",
+        )
+
+
+@pytest.mark.django_db
+def test_buffer_account_strips_provider_account_id():
+    org = _org()
+    platform = _platform()
+    connection = _buffer(org)
+    account = SocialAccount.objects.create(
+        organization=org,
+        platform=platform,
+        provider=SocialAccount.Provider.BUFFER,
+        provider_connection=connection,
+        provider_account_id=" channel-1 ",
+        external_id="page-1",
+        display_name="LinkedIn Page",
+    )
+    assert account.provider_account_id == "channel-1"
+
+
+@pytest.mark.django_db
+def test_direct_account_rejects_whitespace_provider_account_id():
+    org = _org()
+    platform = _platform()
+    with pytest.raises(ValidationError, match="provider account id"):
+        SocialAccount.objects.create(
+            organization=org,
+            platform=platform,
+            provider=SocialAccount.Provider.DIRECT,
+            provider_account_id="   ",
+            external_id="page-1",
+            display_name="LinkedIn Page",
+        )
+
+
+@pytest.mark.django_db
+def test_provider_account_id_must_be_string():
+    org = _org()
+    platform = _platform()
+    connection = _buffer(org)
+    account = SocialAccount(
+        organization=org,
+        platform=platform,
+        provider=SocialAccount.Provider.BUFFER,
+        provider_connection=connection,
+        provider_account_id=123,
+        external_id="page-1",
+        display_name="LinkedIn Page",
+    )
+    with pytest.raises(ValidationError, match="string"):
+        account.clean()

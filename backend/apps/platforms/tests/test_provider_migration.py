@@ -10,7 +10,7 @@ class ProviderBackfillMigrationTest(TransactionTestCase):
         ("platforms", "0008_socialaccount_connection_state_and_more"),
         ("identity", "0010_phaseae2eownership"),
     ]
-    migrate_to = [("platforms", "0009_socialaccount_provider_and_more")]
+    migrate_to = [("platforms", "0010_remove_socialaccount_platforms_social_account_provider_shape_and_more")]
 
     def setUp(self):
         super().setUp()

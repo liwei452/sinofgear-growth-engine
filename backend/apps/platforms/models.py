@@ -118,6 +118,75 @@ class EncryptedOAuthCredential(OrganizationScopedModel):
         ]
 
 
+class ProviderConnection(OrganizationScopedModel):
+    class Provider(models.TextChoices):
+        BUFFER = "BUFFER", "Buffer"
+
+    class ConnectionState(models.TextChoices):
+        CONFIGURATION_REQUIRED = "CONFIGURATION_REQUIRED", "Configuration required"
+        CONNECTED = "CONNECTED", "Connected"
+        REFRESH_DUE = "REFRESH_DUE", "Refresh due"
+        REAUTHORIZATION_REQUIRED = "REAUTHORIZATION_REQUIRED", "Reauthorization required"
+        INSUFFICIENT_CAPABILITY = "INSUFFICIENT_CAPABILITY", "Insufficient capability"
+        PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE", "Provider unavailable"
+        DISCONNECTED = "DISCONNECTED", "Disconnected"
+
+    provider = models.CharField(max_length=32, choices=Provider.choices)
+    credential_reference = models.CharField(max_length=512, blank=True, default="")
+    external_id = models.CharField(max_length=255, blank=True, default="")
+    display_name = models.CharField(max_length=255, blank=True, default="")
+    granted_scopes = models.JSONField(default=list, blank=True)
+    provider_metadata = models.JSONField(default=dict, blank=True)
+    connection_state = models.CharField(
+        max_length=32,
+        choices=ConnectionState.choices,
+        default=ConnectionState.CONFIGURATION_REQUIRED,
+    )
+    last_probe_at = models.DateTimeField(null=True, blank=True)
+    last_sync_at = models.DateTimeField(null=True, blank=True)
+    reauthorization_required_at = models.DateTimeField(null=True, blank=True)
+    disconnected_at = models.DateTimeField(null=True, blank=True)
+    lifecycle_error_code = models.CharField(max_length=64, blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "provider"],
+                name="platforms_unique_provider_connection",
+            ),
+        ]
+        ordering = ["provider"]
+
+    def clean(self) -> None:
+        super().clean()
+        if not isinstance(self.granted_scopes, list):
+            raise ValidationError({"granted_scopes": "granted_scopes must be a list."})
+        for scope in self.granted_scopes:
+            if not isinstance(scope, str):
+                raise ValidationError({
+                    "granted_scopes": "granted_scopes must contain only strings."
+                })
+        if len(self.granted_scopes) != len(set(self.granted_scopes)):
+            raise ValidationError({
+                "granted_scopes": "granted_scopes must not contain duplicates."
+            })
+        if not isinstance(self.provider_metadata, dict):
+            raise ValidationError({"provider_metadata": "provider_metadata must be a dict."})
+        if self.connection_state == self.ConnectionState.CONNECTED:
+            if not self.credential_reference.strip():
+                raise ValidationError({
+                    "credential_reference": "CONNECTED provider requires a credential reference."
+                })
+            if not self.external_id.strip():
+                raise ValidationError({
+                    "external_id": "CONNECTED provider requires an external id."
+                })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+
 class SocialAccount(OrganizationScopedModel):
     class Status(models.TextChoices):
         ACTIVE = "ACTIVE", "Active"
@@ -138,6 +207,10 @@ class SocialAccount(OrganizationScopedModel):
         PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE", "Provider unavailable"
         DISCONNECTED = "DISCONNECTED", "Disconnected"
 
+    class Provider(models.TextChoices):
+        DIRECT = "DIRECT", "Direct"
+        BUFFER = "BUFFER", "Buffer"
+
     platform = models.ForeignKey(Platform, on_delete=models.PROTECT, related_name="social_accounts")
     credential = models.ForeignKey(
         ConnectorCredential, on_delete=models.SET_NULL, null=True, blank=True, related_name="social_accounts"
@@ -157,12 +230,42 @@ class SocialAccount(OrganizationScopedModel):
     reauthorization_required_at = models.DateTimeField(null=True, blank=True)
     disconnected_at = models.DateTimeField(null=True, blank=True)
     lifecycle_error_code = models.CharField(max_length=64, blank=True, default="")
+    provider = models.CharField(
+        max_length=32, choices=Provider.choices, default=Provider.DIRECT,
+    )
+    provider_connection = models.ForeignKey(
+        ProviderConnection,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="social_accounts",
+    )
+    provider_account_id = models.CharField(max_length=255, blank=True, default="")
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "platform", "external_id"], name="platforms_unique_social_account"
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "provider_connection", "provider_account_id"],
+                condition=models.Q(provider_connection__isnull=False),
+                name="platforms_unique_buffer_channel",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        provider="DIRECT",
+                        provider_connection__isnull=True,
+                        provider_account_id="",
+                    )
+                    | (
+                        models.Q(provider="BUFFER", provider_connection__isnull=False)
+                        & ~models.Q(provider_account_id="")
+                    )
+                ),
+                name="platforms_social_account_provider_shape",
+            ),
         ]
         ordering = ["display_name"]
 
@@ -172,6 +275,36 @@ class SocialAccount(OrganizationScopedModel):
             raise ValidationError({"credential": "Credential must belong to the account organization."})
         if self.credential_id and self.credential.platform_id != self.platform_id:
             raise ValidationError({"credential": "Credential must belong to the selected platform."})
+        if self.provider == self.Provider.DIRECT:
+            if self.provider_connection_id:
+                raise ValidationError({
+                    "provider_connection": "DIRECT accounts cannot have a provider connection."
+                })
+            if self.provider_account_id:
+                raise ValidationError({
+                    "provider_account_id": "DIRECT accounts cannot have a provider account id."
+                })
+        elif self.provider == self.Provider.BUFFER:
+            if not self.provider_connection_id:
+                raise ValidationError({
+                    "provider_connection": "BUFFER accounts require a provider connection."
+                })
+            if not self.provider_account_id:
+                raise ValidationError({
+                    "provider_account_id": "BUFFER accounts require a provider account id."
+                })
+            if self.credential_id:
+                raise ValidationError({
+                    "credential": "BUFFER accounts must not carry a direct credential."
+                })
+            if self.provider_connection.organization_id != self.organization_id:
+                raise ValidationError({
+                    "provider_connection": "Provider connection must belong to the account organization."
+                })
+            if self.provider_connection.provider != self.Provider.BUFFER:
+                raise ValidationError({
+                    "provider_connection": "Provider connection provider must match the account provider."
+                })
 
     def save(self, *args: object, **kwargs: object) -> None:
         self.full_clean()

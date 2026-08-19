@@ -64,6 +64,13 @@ class BufferResponseTooLarge(RuntimeError):
     pass
 
 
+def _validate_request(method: str, url: str) -> None:
+    if method != "POST":
+        raise ValueError("Buffer transport only allows POST requests.")
+    if url != BUFFER_GRAPHQL_ENDPOINT:
+        raise ValueError("Buffer transport only allows the pinned Buffer endpoint.")
+
+
 class BufferHttpTransport:
     """Production transport pinned to strict TLS, no redirects, bounded reads."""
 
@@ -81,6 +88,7 @@ class BufferHttpTransport:
         timeout_seconds,
         data: bytes | None = None,
     ) -> HttpResponse:
+        _validate_request(method, url)
         if data is not None:
             raise ValueError("Buffer transport only supports JSON bodies.")
         timeout = min(max(int(timeout_seconds), 1), 20)

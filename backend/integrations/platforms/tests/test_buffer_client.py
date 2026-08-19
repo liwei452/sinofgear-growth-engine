@@ -261,6 +261,64 @@ def test_buffer_transport_rejects_oversized_response():
         )
 
 
+@pytest.mark.parametrize("method", ["GET", "PUT", "PATCH", "DELETE"])
+def test_buffer_transport_rejects_non_post_methods_before_sending(method):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={})
+
+    mock = httpx.MockTransport(handler)
+    transport = BufferHttpTransport(
+        client_factory=lambda **kwargs: httpx.Client(transport=mock, **kwargs)
+    )
+    with pytest.raises(ValueError):
+        transport.request(
+            method,
+            "https://api.buffer.com",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json={},
+            timeout_seconds=20,
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example.com",
+        "http://api.buffer.com",
+        "https://api.buffer.com:444",
+        "https://api.buffer.com/",
+        "https://api.buffer.com/path",
+        "https://api.buffer.com?x=1",
+        "https://api.buffer.com#frag",
+        "https://user:pass@api.buffer.com",
+    ],
+)
+def test_buffer_transport_rejects_invalid_url_without_sending(url):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={})
+
+    mock = httpx.MockTransport(handler)
+    transport = BufferHttpTransport(
+        client_factory=lambda **kwargs: httpx.Client(transport=mock, **kwargs)
+    )
+    with pytest.raises(ValueError):
+        transport.request(
+            "POST",
+            url,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json={},
+            timeout_seconds=20,
+        )
+    assert calls == []
+
+
 def test_rate_limit_headers_are_matched_by_window_name():
     result = parse_rate_limits(
         {

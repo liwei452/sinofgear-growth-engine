@@ -34,7 +34,7 @@ class BufferConnector:
 
     def probe_connection(self, request: BufferDiscoveryRequest) -> BufferProbeResult:
         try:
-            token = self._resolve_token(request)
+            token, organization_id = self._resolve(request)
         except BufferApiError as error:
             return _probe_failure(error)
         try:
@@ -43,23 +43,14 @@ class BufferConnector:
             return _probe_failure(error)
         try:
             account = _parse_account(response.data)
+            _match_organization(account, organization_id)
         except BufferApiError as error:
             return _probe_failure(error)
         return BufferProbeResult(ok=True, account=account, rate_limit=response.rate_limit)
 
     def discover_channels(self, request: BufferDiscoveryRequest) -> BufferDiscoveryResult:
-        expected_organization_id = request.expected_organization_id
-        if not isinstance(expected_organization_id, str):
-            return _discovery_failure(
-                BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
-            )
-        organization_id = expected_organization_id.strip()
-        if not organization_id:
-            return _discovery_failure(
-                BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
-            )
         try:
-            token = self._resolve_token(request)
+            token, organization_id = self._resolve(request)
         except BufferApiError as error:
             return _discovery_failure(error)
         try:
@@ -68,9 +59,6 @@ class BufferConnector:
             return _discovery_failure(error)
         try:
             account = _parse_account(account_response.data)
-        except BufferApiError as error:
-            return _discovery_failure(error)
-        try:
             _match_organization(account, organization_id)
         except BufferApiError as error:
             return _discovery_failure(error)
@@ -91,6 +79,12 @@ class BufferConnector:
             ignored_channels=ignored,
             rate_limit=channels_response.rate_limit,
         )
+
+    def _resolve(self, request: BufferDiscoveryRequest) -> tuple[str, str]:
+        expected_organization_id = request.expected_organization_id
+        if not isinstance(expected_organization_id, str) or not expected_organization_id.strip():
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        return self._resolve_token(request), expected_organization_id.strip()
 
     def _resolve_token(self, request: BufferDiscoveryRequest) -> str:
         reference = request.credential_reference
@@ -128,6 +122,7 @@ def _parse_account(data: dict) -> BufferAccount:
     account_id = account.get("id")
     if not isinstance(account_id, str) or not account_id.strip():
         raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    account_id = account_id.strip()
     name = account.get("name")
     if name is not None and not isinstance(name, str):
         raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
@@ -143,8 +138,14 @@ def _parse_account(data: dict) -> BufferAccount:
         organization_id = item.get("id")
         if not isinstance(organization_id, str) or not organization_id.strip():
             raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+        organization_id = organization_id.strip()
+        if len(organization_id) > MAX_FIELD_LENGTH:
+            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
         organization_name = item.get("name")
         if organization_name is not None and not isinstance(organization_name, str):
+            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+        normalized_name = organization_name or ""
+        if len(normalized_name) > MAX_FIELD_LENGTH:
             raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
         if organization_id in seen_ids:
             raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
@@ -152,7 +153,7 @@ def _parse_account(data: dict) -> BufferAccount:
         organizations.append(
             BufferOrganization(
                 provider_organization_id=organization_id,
-                name=organization_name or "",
+                name=normalized_name,
             )
         )
     return BufferAccount(

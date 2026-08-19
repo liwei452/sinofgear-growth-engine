@@ -125,6 +125,66 @@ def test_probe_fails_safely_when_token_store_is_unavailable():
     assert result.error_code == BufferErrorCode.CONFIGURATION_REQUIRED.value
 
 
+def test_probe_rejects_blank_expected_organization_id():
+    result = _connector().probe_connection(_request(expected_org_id="   "))
+    assert result.ok is False
+    assert result.error_code == BufferErrorCode.CONFIGURATION_REQUIRED.value
+
+
+def test_probe_organization_not_found_is_safe_failure():
+    client = FakeClient(account_data=_account(_org("org-1")))
+    result = _connector(client=client).probe_connection(_request(expected_org_id="missing"))
+    assert result.ok is False
+    assert result.error_code == BufferErrorCode.ORGANIZATION_NOT_FOUND.value
+
+
+def test_probe_duplicate_organization_id_is_contract_error():
+    client = FakeClient(account_data=_account(_org("org-1"), _org(" org-1 ")))
+    result = _connector(client=client).probe_connection(_request(expected_org_id="org-1"))
+    assert result.ok is False
+    assert result.error_code == BufferErrorCode.CONTRACT_ERROR.value
+
+
+def test_probe_normalizes_and_strips_account_and_organization_ids():
+    client = FakeClient(
+        account_data={
+            "account": {
+                "id": " acct-1 ",
+                "name": "Acme",
+                "organizations": [{"id": " org-1 ", "name": "Acme Org"}],
+            }
+        }
+    )
+    result = _connector(client=client).probe_connection(_request(expected_org_id=" org-1 "))
+
+    assert result.ok is True
+    assert result.account.id == "acct-1"
+    assert result.account.organizations[0].provider_organization_id == "org-1"
+
+
+@pytest.mark.parametrize("org_id", ["", "   ", "x" * 256])
+def test_probe_rejects_invalid_organization_id(org_id):
+    client = FakeClient(account_data=_account({"id": org_id, "name": "Acme Org"}))
+    result = _connector(client=client).probe_connection(_request())
+    assert result.ok is False
+    assert result.error_code == BufferErrorCode.CONTRACT_ERROR.value
+
+
+@pytest.mark.parametrize("org_name", [123, "x" * 256])
+def test_probe_rejects_invalid_organization_name(org_name):
+    client = FakeClient(account_data=_account({"id": "org-1", "name": org_name}))
+    result = _connector(client=client).probe_connection(_request())
+    assert result.ok is False
+    assert result.error_code == BufferErrorCode.CONTRACT_ERROR.value
+
+
+def test_probe_accepts_null_organization_name():
+    client = FakeClient(account_data=_account({"id": "org-1", "name": None}))
+    result = _connector(client=client).probe_connection(_request())
+    assert result.ok is True
+    assert result.account.organizations[0].name == ""
+
+
 def test_discover_selects_exact_organization_by_id():
     client = FakeClient(
         account_data=_account(_org("org-1"), _org("org-2")),

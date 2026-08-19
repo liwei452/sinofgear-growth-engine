@@ -73,13 +73,13 @@ const customerStages = ["发现", "待核实", "高意向", "待联系", "已联
 
 <style scoped>
 .lane-board { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.lane { display: grid; gap: 10px; border: 1px solid #e5ecf6; border-radius: 16px; background: #fff; padding: 16px; }
+.lane { display: grid; gap: 10px; border: 1px solid var(--sg-line); border-radius: 16px; background: #fff; padding: 16px; }
 .lane-head { display: flex; align-items: center; justify-content: space-between; }
 .lane-head h3 { margin: 0; font-size: 1rem; }
 .lane-head span { color: var(--sg-muted); font-size: .7rem; }
 .stages { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.stages li { border-radius: 999px; background: #f0f5fc; padding: 4px 9px; color: #2a5aa6; font-size: .7rem; }
+.stages li { border-radius: 999px; background: var(--sg-brand-soft); padding: 4px 9px; color: var(--sg-brand-strong); font-size: .7rem; }
 .lane-actions { display: flex; gap: 8px; }
-.lane-actions select { flex: 1; border: 1px solid #d7e2f0; border-radius: 9px; padding: 8px 9px; }
+.lane-actions select { flex: 1; border: 1px solid var(--sg-line); border-radius: 9px; padding: 8px 9px; }
 @media (max-width: 720px) { .lane-board { grid-template-columns: 1fr; } }
 </style>

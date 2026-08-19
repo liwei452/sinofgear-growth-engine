@@ -267,7 +267,7 @@ async function reviewConflict(): Promise<void> {
 
 <style scoped>
 .mission-detail-page { display: grid; gap: 16px; }
-.detail-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-radius: 20px; background: linear-gradient(120deg, #0b3b8f 0%, #0875eb 60%, #3eb6ff 100%); padding: 24px 28px; color: #fff; }
+.detail-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-radius: 20px; background: linear-gradient(120deg, var(--sg-brand-deep) 0%, var(--sg-brand-strong) 60%, var(--sg-brand-light) 100%); padding: 24px 28px; color: #fff; }
 .detail-hero h1 { margin: 4px 0 7px; font-size: clamp(1.45rem, 2vw, 1.85rem); }
 .detail-hero p { margin: 0; color: #eaf5ff; font-size: .82rem; line-height: 1.55; }
 .eyebrow { margin: 0; color: #bfe0ff; font-size: .65rem; font-weight: 900; letter-spacing: .1em; }
@@ -275,7 +275,7 @@ async function reviewConflict(): Promise<void> {
 .section-nav { display: flex; flex-wrap: wrap; gap: 6px; }
 .section-nav a { border-radius: 999px; padding: 7px 12px; color: var(--sg-muted); text-decoration: none; font-size: .76rem; }
 .section-nav a.active { background: var(--sg-brand); color: #fff; }
-.panel { display: grid; gap: 12px; border: 1px solid #e5ecf6; border-radius: 16px; background: #fff; padding: 18px; }
+.panel { display: grid; gap: 12px; border: 1px solid var(--sg-line); border-radius: 16px; background: #fff; padding: 18px; }
 .panel h2 { margin: 0; font-size: 1rem; }
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 0; }
 .facts dt { color: var(--sg-muted); font-size: .68rem; }
@@ -290,10 +290,10 @@ async function reviewConflict(): Promise<void> {
 .review-link:disabled { color: var(--sg-muted); cursor: default; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .timeline { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.timeline li { display: grid; gap: 3px; border-left: 2px solid #bfd9f4; padding-left: 12px; }
+.timeline li { display: grid; gap: 3px; border-left: 2px solid var(--sg-line); padding-left: 12px; }
 .timeline time { color: var(--sg-muted); font-size: .68rem; }
 .timeline p { margin: 0; color: var(--sg-muted); font-size: .76rem; }
-.empty-card { margin: 0; border: 1px dashed #bfd9f4; border-radius: 12px; padding: 18px; color: var(--sg-muted); }
+.empty-card { margin: 0; border: 1px dashed var(--sg-line); border-radius: 12px; padding: 18px; color: var(--sg-muted); }
 .error { color: var(--sg-danger); }
-.button-danger { border: 1px solid #f3c2c2; background: #fff; color: #c0392b; }
+.button-danger { border: 1px solid #f3c2c2; background: #fff; color: var(--sg-danger); }
 </style>

@@ -2,6 +2,8 @@
   color-scheme: light;
   --sg-brand: #1687ff;
   --sg-brand-strong: #0875eb;
+  --sg-brand-deep: #0b3b8f;
+  --sg-brand-light: #3eb6ff;
   --sg-brand-hover: var(--sg-brand-strong);
   --sg-brand-soft: #eaf4ff;
   --sg-accent: #1687ff;

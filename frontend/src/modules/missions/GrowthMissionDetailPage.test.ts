@@ -51,6 +51,7 @@ function renderDetail(permissions: string[]) {
     if (path.includes("/timeline")) body = []
     else if (path.includes("/candidates")) body = []
     else if (path.includes("/content-summary")) body = { platform_contents: [], channel_packages: [] }
+    else if (path.includes("/outreach-summary")) body = []
     else if (path.includes("/platforms")) body = { results: [] }
     else body = mission
     return Promise.resolve(new Response(JSON.stringify(body), {

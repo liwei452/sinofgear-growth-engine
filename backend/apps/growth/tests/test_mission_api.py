@@ -252,6 +252,47 @@ def test_start_outreach_links_mission(administrator_client, mission, monkeypatch
     ).exists()
 
 
+def test_mission_outreach_summary_returns_draft_and_approval_state(
+    administrator_client, mission, monkeypatch
+):
+    from apps.growth.agent import acquisition as acq
+
+    _approve_plan(administrator_client, mission)
+    monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
+    candidate = DiscoveryCandidate.objects.create(
+        organization=mission.organization,
+        company_name="Mining Co",
+        country="ZA",
+        website="",
+        industry="mining equipment",
+        status=DiscoveryCandidate.Status.ACCEPTED,
+        import_format="GOOGLE_MAPS",
+        raw_record={"primary_type": "mining"},
+        record_hash="mission-outreach-summary-hash",
+        is_demo=False,
+    )
+    started = administrator_client.post(
+        f"{MISSIONS_URL}/{mission.id}/candidates/{candidate.id}/start-outreach",
+        {},
+        format="json",
+    )
+    assert started.status_code == 200
+
+    response = administrator_client.get(
+        f"{MISSIONS_URL}/{mission.id}/outreach-summary",
+    )
+
+    assert response.status_code == 200
+    assert len(response.data) == 1
+    item = response.data[0]
+    assert item["company_name"] == "Mining Co"
+    assert item["draft"] is not None
+    assert item["draft"]["english_draft"]
+    assert item["draft"]["status"] == "DRAFT"
+    assert item["agent_run"]["status"] == "WAITING_APPROVAL"
+    assert item["agent_run"]["pending_tool"] == "send_email"
+
+
 def test_draft_mission_cannot_start_outreach(administrator_client, mission):
     response = administrator_client.post(
         f"{MISSIONS_URL}/{mission.id}/start-content-strategy", {}, format="json"

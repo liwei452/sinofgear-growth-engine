@@ -56,6 +56,7 @@ from .mission_views import (
     MissionDetailView,
     MissionGeneratePlanView,
     MissionListCreateView,
+    MissionOutreachSummaryView,
     MissionStartContentStrategyView,
     MissionStartOutreachView,
     MissionStatusView,
@@ -254,6 +255,11 @@ urlpatterns = [
         "growth/missions/<uuid:mission_id>/candidates",
         MissionCandidatesView.as_view(),
         name="growth-mission-candidates",
+    ),
+    path(
+        "growth/missions/<uuid:mission_id>/outreach-summary",
+        MissionOutreachSummaryView.as_view(),
+        name="growth-mission-outreach-summary",
     ),
     path(
         "growth/missions/<uuid:mission_id>/content-summary",

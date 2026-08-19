@@ -6,10 +6,12 @@ import { useRoute } from "vue-router"
 import { apiRequest } from "../../api/client"
 import { currentUserQueryOptions } from "../auth/auth"
 import { getPlatformContent, listPlatforms, type PlatformContent } from "../content/api"
+import { approveAgentRun } from "../growth/agentApi"
 import {
   approveMissionPlan,
   generateMissionPlan,
   missionContentSummaryQueryOptions,
+  missionOutreachSummaryQueryOptions,
   missionQueryOptions,
   missionTimelineQueryOptions,
   startMissionContentStrategy,
@@ -27,6 +29,7 @@ const currentUserQuery = useQuery(currentUserQueryOptions())
 const missionQuery = useQuery(missionQueryOptions(missionId.value))
 const timelineQuery = useQuery(missionTimelineQueryOptions(missionId.value))
 const contentSummaryQuery = useQuery(missionContentSummaryQueryOptions(missionId.value))
+const outreachSummaryQuery = useQuery(missionOutreachSummaryQueryOptions(missionId.value))
 const candidatesQuery = useQuery({
   queryKey: ["growth", "missions", missionId.value, "candidates"],
   queryFn: async () => {
@@ -43,6 +46,7 @@ const permissions = computed(() => currentUserQuery.data.value?.membership.permi
 const canManage = computed(() => permissions.value.includes("missions.manage"))
 const canReview = computed(() => permissions.value.includes("missions.review"))
 const canRun = computed(() => permissions.value.includes("agents.run"))
+const canApprove = computed(() => permissions.value.includes("agents.approve"))
 
 const mission = computed(() => missionQuery.data.value)
 const contentSummary = computed(() => contentSummaryQuery.data.value)
@@ -80,13 +84,34 @@ const transitionMutation = useMutation({
 
 const outreachMutation = useMutation({
   mutationFn: (candidateId: string) => startMissionOutreach(missionId.value, candidateId),
-  onSuccess: refresh,
+  onSuccess: async () => {
+    refresh()
+    await queryClient.invalidateQueries({
+      queryKey: ["growth", "missions", missionId.value, "outreach-summary"],
+    })
+  },
 })
 
 const strategyMutation = useMutation({
   mutationFn: () => startMissionContentStrategy(missionId.value),
   onSuccess: refresh,
 })
+
+const outreachApproveMutation = useMutation({
+  mutationFn: ({ runId, decision }: { runId: string; decision: "approve" | "reject" }) => (
+    approveAgentRun(runId, decision)
+  ),
+  onSuccess: async () => {
+    await queryClient.invalidateQueries({
+      queryKey: ["growth", "missions", missionId.value, "outreach-summary"],
+    })
+    await queryClient.invalidateQueries({ queryKey: ["growth", "agent-runs"] })
+  },
+})
+
+function approveOutreach(runId: string, decision: "approve" | "reject"): void {
+  outreachApproveMutation.mutate({ runId, decision })
+}
 
 const platformsQuery = useQuery({
   queryKey: ["content", "platforms"],
@@ -232,6 +257,49 @@ async function reviewConflict(): Promise<void> {
         @start-content-strategy="strategyMutation.mutate"
       />
 
+      <section v-if="view === 'customer'" class="panel">
+        <h2>开发信队列</h2>
+        <p v-if="outreachSummaryQuery.isPending.value">正在读取开发信…</p>
+        <p v-else-if="!outreachSummaryQuery.data.value?.length">暂无已开始的获客任务。</p>
+        <ol v-else class="outreach-list">
+          <li v-for="item in outreachSummaryQuery.data.value" :key="item.candidate_id">
+            <div class="outreach-head">
+              <strong>{{ item.company_name }}</strong>
+              <span class="chip">{{ item.agent_run?.status ?? "未开始" }}</span>
+            </div>
+            <template v-if="item.draft">
+              <p class="draft-en">{{ item.draft.english_draft }}</p>
+              <p class="draft-zh">{{ item.draft.chinese_explanation }}</p>
+            </template>
+            <p v-else class="muted">尚未生成开发信。</p>
+            <div
+              v-if="canApprove && item.agent_run?.status === 'WAITING_APPROVAL'"
+              class="outreach-actions"
+            >
+              <button
+                class="button button-primary"
+                type="button"
+                :disabled="outreachApproveMutation.isPending.value"
+                @click="approveOutreach(item.agent_run.id, 'approve')"
+              >
+                批准发送
+              </button>
+              <button
+                class="button button-quiet"
+                type="button"
+                :disabled="outreachApproveMutation.isPending.value"
+                @click="approveOutreach(item.agent_run.id, 'reject')"
+              >
+                拒绝
+              </button>
+            </div>
+            <p v-if="item.latest_message" class="muted">
+              最新结果：{{ item.latest_message.status }} · {{ item.latest_message.provider }}
+            </p>
+          </li>
+        </ol>
+      </section>
+
       <section v-if="view === 'timeline'" class="panel">
         <h2>执行时间线</h2>
         <ol class="timeline">
@@ -288,6 +356,14 @@ async function reviewConflict(): Promise<void> {
 .content-list .chip { border-radius: 999px; background: #eef2f6; padding: 2px 7px; color: #4f5d6c; font-size: .66rem; }
 .review-link { border: 0; background: transparent; padding: 0; color: var(--sg-brand); cursor: pointer; font-size: .74rem; }
 .review-link:disabled { color: var(--sg-muted); cursor: default; }
+.outreach-list { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.outreach-list li { display: grid; gap: 8px; border: 1px solid var(--sg-line); border-radius: 12px; padding: 14px; }
+.outreach-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.outreach-head strong { font-size: .86rem; }
+.outreach-head .chip { border-radius: 999px; background: #eef2f6; padding: 2px 7px; color: #4f5d6c; font-size: .66rem; }
+.draft-en { margin: 0; color: var(--sg-ink); font-size: .82rem; white-space: pre-wrap; }
+.draft-zh { margin: 0; color: var(--sg-muted); font-size: .76rem; }
+.outreach-actions { display: flex; gap: 8px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .timeline { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .timeline li { display: grid; gap: 3px; border-left: 2px solid var(--sg-line); padding-left: 12px; }

@@ -123,6 +123,30 @@ export type MissionContentSummary = {
   channel_packages: Array<{ id: string; channel: string; status: string }>
 }
 
+export type MissionOutreachItem = {
+  candidate_id: string
+  company_name: string
+  account_id: string | null
+  follow_up_stage: string | null
+  draft: {
+    id: string
+    english_draft: string
+    chinese_explanation: string
+    status: string
+  } | null
+  latest_message: {
+    id: string
+    status: string
+    provider: string
+    sent_at: string | null
+  } | null
+  agent_run: {
+    id: string
+    status: string
+    pending_tool: string | null
+  } | null
+}
+
 export function missionContentSummaryQueryOptions(id: string) {
   return queryOptions({
     queryKey: ["growth", "missions", id, "content-summary"],
@@ -132,6 +156,20 @@ export function missionContentSummaryQueryOptions(id: string) {
       )
       if (!summary) throw new Error("内容摘要响应为空。")
       return summary
+    },
+    staleTime: 15_000,
+  })
+}
+
+export function missionOutreachSummaryQueryOptions(id: string) {
+  return queryOptions({
+    queryKey: ["growth", "missions", id, "outreach-summary"],
+    queryFn: async () => {
+      const items = await apiRequest<MissionOutreachItem[]>(
+        `/api/v1/growth/missions/${id}/outreach-summary`,
+      )
+      if (!items) throw new Error("获客摘要响应为空。")
+      return items
     },
     staleTime: 15_000,
   })

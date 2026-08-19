@@ -43,6 +43,7 @@ from .models import (
     GrowthMission,
     MissionEntityLink,
     MissionPlan,
+    TargetAccount,
 )
 
 
@@ -289,6 +290,83 @@ class MissionCandidatesView(APIView):
             {"id": str(candidate.id), "company_name": candidate.company_name}
             for candidate in candidates
         ])
+
+
+class MissionOutreachSummaryView(APIView):
+    permission_classes = [CanReadMissions]
+
+    @extend_schema(tags=["Growth missions"], responses={200: dict})
+    def get(self, request, mission_id):
+        mission = get_object_or_404(
+            GrowthMission, id=mission_id, organization=request.organization
+        )
+        candidate_ids = MissionEntityLink.objects.filter(
+            mission=mission,
+            entity_type=MissionEntityLink.EntityType.DISCOVERY_CANDIDATE,
+        ).values_list("entity_id", flat=True)
+        candidates = DiscoveryCandidate.objects.filter(
+            organization=request.organization,
+            id__in=candidate_ids,
+            status=DiscoveryCandidate.Status.ACCEPTED,
+        ).order_by("-score", "company_name")
+
+        items = []
+        for candidate in candidates:
+            account = TargetAccount.objects.filter(
+                organization=request.organization,
+                source_identity=f"candidate:{candidate.id}",
+            ).first()
+            draft = None
+            follow_up_stage = None
+            latest_message = None
+            run = AgentRun.objects.filter(
+                organization=request.organization,
+                idempotency_key=f"proactive:{candidate.id}",
+            ).first()
+
+            if account is not None:
+                draft_record = account.outreach_drafts.order_by("-created_at", "-id").first()
+                if draft_record is not None:
+                    draft = {
+                        "id": str(draft_record.id),
+                        "english_draft": draft_record.english_draft,
+                        "chinese_explanation": draft_record.chinese_explanation,
+                        "status": draft_record.status,
+                    }
+                follow_up = account.follow_ups.first()
+                if follow_up is not None:
+                    follow_up_stage = follow_up.stage
+                message = account.outreach_messages.order_by("-created_at", "-id").first()
+                if message is not None:
+                    latest_message = {
+                        "id": str(message.id),
+                        "status": message.status,
+                        "provider": message.provider,
+                        "sent_at": message.sent_at.isoformat() if message.sent_at else None,
+                    }
+
+            pending = None
+            if run is not None:
+                pending_step = run.steps.filter(outcome="blocked_approval").order_by(
+                    "-index", "-id",
+                ).first()
+                if pending_step is not None:
+                    pending = pending_step.tool_name
+
+            items.append({
+                "candidate_id": str(candidate.id),
+                "company_name": candidate.company_name,
+                "account_id": str(account.id) if account else None,
+                "follow_up_stage": follow_up_stage,
+                "draft": draft,
+                "latest_message": latest_message,
+                "agent_run": {
+                    "id": str(run.id),
+                    "status": run.status,
+                    "pending_tool": pending,
+                } if run is not None else None,
+            })
+        return Response(items)
 
 
 class MissionContentSummaryView(APIView):

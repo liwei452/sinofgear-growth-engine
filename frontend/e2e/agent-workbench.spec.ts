@@ -2,67 +2,69 @@ import { expect, type Page, test } from "@playwright/test"
 
 async function login(page: Page) {
   await page.goto("/login")
-  await page.getByLabel("用户名").fill("phasea_e2e_operator")
+  await page.getByLabel("用户名").fill("phasea_e2e_admin")
   await page.getByLabel("密码").fill("PhaseA-E2E-Only!")
   await page.getByRole("button", { name: "登录", exact: true }).click()
   await expect(page).toHaveURL(/\/$/)
 }
 
-async function expectResponsive(page: Page, width: number) {
-  await page.setViewportSize({ width, height: 900 })
-  await expect(page.getByRole("heading", { name: "Agent 工作台" })).toBeVisible()
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+async function createRunningMission(page: Page, title: string) {
+  await page.goto("/missions")
+  await page.getByRole("button", { name: "创建增长任务" }).click()
+  const dialog = page.getByRole("dialog", { name: "创建增长任务" })
+  await dialog.getByLabel("任务名称").fill(title)
+  await dialog.getByLabel("任务目标").fill("Expand verified industrial gear opportunities")
+  await dialog.getByLabel("目标国家（逗号分隔）").fill("DE")
+  await dialog.getByLabel("目标行业（逗号分隔）").fill("mining equipment")
+  await dialog.getByLabel("主推产品").selectOption({ index: 1 })
+  await dialog.getByLabel("开始日期").fill("2026-08-01")
+  await dialog.getByLabel("结束日期").fill("2026-09-30")
+  await dialog.getByRole("button", { name: "创建任务" }).click()
+  await expect(page.getByRole("heading", { name: title })).toBeVisible()
+
+  await page.getByRole("link", { name: title }).click()
+  await expect(page.getByRole("heading", { name: title, level: 1 })).toBeVisible()
+
+  // Generate the execution plan, then approve it to put the mission into RUNNING.
+  const generateResponse = page.waitForResponse(response => (
+    new URL(response.url()).pathname.endsWith("/generate-plan")
+      && response.request().method() === "POST"
+  ))
+  await page.getByRole("button", { name: "生成执行计划" }).click()
+  expect([200, 201]).toContain((await generateResponse).status())
+
+  await expect(page.getByRole("button", { name: "批准并启动" })).toBeVisible()
+  const approveResponse = page.waitForResponse(response => (
+    new URL(response.url()).pathname.endsWith("/approve-plan")
+      && response.request().method() === "POST"
+  ))
+  await page.getByRole("button", { name: "批准并启动" }).click()
+  expect([200, 201]).toContain((await approveResponse).status())
+  await expect(page.getByRole("button", { name: "暂停" })).toBeVisible()
 }
 
-test("operator starts a truthful automation task and discloses technical details on demand", async ({ page }) => {
-  const run = {
-    id: "fixture-automation-run",
-    goal: "准备内容策略任务",
-    agent_type: "content_strategy",
-    execution_mode: "AUTOMATION",
-    planner_provider: "",
-    planner_model: "",
-    status: "COMPLETED",
-    terminal_reason: "complete",
-    created_at: "2026-08-18T08:00:00Z",
-    updated_at: "2026-08-18T08:01:00Z",
-    steps: [{
-      index: 1,
-      tool_name: "analyze_content_opportunities",
-      args: { source: "fixture-owned" },
-      outcome: "succeeded",
-      output: { count: 1 },
-      error: null,
-      reasoning: "Only stored fixture evidence was analyzed.",
-    }],
-    pending_approval: null,
-  }
-  let started = false
+test("operator starts the content-strategy agent from the mission lane", async ({ page }) => {
   await login(page)
-  await page.route("**/api/v1/ai/provider-status", route => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({ mode: "FAKE_OFFLINE", provider_label: "Fake / 离线演示", model: "fake-v1", configured: false, real_requests_enabled: false }),
-  }))
-  await page.route("**/api/v1/growth/agent/runs/start", async route => {
-    started = true
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "COMPLETED", terminal_reason: "complete", pending_approval_token: null }) })
-  })
-  await page.route("**/api/v1/growth/agent/runs", route => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify(started ? [run] : []),
-  }))
+  await createRunningMission(page, "E2E 策略任务")
 
-  await page.goto("/agent-workspace")
-  await expect(page.getByRole("heading", { name: "Agent 工作台" })).toBeVisible()
-  await page.getByRole("button", { name: "启动内容策略" }).first().click()
-  await page.getByRole("button", { name: "确认启动" }).click()
-  const timeline = page.getByRole("article", { name: "准备内容策略任务" })
-  await expect(timeline).toContainText("自动化流程")
-  await expect(timeline.getByText("fixture-owned")).toHaveCount(0)
-  await timeline.getByText("技术记录").click()
-  await expect(timeline.getByText(/fixture-owned/)).toBeVisible()
+  const lane = page.locator('section[aria-label="执行线"]')
+  await expect(lane.getByRole("heading", { name: "社媒增长" })).toBeVisible()
 
-  for (const width of [1440, 1024, 390]) await expectResponsive(page, width)
+  const strategyResponse = page.waitForResponse(response => (
+    new URL(response.url()).pathname.endsWith("/start-content-strategy")
+      && response.request().method() === "POST"
+  ))
+  await lane.getByRole("button", { name: "开始内容策略" }).click()
+  expect([200, 201]).toContain((await strategyResponse).status())
+
+  // The mission page must stay truthful: no error surface, lane stages visible.
+  await expect(page.locator('[role="alert"]')).toHaveCount(0)
+  await expect(lane.getByText("内容计划")).toBeVisible()
+  await expect(lane.getByText("人工审核")).toBeVisible()
+
+  for (const width of [1440, 1024, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expect(page.getByRole("heading", { name: "客户开发" })).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  }
 })

@@ -1,6 +1,5 @@
 import { expect, type Page, test } from "@playwright/test"
 
-
 async function login(page: Page) {
   await page.goto("/login")
   await page.getByLabel("用户名").fill("phasea_e2e_admin")
@@ -9,80 +8,45 @@ async function login(page: Page) {
   await expect(page).toHaveURL(/\/$/)
 }
 
-
-test("five-channel fixture authorization returns to account picker without publishing", async ({ page }) => {
-  let connected = false
+test("administrator connects a manual platform account without exposing secrets", async ({ page }) => {
   let publishCalls = 0
-  const sessionId = "30000000-0000-4000-8000-000000000099"
-  const candidateId = "40000000-0000-4000-8000-000000000099"
-
   await login(page)
-  await page.route("**/api/v1/growth/workspace", route => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      target_accounts: [], contacts: [], intent_signals: [], inbound_leads: [],
-      follow_ups: [], outreach_drafts: [], field_provenance: [], metric_receipts: [],
-      publish_batches: [], channel_packages: [], market_pilots: { markets: [] },
-      connectors: [
-        { channel: "FACEBOOK", status: connected ? "CONNECTED" : "NOT_CONNECTED", connection_label: connected ? "已连接" : "未连接", recovery_action: connected ? "" : "连接账号", mode: connected ? "OFFICIAL" : "", account_id: connected ? "50000000-0000-4000-8000-000000000099" : "", publication_mode: "PUBLIC" },
-        { channel: "INSTAGRAM", status: "CONFIGURATION_REQUIRED", connection_label: "未配置", recovery_action: "连接账号", mode: "", publication_mode: "UNAVAILABLE" },
-        { channel: "LINKEDIN", status: "WAITING_PLATFORM_REVIEW", connection_label: "等待平台审核", recovery_action: "", mode: "", publication_mode: "UNAVAILABLE" },
-        { channel: "TIKTOK", status: "PRIVATE_ONLY", connection_label: "仅私密发布", recovery_action: "", mode: "OFFICIAL", publication_mode: "PRIVATE_ONLY" },
-        { channel: "YOUTUBE", status: "WAITING_PLATFORM_REVIEW", connection_label: "等待平台审核", recovery_action: "", mode: "OFFICIAL", publication_mode: "UPLOAD" },
-      ],
-    }),
-  }))
-  await page.route("**/api/v1/platform-connections/FACEBOOK/authorize", route => route.fulfill({
-    status: 201,
-    contentType: "application/json",
-    body: JSON.stringify({
-      status: "AUTHORIZATION_REQUIRED",
-      authorization_url: "https://fixture.invalid/oauth",
-      expires_at: "2026-08-15T16:00:00Z",
-    }),
-  }))
-  await page.route("https://fixture.invalid/oauth", route => route.fulfill({
-    status: 200,
-    contentType: "text/html",
-    body: `<a href="${new URL(page.url()).origin}/promotion?connection_session=${sessionId}&connection_status=ready">Fixture authorization complete</a>`,
-  }))
-  await page.route(`**/api/v1/platform-connection-sessions/${sessionId}`, route => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      id: sessionId, platform: "FACEBOOK", platform_name: "Facebook",
-      expires_at: "2026-08-15T16:00:00Z",
-      candidates: [{
-        candidate_id: candidateId, display_name: "Fixture Company Page",
-        channel: "FACEBOOK", capability_label: "可发布", publication_mode: "PUBLIC",
-      }],
-    }),
-  }))
-  await page.route(`**/api/v1/platform-connection-sessions/${sessionId}/confirm`, async route => {
-    connected = true
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ platform: "FACEBOOK", status: "CONNECTED", connection_label: "已连接", recovery_action: "", mode: "OFFICIAL" }),
-    })
-  })
   await page.route("**/api/v1/growth/publish-batches", route => {
     publishCalls += 1
     return route.abort()
   })
+  await page.route("**/api/v1/growth/missions/*/publish", route => {
+    publishCalls += 1
+    return route.abort()
+  })
 
-  await page.goto("/promotion")
-  const readiness = page.getByRole("region", { name: "社媒账号连接状态" })
-  for (const label of ["Facebook Page", "Instagram Business", "LinkedIn Company Page", "TikTok", "YouTube"]) {
-    await expect(readiness.getByText(label, { exact: true })).toBeVisible()
-  }
-  await readiness.getByRole("button", { name: "连接 Facebook 账号" }).click()
-  await page.getByRole("link", { name: "Fixture authorization complete" }).click()
-  await expect(page.getByRole("heading", { name: "选择要用于发布的账号" })).toBeVisible()
-  await page.getByRole("button", { name: "使用此账号" }).click()
-  await expect(page.getByRole("status")).toContainText("Fixture Company Page 已连接")
-  await page.reload()
-  await expect(page.getByRole("region", { name: "社媒账号连接状态" })).toContainText("已连接")
+  await page.goto("/platform-accounts")
+  await expect(page.getByRole("heading", { name: "平台账户" })).toBeVisible()
+  await expect(page.getByText("这里只展示安全的连接摘要，不会显示或回填密钥。")).toBeVisible()
+
+  await page.getByRole("button", { name: "连接平台账户" }).click()
+  const dialog = page.getByRole("dialog", { name: "连接平台账户" })
+  await dialog.getByLabel("平台", { exact: true }).selectOption({ index: 1 })
+  await dialog.getByLabel("显示名称").fill("E2E 手动渠道")
+  await dialog.getByLabel("平台账户标识").fill("e2e-manual-account-001")
+  await dialog.getByLabel("发布方式").selectOption("MANUAL")
+
+  // Manual publishing never asks for a credential reference.
+  await expect(dialog.getByLabel("凭据引用")).toHaveCount(0)
+
+  const connectResponse = page.waitForResponse(response => (
+    new URL(response.url()).pathname === "/api/v1/social-accounts/connect"
+      && response.request().method() === "POST"
+  ))
+  await dialog.getByRole("button", { name: "保存连接" }).click()
+  expect([200, 201]).toContain((await connectResponse).status())
+
+  await expect(page.getByRole("status")).toContainText("平台账户已连接")
+  const card = page.getByRole("article").filter({ hasText: "E2E 手动渠道" })
+  await expect(card).toBeVisible()
+  await expect(card).toContainText("手动发布")
+  await expect(card).toContainText("未配置凭据")
+
+  // Connecting an account must never trigger a publish request.
   expect(publishCalls).toBe(0)
 })

@@ -6,6 +6,16 @@ from datetime import datetime
 from .models import AgentRunStep, GrowthMission, MissionEntityLink, MissionPlan
 
 
+_CONTENT_ENTITY_LABELS = {
+    MissionEntityLink.EntityType.CAMPAIGN: ("CAMPAIGN", "Campaign"),
+    MissionEntityLink.EntityType.CONTENT_BRIEF: ("BRIEF", "Content brief"),
+    MissionEntityLink.EntityType.MASTER_CONTENT: ("MASTER", "Master content"),
+    MissionEntityLink.EntityType.PLATFORM_CONTENT: ("PLATFORM", "Platform content"),
+    MissionEntityLink.EntityType.CHANNEL_PACKAGE: ("PACKAGE", "Channel package"),
+    MissionEntityLink.EntityType.PUBLISH_BATCH: ("BATCH", "Publish batch"),
+}
+
+
 @dataclass(frozen=True)
 class MissionTimelineItem:
     occurred_at: datetime
@@ -54,6 +64,23 @@ def project_mission_timeline(*, mission: GrowthMission) -> list[MissionTimelineI
                 summary=f"Plan v{plan.version} approved.",
                 evidence_type="mission_plan",
                 evidence_id=str(plan.id),
+            )
+        )
+
+    for link in MissionEntityLink.objects.filter(
+        mission=mission,
+        entity_type__in=_CONTENT_ENTITY_LABELS,
+    ).order_by("created_at", "id"):
+        state, label = _CONTENT_ENTITY_LABELS[link.entity_type]
+        items.append(
+            MissionTimelineItem(
+                occurred_at=link.created_at,
+                lane=link.lane,
+                state=state,
+                title=label,
+                summary="",
+                evidence_type=link.entity_type,
+                evidence_id=str(link.entity_id),
             )
         )
 

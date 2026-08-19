@@ -336,3 +336,86 @@ def test_serializers_expose_provider_submission_id(
     assert data["provider_call_started_at"] is not None
     assert data["attempts"][-1]["provider_submission_id"] == "buffer-sub-1"
     assert data["attempts"][-1]["provider_call_started_at"] is not None
+
+
+def test_complete_submitted_rejects_empty_submission_id(publishing_context):
+    context = publishing_context
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="async-empty-direct",
+        actor=context["actor"],
+    )
+    claimed = claim_publish_task(task.id)
+    assert claimed is not None
+    claimed_task, attempt = claimed
+
+    with pytest.raises(PublishingConflict, match="submission id"):
+        complete_publish_submitted(
+            claimed_task.id,
+            attempt.claim_token,
+            OfficialPublishResult(status="SUBMITTED", submission_id=""),
+        )
+
+    claimed_task.refresh_from_db()
+    assert claimed_task.status == PublishTask.Status.RUNNING
+
+
+def test_retry_clears_provider_call_started_at(publishing_context, monkeypatch):
+    context = publishing_context
+    _patch_connector(
+        monkeypatch,
+        PublishResult(succeeded=False, error_code="PROVIDER_ERROR"),
+    )
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="async-retry-call",
+        actor=context["actor"],
+    )
+    execute_publish_task(task.id)
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.FAILED
+    assert task.provider_call_started_at is not None
+
+    retry_publish_task(task)
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.QUEUED
+    assert task.provider_call_started_at is None
+
+    claimed = claim_publish_task(task.id)
+    assert claimed is not None
+    expired = timezone.now() + timedelta(seconds=PUBLISH_LEASE_SECONDS + 1)
+    assert reap_stale_publish_tasks(now=expired) == 1
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.FAILED
+    assert task.last_error["code"] == "STALE_WORKER"
+
+
+def test_tampered_provider_call_started_at_is_rejected(publishing_context):
+    context = publishing_context
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="async-tamper-call",
+        actor=context["actor"],
+    )
+    claimed = claim_publish_task(task.id)
+    assert claimed is not None
+    claimed_task, attempt = claimed
+    from apps.publishing.services import _mark_provider_call_started
+
+    _mark_provider_call_started(claimed_task, attempt)
+    complete_publish_submitted(
+        claimed_task.id,
+        attempt.claim_token,
+        OfficialPublishResult(status="SUBMITTED", submission_id="sub-1"),
+    )
+
+    with publishing_writes():
+        claimed_task.provider_call_started_at = None
+        claimed_task.save(update_fields=["provider_call_started_at", "updated_at"])
+    loaded = publish_task_consistency_queryset(context["organization"]).get(
+        pk=claimed_task.pk
+    )
+    assert not publish_task_is_consistent(loaded)

@@ -89,6 +89,14 @@ def _attempt_history_is_consistent(task, post):
             return False
         if attempt.finished_at is not None and attempt.finished_at < attempt.started_at:
             return False
+        if attempt.provider_call_started_at is not None and (
+            attempt.provider_call_started_at < attempt.started_at
+            or (
+                attempt.finished_at is not None
+                and attempt.provider_call_started_at > attempt.finished_at
+            )
+        ):
+            return False
         if (
             previous is not None
             and (
@@ -241,6 +249,7 @@ def publish_task_is_consistent(task):
                 and task.canceled_at is None
                 and task.last_error is None
                 and task.retry_not_before is None
+                and task.provider_call_started_at is None
                 and post is None
             )
         attempts = getattr(task, "_safe_attempts", None)
@@ -260,6 +269,7 @@ def publish_task_is_consistent(task):
                 and latest.status == PublishAttempt.Status.RUNNING
                 and latest.claim_token == task.claim_token
                 and latest.started_at == task.started_at
+                and task.provider_call_started_at == latest.provider_call_started_at
             )
         if task.status == PublishTask.Status.SUCCEEDED:
             return (
@@ -276,6 +286,8 @@ def publish_task_is_consistent(task):
                 and post.social_account_id == task.social_account_id
                 and post.attempt_id == latest.id
                 and post.external_id == latest.external_id
+                and task.provider_call_started_at is not None
+                and task.provider_call_started_at == latest.provider_call_started_at
             )
         if task.status == PublishTask.Status.SUBMITTED:
             return (
@@ -289,6 +301,8 @@ def publish_task_is_consistent(task):
                 and latest.started_at == task.started_at
                 and latest.finished_at == task.finished_at
                 and latest.provider_submission_id == task.provider_submission_id
+                and task.provider_call_started_at is not None
+                and task.provider_call_started_at == latest.provider_call_started_at
             )
         if task.status == PublishTask.Status.SUBMISSION_UNKNOWN:
             return (
@@ -304,6 +318,8 @@ def publish_task_is_consistent(task):
                 and latest.started_at == task.started_at
                 and latest.finished_at == task.finished_at
                 and latest.error == task.last_error
+                and task.provider_call_started_at is not None
+                and task.provider_call_started_at == latest.provider_call_started_at
             )
         if task.status == PublishTask.Status.FAILED:
             return (
@@ -315,6 +331,7 @@ def publish_task_is_consistent(task):
                 and latest.finished_at == task.finished_at
                 and latest.error == task.last_error
                 and latest.retry_at == task.retry_not_before
+                and task.provider_call_started_at == latest.provider_call_started_at
                 and post is None
             )
         if task.status == PublishTask.Status.CANCELED:
@@ -333,6 +350,7 @@ def publish_task_is_consistent(task):
                 and latest.status == PublishAttempt.Status.CANCELED
                 and latest.started_at == task.started_at
                 and latest.finished_at == task.finished_at
+                and task.provider_call_started_at == latest.provider_call_started_at
             )
         if task.status != PublishTask.Status.QUEUED:
             return False
@@ -344,10 +362,14 @@ def publish_task_is_consistent(task):
         if not base_queued:
             return False
         if task.attempt_number == 0:
-            return task.started_at is None and latest is None
+            return (
+                task.started_at is None and latest is None
+                and task.provider_call_started_at is None
+            )
         return (
             latest is not None and latest.status == PublishAttempt.Status.FAILED
             and task.started_at == latest.started_at
+            and task.provider_call_started_at is None
         )
     except (AttributeError, KeyError, TypeError, ValueError, ZoneInfoNotFoundError):
         return False
@@ -760,6 +782,10 @@ def _result_kind(result):
 
 @transaction.atomic
 def complete_publish_submitted(task_id, claim_token, result):
+    submission_id = getattr(result, "submission_id", "")
+    if not isinstance(submission_id, str) or not submission_id.strip() or len(submission_id) > 255:
+        raise PublishingConflict("Connector submission id is invalid.")
+    submission_id = submission_id.strip()
     task = PublishTask.objects.select_for_update().get(pk=task_id)
     attempt = PublishAttempt.objects.select_for_update().get(
         task=task, claim_token=claim_token
@@ -771,9 +797,6 @@ def complete_publish_submitted(task_id, claim_token, result):
             with publishing_writes():
                 attempt.save(update_fields=["status", "finished_at", "updated_at"])
         return task
-    submission_id = str(getattr(result, "submission_id", "") or "")
-    if len(submission_id) > 255:
-        raise PublishingConflict("Connector submission id is invalid.")
     now = timezone.now()
     task.status = PublishTask.Status.SUBMITTED
     task.claim_token = None
@@ -1133,9 +1156,11 @@ def retry_publish_task(task, *, actor=None):
     task.last_error = None
     task.retry_not_before = None
     task.finished_at = None
+    task.provider_call_started_at = None
     with publishing_writes():
         task.save(update_fields=[
-            "status", "last_error", "retry_not_before", "finished_at", "updated_at",
+            "status", "last_error", "retry_not_before", "finished_at",
+            "provider_call_started_at", "updated_at",
         ])
     from .tasks import run_publish_task
 

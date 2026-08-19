@@ -30,7 +30,7 @@ const runningMissions = computed(
 
 <style scoped>
 .today-page { display: grid; gap: 18px; }
-.today-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-radius: 20px; background: linear-gradient(120deg, #0b3b8f 0%, #0875eb 60%, #3eb6ff 100%); padding: 24px 28px; color: #fff; }
+.today-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-radius: 20px; background: linear-gradient(120deg, var(--sg-brand-deep) 0%, var(--sg-brand-strong) 60%, var(--sg-brand-light) 100%); padding: 24px 28px; color: #fff; }
 .today-hero h1 { margin: 4px 0 7px; font-size: clamp(1.5rem, 2vw, 1.9rem); }
 .today-hero p { margin: 0; color: #eaf5ff; font-size: .82rem; line-height: 1.55; }
 .eyebrow { margin: 0; color: #bfe0ff; font-size: .65rem; font-weight: 900; letter-spacing: .1em; }

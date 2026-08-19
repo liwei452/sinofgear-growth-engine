@@ -87,7 +87,7 @@ function onCreated(): void {
 
 <style scoped>
 .missions-page { display: grid; gap: 18px; }
-.missions-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-radius: 20px; background: linear-gradient(120deg, #0b3b8f 0%, #0875eb 60%, #3eb6ff 100%); padding: 26px 30px; color: #fff; }
+.missions-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-radius: 20px; background: linear-gradient(120deg, var(--sg-brand-deep) 0%, var(--sg-brand-strong) 60%, var(--sg-brand-light) 100%); padding: 26px 30px; color: #fff; }
 .missions-hero h1 { margin: 4px 0 7px; font-size: clamp(1.5rem, 2vw, 1.9rem); }
 .missions-hero p:last-child { max-width: 720px; margin: 0; color: #eaf5ff; font-size: .82rem; line-height: 1.6; }
 .eyebrow { margin: 0; color: #bfe0ff; font-size: .65rem; font-weight: 900; letter-spacing: .1em; }

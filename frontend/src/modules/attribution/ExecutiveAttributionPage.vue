@@ -80,7 +80,7 @@ const attribution = computed(() => attributionQuery.data.value)
 
 <style scoped>
 .attribution-page { display: grid; gap: 16px; }
-.attribution-hero { border-radius: 20px; background: linear-gradient(120deg, #0b3b8f 0%, #0875eb 60%, #3eb6ff 100%); padding: 24px 28px; color: #fff; }
+.attribution-hero { border-radius: 20px; background: linear-gradient(120deg, var(--sg-brand-deep) 0%, var(--sg-brand-strong) 60%, var(--sg-brand-light) 100%); padding: 24px 28px; color: #fff; }
 .attribution-hero h1 { margin: 4px 0 7px; }
 .attribution-hero p { margin: 0; color: #eaf5ff; font-size: .82rem; }
 .eyebrow { margin: 0; color: #bfe0ff; font-size: .65rem; font-weight: 900; letter-spacing: .1em; }

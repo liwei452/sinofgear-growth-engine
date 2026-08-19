@@ -15,6 +15,7 @@ frontend/.playwright/
 
 # Local preview artifacts
 backend/preview.sqlite3
+backend/preview_storage/
 backend/preview_backend.log
 backend/preview_backend_err.log
 backend/config/preview_settings.py

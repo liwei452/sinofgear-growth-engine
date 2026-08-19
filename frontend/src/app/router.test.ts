@@ -21,8 +21,6 @@ function makeComponents() {
     Dashboard: Stub("DashboardStub", "首页"),
     Promotion: Stub("PromotionStub", "推广"),
     Opportunities: Stub("OpportunitiesStub", "客户机会"),
-    AgentApprovals: Stub("AgentApprovalsStub", "Agent 审批"),
-    AgentWorkspace: Stub("AgentWorkspaceStub", "Agent 工作台"),
     Missions: Stub("MissionsStub", "增长任务"),
     MissionDetail: Stub("MissionDetailStub", "任务详情"),
     Company: Stub("CompanyStub", "公司"),

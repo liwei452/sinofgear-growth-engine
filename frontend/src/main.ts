@@ -10,7 +10,6 @@ import DashboardPage from "./modules/dashboard/DashboardPage.vue"
 import RoleHomePage from "./modules/dashboard/RoleHomePage.vue"
 import CompanyPage from "./modules/growth/CompanyPage.vue"
 import OpportunitiesPage from "./modules/growth/OpportunitiesPage.vue"
-import AgentApprovalsPage from "./modules/growth/AgentApprovalsPage.vue"
 import GrowthMissionsPage from "./modules/missions/GrowthMissionsPage.vue"
 import GrowthMissionDetailPage from "./modules/missions/GrowthMissionDetailPage.vue"
 import ExecutiveAttributionPage from "./modules/attribution/ExecutiveAttributionPage.vue"
@@ -27,8 +26,6 @@ const router = createAppRouter(queryClient, {
     RoleHome: RoleHomePage,
     Promotion: defineAsyncComponent(() => import("./modules/growth/PromotionPage.vue")),
     Opportunities: OpportunitiesPage,
-    AgentApprovals: AgentApprovalsPage,
-    AgentWorkspace: defineAsyncComponent(() => import("./modules/agents/AgentWorkspacePage.vue")),
     Missions: GrowthMissionsPage,
     MissionDetail: GrowthMissionDetailPage,
     Company: CompanyPage,

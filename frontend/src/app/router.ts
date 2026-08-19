@@ -13,8 +13,6 @@ export type AppRouteComponents = {
   Dashboard: Component
   Promotion: Component
   Opportunities: Component
-  AgentApprovals: Component
-  AgentWorkspace: Component
   Missions: Component
   MissionDetail: Component
   Company: Component
@@ -70,7 +68,6 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
     { path: "promotion", name: "promotion", component: options.components.Promotion, meta: { title: "社媒运营", requiredPermission: "publishing.read" } },
     { path: "opportunities", name: "opportunities", component: options.components.Opportunities, meta: { title: "客户机会", requiredPermission: "leads.read" } },
     { path: "agent-approvals", name: "agent-approvals", redirect: { name: "home", query: { view: "approvals" } } },
-    { path: "agent-workspace", name: "agent-workspace", component: options.components.AgentWorkspace, meta: { title: "Agent 工作台", requiredPermission: "agents.run" } },
     { path: "missions", name: "missions", component: options.components.Missions, meta: { title: "增长任务", requiredPermission: "missions.read" } },
     { path: "missions/:missionId", name: "mission-detail", component: options.components.MissionDetail, meta: { title: "增长任务详情", requiredPermission: "missions.read" } },
     { path: "company", name: "company", component: options.components.Company, meta: { title: "我的公司", requiredRole: "ADMINISTRATOR" } },

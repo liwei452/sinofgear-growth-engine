@@ -1,4 +1,6 @@
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -8,6 +10,18 @@ from apps.common.models import OrganizationScopedModel
 from apps.common.security import is_sensitive_key
 
 from .codes import AccountCapability, validate_capability_list
+
+
+_provider_event_write = ContextVar("provider_event_write", default=False)
+
+
+@contextmanager
+def provider_event_writes():
+    token = _provider_event_write.set(True)
+    try:
+        yield
+    finally:
+        _provider_event_write.reset(token)
 
 
 def _find_sensitive_key(value):
@@ -352,3 +366,91 @@ class SocialAccount(OrganizationScopedModel):
     def save(self, *args: object, **kwargs: object) -> None:
         self.full_clean()
         super().save(*args, **kwargs)
+
+
+class ProviderConnectionEventQuerySet(models.QuerySet):
+    @staticmethod
+    def _write_guard() -> None:
+        if not _provider_event_write.get():
+            raise ValidationError(
+                "Provider connection events may be appended only through the connection service."
+            )
+
+    def update(self, **kwargs):
+        raise ValidationError("Provider connection events are append-only.")
+
+    def bulk_update(self, objs, fields, **kwargs):
+        raise ValidationError("Provider connection events are append-only.")
+
+    def bulk_create(self, objs, **kwargs):
+        self._write_guard()
+        return super().bulk_create(objs, **kwargs)
+
+    def delete(self):
+        raise ValidationError("Provider connection events cannot be deleted.")
+
+
+class ProviderConnectionEvent(models.Model):
+    class Action(models.TextChoices):
+        CONNECT = "CONNECT", "Connect"
+        ROTATE = "ROTATE", "Rotate"
+        PROBE = "PROBE", "Probe"
+        SYNC = "SYNC", "Sync"
+        DISCONNECT = "DISCONNECT", "Disconnect"
+
+    class Outcome(models.TextChoices):
+        SUCCESS = "SUCCESS", "Success"
+        FAILED = "FAILED", "Failed"
+
+    objects = models.Manager.from_queryset(ProviderConnectionEventQuerySet)()
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "identity.Organization",
+        on_delete=models.PROTECT,
+        related_name="provider_connection_events",
+    )
+    provider_connection = models.ForeignKey(
+        ProviderConnection,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="events",
+    )
+    provider = models.CharField(max_length=32)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="provider_connection_events",
+    )
+    action = models.CharField(max_length=32, choices=Action.choices)
+    outcome = models.CharField(max_length=16, choices=Outcome.choices)
+    error_code = models.CharField(max_length=64, blank=True, default="")
+    metadata = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        base_manager_name = "objects"
+        default_manager_name = "objects"
+        indexes = [
+            models.Index(
+                fields=["organization", "provider", "-created_at"],
+                name="platforms_provconn_evt_org_idx",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding or not _provider_event_write.get():
+            raise ValidationError(
+                "Provider connection events are append-only and service-created."
+            )
+        if not isinstance(self.metadata, dict):
+            raise ValidationError({"metadata": "metadata must be a dict."})
+        if _find_sensitive_key(self.metadata) is not None:
+            raise ValidationError({"metadata": "metadata must not contain sensitive keys."})
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Provider connection events cannot be deleted.")

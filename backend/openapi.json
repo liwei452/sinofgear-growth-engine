@@ -7030,6 +7030,219 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/provider-connections/buffer:
+    get:
+      operationId: api_v1_provider_connections_buffer_retrieve
+      tags:
+      - BufferProviderConnection
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BufferProviderConnectionRead'
+          description: ''
+    post:
+      operationId: api_v1_provider_connections_buffer_create
+      tags:
+      - BufferProviderConnection
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BufferProviderConnectionCreate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/BufferProviderConnectionCreate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/BufferProviderConnectionCreate'
+        required: true
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BufferProviderConnectionRead'
+          description: ''
+        '400':
+          description: The request is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: The request is forbidden or failed CSRF validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+    patch:
+      operationId: api_v1_provider_connections_buffer_partial_update
+      tags:
+      - BufferProviderConnection
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedBufferProviderConnectionRotate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedBufferProviderConnectionRotate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedBufferProviderConnectionRotate'
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BufferProviderConnectionRead'
+          description: ''
+        '400':
+          description: The request is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: The request is forbidden or failed CSRF validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/provider-connections/buffer/disconnect:
+    post:
+      operationId: api_v1_provider_connections_buffer_disconnect_create
+      tags:
+      - BufferProviderConnection
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BufferProviderConnectionDisconnect'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/BufferProviderConnectionDisconnect'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/BufferProviderConnectionDisconnect'
+        required: true
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BufferProviderConnectionRead'
+          description: ''
+        '400':
+          description: The request is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: The request is forbidden or failed CSRF validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/provider-connections/buffer/probe:
+    post:
+      operationId: api_v1_provider_connections_buffer_probe_create
+      tags:
+      - BufferProviderConnection
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BufferProviderConnectionRead'
+          description: ''
+        '400':
+          description: The request is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: The request is forbidden or failed CSRF validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/provider-connections/buffer/sync:
+    post:
+      operationId: api_v1_provider_connections_buffer_sync_create
+      tags:
+      - BufferProviderConnection
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BufferProviderConnectionSync'
+          description: ''
+        '400':
+          description: The request is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: The request is forbidden or failed CSRF validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
   /api/v1/publish-calendar:
     get:
       operationId: api_v1_publish_calendar_retrieve
@@ -8125,7 +8338,7 @@ components:
       type: object
       properties:
         provider:
-          $ref: '#/components/schemas/ProviderEnum'
+          $ref: '#/components/schemas/Provider914Enum'
         model:
           $ref: '#/components/schemas/ModelEnum'
         configured:
@@ -8167,7 +8380,7 @@ components:
       type: object
       properties:
         provider:
-          $ref: '#/components/schemas/ProviderEnum'
+          $ref: '#/components/schemas/Provider914Enum'
         model:
           $ref: '#/components/schemas/ModelEnum'
         api_key:
@@ -8786,6 +8999,133 @@ components:
           additionalProperties: {}
       required:
       - errors
+    BufferIgnoredChannel:
+      type: object
+      properties:
+        provider_account_id:
+          type: string
+        service:
+          type: string
+        reason:
+          type: string
+      required:
+      - provider_account_id
+      - reason
+      - service
+    BufferProviderConnectionCreate:
+      type: object
+      properties:
+        api_key:
+          type: string
+          writeOnly: true
+          maxLength: 4096
+        organization_id:
+          type: string
+          maxLength: 255
+      required:
+      - api_key
+      - organization_id
+    BufferProviderConnectionDisconnect:
+      type: object
+      properties:
+        confirm:
+          type: boolean
+      required:
+      - confirm
+    BufferProviderConnectionRead:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        provider:
+          allOf:
+          - $ref: '#/components/schemas/BufferProviderConnectionReadProviderEnum'
+          readOnly: true
+        configured:
+          type: boolean
+          readOnly: true
+        external_id:
+          type: string
+          readOnly: true
+        display_name:
+          type: string
+          readOnly: true
+        connection_state:
+          allOf:
+          - $ref: '#/components/schemas/ConnectionStateEnum'
+          readOnly: true
+        last_probe_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        last_sync_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        reauthorization_required_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        disconnected_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        lifecycle_error_code:
+          type: string
+          readOnly: true
+        channel_count:
+          type: integer
+          readOnly: true
+        active_channel_count:
+          type: integer
+          readOnly: true
+      required:
+      - active_channel_count
+      - channel_count
+      - configured
+      - connection_state
+      - disconnected_at
+      - display_name
+      - external_id
+      - id
+      - last_probe_at
+      - last_sync_at
+      - lifecycle_error_code
+      - provider
+      - reauthorization_required_at
+    BufferProviderConnectionReadProviderEnum:
+      enum:
+      - BUFFER
+      type: string
+      description: '* `BUFFER` - Buffer'
+    BufferProviderConnectionSync:
+      type: object
+      properties:
+        created_count:
+          type: integer
+        updated_count:
+          type: integer
+        disconnected_count:
+          type: integer
+        ignored_channels:
+          type: array
+          items:
+            $ref: '#/components/schemas/BufferIgnoredChannel'
+        synced_at:
+          type: string
+          format: date-time
+      required:
+      - created_count
+      - disconnected_count
+      - ignored_channels
+      - synced_at
+      - updated_count
     CRMHandoff:
       type: object
       properties:
@@ -11409,6 +11749,13 @@ components:
         * `PRIORITIZE` - Prioritize
         * `OBSERVE` - Observe
         * `PROCESSED` - Processed
+    PatchedBufferProviderConnectionRotate:
+      type: object
+      properties:
+        api_key:
+          type: string
+          writeOnly: true
+          maxLength: 4096
     PatchedCampaignPatch:
       type: object
       properties:
@@ -12348,7 +12695,7 @@ components:
       required:
       - code
       - current_version
-    ProviderEnum:
+    Provider914Enum:
       enum:
       - deepseek
       type: string

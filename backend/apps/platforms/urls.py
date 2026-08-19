@@ -6,6 +6,8 @@ from .views import (
     PlatformAuthorizationCallbackView, PlatformAuthorizationView, PlatformConnectionListView,
     SocialAccountConnectionView, SocialAccountDetailView, SocialAccountListView,
     SocialAccountDisconnectView, SocialAccountProbeView, SocialAccountReauthorizationView,
+    BufferProviderConnectionView, BufferProviderConnectionProbeView,
+    BufferProviderConnectionSyncView, BufferProviderConnectionDisconnectView,
 )
 
 urlpatterns = [
@@ -39,4 +41,8 @@ urlpatterns = [
     path("social-accounts/<uuid:account_id>/disconnect", SocialAccountDisconnectView.as_view(), name="social-account-disconnect"),
     path("connector-credentials", ConnectorCredentialListView.as_view(), name="connector-credential-list"),
     path("connector-credentials/<uuid:credential_id>", ConnectorCredentialDetailView.as_view(), name="connector-credential-detail"),
+    path("provider-connections/buffer", BufferProviderConnectionView.as_view(), name="buffer-provider-connection"),
+    path("provider-connections/buffer/probe", BufferProviderConnectionProbeView.as_view(), name="buffer-provider-connection-probe"),
+    path("provider-connections/buffer/sync", BufferProviderConnectionSyncView.as_view(), name="buffer-provider-connection-sync"),
+    path("provider-connections/buffer/disconnect", BufferProviderConnectionDisconnectView.as_view(), name="buffer-provider-connection-disconnect"),
 ]

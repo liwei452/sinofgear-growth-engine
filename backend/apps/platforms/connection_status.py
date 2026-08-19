@@ -38,13 +38,15 @@ def connection_summary(*, organization, platform_code: str) -> ConnectionSummary
         organization=organization,
         platform__code=platform_code,
         status=SocialAccount.Status.ACTIVE,
-    ).select_related("credential", "platform").order_by("id")[:2])
+    ).select_related("credential", "platform", "provider_connection").order_by("id")[:2])
     if not accounts:
         return _summary("NOT_CONNECTED")
     if len(accounts) != 1:
         return _summary("CONFIGURATION_REQUIRED")
 
     account = accounts[0]
+    if account.provider == SocialAccount.Provider.BUFFER:
+        return _buffer_summary(account)
     if account.connection_state in {
         SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED,
         SocialAccount.ConnectionState.PROVIDER_UNAVAILABLE,
@@ -72,3 +74,15 @@ def connection_summary(*, organization, platform_code: str) -> ConnectionSummary
     if account.credential.expires_at and account.credential.expires_at <= timezone.now():
         return _summary("REAUTHORIZATION_REQUIRED", account, mode="OFFICIAL")
     return _summary("CONNECTED", account, mode="OFFICIAL")
+
+
+def _buffer_summary(account: SocialAccount) -> ConnectionSummary:
+    if account.connection_state in {
+        SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED,
+        SocialAccount.ConnectionState.PROVIDER_UNAVAILABLE,
+        SocialAccount.ConnectionState.INSUFFICIENT_CAPABILITY,
+    }:
+        return _summary(account.connection_state, account, mode="BUFFER")
+    if account.connection_state == SocialAccount.ConnectionState.CONNECTED:
+        return _summary("CONNECTED", account, mode="BUFFER")
+    return _summary("CONFIGURATION_REQUIRED", account, mode="BUFFER")

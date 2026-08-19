@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 
 from .capabilities import resolve_account_capabilities
 from .codes import AccountCapability
-from .models import ConnectorCredential, Platform, SocialAccount
+from .models import ConnectorCredential, Platform, ProviderConnection, SocialAccount
 from .oauth import validate_return_path
 
 
@@ -52,6 +52,11 @@ class SocialAccountReadSerializer(serializers.ModelSerializer):
         return sorted(capability.value for capability in resolve_account_capabilities(account.id))
 
     def get_credential_configured(self, account: SocialAccount) -> bool:
+        if account.provider == SocialAccount.Provider.BUFFER:
+            return bool(
+                account.provider_connection_id
+                and account.provider_connection.credential_reference
+            )
         return account.credential_id is not None
 
 
@@ -331,3 +336,70 @@ class SocialAccountLifecycleSerializer(serializers.ModelSerializer):
             "reauthorization_required_at", "disconnected_at", "lifecycle_error_code",
         ]
         read_only_fields = fields
+
+
+class BufferProviderConnectionReadSerializer(serializers.ModelSerializer):
+    configured = serializers.SerializerMethodField()
+    channel_count = serializers.SerializerMethodField()
+    active_channel_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProviderConnection
+        fields = [
+            "id", "provider", "configured", "external_id", "display_name",
+            "connection_state", "last_probe_at", "last_sync_at",
+            "reauthorization_required_at", "disconnected_at",
+            "lifecycle_error_code", "channel_count", "active_channel_count",
+        ]
+        read_only_fields = fields
+
+    def get_configured(self, connection: ProviderConnection) -> bool:
+        return bool(connection.credential_reference)
+
+    def get_channel_count(self, connection: ProviderConnection) -> int:
+        return connection.social_accounts.count()
+
+    def get_active_channel_count(self, connection: ProviderConnection) -> int:
+        return connection.social_accounts.filter(status=SocialAccount.Status.ACTIVE).count()
+
+
+class BufferProviderConnectionCreateSerializer(StrictMixin, serializers.Serializer):
+    api_key = serializers.CharField(max_length=4096, write_only=True)
+    organization_id = serializers.CharField(max_length=255)
+
+    def validate_api_key(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("API Key is required.")
+        return value
+
+    def validate_organization_id(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Organization ID is required.")
+        return value
+
+
+class BufferProviderConnectionRotateSerializer(StrictMixin, serializers.Serializer):
+    api_key = serializers.CharField(max_length=4096, write_only=True)
+
+    def validate_api_key(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("API Key is required.")
+        return value
+
+
+class BufferProviderConnectionDisconnectSerializer(StrictMixin, serializers.Serializer):
+    confirm = serializers.BooleanField()
+
+
+class BufferIgnoredChannelSerializer(serializers.Serializer):
+    provider_account_id = serializers.CharField()
+    service = serializers.CharField()
+    reason = serializers.CharField()
+
+
+class BufferProviderConnectionSyncSerializer(serializers.Serializer):
+    created_count = serializers.IntegerField()
+    updated_count = serializers.IntegerField()
+    disconnected_count = serializers.IntegerField()
+    ignored_channels = BufferIgnoredChannelSerializer(many=True)
+    synced_at = serializers.DateTimeField()

@@ -4,6 +4,7 @@ from django.conf import settings
 from django.http import Http404, HttpResponseRedirect
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -18,6 +19,16 @@ from integrations.platforms.runtime import get_social_provider_runtime
 from integrations.platforms.token_store import TokenStoreContext
 
 from .models import AccountConnectionSession, ConnectorCredential, Platform, SocialAccount
+from .provider_connections import (
+    BufferConnectionError,
+    build_buffer_connector,
+    connect_buffer,
+    disconnect_buffer,
+    get_buffer_connection,
+    probe_buffer_connection,
+    rotate_buffer_credential,
+    sync_buffer_channels,
+)
 from .lifecycle import (
     LifecycleAdapterRegistry,
     ProviderLifecycleError,
@@ -50,6 +61,11 @@ from .serializers import (
     AccountConnectionConfirmationSerializer, AccountConnectionSessionSerializer,
     PlatformAuthorizationCallbackSerializer,
     SocialAccountDisconnectSerializer, SocialAccountLifecycleSerializer,
+    BufferProviderConnectionCreateSerializer,
+    BufferProviderConnectionDisconnectSerializer,
+    BufferProviderConnectionReadSerializer,
+    BufferProviderConnectionRotateSerializer,
+    BufferProviderConnectionSyncSerializer,
 )
 
 
@@ -58,11 +74,16 @@ authorization_registry = _social_runtime.authorization_registry
 connection_token_store = _social_runtime.token_store
 lifecycle_registry = LifecycleAdapterRegistry()
 lifecycle_token_store = _social_runtime.token_store
+buffer_token_store = _social_runtime.token_store
+
+
+def buffer_connector_factory():
+    return build_buffer_connector(buffer_token_store)
 
 
 def _account(organization, account_id):
     try:
-        return SocialAccount.objects.select_related("platform", "credential").get(
+        return SocialAccount.objects.select_related("platform", "credential", "provider_connection").get(
             pk=account_id, organization=organization
         )
     except (SocialAccount.DoesNotExist, ValueError) as error:
@@ -96,7 +117,7 @@ class SocialAccountListView(APIView):
     @extend_schema(operation_id="social_accounts_list", responses=SocialAccountListSerializer)
     def get(self, request: Request) -> Response:
         accounts = SocialAccount.objects.filter(organization=request.organization).select_related(
-            "platform", "credential"
+            "platform", "credential", "provider_connection"
         )
         return Response({"results": SocialAccountReadSerializer(accounts, many=True).data})
 
@@ -559,3 +580,140 @@ class AccountConnectionConfirmationView(APIView):
             "recovery_action": summary.recovery_action,
             "mode": summary.mode,
         })
+
+
+def _buffer_error_response(error: BufferConnectionError) -> Response:
+    return Response(
+        {"code": error.code, "message": error.message},
+        status=error.http_status,
+    )
+
+
+@extend_schema(tags=["BufferProviderConnection"])
+class BufferProviderConnectionView(APIView):
+    permission_classes = [IsAuthenticated, CanManageCredentials]
+
+    @extend_schema(responses={200: BufferProviderConnectionReadSerializer})
+    def get(self, request: Request) -> Response:
+        try:
+            connection = get_buffer_connection(request.organization)
+        except BufferConnectionError as error:
+            return _buffer_error_response(error)
+        return Response(BufferProviderConnectionReadSerializer(connection).data)
+
+    @extend_schema(
+        request=BufferProviderConnectionCreateSerializer,
+        responses={201: BufferProviderConnectionReadSerializer},
+    )
+    def post(self, request: Request) -> Response:
+        serializer = BufferProviderConnectionCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            connection = connect_buffer(
+                organization=request.organization,
+                actor=request.user,
+                api_key=serializer.validated_data["api_key"],
+                organization_id=serializer.validated_data["organization_id"],
+                token_store=buffer_token_store,
+                connector=buffer_connector_factory(),
+            )
+        except BufferConnectionError as error:
+            return _buffer_error_response(error)
+        return Response(
+            BufferProviderConnectionReadSerializer(connection).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(
+        request=BufferProviderConnectionRotateSerializer,
+        responses={200: BufferProviderConnectionReadSerializer},
+    )
+    def patch(self, request: Request) -> Response:
+        serializer = BufferProviderConnectionRotateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            connection = rotate_buffer_credential(
+                organization=request.organization,
+                actor=request.user,
+                api_key=serializer.validated_data["api_key"],
+                token_store=buffer_token_store,
+                connector=buffer_connector_factory(),
+            )
+        except BufferConnectionError as error:
+            return _buffer_error_response(error)
+        return Response(BufferProviderConnectionReadSerializer(connection).data)
+
+
+@extend_schema(tags=["BufferProviderConnection"])
+class BufferProviderConnectionProbeView(APIView):
+    permission_classes = [IsAuthenticated, CanManageCredentials]
+
+    @extend_schema(request=None, responses={200: BufferProviderConnectionReadSerializer})
+    def post(self, request: Request) -> Response:
+        try:
+            connection = probe_buffer_connection(
+                organization=request.organization,
+                actor=request.user,
+                connector=buffer_connector_factory(),
+            )
+        except BufferConnectionError as error:
+            return _buffer_error_response(error)
+        return Response(BufferProviderConnectionReadSerializer(connection).data)
+
+
+@extend_schema(tags=["BufferProviderConnection"])
+class BufferProviderConnectionSyncView(APIView):
+    permission_classes = [IsAuthenticated, CanManageCredentials]
+
+    @extend_schema(request=None, responses={200: BufferProviderConnectionSyncSerializer})
+    def post(self, request: Request) -> Response:
+        try:
+            result = sync_buffer_channels(
+                organization=request.organization,
+                actor=request.user,
+                connector=buffer_connector_factory(),
+            )
+        except BufferConnectionError as error:
+            return _buffer_error_response(error)
+        data = {
+            "created_count": result.created_count,
+            "updated_count": result.updated_count,
+            "disconnected_count": result.disconnected_count,
+            "ignored_channels": [
+                {
+                    "provider_account_id": item.provider_account_id,
+                    "service": item.service,
+                    "reason": item.reason,
+                }
+                for item in result.ignored_channels
+            ],
+            "synced_at": result.synced_at,
+        }
+        return Response(data)
+
+
+@extend_schema(tags=["BufferProviderConnection"])
+class BufferProviderConnectionDisconnectView(APIView):
+    permission_classes = [IsAuthenticated, CanManageCredentials]
+
+    @extend_schema(
+        request=BufferProviderConnectionDisconnectSerializer,
+        responses={200: BufferProviderConnectionReadSerializer},
+    )
+    def post(self, request: Request) -> Response:
+        serializer = BufferProviderConnectionDisconnectSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not serializer.validated_data["confirm"]:
+            return Response({
+                "code": "DISCONNECT_CONFIRMATION_REQUIRED",
+                "message": "请明确确认后再断开连接。",
+            }, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            connection = disconnect_buffer(
+                organization=request.organization,
+                actor=request.user,
+                token_store=buffer_token_store,
+            )
+        except BufferConnectionError as error:
+            return _buffer_error_response(error)
+        return Response(BufferProviderConnectionReadSerializer(connection).data)

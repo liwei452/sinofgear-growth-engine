@@ -360,6 +360,11 @@ def sync_publish_item_from_task(*, task_id):
         item.status = GrowthPublishItem.Status.SUCCEEDED
         item.external_post_id = post.external_id if post else ""
         item.last_error = None
+    elif task.status in {
+        PublishTask.Status.SUBMITTED, PublishTask.Status.SUBMISSION_UNKNOWN,
+    }:
+        item.status = GrowthPublishItem.Status.DELEGATED
+        item.last_error = task.last_error or None
     elif task.status == PublishTask.Status.FAILED:
         item.status = GrowthPublishItem.Status.FAILED
         item.last_error = task.last_error or {

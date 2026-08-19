@@ -116,7 +116,7 @@ def test_daily_publish_limit_counts_pending_tasks(publishing_context):
         )
 
 
-def test_reap_stale_publish_tasks_fails_expired_running(publishing_context):
+def test_reap_stale_publish_tasks_marks_unknown_outcome(publishing_context):
     context = publishing_context
     task = create_publish_task(
         content=context["content"],
@@ -133,5 +133,5 @@ def test_reap_stale_publish_tasks_fails_expired_running(publishing_context):
     assert reap_stale_publish_tasks(now=expired) == 1
 
     task.refresh_from_db()
-    assert task.status == PublishTask.Status.FAILED
-    assert task.last_error["code"] == "STALE_WORKER"
+    assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
+    assert task.last_error["code"] == "OUTCOME_UNKNOWN"

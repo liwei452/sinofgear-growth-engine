@@ -58,6 +58,10 @@ SAFE_PUBLISH_ERRORS = {
         "code": "STALE_WORKER",
         "message": "Worker lease expired without heartbeat.",
     },
+    "OUTCOME_UNKNOWN": {
+        "code": "OUTCOME_UNKNOWN",
+        "message": "Provider outcome could not be determined.",
+    },
 }
 
 
@@ -143,6 +147,25 @@ def _attempt_history_is_consistent(task, post):
             and attempt.finished_at is not None
         ):
             return False
+        if attempt.status == PublishAttempt.Status.SUBMITTED and not (
+            attempt.outcome == "SUBMITTED"
+            and attempt.error is None
+            and attempt.retry_at is None
+            and attempt.provider_submission_id
+            and not attempt.external_id
+            and attempt.finished_at is not None
+        ):
+            return False
+        if attempt.status == PublishAttempt.Status.SUBMISSION_UNKNOWN and not (
+            attempt.outcome == "OUTCOME_UNKNOWN"
+            and _safe_error_is_exact(attempt.error)
+            and attempt.error["code"] == "OUTCOME_UNKNOWN"
+            and attempt.retry_at is None
+            and not attempt.external_id
+            and not attempt.provider_submission_id
+            and attempt.finished_at is not None
+        ):
+            return False
         if attempt.retry_at is not None and attempt.retry_at < attempt.finished_at:
             return False
         previous = attempt
@@ -150,6 +173,8 @@ def _attempt_history_is_consistent(task, post):
     if any(
         attempt.status in {
             PublishAttempt.Status.RUNNING,
+            PublishAttempt.Status.SUBMITTED,
+            PublishAttempt.Status.SUBMISSION_UNKNOWN,
             PublishAttempt.Status.SUCCEEDED,
             PublishAttempt.Status.CANCELED,
         }
@@ -251,6 +276,34 @@ def publish_task_is_consistent(task):
                 and post.social_account_id == task.social_account_id
                 and post.attempt_id == latest.id
                 and post.external_id == latest.external_id
+            )
+        if task.status == PublishTask.Status.SUBMITTED:
+            return (
+                content.status == PlatformContent.Status.APPROVED
+                and task.claim_token is None and task.started_at is not None
+                and task.finished_at is not None and task.canceled_at is None
+                and task.last_error is None and task.retry_not_before is None
+                and task.provider_submission_id
+                and post is None and latest is not None
+                and latest.status == PublishAttempt.Status.SUBMITTED
+                and latest.started_at == task.started_at
+                and latest.finished_at == task.finished_at
+                and latest.provider_submission_id == task.provider_submission_id
+            )
+        if task.status == PublishTask.Status.SUBMISSION_UNKNOWN:
+            return (
+                content.status == PlatformContent.Status.APPROVED
+                and task.claim_token is None and task.started_at is not None
+                and task.finished_at is not None and task.canceled_at is None
+                and _safe_error_is_exact(task.last_error)
+                and task.last_error["code"] == "OUTCOME_UNKNOWN"
+                and task.retry_not_before is None
+                and not task.provider_submission_id
+                and post is None and latest is not None
+                and latest.status == PublishAttempt.Status.SUBMISSION_UNKNOWN
+                and latest.started_at == task.started_at
+                and latest.finished_at == task.finished_at
+                and latest.error == task.last_error
             )
         if task.status == PublishTask.Status.FAILED:
             return (
@@ -692,6 +745,94 @@ def complete_publish_success(task_id, claim_token, result, *, actor=None):
     return post
 
 
+def _result_kind(result):
+    if getattr(result, "succeeded", False):
+        return "succeeded"
+    if getattr(result, "submitted", False):
+        return "submitted"
+    if getattr(result, "error_code", "") == "OUTCOME_UNKNOWN":
+        return "unknown"
+    return "failed"
+
+
+@transaction.atomic
+def complete_publish_submitted(task_id, claim_token, result):
+    task = PublishTask.objects.select_for_update().get(pk=task_id)
+    attempt = PublishAttempt.objects.select_for_update().get(
+        task=task, claim_token=claim_token
+    )
+    if task.status != PublishTask.Status.RUNNING or task.claim_token != claim_token:
+        if attempt.status == PublishAttempt.Status.RUNNING:
+            attempt.status = PublishAttempt.Status.STALE
+            attempt.finished_at = timezone.now()
+            with publishing_writes():
+                attempt.save(update_fields=["status", "finished_at", "updated_at"])
+        return task
+    submission_id = str(getattr(result, "submission_id", "") or "")
+    if len(submission_id) > 255:
+        raise PublishingConflict("Connector submission id is invalid.")
+    now = timezone.now()
+    task.status = PublishTask.Status.SUBMITTED
+    task.claim_token = None
+    task.last_error = None
+    task.retry_not_before = None
+    task.provider_submission_id = submission_id
+    task.finished_at = now
+    attempt.status = PublishAttempt.Status.SUBMITTED
+    attempt.outcome = "SUBMITTED"
+    attempt.error = None
+    attempt.retry_at = None
+    attempt.provider_submission_id = submission_id
+    attempt.finished_at = now
+    with publishing_writes():
+        task.save(update_fields=[
+            "status", "claim_token", "last_error", "retry_not_before",
+            "provider_submission_id", "finished_at", "updated_at",
+        ])
+        attempt.save(update_fields=[
+            "status", "outcome", "error", "retry_at",
+            "provider_submission_id", "finished_at", "updated_at",
+        ])
+    return task
+
+
+@transaction.atomic
+def complete_publish_unknown(task_id, claim_token, result):
+    del result
+    task = PublishTask.objects.select_for_update().get(pk=task_id)
+    attempt = PublishAttempt.objects.select_for_update().get(
+        task=task, claim_token=claim_token
+    )
+    if task.status != PublishTask.Status.RUNNING or task.claim_token != claim_token:
+        if attempt.status == PublishAttempt.Status.RUNNING:
+            attempt.status = PublishAttempt.Status.STALE
+            attempt.finished_at = timezone.now()
+            with publishing_writes():
+                attempt.save(update_fields=["status", "finished_at", "updated_at"])
+        return task
+    now = timezone.now()
+    error = SAFE_PUBLISH_ERRORS["OUTCOME_UNKNOWN"]
+    task.status = PublishTask.Status.SUBMISSION_UNKNOWN
+    task.claim_token = None
+    task.last_error = error
+    task.retry_not_before = None
+    task.finished_at = now
+    attempt.status = PublishAttempt.Status.SUBMISSION_UNKNOWN
+    attempt.outcome = "OUTCOME_UNKNOWN"
+    attempt.error = error
+    attempt.retry_at = None
+    attempt.finished_at = now
+    with publishing_writes():
+        task.save(update_fields=[
+            "status", "claim_token", "last_error", "retry_not_before",
+            "finished_at", "updated_at",
+        ])
+        attempt.save(update_fields=[
+            "status", "outcome", "error", "retry_at", "finished_at", "updated_at",
+        ])
+    return task
+
+
 @transaction.atomic
 def heartbeat_publish_task(task_id, *, claim_token) -> PublishTask:
     task = PublishTask.objects.select_for_update().get(pk=task_id)
@@ -716,8 +857,8 @@ def reap_stale_publish_tasks(*, now=None) -> int:
     )
     for task in stale:
         token = task.claim_token
-        error = SAFE_PUBLISH_ERRORS["STALE_WORKER"]
-        task.status = PublishTask.Status.FAILED
+        error = SAFE_PUBLISH_ERRORS["OUTCOME_UNKNOWN"]
+        task.status = PublishTask.Status.SUBMISSION_UNKNOWN
         task.last_error = error
         task.finished_at = now
         task.claim_token = None
@@ -728,11 +869,14 @@ def reap_stale_publish_tasks(*, now=None) -> int:
         if token:
             attempt = PublishAttempt.objects.filter(claim_token=token).first()
             if attempt is not None and attempt.status == PublishAttempt.Status.RUNNING:
-                attempt.status = PublishAttempt.Status.FAILED
+                attempt.status = PublishAttempt.Status.SUBMISSION_UNKNOWN
+                attempt.outcome = "OUTCOME_UNKNOWN"
                 attempt.error = error
                 attempt.finished_at = now
                 with publishing_writes():
-                    attempt.save(update_fields=["status", "error", "finished_at"])
+                    attempt.save(update_fields=[
+                        "status", "outcome", "error", "finished_at", "updated_at",
+                    ])
     return len(stale)
 
 
@@ -849,28 +993,42 @@ def execute_publish_task(task_id):
             )
     except PublishPayloadError as exc:
         result = PublishResult(succeeded=False, error_code="VALIDATION_REJECTED", error_message=str(exc))
+    except (TimeoutError, ConnectionError, OSError):
+        logger.exception("Provider publish outcome is unknown.")
+        result = PublishResult(
+            succeeded=False,
+            error_code="OUTCOME_UNKNOWN",
+            error_message="Provider publish outcome is unknown.",
+        )
     except Exception:
         logger.exception("Provider rejected the publish request.")
         result = PublishResult(
             succeeded=False, error_code="PROVIDER_ERROR",
             error_message="Provider rejected the publish request.",
         )
-    if not result.succeeded:
-        complete_publish_failure(task.id, attempt.claim_token, result)
+    kind = _result_kind(result)
+    if kind == "succeeded":
+        try:
+            post = complete_publish_success(
+                task.id, attempt.claim_token, result, actor=task.created_by
+            )
+        except Exception:
+            logger.exception("Publish finalization failed.")
+            complete_publish_failure(
+                task.id, attempt.claim_token,
+                PublishResult(succeeded=False, error_code="PUBLISH_FINALIZE_ERROR"),
+            )
+            return None
+        _associate_pre_publish_tracking(task, post)
+        return post
+    if kind == "submitted":
+        complete_publish_submitted(task.id, attempt.claim_token, result)
         return None
-    try:
-        post = complete_publish_success(
-            task.id, attempt.claim_token, result, actor=task.created_by
-        )
-    except Exception:
-        logger.exception("Publish finalization failed.")
-        complete_publish_failure(
-            task.id, attempt.claim_token,
-            PublishResult(succeeded=False, error_code="PUBLISH_FINALIZE_ERROR"),
-        )
+    if kind == "unknown":
+        complete_publish_unknown(task.id, attempt.claim_token, result)
         return None
-    _associate_pre_publish_tracking(task, post)
-    return post
+    complete_publish_failure(task.id, attempt.claim_token, result)
+    return None
 
 
 @transaction.atomic
@@ -911,6 +1069,12 @@ def cancel_publish_task(task, *, actor=None):
 def retry_publish_task(task, *, actor=None):
     del actor
     task = PublishTask.objects.select_for_update().get(pk=task.pk)
+    if task.status in {
+        PublishTask.Status.SUBMITTED, PublishTask.Status.SUBMISSION_UNKNOWN,
+    }:
+        raise PublishingConflict(
+            "Submitted or unknown-outcome tasks require reconciliation, not retry."
+        )
     if task.status != PublishTask.Status.FAILED:
         raise PublishingConflict("Only failed publish tasks can be retried.")
     if task.attempt_number >= MAX_PUBLISH_ATTEMPTS:

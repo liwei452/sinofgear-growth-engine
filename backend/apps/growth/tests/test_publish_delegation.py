@@ -124,7 +124,11 @@ def test_sync_publish_item_from_task_marks_canceled(db, monkeypatch):
         "PublishTask",
         SimpleNamespace(
             Status=SimpleNamespace(
-                SUCCEEDED="SUCCEEDED", FAILED="FAILED", CANCELED="CANCELED",
+                SUCCEEDED="SUCCEEDED",
+                FAILED="FAILED",
+                CANCELED="CANCELED",
+                SUBMITTED="SUBMITTED",
+                SUBMISSION_UNKNOWN="SUBMISSION_UNKNOWN",
             ),
             objects=SimpleNamespace(
                 filter=lambda **kwargs: SimpleNamespace(

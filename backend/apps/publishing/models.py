@@ -65,6 +65,8 @@ class PublishTask(ProtectedPublishingModel):
         SCHEDULED = "SCHEDULED", "Scheduled"
         QUEUED = "QUEUED", "Queued"
         RUNNING = "RUNNING", "Running"
+        SUBMITTED = "SUBMITTED", "Submitted"
+        SUBMISSION_UNKNOWN = "SUBMISSION_UNKNOWN", "Submission unknown"
         SUCCEEDED = "SUCCEEDED", "Succeeded"
         FAILED = "FAILED", "Failed"
         CANCELED = "CANCELED", "Canceled"
@@ -82,13 +84,14 @@ class PublishTask(ProtectedPublishingModel):
     connector_code = models.CharField(max_length=64, default="mock")
     idempotency_key = models.CharField(max_length=128)
     request_fingerprint = models.CharField(max_length=64)
-    status = models.CharField(max_length=16, choices=Status.choices)
+    status = models.CharField(max_length=32, choices=Status.choices)
     scheduled_at = models.DateTimeField(null=True, blank=True)
     requested_timezone = models.CharField(max_length=64, default="UTC")
     claim_token = models.UUIDField(null=True, blank=True)
     attempt_number = models.PositiveIntegerField(default=0)
     retry_not_before = models.DateTimeField(null=True, blank=True)
     last_error = models.JSONField(null=True, blank=True)
+    provider_submission_id = models.CharField(max_length=255, blank=True, default="")
     heartbeat_at = models.DateTimeField(null=True, blank=True)
     lease_expires_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
@@ -112,6 +115,8 @@ class PublishTask(ProtectedPublishingModel):
 class PublishAttempt(ProtectedPublishingModel):
     class Status(models.TextChoices):
         RUNNING = "RUNNING", "Running"
+        SUBMITTED = "SUBMITTED", "Submitted"
+        SUBMISSION_UNKNOWN = "SUBMISSION_UNKNOWN", "Submission unknown"
         SUCCEEDED = "SUCCEEDED", "Succeeded"
         FAILED = "FAILED", "Failed"
         CANCELED = "CANCELED", "Canceled"
@@ -120,12 +125,13 @@ class PublishAttempt(ProtectedPublishingModel):
     task = models.ForeignKey(PublishTask, on_delete=models.PROTECT, related_name="attempts")
     number = models.PositiveIntegerField()
     claim_token = models.UUIDField(default=uuid.uuid4, unique=True)
-    status = models.CharField(max_length=16, choices=Status.choices)
+    status = models.CharField(max_length=32, choices=Status.choices)
     request_fingerprint = models.CharField(max_length=64)
     outcome = models.CharField(max_length=32, blank=True)
     error = models.JSONField(null=True, blank=True)
     retry_at = models.DateTimeField(null=True, blank=True)
     external_id = models.CharField(max_length=255, blank=True)
+    provider_submission_id = models.CharField(max_length=255, blank=True, default="")
     started_at = models.DateTimeField()
     finished_at = models.DateTimeField(null=True, blank=True)
 

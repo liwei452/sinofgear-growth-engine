@@ -7083,6 +7083,8 @@ paths:
           - QUEUED
           - RUNNING
           - SCHEDULED
+          - SUBMISSION_UNKNOWN
+          - SUBMITTED
           - SUCCEEDED
       - in: query
         name: timezone
@@ -7141,6 +7143,8 @@ paths:
           - QUEUED
           - RUNNING
           - SCHEDULED
+          - SUBMISSION_UNKNOWN
+          - SUBMITTED
           - SUCCEEDED
       tags:
       - PublishTasks
@@ -12409,6 +12413,8 @@ components:
     PublishAttemptStatusEnum:
       enum:
       - RUNNING
+      - SUBMITTED
+      - SUBMISSION_UNKNOWN
       - SUCCEEDED
       - FAILED
       - CANCELED
@@ -12416,6 +12422,8 @@ components:
       type: string
       description: |-
         * `RUNNING` - Running
+        * `SUBMITTED` - Submitted
+        * `SUBMISSION_UNKNOWN` - Submission unknown
         * `SUCCEEDED` - Succeeded
         * `FAILED` - Failed
         * `CANCELED` - Canceled
@@ -12611,6 +12619,8 @@ components:
       - SCHEDULED
       - QUEUED
       - RUNNING
+      - SUBMITTED
+      - SUBMISSION_UNKNOWN
       - SUCCEEDED
       - FAILED
       - CANCELED
@@ -12619,6 +12629,8 @@ components:
         * `SCHEDULED` - Scheduled
         * `QUEUED` - Queued
         * `RUNNING` - Running
+        * `SUBMITTED` - Submitted
+        * `SUBMISSION_UNKNOWN` - Submission unknown
         * `SUCCEEDED` - Succeeded
         * `FAILED` - Failed
         * `CANCELED` - Canceled

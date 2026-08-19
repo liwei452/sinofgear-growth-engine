@@ -46,6 +46,7 @@ class OfficialPublishResult:
     status: str
     external_id: str = ""
     external_url: str = ""
+    submission_id: str = ""
     error_code: str = ""
     error_message: str = ""
     retryable: bool = False
@@ -54,6 +55,10 @@ class OfficialPublishResult:
     @property
     def succeeded(self) -> bool:
         return self.status in {"SUCCEEDED", "SUCCEEDED_PRIVATE"}
+
+    @property
+    def submitted(self) -> bool:
+        return self.status == "SUBMITTED"
 
 
 class OfficialConnector(Protocol):

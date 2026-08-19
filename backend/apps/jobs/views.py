@@ -130,6 +130,7 @@ class JobActionView(APIView):
         try:
             if self.action == "retry":
                 job = JobService.retry(job.id, organization=request.organization)
+                self._dispatch_retry(job)
             else:
                 job = JobService.cancel(job.id, organization=request.organization)
         except JobConflictError as exc:
@@ -138,6 +139,13 @@ class JobActionView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
         return Response(JobSerializer(job).data)
+
+    @staticmethod
+    def _dispatch_retry(job):
+        if job.type == Job.Type.CONTENT_PLATFORM_VARIANTS:
+            from apps.content.tasks import generate_platform_variants_job
+
+            generate_platform_variants_job.delay(str(job.id))
 
 
 class JobRetryView(JobActionView):

@@ -1,6 +1,7 @@
 import pytest
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from rest_framework.test import APIClient
 
 from apps.ai.models import AIRun, PromptVersion, ai_audit_writes
 from apps.ai.services import PromptVersionService
@@ -14,6 +15,7 @@ from apps.content.models import PlatformContent
 from apps.content.services import create_generated_master
 from apps.content.tasks import generate_master_content_job
 from apps.identity.models import Organization
+from apps.identity.models import Membership, Role
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
 from apps.platforms.models import Platform
@@ -169,3 +171,44 @@ def test_generate_master_content_job_exposes_platform_failure(
     )
     assert child.status == Job.Status.FAILED
     assert job.status == Job.Status.SUCCEEDED
+
+
+@pytest.mark.django_db
+def test_retry_redispatches_platform_variants_job(
+    master_with_two_platforms, monkeypatch
+):
+    from apps.content import services
+
+    organization, actor, master, job, prompt = master_with_two_platforms
+    Membership.objects.create(
+        user=actor,
+        organization=organization,
+        role=Role.objects.create_administrator(),
+    )
+    client = APIClient()
+    assert client.login(username=actor.username, password="x")
+
+    real_create = services.create_platform_content
+
+    def fail_facebook(master_content, *, platform, actor=None):
+        if platform.code == "FACEBOOK":
+            raise services.ContentStateError("injected platform failure")
+        return real_create(master_content, platform=platform, actor=actor)
+
+    monkeypatch.setattr(services, "create_platform_content", fail_facebook)
+
+    with pytest.raises(services.ContentStateError, match="injected platform failure"):
+        generate_master_content_job(job.id, prompt.id)
+
+    child = Job.objects.get(
+        organization=organization, type=Job.Type.CONTENT_PLATFORM_VARIANTS
+    )
+    assert child.status == Job.Status.FAILED
+
+    monkeypatch.setattr(services, "create_platform_content", real_create)
+    response = client.post(f"/api/v1/jobs/{child.id}/retry", {}, format="json")
+
+    assert response.status_code == 200
+    child.refresh_from_db()
+    assert child.status == Job.Status.SUCCEEDED
+    assert PlatformContent.objects.filter(master_content=master).count() == 2

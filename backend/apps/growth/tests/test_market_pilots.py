@@ -95,12 +95,10 @@ def test_operator_can_watch_a_market_for_only_their_organization_and_refresh_kee
     market_profiles_for(other)
 
     watched = client.post("/api/v1/growth/markets/USA/watch", {}, format="json")
-    workspace = client.get("/api/v1/growth/workspace")
 
     assert watched.status_code == 200
     assert watched.data == {"country_code": "USA", "is_watched": True, "message": "已加入观察市场。"}
-    usa = next(market for market in workspace.data["market_pilots"]["markets"] if market["country_code"] == "USA")
-    assert usa["is_watched"] is True
+    assert MarketCountryProfile.objects.get(organization=organization, country_code="USA").is_watched is True
     assert MarketCountryProfile.objects.get(organization=other, country_code="USA").is_watched is False
 
 
@@ -155,16 +153,10 @@ def test_operator_can_create_a_truthful_watch_market_without_reusing_demo_resear
         "country_label": "Germany",
         "path_family": "MIXED_ACQUISITION",
     }, format="json")
-    workspace = client.get("/api/v1/growth/workspace")
     assert custom.status_code == 201
-    assert workspace.status_code == 200
-    germany = next(market for market in workspace.data["market_pilots"]["markets"] if market["country_code"] == "DEU")
-    assert germany["metrics"] == {
-        "effective_customer_rate": None,
-        "positive_reply_rate": None,
-        "source_cost_micros": 0,
-        "raw_sample_count": 0,
-    }
+    germany = MarketCountryProfile.objects.get(organization=organization, country_code="DEU")
+    assert germany.is_demo is False
+    assert germany.is_watched is True
 
 
 @pytest.mark.django_db

@@ -79,11 +79,6 @@ def test_human_decisions_append_history_without_overwriting_the_signal(opportuni
     signal.refresh_from_db()
     assert signal.confidence == 82
     assert signal.score_breakdown["intent_strength"] == 23
-    workspace = client.get("/api/v1/growth/workspace").data
-    assert [item["status_label"] for item in workspace["opportunity_reviews"]] == [
-        "继续观察", "优先跟进",
-    ]
-    assert workspace["opportunity_reviews"][0]["original_confidence"] == 82
 
 
 def test_mock_crm_handoff_requires_priority_review_and_complete_evidence(opportunity):
@@ -157,4 +152,3 @@ def test_review_and_handoff_routes_are_documented(opportunity):
 
     assert "post" in schema["paths"]["/api/v1/growth/opportunities/{account_id}/review"]
     assert "post" in schema["paths"]["/api/v1/growth/opportunities/{account_id}/crm-handoff"]
-

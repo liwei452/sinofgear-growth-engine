@@ -5,7 +5,13 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.growth.models import IntentSignal, OutreachDraft, TargetAccount
+from apps.growth.models import (
+    AccountFunnelEvent,
+    IntentSignal,
+    OutreachDraft,
+    ReactivationRecord,
+    TargetAccount,
+)
 from apps.identity.models import Membership, Organization, Role
 
 
@@ -75,7 +81,6 @@ def test_legal_existing_relationship_can_create_and_approve_a_never_sent_draft(o
 
     drafted = client.post(f"/api/v1/growth/reactivations/{selected.data['id']}/draft", {}, format="json")
     approved = client.post(f"/api/v1/growth/reactivations/{selected.data['id']}/approve", {}, format="json")
-    workspace = client.get("/api/v1/growth/workspace")
 
     assert drafted.status_code == 201
     assert "PackTech GmbH" in drafted.data["english_draft"]
@@ -92,10 +97,12 @@ def test_legal_existing_relationship_can_create_and_approve_a_never_sent_draft(o
         "message": "Draft approved for future manual sending; nothing was sent.",
     }
     assert OutreachDraft.objects.get(id=drafted.data["draft_id"]).status == OutreachDraft.Status.APPROVED
-    reactivation = workspace.data["reactivations"][0]
-    assert reactivation["status"] == "APPROVED"
-    assert [event["event_type"] for event in reactivation["events"]] == [
-        "REACTIVATION_SELECTED", "REACTIVATION_DRAFTED", "REACTIVATION_APPROVED",
+    reactivation = ReactivationRecord.objects.get(organization=organization)
+    assert reactivation.status == ReactivationRecord.Status.APPROVED
+    assert [event.event_type for event in reactivation.events.all()] == [
+        AccountFunnelEvent.EventType.REACTIVATION_SELECTED,
+        AccountFunnelEvent.EventType.REACTIVATION_DRAFTED,
+        AccountFunnelEvent.EventType.REACTIVATION_APPROVED,
     ]
 
 

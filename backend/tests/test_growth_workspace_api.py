@@ -64,32 +64,6 @@ def growth_publish_ready(growth_client):
 
 
 @pytest.mark.django_db
-def test_workspace_route_exposes_four_separate_collections(growth_client):
-    client, _organization = growth_client
-
-    response = client.get("/api/v1/growth/workspace")
-
-    assert response.status_code == 200
-    assert set(response.data) >= {
-        "target_accounts", "contacts", "intent_signals", "inbound_leads", "follow_ups",
-        "outreach_drafts", "channel_packages", "metric_receipts", "field_provenance",
-        "connectors",
-    }
-    assert response.data["connectors"] == [
-        {
-            "channel": channel,
-            "status": "CONFIGURATION_REQUIRED",
-            "connection_label": "未配置",
-            "recovery_action": "连接账号",
-            "mode": "",
-            "account_id": "",
-            "publication_mode": "UNAVAILABLE",
-        }
-        for channel in ("LINKEDIN", "FACEBOOK", "INSTAGRAM", "TIKTOK", "YOUTUBE")
-    ]
-
-
-@pytest.mark.django_db
 def test_one_click_publish_api_is_idempotent_and_retries_only_failure(growth_publish_ready):
     client, _organization, packages = growth_publish_ready
     payload = {"package_ids": [str(package.id) for package in packages]}
@@ -122,12 +96,10 @@ def test_one_click_publish_api_is_idempotent_and_retries_only_failure(growth_pub
         f"/api/v1/growth/publish-batches/{first.data['id']}/retry-failed", {}, format="json",
     )
     detail = client.get(f"/api/v1/growth/publish-batches/{first.data['id']}")
-    workspace = client.get("/api/v1/growth/workspace")
 
     assert retried.status_code == 200
     assert retried.data["status"] == "CONFIGURATION_REQUIRED"
     assert detail.data == retried.data
-    assert workspace.data["publish_batches"][0] == retried.data
     attempts = {item["channel"]: item["attempt_number"] for item in retried.data["items"]}
     assert attempts == {"FACEBOOK": 0, "INSTAGRAM": 0, "LINKEDIN": 0, "TIKTOK": 0}
     assert all(
@@ -182,115 +154,31 @@ def test_publish_batch_api_does_not_enumerate_foreign_packages(growth_publish_re
 
 
 @pytest.mark.django_db
-def test_workspace_keeps_growth_objects_distinct_and_organization_scoped(growth_client):
+def test_company_facts_list_is_organization_scoped(growth_client):
     client, organization = growth_client
-    from apps.growth.models import Contact, InboundLead, IntentSignal, TargetAccount
+    from apps.growth.models import FieldProvenance
 
-    account = TargetAccount.objects.create(
-        organization=organization, name="PackTech GmbH", country="Germany",
-        industry="Packaging machinery", employee_range="51-200", is_demo=True,
-    )
-    Contact.objects.create(
-        organization=organization, account=account, full_name="Purchasing team",
-        role_title="Public contact path", public_contact_path="https://packtech.example/contact",
-    )
-    IntentSignal.objects.create(
-        organization=organization, account=account, signal_type="HIRING",
-        source_label="Public careers page", source_url="https://packtech.example/careers",
-        evidence_text="Hiring a precision transmission buyer", confidence=88, is_demo=True,
-    )
-    InboundLead.objects.create(
-        organization=organization, account=account, source_label="Demo website form", is_demo=True,
-    )
-    foreign = Organization.objects.create(name="Foreign", slug="foreign-growth")
-    TargetAccount.objects.create(organization=foreign, name="Foreign secret", country="US")
-
-    response = client.get("/api/v1/growth/workspace")
-
-    assert response.status_code == 200
-    assert [item["name"] for item in response.data["target_accounts"]] == ["PackTech GmbH"]
-    assert len(response.data["contacts"]) == 1
-    assert len(response.data["intent_signals"]) == 1
-    assert len(response.data["inbound_leads"]) == 1
-    assert response.data["target_accounts"][0]["data_label"] == "Demo / Fake"
-    assert "Foreign secret" not in str(response.data)
-
-
-@pytest.mark.django_db
-def test_workspace_explains_opportunity_evidence_and_priority(growth_client):
-    client, organization = growth_client
-    from apps.growth.models import IntentSignal, TargetAccount
-
-    account = TargetAccount.objects.create(
-        organization=organization, name="Evidence Buyer", country="Germany", is_demo=True,
-    )
-    IntentSignal.objects.create(
+    FieldProvenance.objects.create(
         organization=organization,
-        account=account,
-        signal_type="HIRING",
-        source_label="Public careers page",
-        source_url="https://example.invalid/evidence",
-        evidence_text="Hiring a precision transmission buyer",
-        confidence=88,
-        is_demo=True,
-        collection_method="DEMO_FIXTURE",
-        content_hash="a" * 64,
-        score_breakdown={
-            "icp_fit": 20, "intent_strength": 24, "recency": 14,
-            "role_relevance": 12, "evidence_coverage": 18, "risk_penalty": 0,
-        },
-        scoring_rule_version="opportunity-v1",
-        uncertainty_notes=["采购时间仍需人工确认"],
+        field_name="accuracy_grade",
+        field_value="DIN 6",
+        source_label="Product library",
+        verification_status="NEEDS_EVIDENCE",
+    )
+    foreign = Organization.objects.create(name="Foreign", slug="foreign-facts-list")
+    FieldProvenance.objects.create(
+        organization=foreign,
+        field_name="secret_capacity",
+        field_value="hidden",
+        source_label="private",
+        verification_status="NEEDS_CONFIRMATION",
     )
 
-    response = client.get("/api/v1/growth/workspace")
+    response = client.get("/api/v1/growth/company-facts")
 
     assert response.status_code == 200
-    signal = response.data["intent_signals"][0]
-    assert signal["collection_method"] == "DEMO_FIXTURE"
-    assert signal["collection_method_label"] == "本地演示样本"
-    assert signal["content_hash"] == "a" * 64
-    assert signal["score_breakdown"] == {
-        "icp_fit": 20, "intent_strength": 24, "recency": 14,
-        "role_relevance": 12, "evidence_coverage": 18, "risk_penalty": 0,
-    }
-    assert signal["scoring_rule_version"] == "opportunity-v1"
-    assert signal["uncertainty_notes"] == ["采购时间仍需人工确认"]
-    assert signal["priority_label"] == "优先跟进"
-
-
-@pytest.mark.django_db
-def test_high_total_without_enough_evidence_stays_in_observation(growth_client):
-    client, organization = growth_client
-    from apps.growth.models import IntentSignal, TargetAccount
-
-    account = TargetAccount.objects.create(
-        organization=organization, name="Thin Evidence Buyer", country="Italy", is_demo=True,
-    )
-    IntentSignal.objects.create(
-        organization=organization,
-        account=account,
-        signal_type="EXPANSION",
-        source_label="Public product page",
-        source_url="https://example.invalid/thin-evidence",
-        evidence_text="Possible expansion",
-        confidence=90,
-        is_demo=True,
-        collection_method="MANUAL_URL",
-        content_hash="b" * 64,
-        score_breakdown={
-            "icp_fit": 25, "intent_strength": 25, "recency": 20,
-            "role_relevance": 10, "evidence_coverage": 10, "risk_penalty": 0,
-        },
-        scoring_rule_version="opportunity-v1",
-        uncertainty_notes=["只有单一来源"],
-    )
-
-    response = client.get("/api/v1/growth/workspace")
-
-    assert response.status_code == 200
-    assert response.data["intent_signals"][0]["collection_method_label"] == "人工导入网页"
-    assert response.data["intent_signals"][0]["priority_label"] == "继续观察"
+    assert [item["field_name"] for item in response.data] == ["accuracy_grade"]
+    assert "hidden" not in str(response.data)
 
 
 @pytest.mark.django_db
@@ -332,25 +220,6 @@ def test_growth_actions_do_not_enumerate_foreign_accounts(growth_client):
     assert draft.status_code == 404
     assert "Foreign secret" not in follow_up.content.decode()
     assert "Foreign secret" not in draft.content.decode()
-
-
-@pytest.mark.django_db
-def test_workspace_returns_persisted_follow_up_and_latest_draft(growth_client):
-    client, organization = growth_client
-    from apps.growth.models import TargetAccount
-
-    account = TargetAccount.objects.create(
-        organization=organization, name="PackTech GmbH", country="Germany", is_demo=True,
-    )
-    client.post(f"/api/v1/growth/opportunities/{account.id}/follow-up", {}, format="json")
-    draft = client.post(f"/api/v1/growth/opportunities/{account.id}/draft", {}, format="json")
-
-    response = client.get("/api/v1/growth/workspace")
-
-    assert response.status_code == 200
-    assert str(response.data["follow_ups"][0]["account_id"]) == str(account.id)
-    assert response.data["outreach_drafts"][0]["id"] == str(draft.data["id"])
-    assert response.data["outreach_drafts"][0]["delivery"] == "NEVER_SENT"
 
 
 @pytest.mark.django_db

@@ -9,7 +9,6 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.response import Response
-from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
@@ -36,24 +35,17 @@ from .enrichment import (
 )
 from .models import (
     ChannelPackage,
-    Contact,
     DiscoveryCandidate,
     DiscoveryProfile,
     DiscoveryRun,
     FieldProvenance,
-    FollowUp,
     GoogleMapsDiscoveryConfig,
     GrowthMission,
     GrowthPublishBatch,
-    InboundLead,
-    IntentSignal,
     MissionEntityLink,
-    MetricReceipt,
     MarketCountryProfile,
-    OpportunityReview,
     OutreachDraft,
     ReactivationRecord,
-    CRMHandoff,
     TargetAccount,
     TradeDatasetSnapshot,
     TradeSyncRun,
@@ -73,12 +65,11 @@ from .webhook_auth import verify_webhook_signature
 from .promotion_plan import (
     approve_promotion_plan,
     clear_promotion_plan_approval,
-    promotion_plan_preview,
     promotion_plan_status,
 )
 
 from .manual_imports import import_manual_opportunity
-from .market_pilots import market_pilot_summary, market_profiles_for
+from .market_pilots import market_profiles_for
 from .serializers import (
     ChannelPackageBatchApproveSerializer,
     ChannelPackageBatchPrepareSerializer,
@@ -91,12 +82,10 @@ from .serializers import (
     DiscoveryCandidateReviewSerializer,
     DiscoveryCandidateSerializer,
     EnrichmentCandidateSerializer,
-    ContactSerializer,
     DiscoveryProfileUpdateSerializer,
     DiscoveryRunResultSerializer,
     DiscoverySummarySerializer,
     FieldProvenanceSerializer,
-    FollowUpSerializer,
     GoogleMapsDiscoveryConfigResponseSerializer,
     GoogleMapsDiscoveryConfigUpdateSerializer,
     GoogleMapsDiscoveryRunResultSerializer,
@@ -107,7 +96,6 @@ from .serializers import (
     GrowthPublishBatchSerializer,
     GrowthErrorSerializer,
     GrowthValidationErrorSerializer,
-    InboundLeadSerializer,
     IntentSignalSerializer,
     ManualOpportunityImportResponseSerializer,
     ManualOpportunityImportSerializer,
@@ -115,7 +103,6 @@ from .serializers import (
     MetricReceiptSerializer,
     OpportunityReviewCreateSerializer,
     OpportunityReviewSerializer,
-    OutreachDraftSerializer,
     ReactivationCreateSerializer,
     CRMHandoffCreateSerializer,
     CRMHandoffSerializer,
@@ -272,92 +259,6 @@ def discovery_summary(profile):
             },
         ],
     }
-
-
-class GrowthWorkspaceView(APIView):
-    permission_classes = [CanReadLeads]
-
-    @extend_schema(tags=["Growth workspace"])
-    def get(self, request):
-        organization = request.organization
-        limit, offset = self._pagination(request)
-        payload = self._workspace_payload(organization, limit=limit, offset=offset)
-        return Response(payload)
-
-    @staticmethod
-    def _pagination(request):
-        try:
-            limit = int(request.query_params.get("limit", 500))
-            offset = int(request.query_params.get("offset", 0))
-        except (TypeError, ValueError):
-            raise ValidationError("分页参数必须是整数。")
-        return max(1, min(limit, 500)), max(0, offset)
-
-    def _workspace_payload(self, organization, *, limit, offset):
-        accounts = list(
-            TargetAccount.objects.filter(organization=organization).order_by("-created_at", "-id")
-        )
-        all_signals = list(IntentSignal.objects.filter(organization=organization))
-        page_accounts = accounts[offset:offset + limit]
-        return {
-            "target_accounts": TargetAccountSerializer(page_accounts, many=True).data,
-            "accounts_total": len(accounts),
-            "accounts_has_more": offset + limit < len(accounts),
-            "accounts_offset": offset,
-            "contacts": ContactSerializer(
-                Contact.objects.filter(organization=organization)[:limit], many=True,
-            ).data,
-            "intent_signals": IntentSignalSerializer(
-                all_signals[:limit], many=True,
-            ).data,
-            "inbound_leads": InboundLeadSerializer(
-                InboundLead.objects.filter(organization=organization)[:limit], many=True,
-            ).data,
-            "follow_ups": FollowUpSerializer(
-                FollowUp.objects.filter(organization=organization)[:limit], many=True,
-            ).data,
-            "outreach_drafts": OutreachDraftSerializer(
-                OutreachDraft.objects.filter(organization=organization)
-                .order_by("-created_at", "-id")[:limit], many=True,
-            ).data,
-            "reactivations": [
-                reactivation_payload(record)
-                for record in ReactivationRecord.objects.filter(organization=organization)
-                .select_related("account", "draft")
-                .prefetch_related("events", "account__intent_signals")[:limit]
-            ],
-            "opportunity_reviews": OpportunityReviewSerializer(
-                OpportunityReview.objects.filter(organization=organization)[:limit], many=True,
-            ).data,
-            "crm_handoffs": CRMHandoffSerializer(
-                CRMHandoff.objects.filter(organization=organization)[:limit], many=True,
-            ).data,
-            "channel_packages": ChannelPackageSerializer(
-                ChannelPackage.objects.filter(organization=organization)
-                .order_by("channel", "id")[:limit], many=True,
-            ).data,
-            "publish_batches": GrowthPublishBatchSerializer(
-                GrowthPublishBatch.objects.filter(organization=organization)
-                .prefetch_related("items")[:5],
-                many=True,
-            ).data,
-            "metric_receipts": MetricReceiptSerializer(
-                MetricReceipt.objects.filter(organization=organization)
-                .order_by("-created_at", "-id")[:limit], many=True,
-            ).data,
-            "field_provenance": FieldProvenanceSerializer(
-                FieldProvenance.objects.filter(organization=organization)[:limit], many=True,
-            ).data,
-            "connectors": connector_readiness(organization),
-            "discovery": discovery_summary(discovery_profile_for(organization)),
-            "market_pilots": market_pilot_summary(
-                signals=all_signals,
-                accounts=accounts,
-                profiles=market_profiles_for(organization),
-            ),
-            "promotion_plan": promotion_plan_preview(organization),
-            "promotion_plan_approval": promotion_plan_status(organization),
-        }
 
 
 class PromotionPlanApproveView(APIView):
@@ -954,6 +855,14 @@ class DiscoveryProfileView(APIView):
 
     @extend_schema(
         tags=["Growth workspace"],
+        responses={200: DiscoverySummarySerializer},
+    )
+    def get(self, request):
+        profile = discovery_profile_for(request.organization)
+        return Response(discovery_summary(profile))
+
+    @extend_schema(
+        tags=["Growth workspace"],
         request=DiscoveryProfileUpdateSerializer,
         responses={200: DiscoverySummarySerializer, 400: GrowthValidationErrorSerializer},
     )
@@ -1406,6 +1315,17 @@ class MetricReceiptCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         receipt = serializer.save(organization=request.organization)
         return Response(MetricReceiptSerializer(receipt).data, status=201)
+
+
+class CompanyFactListView(APIView):
+    permission_classes = [CanReadLeads]
+
+    @extend_schema(tags=["Growth workspace"])
+    def get(self, request):
+        facts = FieldProvenance.objects.filter(organization=request.organization).order_by(
+            "field_name", "-updated_at",
+        )
+        return Response(FieldProvenanceSerializer(facts, many=True).data)
 
 
 class CompanyFactVerifyView(APIView):

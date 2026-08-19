@@ -12,6 +12,7 @@ from .views import (
     DiscoveryCandidateReviewView,
     ChannelPackageManualExportView,
     FourChannelManualExportView,
+    CompanyFactListView,
     CompanyFactVerifyView,
     DiscoveryProfileView,
     DiscoveryRunView,
@@ -19,7 +20,6 @@ from .views import (
     GoogleMapsDiscoveryConfigView,
     GoogleMapsDiscoveryRunView,
     GoogleMapsDiscoveryTestView,
-    GrowthWorkspaceView,
     InboundRfqView,
     LeadVisitView,
     MetricReceiptCreateView,
@@ -65,7 +65,7 @@ from .mission_attribution_views import MissionAttributionView
 from .work_item_views import WorkItemListView
 
 urlpatterns = [
-    path("growth/workspace", GrowthWorkspaceView.as_view(), name="growth-workspace"),
+    path("growth/company-facts", CompanyFactListView.as_view(), name="growth-company-facts"),
     path("growth/markets/watch", MarketWatchCreateView.as_view(), name="growth-market-watch-create"),
     path("growth/markets/<str:country_code>/watch", MarketWatchView.as_view(), name="growth-market-watch"),
     path("growth/trade-syncs", TradeSyncView.as_view(), name="growth-trade-syncs"),

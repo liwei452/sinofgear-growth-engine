@@ -76,8 +76,8 @@ def test_accepted_candidate_gets_an_idempotent_fake_enrichment_preview_without_l
     }
     assert repeated.status_code == 200
     assert repeated.data["created"] is False
-    workspace = client.get("/api/v1/growth/workspace")
-    queued = workspace.data["discovery"]["enrichment_candidates"]
+    summary = client.get("/api/v1/growth/discovery/profile")
+    queued = summary.data["enrichment_candidates"]
     assert len(queued) == 1
     assert queued[0]["company_name"] == "Jakarta Drives"
     assert queued[0]["latest_preview"] == {

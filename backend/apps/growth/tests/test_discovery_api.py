@@ -4,7 +4,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
-from apps.growth.models import DiscoveryProfile, IntentSignal, TargetAccount
+from apps.growth.models import DiscoveryProfile, IntentSignal
 from apps.identity.models import Membership, Organization, Role
 from integrations.sources.base import SourceBatch, SourceItem
 
@@ -51,9 +51,8 @@ def organization(db):
     return Organization.objects.create(name="Discovery API", slug="discovery-api")
 
 
-def test_workspace_exposes_an_owner_friendly_discovery_summary(organization):
-    workspace = _client(organization).get("/api/v1/growth/workspace").data
-    summary = workspace["discovery"]
+def test_discovery_profile_exposes_an_owner_friendly_summary(organization):
+    summary = _client(organization).get(PROFILE_URL).data
 
     assert summary == {
         "enabled": True,
@@ -76,30 +75,7 @@ def test_workspace_exposes_an_owner_friendly_discovery_summary(organization):
         ],
     }
     assert "cursor" not in summary
-    assert [market["country_code"] for market in workspace["market_pilots"]["markets"][:5]] == [
-        "IDN", "ZAF", "CHL", "VNM", "PHL",
-    ]
-    assert len(workspace["market_pilots"]["markets"]) == 21
     assert DiscoveryProfile.objects.filter(organization=organization).count() == 1
-
-
-def test_workspace_paginates_target_accounts(organization):
-    for index in range(3):
-        TargetAccount.objects.create(
-            organization=organization,
-            name=f"Account {index}",
-            country="IDN",
-        )
-    client = _client(organization, suffix="pagination")
-
-    first = client.get("/api/v1/growth/workspace?limit=2&offset=0").data
-    second = client.get("/api/v1/growth/workspace?limit=2&offset=2").data
-
-    assert first["accounts_total"] == 3
-    assert first["accounts_has_more"] is True
-    assert len(first["target_accounts"]) == 2
-    assert len(second["target_accounts"]) == 1
-    assert second["accounts_has_more"] is False
 
 
 def test_manager_runs_official_discovery_while_reader_is_forbidden(organization, monkeypatch):
@@ -132,4 +108,4 @@ def test_discovery_routes_are_documented(organization):
     schema = _client(organization, suffix="schema").get("/api/v1/schema").json()
 
     assert set(schema["paths"][RUN_URL]) == {"post"}
-    assert set(schema["paths"][PROFILE_URL]) == {"patch"}
+    assert set(schema["paths"][PROFILE_URL]) == {"get", "patch"}

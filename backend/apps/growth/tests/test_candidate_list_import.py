@@ -146,15 +146,15 @@ def test_pending_candidate_can_be_reviewed_into_enrichment_without_creating_an_o
     assert imported.status_code == 201
     candidate = DiscoveryCandidate.objects.get(organization=organization)
 
-    workspace = client.get("/api/v1/growth/workspace")
+    summary = client.get("/api/v1/growth/discovery/profile")
     reviewed = client.post(
         f"/api/v1/growth/discovery/candidates/{candidate.id}/review",
         {"decision": "ACCEPT", "note": "官网与公司名称一致"},
         format="json",
     )
 
-    assert workspace.status_code == 200
-    assert workspace.data["discovery"]["candidates"] == [{
+    assert summary.status_code == 200
+    assert summary.data["candidates"] == [{
         "id": str(candidate.id),
         "company_name": "Jakarta Drives",
         "country": "Indonesia",

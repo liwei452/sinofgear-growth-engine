@@ -137,9 +137,11 @@ def _deterministic_plan(mission: GrowthMission) -> dict:
 
 
 def _mission_prompt(mission: GrowthMission) -> str:
+    product_name = getattr(mission.primary_product, "name_en", "") or ""
     return (
         f"Create a growth execution plan for mission '{mission.title}'.\n"
         f"Objective: {mission.objective}\n"
+        f"Primary product: {product_name}\n"
         f"Target countries: {', '.join(mission.target_countries or [])}\n"
         f"Target industries: {', '.join(mission.target_industries or [])}\n"
         f"Allowed channels: {', '.join(mission.allowed_channels or [])}\n"

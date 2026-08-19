@@ -16,7 +16,7 @@ from .persistent import continue_agent_run
 from .execution import resolve_agent_execution, resolve_run_execution
 from .planner import DeterministicPlanner, Plan
 from .tools import Tool, ToolRegistry, ToolResult
-from ..models import AgentRun, DiscoveryCandidate, InboundRfq, MissionEntityLink
+from ..models import AgentRun, DiscoveryCandidate, GrowthMission, InboundRfq, MissionEntityLink
 
 
 def _mission_entity_ids(mission_id, entity_type):
@@ -28,6 +28,23 @@ def _mission_entity_ids(mission_id, entity_type):
             entity_type=entity_type,
         ).values_list("entity_id", flat=True)
     )
+
+
+def _mission_context(organization, mission_id):
+    if not mission_id:
+        return {}
+    mission = GrowthMission.objects.filter(
+        organization=organization, id=mission_id
+    ).first()
+    if mission is None:
+        return {}
+    return {
+        "target_country": (mission.target_countries or [""])[0],
+        "product_ids": [str(mission.primary_product_id)] if mission.primary_product_id else [],
+        "channels": [c for c in (mission.allowed_channels or []) if c != "EMAIL"],
+        "industries": mission.target_industries or [],
+        "attribution_code": mission.attribution_code,
+    }
 
 
 def content_opportunity_signals(organization, mission_id: str | None = None) -> dict[str, Any]:
@@ -114,10 +131,13 @@ def _create_brief_tool(organization, creator_id: str, mission_id: str | None = N
         if not Membership.objects.filter(user=creator, organization=organization).exists():
             return ToolResult(ok=False, error="creator is not a member of this organization.")
 
+        mission_context = _mission_context(organization, mission_id)
         signals = content_opportunity_signals(organization, mission_id=mission_id)
         proposals = propose_content_opportunities(signals)
         proposal = proposals[0] if proposals else {"topic": "Gear selection", "reasons": []}
         top_industry = (signals.get("top_industries") or [{}])[0].get("industry", "")
+        keywords = list(signals.get("recent_need_slugs", []))
+        keywords.extend(mission_context.get("industries", []))
         campaign = _get_or_create_campaign(
             organization,
             f"Content Strategy: {mission_id}" if mission_id else "Content Strategy",
@@ -127,7 +147,7 @@ def _create_brief_tool(organization, creator_id: str, mission_id: str | None = N
             campaign=campaign,
             creator=creator,
             values={
-                "target_country": args.get("target_country", ""),
+                "target_country": args.get("target_country", mission_context.get("target_country", "")),
                 "customer_type": args.get("customer_type", top_industry),
                 "content_objective": f"{proposal['topic']}. " + " ".join(proposal["reasons"]),
                 "cta": args.get("cta", "Upload drawings"),
@@ -136,9 +156,9 @@ def _create_brief_tool(organization, creator_id: str, mission_id: str | None = N
                 "prohibited_claims": args.get("prohibited_claims", []),
                 "selling_points": args.get("selling_points", []),
                 "advantages": args.get("advantages", []),
-                "keywords": args.get("keywords", signals.get("recent_need_slugs", [])),
+                "keywords": args.get("keywords", keywords),
             },
-            product_ids=(),
+            product_ids=tuple(mission_context.get("product_ids", ())),
             asset_ids=(),
             platform_ids=(),
             concept_links=(),

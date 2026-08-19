@@ -290,7 +290,7 @@ def test_ready_brief_without_assets_builds_valid_input_and_runs_deterministicall
     assert duplicate.output_json == first.output_json
     job.refresh_from_db()
     master = MasterContent.objects.get(generation_job=job)
-    assert master.status == MasterContent.Status.DRAFT
+    assert master.status == MasterContent.Status.APPROVED
     assert master.ai_run == first
     assert job.result_reference == {
         "type": "master_content", "id": str(master.id), "version": 1,

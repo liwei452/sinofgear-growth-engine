@@ -1,6 +1,7 @@
 import json
 
 from apps.ai.provider_config import resolve_product_ai
+from apps.ai.services import BudgetedAIProvider
 
 from .grading import grade_candidate
 
@@ -38,7 +39,12 @@ def judge_candidate(candidate, *, website_facts=None) -> dict:
         snapshot, ensure_ascii=False,
     )
     try:
-        return runtime.provider.generate(
+        provider = BudgetedAIProvider(
+            organization=candidate.organization,
+            model=runtime.model,
+            provider=runtime.provider,
+        )
+        return provider.generate(
             prompt=prompt,
             schema=LEAD_JUDGMENT_SCHEMA,
         )

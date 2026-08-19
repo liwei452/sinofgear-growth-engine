@@ -6,6 +6,7 @@ from apps.content.models import PlatformContent
 from apps.content.services import content_is_consistent
 from integrations.platforms.manual_fake import ManualPackageFakeConnector, ManualPackageReceipt
 from apps.ai.provider_config import resolve_product_ai
+from apps.ai.services import BudgetedAIProvider
 
 from .models import (
     CRMHandoff,
@@ -183,7 +184,12 @@ def _outreach_draft_text(account: TargetAccount) -> str:
         snapshot, ensure_ascii=False,
     )
     try:
-        result = runtime.provider.generate(
+        provider = BudgetedAIProvider(
+            organization=account.organization,
+            model=runtime.model,
+            provider=runtime.provider,
+        )
+        result = provider.generate(
             prompt=prompt,
             schema=OUTREACH_DRAFT_SCHEMA,
         )

@@ -60,6 +60,7 @@ class ImmutableAuditModel(models.Model):
 class ReviewAction(models.TextChoices):
     SUBMIT = "SUBMIT", "Submit for review"
     APPROVE = "APPROVE", "Approve"
+    AUTO_APPROVE = "AUTO_APPROVE", "Auto approve"
     REJECT = "REJECT", "Reject"
     DEPRECATE = "DEPRECATE", "Deprecate"
     ARCHIVE = "ARCHIVE", "Archive"

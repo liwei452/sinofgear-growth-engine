@@ -7,6 +7,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
 from .models import Membership
@@ -19,10 +20,17 @@ from .serializers import (
 )
 
 
+class LoginRateThrottle(AnonRateThrottle):
+    """Per-IP rate limit for credential attempts on the login endpoint."""
+
+    scope = "login"
+
+
 @method_decorator(csrf_protect, name="dispatch")
 @extend_schema(tags=["Auth"])
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
 
     @extend_schema(request=LoginSerializer, responses={204: None})
     def post(self, request: Request) -> Response:

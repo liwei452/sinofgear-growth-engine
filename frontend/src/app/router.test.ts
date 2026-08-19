@@ -36,8 +36,6 @@ function makeComponents() {
     Assets: Stub("AssetsStub", "素材库"),
     PublishingCalendar: Stub("PublishingStub", "发布日历"),
     PlatformAccounts: Stub("AccountsStub", "平台账户"),
-    Analytics: Stub("AnalyticsStub", "经营效果"),
-    LegacyAnalytics: Stub("LegacyAnalyticsStub", "高级数据"),
     RoleHome: Stub("RoleHomeStub", "首页"),
     ContentAssetsHub: Stub("ContentAssetsHubStub", "内容与素材"),
     Attribution: Stub("AttributionStub", "数据归因"),

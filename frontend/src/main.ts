@@ -9,7 +9,6 @@ import LoginPage from "./modules/auth/LoginPage.vue"
 import DashboardPage from "./modules/dashboard/DashboardPage.vue"
 import RoleHomePage from "./modules/dashboard/RoleHomePage.vue"
 import CompanyPage from "./modules/growth/CompanyPage.vue"
-import EffectivenessPage from "./modules/growth/EffectivenessPage.vue"
 import OpportunitiesPage from "./modules/growth/OpportunitiesPage.vue"
 import AgentApprovalsPage from "./modules/growth/AgentApprovalsPage.vue"
 import GrowthMissionsPage from "./modules/missions/GrowthMissionsPage.vue"
@@ -43,8 +42,6 @@ const router = createAppRouter(queryClient, {
     Assets: defineAsyncComponent(() => import("./modules/assets/AssetLibraryPage.vue")),
     PublishingCalendar: defineAsyncComponent(() => import("./modules/publishing/PublishingCalendarPage.vue")),
     PlatformAccounts: defineAsyncComponent(() => import("./modules/platformAccounts/PlatformAccountsPage.vue")),
-    Analytics: EffectivenessPage,
-    LegacyAnalytics: defineAsyncComponent(() => import("./modules/analytics/AnalyticsPage.vue")),
     Attribution: ExecutiveAttributionPage,
     ContentAssetsHub: ContentAssetsHubPage,
     Placeholder: PlaceholderPage,

@@ -28,8 +28,6 @@ export type AppRouteComponents = {
   Assets: Component
   PublishingCalendar: Component
   PlatformAccounts: Component
-  Analytics: Component
-  LegacyAnalytics: Component
   RoleHome: Component
   ContentAssetsHub: Component
   Attribution: Component
@@ -109,7 +107,6 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
     { path: "analytics", name: "analytics", redirect: { name: "attribution" } },
     { path: "attribution", name: "attribution", component: options.components.Attribution, meta: { title: "数据归因", requiredPermission: "missions.read" } },
     { path: "content", name: "content", component: options.components.ContentAssetsHub, meta: { title: "内容与素材", requiredPermission: "content.read" } },
-    { path: "admin/analytics", name: "admin-analytics", component: options.components.LegacyAnalytics, meta: { title: "高级数据看板", requiredRole: "ADMINISTRATOR" } },
   ]
   const router = createRouter({
     history: options.history ?? createWebHistory(),

@@ -8,6 +8,7 @@ import { currentUserQueryOptions } from "../auth/auth"
 import {
   approveMissionPlan,
   generateMissionPlan,
+  missionContentSummaryQueryOptions,
   missionQueryOptions,
   missionTimelineQueryOptions,
   startMissionContentStrategy,
@@ -23,6 +24,7 @@ const missionId = computed(() => String(route.params.missionId ?? ""))
 const currentUserQuery = useQuery(currentUserQueryOptions())
 const missionQuery = useQuery(missionQueryOptions(missionId.value))
 const timelineQuery = useQuery(missionTimelineQueryOptions(missionId.value))
+const contentSummaryQuery = useQuery(missionContentSummaryQueryOptions(missionId.value))
 const candidatesQuery = useQuery({
   queryKey: ["growth", "missions", missionId.value, "candidates"],
   queryFn: async () => {
@@ -41,6 +43,7 @@ const canReview = computed(() => permissions.value.includes("missions.review"))
 const canRun = computed(() => permissions.value.includes("agents.run"))
 
 const mission = computed(() => missionQuery.data.value)
+const contentSummary = computed(() => contentSummaryQuery.data.value)
 const view = computed(() => (typeof route.query.view === "string" ? route.query.view : "overview"))
 
 const notices = {
@@ -118,6 +121,10 @@ const strategyMutation = useMutation({
           <div><dt>健康状态</dt><dd>{{ mission.health_status }}</dd></div>
           <div><dt>归因码</dt><dd>{{ mission.attribution_code }}</dd></div>
         </dl>
+        <div v-if="contentSummary" class="content-summary">
+          <h3>社媒内容</h3>
+          <p>平台版本 {{ contentSummary.platform_contents.length }} 条 · 发布包 {{ contentSummary.channel_packages.length }} 个</p>
+        </div>
         <div class="actions">
           <button
             v-if="canManage && ['DRAFT', 'PENDING_APPROVAL'].includes(mission.status)"
@@ -208,6 +215,9 @@ const strategyMutation = useMutation({
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 0; }
 .facts dt { color: var(--sg-muted); font-size: .68rem; }
 .facts dd { margin: 2px 0 0; font-size: .8rem; }
+.content-summary { border-top: 1px solid var(--sg-line); padding-top: 10px; }
+.content-summary h3 { margin: 0 0 4px; font-size: .8rem; }
+.content-summary p { margin: 0; color: var(--sg-muted); font-size: .74rem; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .timeline { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .timeline li { display: grid; gap: 3px; border-left: 2px solid #bfd9f4; padding-left: 12px; }

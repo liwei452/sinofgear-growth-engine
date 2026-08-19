@@ -52,6 +52,7 @@ from .agent_views import (
 from .mission_views import (
     MissionApprovePlanView,
     MissionCandidatesView,
+    MissionContentSummaryView,
     MissionDetailView,
     MissionGeneratePlanView,
     MissionListCreateView,
@@ -253,6 +254,11 @@ urlpatterns = [
         "growth/missions/<uuid:mission_id>/candidates",
         MissionCandidatesView.as_view(),
         name="growth-mission-candidates",
+    ),
+    path(
+        "growth/missions/<uuid:mission_id>/content-summary",
+        MissionContentSummaryView.as_view(),
+        name="growth-mission-content-summary",
     ),
     path("growth/work-items", WorkItemListView.as_view(), name="growth-work-items"),
     path("growth/attribution", MissionAttributionView.as_view(), name="growth-attribution"),

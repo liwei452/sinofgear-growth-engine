@@ -4,6 +4,7 @@ from drf_spectacular.utils import extend_schema
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.content.models import PlatformContent
 from apps.identity.permissions import (
     CanManageMissions,
     CanReadMissions,
@@ -37,6 +38,7 @@ from .mission_services import (
 )
 from .models import (
     AgentRun,
+    ChannelPackage,
     DiscoveryCandidate,
     GrowthMission,
     MissionEntityLink,
@@ -287,6 +289,44 @@ class MissionCandidatesView(APIView):
             {"id": str(candidate.id), "company_name": candidate.company_name}
             for candidate in candidates
         ])
+
+
+class MissionContentSummaryView(APIView):
+    permission_classes = [CanReadMissions]
+
+    @extend_schema(tags=["Growth missions"], responses={200: dict})
+    def get(self, request, mission_id):
+        mission = get_object_or_404(
+            GrowthMission, id=mission_id, organization=request.organization
+        )
+        platform_ids = set(
+            MissionEntityLink.objects.filter(
+                mission=mission,
+                entity_type=MissionEntityLink.EntityType.PLATFORM_CONTENT,
+            ).values_list("entity_id", flat=True)
+        )
+        package_ids = set(
+            MissionEntityLink.objects.filter(
+                mission=mission,
+                entity_type=MissionEntityLink.EntityType.CHANNEL_PACKAGE,
+            ).values_list("entity_id", flat=True)
+        )
+        platforms = PlatformContent.objects.filter(
+            organization=request.organization, id__in=platform_ids
+        ).select_related("platform")
+        packages = ChannelPackage.objects.filter(
+            organization=request.organization, id__in=package_ids
+        )
+        return Response({
+            "platform_contents": [
+                {"id": str(c.id), "platform_code": c.platform.code, "status": c.status}
+                for c in platforms
+            ],
+            "channel_packages": [
+                {"id": str(p.id), "channel": p.channel, "status": p.status}
+                for p in packages
+            ],
+        })
 
 
 class MissionStartContentStrategyView(APIView):

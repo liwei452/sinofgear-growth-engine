@@ -118,6 +118,25 @@ export function missionTimelineQueryOptions(id: string) {
   })
 }
 
+export type MissionContentSummary = {
+  platform_contents: Array<{ id: string; platform_code: string; status: string }>
+  channel_packages: Array<{ id: string; channel: string; status: string }>
+}
+
+export function missionContentSummaryQueryOptions(id: string) {
+  return queryOptions({
+    queryKey: ["growth", "missions", id, "content-summary"],
+    queryFn: async () => {
+      const summary = await apiRequest<MissionContentSummary>(
+        `/api/v1/growth/missions/${id}/content-summary`,
+      )
+      if (!summary) throw new Error("内容摘要响应为空。")
+      return summary
+    },
+    staleTime: 15_000,
+  })
+}
+
 export async function createMission(input: MissionCreateInput): Promise<GrowthMission> {
   const mission = await apiRequest<GrowthMission>("/api/v1/growth/missions", {
     method: "POST",

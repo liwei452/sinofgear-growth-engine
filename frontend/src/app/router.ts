@@ -11,8 +11,6 @@ export type AppRouteComponents = {
   Login: Component
   Shell: Component
   Dashboard: Component
-  Promotion: Component
-  Opportunities: Component
   Missions: Component
   MissionDetail: Component
   Company: Component
@@ -21,13 +19,9 @@ export type AppRouteComponents = {
   MapsDiscovery: Component
   Products: Component
   Knowledge: Component
-  ContentFactory: Component
-  Reviews: Component
   Assets: Component
-  PublishingCalendar: Component
   PlatformAccounts: Component
   RoleHome: Component
-  ContentAssetsHub: Component
   Attribution: Component
   Placeholder: Component
 }

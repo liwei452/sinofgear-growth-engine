@@ -433,27 +433,6 @@ export type TradeSyncResponse = {
   scope_warning: string
 }
 
-export type GrowthWorkspace = {
-  target_accounts: TargetAccount[]
-  contacts: Array<Record<string, unknown>>
-  intent_signals: IntentSignal[]
-  inbound_leads: Array<Record<string, unknown>>
-  follow_ups: FollowUp[]
-  outreach_drafts: OutreachDraft[]
-  reactivations?: Reactivation[]
-  opportunity_reviews?: OpportunityReview[]
-  crm_handoffs?: CRMHandoff[]
-  channel_packages: ChannelPackage[]
-  publish_batches: PublishBatch[]
-  metric_receipts: MetricReceipt[]
-  field_provenance: FieldProvenance[]
-  connectors: PlatformConnection[]
-  discovery?: DiscoverySummary
-  market_pilots?: MarketPilotSummary
-  promotion_plan?: PromotionPlan
-  promotion_plan_approval?: PromotionPlanApproval
-}
-
 export type PromotionPlan = {
   target_markets: Array<{ country_code: string; country_label: string; reason: string }>
   audiences: Array<{ industry: string; reason: string }>
@@ -475,22 +454,6 @@ export type DraftActionResponse = {
   "English draft": string
   "Chinese explanation": string
   delivery: "NEVER_SENT"
-}
-
-export const growthQueryKeys = {
-  workspace: ["growth", "workspace"] as const,
-}
-
-export function growthWorkspaceQueryOptions() {
-  return queryOptions({
-    queryKey: growthQueryKeys.workspace,
-    queryFn: async () => {
-      const workspace = await apiRequest<GrowthWorkspace>("/api/v1/growth/workspace")
-      if (!workspace) throw new Error("增长工作区响应为空。")
-      return workspace
-    },
-    staleTime: 15_000,
-  })
 }
 
 export const companyFactsQueryKeys = {

@@ -9,11 +9,9 @@ import LoginPage from "./modules/auth/LoginPage.vue"
 import DashboardPage from "./modules/dashboard/DashboardPage.vue"
 import RoleHomePage from "./modules/dashboard/RoleHomePage.vue"
 import CompanyPage from "./modules/growth/CompanyPage.vue"
-import OpportunitiesPage from "./modules/growth/OpportunitiesPage.vue"
 import GrowthMissionsPage from "./modules/missions/GrowthMissionsPage.vue"
 import GrowthMissionDetailPage from "./modules/missions/GrowthMissionDetailPage.vue"
 import ExecutiveAttributionPage from "./modules/attribution/ExecutiveAttributionPage.vue"
-import ContentAssetsHubPage from "./modules/content/ContentAssetsHubPage.vue"
 import PlaceholderPage from "./shared/components/PlaceholderPage.vue"
 import "./styles/tokens.css"
 import "./styles/base.css"
@@ -24,8 +22,6 @@ const router = createAppRouter(queryClient, {
     Shell: AppShell,
     Dashboard: DashboardPage,
     RoleHome: RoleHomePage,
-    Promotion: defineAsyncComponent(() => import("./modules/growth/PromotionPage.vue")),
-    Opportunities: OpportunitiesPage,
     Missions: GrowthMissionsPage,
     MissionDetail: GrowthMissionDetailPage,
     Company: CompanyPage,
@@ -34,13 +30,9 @@ const router = createAppRouter(queryClient, {
     MapsDiscovery: defineAsyncComponent(() => import("./modules/growth/GoogleMapsDiscoverySettings.vue")),
     Products: defineAsyncComponent(() => import("./modules/products/ProductLibraryPage.vue")),
     Knowledge: defineAsyncComponent(() => import("./modules/knowledge/KnowledgeLibraryPage.vue")),
-    ContentFactory: defineAsyncComponent(() => import("./modules/content/ContentFactoryPage.vue")),
-    Reviews: defineAsyncComponent(() => import("./modules/content/ReviewCenterPage.vue")),
     Assets: defineAsyncComponent(() => import("./modules/assets/AssetLibraryPage.vue")),
-    PublishingCalendar: defineAsyncComponent(() => import("./modules/publishing/PublishingCalendarPage.vue")),
     PlatformAccounts: defineAsyncComponent(() => import("./modules/platformAccounts/PlatformAccountsPage.vue")),
     Attribution: ExecutiveAttributionPage,
-    ContentAssetsHub: ContentAssetsHubPage,
     Placeholder: PlaceholderPage,
   },
 })

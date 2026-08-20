@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
-from django.db import IntegrityError, transaction
+from django.db import transaction
 from django.utils import timezone
 
+from apps.identity.models import Organization
 from integrations.platforms.base import ConnectorConfigurationRequired
 from integrations.platforms.buffer_client import BufferGraphQLClient, BufferHttpTransport
 from integrations.platforms.buffer_connector import BufferConnector
@@ -20,6 +22,9 @@ from .models import (
     SocialAccount,
     provider_event_writes,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 SAFE_ERROR_MESSAGES = {
@@ -85,6 +90,10 @@ def _buffer_connection(organization, *, for_update: bool = False) -> ProviderCon
 
 def get_buffer_connection(organization) -> ProviderConnection:
     return _buffer_connection(organization)
+
+
+def _lock_organization(organization) -> None:
+    Organization.objects.select_for_update().get(pk=organization.pk)
 
 
 def _map_buffer_error_code(code: str) -> BufferConnectionError:
@@ -176,6 +185,7 @@ def _delete_credential_quietly(token_store, reference: str) -> None:
     try:
         _delete_credential(token_store, reference)
     except Exception:
+        logger.warning("Buffer credential cleanup deferred for orphan reclamation.")
         return
 
 
@@ -255,37 +265,25 @@ def connect_buffer(
     now = clock()
     try:
         with transaction.atomic():
+            _lock_organization(organization)
             locked = ProviderConnection.objects.filter(
                 organization=organization,
                 provider=ProviderConnection.Provider.BUFFER,
-            ).select_for_update().first()
+            ).first()
             if locked is not None and locked.connection_state == ProviderConnection.ConnectionState.CONNECTED:
                 raise BufferConnectionError("BUFFER_ALREADY_CONNECTED")
             old_reference = locked.credential_reference if locked is not None else ""
             if locked is None:
-                try:
-                    connection = ProviderConnection.objects.create(
-                        organization=organization,
-                        provider=ProviderConnection.Provider.BUFFER,
-                        **_connected_values(
-                            reference=temporary_reference,
-                            external_id=organization_id,
-                            display_name=display_name,
-                            now=now,
-                        ),
-                    )
-                except IntegrityError:
-                    locked = ProviderConnection.objects.filter(
-                        organization=organization,
-                        provider=ProviderConnection.Provider.BUFFER,
-                    ).select_for_update().get()
-                    if locked.connection_state == ProviderConnection.ConnectionState.CONNECTED:
-                        raise BufferConnectionError("BUFFER_ALREADY_CONNECTED") from None
-                    old_reference = locked.credential_reference
-                    _apply_connected(locked, temporary_reference, organization_id, display_name, now)
-                    connection = locked
-                    if old_reference and old_reference != temporary_reference:
-                        _delete_credential(token_store, old_reference)
+                connection = ProviderConnection.objects.create(
+                    organization=organization,
+                    provider=ProviderConnection.Provider.BUFFER,
+                    **_connected_values(
+                        reference=temporary_reference,
+                        external_id=organization_id,
+                        display_name=display_name,
+                        now=now,
+                    ),
+                )
             else:
                 _apply_connected(locked, temporary_reference, organization_id, display_name, now)
                 connection = locked
@@ -402,6 +400,8 @@ def probe_buffer_connection(
     snapshot = _buffer_connection(organization)
     snapshot_reference = snapshot.credential_reference
     snapshot_external_id = snapshot.external_id
+    snapshot_state = snapshot.connection_state
+    snapshot_updated_at = snapshot.updated_at
     if not snapshot_reference or not snapshot_external_id:
         raise BufferConnectionError("BUFFER_CONFIGURATION_REQUIRED")
 
@@ -415,7 +415,10 @@ def probe_buffer_connection(
     if probe_result.ok:
         with transaction.atomic():
             locked = _buffer_connection(organization, for_update=True)
-            _assert_probe_snapshot_unchanged(locked, snapshot_reference, snapshot_external_id)
+            _assert_probe_snapshot_unchanged(
+                locked, snapshot_reference, snapshot_external_id,
+                snapshot_state, snapshot_updated_at,
+            )
             locked.connection_state = ProviderConnection.ConnectionState.CONNECTED
             locked.last_probe_at = now
             locked.disconnected_at = None
@@ -437,7 +440,10 @@ def probe_buffer_connection(
     state, set_reauth = _probe_state(probe_result.error_code)
     with transaction.atomic():
         locked = _buffer_connection(organization, for_update=True)
-        _assert_probe_snapshot_unchanged(locked, snapshot_reference, snapshot_external_id)
+        _assert_probe_snapshot_unchanged(
+            locked, snapshot_reference, snapshot_external_id,
+            snapshot_state, snapshot_updated_at,
+        )
         locked.connection_state = state
         locked.lifecycle_error_code = probe_result.error_code
         if set_reauth:
@@ -457,11 +463,14 @@ def probe_buffer_connection(
     raise _map_buffer_error_code(probe_result.error_code)
 
 
-def _assert_probe_snapshot_unchanged(connection, reference, external_id) -> None:
+def _assert_probe_snapshot_unchanged(
+    connection, reference, external_id, state, updated_at,
+) -> None:
     if (
         connection.credential_reference != reference
         or connection.external_id != external_id
-        or connection.connection_state == ProviderConnection.ConnectionState.DISCONNECTED
+        or connection.connection_state != state
+        or connection.updated_at != updated_at
     ):
         raise BufferConnectionError("BUFFER_CONNECTION_CHANGED")
 

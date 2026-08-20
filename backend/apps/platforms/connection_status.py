@@ -86,15 +86,19 @@ def _buffer_platform_summary(accounts: list[SocialAccount]) -> ConnectionSummary
     if connection is None:
         return _summary("CONFIGURATION_REQUIRED", single, mode="BUFFER")
     parent_state = connection.connection_state
+    if parent_state == ProviderConnection.ConnectionState.CONNECTED:
+        return _summary(_aggregate_buffer_channels(accounts), single, mode="BUFFER")
+    if parent_state == ProviderConnection.ConnectionState.DISCONNECTED:
+        return _summary("NOT_CONNECTED", mode="BUFFER")
     if parent_state in {
         ProviderConnection.ConnectionState.REAUTHORIZATION_REQUIRED,
         ProviderConnection.ConnectionState.PROVIDER_UNAVAILABLE,
         ProviderConnection.ConnectionState.INSUFFICIENT_CAPABILITY,
+        ProviderConnection.ConnectionState.CONFIGURATION_REQUIRED,
     }:
         return _summary(parent_state, single, mode="BUFFER")
-    if parent_state == ProviderConnection.ConnectionState.DISCONNECTED:
-        return _summary("NOT_CONNECTED", mode="BUFFER")
-    return _summary(_aggregate_buffer_channels(accounts), single, mode="BUFFER")
+    # REFRESH_DUE and any unknown future state fall back to configuration required.
+    return _summary("CONFIGURATION_REQUIRED", single, mode="BUFFER")
 
 
 def _aggregate_buffer_channels(accounts: list[SocialAccount]) -> str:

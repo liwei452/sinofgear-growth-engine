@@ -45,9 +45,12 @@ class FakeConnector:
         self.probe_calls = []
         self.discover_calls = []
         self.on_discover = None
+        self.on_probe = None
 
     def probe_connection(self, request):
         self.probe_calls.append(request)
+        if self.on_probe is not None:
+            self.on_probe(request)
         return self.probe_result
 
     def discover_channels(self, request):

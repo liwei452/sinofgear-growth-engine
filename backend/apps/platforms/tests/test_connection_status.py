@@ -148,3 +148,32 @@ def test_buffer_multiple_healthy_channels_aggregate_to_connected() -> None:
     assert summary.status == "CONNECTED"
     assert summary.mode == "BUFFER"
     assert summary.account_id == ""
+
+
+@pytest.mark.django_db
+def test_buffer_parent_configuration_required_is_not_reported_connected() -> None:
+    organization = Organization.objects.create(name="Acme", slug="buffer-config-acme")
+    platform = Platform.objects.create(code="LINKEDIN", name="LinkedIn")
+    connection = ProviderConnection.objects.create(
+        organization=organization,
+        provider=ProviderConnection.Provider.BUFFER,
+        credential_reference="",
+        external_id="",
+        connection_state=ProviderConnection.ConnectionState.CONFIGURATION_REQUIRED,
+    )
+    SocialAccount.objects.create(
+        organization=organization,
+        platform=platform,
+        provider=SocialAccount.Provider.BUFFER,
+        provider_connection=connection,
+        provider_account_id="ch-1",
+        external_id="li-page-1",
+        display_name="LinkedIn Channel",
+        publish_mode=SocialAccount.PublishMode.API_AUTO,
+        connection_state=SocialAccount.ConnectionState.CONNECTED,
+    )
+
+    summary = connection_summary(organization=organization, platform_code=platform.code)
+
+    assert summary.status == "CONFIGURATION_REQUIRED"
+    assert summary.mode == "BUFFER"

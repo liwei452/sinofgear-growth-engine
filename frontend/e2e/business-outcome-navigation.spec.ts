@@ -309,6 +309,9 @@ if (visualAuditDirectory) {
         await expect(page.getByRole("heading", { name: auditPage.heading, level: 1 })).toBeVisible()
         await expect(page.locator("main")).toHaveCount(1)
         await expect(page.locator("main").getByText(/正在读取/)).toHaveCount(0)
+        await page.evaluate(() => window.scrollTo(0, 0))
+        await expect(page.locator("header.topbar")).toBeVisible()
+        await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
         await expectNoHorizontalOverflow(page)
         await page.screenshot({
           path: join(visualAuditDirectory, `${viewport.name}-${auditPage.name}.png`),

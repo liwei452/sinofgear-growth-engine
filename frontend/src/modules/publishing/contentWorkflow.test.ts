@@ -18,6 +18,12 @@ it("uses the neutral attention state for an unrecognized runtime status", () => 
   expect(contentWorkflowStage({ contentStatus: "APPROVED", publishStatus: "NEW_SERVER_STATUS" as never })).toBe("NEEDS_ATTENTION")
 })
 
+it("groups the explicit attention status as pending without offering an ordinary retry", () => {
+  expect(contentWorkflowStage({ contentStatus: "APPROVED", publishStatus: "NEEDS_ATTENTION" })).toBe("NEEDS_ATTENTION")
+  expect(contentWorkflowGroup("NEEDS_ATTENTION")).toBe("PENDING")
+  expect(canOfferRetry("NEEDS_ATTENTION")).toBe(false)
+})
+
 it("groups all seven operational statuses into three operator-facing stages", () => {
   expect(contentWorkflowGroup("AI_DRAFT")).toBe("PENDING")
   expect(contentWorkflowGroup("REVIEW")).toBe("PENDING")

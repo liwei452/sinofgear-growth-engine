@@ -2,7 +2,7 @@ import type { ContentStatus } from "../content/api"
 
 export type PublishStatus =
   | "SCHEDULED" | "QUEUED" | "RUNNING" | "SUBMITTED" | "SUBMISSION_UNKNOWN"
-  | "SUCCEEDED" | "FAILED" | "CANCELED" | null
+  | "SUCCEEDED" | "FAILED" | "CANCELED" | "NEEDS_ATTENTION" | null
 
 export type ContentWorkflowStage =
   | "PREPARE" | "AI_DRAFT" | "REVIEW" | "SCHEDULED" | "SUBMITTED" | "PUBLISHED" | "NEEDS_ATTENTION"
@@ -24,6 +24,7 @@ export function contentWorkflowStage({ contentStatus, publishStatus }: ContentWo
     case "SUCCEEDED": return "PUBLISHED"
     case "FAILED":
     case "CANCELED": return "NEEDS_ATTENTION"
+    case "NEEDS_ATTENTION": return "NEEDS_ATTENTION"
     case null:
       switch (contentStatus) {
         case "DRAFT": return "AI_DRAFT"
@@ -63,6 +64,7 @@ export function canOfferRetry(status: PublishStatus): boolean {
     case "SUBMITTED":
     case "SUBMISSION_UNKNOWN":
     case "SUCCEEDED":
+    case "NEEDS_ATTENTION":
     case null: return false
   }
 }

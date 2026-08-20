@@ -109,6 +109,7 @@ class PublishTask(ProtectedPublishingModel):
     retry_not_before = models.DateTimeField(null=True, blank=True)
     last_error = models.JSONField(null=True, blank=True)
     provider_submission_id = models.CharField(max_length=255, blank=True, default="")
+    provider_request_fingerprint = models.CharField(max_length=64, blank=True, default="")
     provider_call_started_at = models.DateTimeField(null=True, blank=True)
     heartbeat_at = models.DateTimeField(null=True, blank=True)
     lease_expires_at = models.DateTimeField(null=True, blank=True)
@@ -165,6 +166,7 @@ class PublishAttempt(ProtectedPublishingModel):
     retry_at = models.DateTimeField(null=True, blank=True)
     external_id = models.CharField(max_length=255, blank=True)
     provider_submission_id = models.CharField(max_length=255, blank=True, default="")
+    provider_request_fingerprint = models.CharField(max_length=64, blank=True, default="")
     provider_call_started_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField()
     finished_at = models.DateTimeField(null=True, blank=True)
@@ -201,6 +203,7 @@ class PublishedPost(ProtectedPublishingModel):
 class PublishReconciliationAttempt(ProtectedPublishingModel):
     class Mode(models.TextChoices):
         EXACT_ID = "EXACT_ID", "Exact provider id"
+        UNKNOWN_MATCH = "UNKNOWN_MATCH", "Unknown submission match"
 
     class Provider(models.TextChoices):
         BUFFER = "BUFFER", "Buffer"
@@ -211,6 +214,7 @@ class PublishReconciliationAttempt(ProtectedPublishingModel):
         FAILED = "FAILED", "Failed"
         NEEDS_ATTENTION = "NEEDS_ATTENTION", "Needs attention"
         STALE = "STALE", "Stale snapshot"
+        MATCHED = "MATCHED", "Unique match"
 
     publish_task = models.ForeignKey(
         PublishTask, on_delete=models.PROTECT, related_name="reconciliation_attempts"
@@ -225,6 +229,11 @@ class PublishReconciliationAttempt(ProtectedPublishingModel):
     provider_post_id = models.CharField(max_length=255, blank=True, default="")
     provider_channel_id = models.CharField(max_length=255, blank=True, default="")
     provider_sent_at = models.DateTimeField(null=True, blank=True)
+    candidate_count = models.PositiveIntegerField(default=0)
+    matched_provider_post_id = models.CharField(max_length=255, blank=True, default="")
+    candidate_set_fingerprint = models.CharField(max_length=64, blank=True, default="")
+    query_window_start = models.DateTimeField(null=True, blank=True)
+    query_window_end = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField()
     finished_at = models.DateTimeField()
 

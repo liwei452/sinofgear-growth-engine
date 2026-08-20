@@ -7,7 +7,7 @@ from .services import (
 )
 from .metrics import sync_post_metrics
 from .reconciliation import (
-    reconcile_buffer_publish_task,
+    reconcile_publish_task,
     select_due_buffer_reconciliation_ids,
 )
 
@@ -49,7 +49,7 @@ def reap_stale_publish_tasks_task():
 
 @shared_task
 def reconcile_buffer_publish_task_job(task_id):
-    task = reconcile_buffer_publish_task(task_id)
+    task = reconcile_publish_task(task_id)
     return {"task_id": str(task.id), "status": task.status}
 
 

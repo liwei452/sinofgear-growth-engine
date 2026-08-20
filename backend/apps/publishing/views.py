@@ -26,7 +26,7 @@ from .services import (
     publish_task_consistency_queryset, publish_task_is_consistent,
     retry_publish_task, run_publish_task_now, validate_idempotency_key,
 )
-from .reconciliation import reconcile_buffer_publish_task
+from .reconciliation import reconcile_publish_task
 
 
 MAX_CALENDAR_ENTRIES = 200
@@ -244,7 +244,7 @@ class PublishReconcileView(APIView):
             return _validation(serializer.errors)
         _task(request.organization, task_id)
         try:
-            task = reconcile_buffer_publish_task(
+            task = reconcile_publish_task(
                 task_id, organization=request.organization, actor=request.user
             )
         except PublishingConflict as exc:
@@ -255,7 +255,10 @@ class PublishReconcileView(APIView):
             "BUFFER_RATE_LIMITED": status.HTTP_429_TOO_MANY_REQUESTS,
             "BUFFER_PROVIDER_UNAVAILABLE": status.HTTP_503_SERVICE_UNAVAILABLE,
         }
-        if error_code in status_mapping and task.status == PublishTask.Status.SUBMITTED:
+        if error_code in status_mapping and task.status in {
+            PublishTask.Status.SUBMITTED,
+            PublishTask.Status.SUBMISSION_UNKNOWN,
+        }:
             return Response(
                 {
                     "code": error_code.lower(),

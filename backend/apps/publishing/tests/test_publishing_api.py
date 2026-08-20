@@ -319,7 +319,7 @@ def test_manual_reconciliation_is_manage_only_and_organization_scoped(
     )
     execute_publish_task(task.id)
     task.refresh_from_db()
-    monkeypatch.setattr(views, "reconcile_buffer_publish_task", lambda *args, **kwargs: task)
+    monkeypatch.setattr(views, "reconcile_publish_task", lambda *args, **kwargs: task)
 
     operator = _client(publishing_context["organization"], Role.Code.OPERATOR, "reconcile")
     assert operator.post(

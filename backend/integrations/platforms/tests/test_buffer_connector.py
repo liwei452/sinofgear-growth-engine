@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from integrations.platforms.base import ConnectorConfigurationRequired, OfficialPublishRequest
 from integrations.platforms.buffer_client import BufferGraphQLResponse
-from integrations.platforms.buffer_connector import BufferConnector
+from integrations.platforms.buffer_connector import BufferConnector, provider_request_fingerprint
 from integrations.platforms.buffer_types import (
     BufferApiError,
     BufferDiscoveryRequest,
     BufferErrorCode,
     BufferRateLimitResult,
     BufferPostQueryRequest,
+    BufferUnknownMatchRequest,
 )
 from integrations.platforms.token_store import OAuthTokenSet
 
@@ -55,6 +58,8 @@ class FakeClient:
         self.post_data = None
         self.post_error = None
         self.fetched_posts = []
+        self.post_pages = []
+        self.fetched_post_pages = []
 
     def fetch_account(self, token):
         self.fetched_account_tokens.append(token)
@@ -84,6 +89,13 @@ class FakeClient:
             data=self.post_data, rate_limit=BufferRateLimitResult()
         )
 
+    def fetch_posts(self, token, **kwargs):
+        self.fetched_post_pages.append((token, kwargs))
+        return BufferGraphQLResponse(
+            data=self.post_pages[len(self.fetched_post_pages) - 1],
+            rate_limit=BufferRateLimitResult(),
+        )
+
 
 def test_fetch_post_normalizes_strict_official_contract():
     client = FakeClient()
@@ -108,6 +120,44 @@ def test_fetch_post_normalizes_strict_official_contract():
     assert result.observation.status == "sent"
     assert result.observation.sent_at.isoformat() == "2026-08-20T01:02:03+00:00"
     assert client.fetched_posts == [("buffer-token", "post-1")]
+
+
+def test_provider_request_fingerprint_uses_final_input_but_not_credential():
+    base = OfficialPublishRequest(
+        channel="LINKEDIN",
+        account_external_id="local-account",
+        provider_account_id="buffer-channel-1",
+        credential_reference="vault://buffer/first",
+        payload={"commentary": " Final text ", "image_url": "https://cdn.example.com/a.png"},
+        idempotency_key="task-1",
+        consent={},
+    )
+    rotated = OfficialPublishRequest(
+        channel=base.channel,
+        account_external_id=base.account_external_id,
+        provider_account_id=base.provider_account_id,
+        credential_reference="vault://buffer/rotated",
+        payload=base.payload,
+        idempotency_key=base.idempotency_key,
+        consent=base.consent,
+    )
+    changed_text = OfficialPublishRequest(
+        channel=base.channel,
+        account_external_id=base.account_external_id,
+        provider_account_id=base.provider_account_id,
+        credential_reference=base.credential_reference,
+        payload={**base.payload, "commentary": "Different"},
+        idempotency_key=base.idempotency_key,
+        consent=base.consent,
+    )
+
+    fingerprint = provider_request_fingerprint(base)
+
+    assert len(fingerprint) == 64
+    assert set(fingerprint) <= set("0123456789abcdef")
+    assert fingerprint == provider_request_fingerprint(rotated)
+    assert fingerprint != provider_request_fingerprint(changed_text)
+    assert "vault" not in fingerprint
 
 
 @pytest.mark.parametrize(
@@ -136,6 +186,65 @@ def test_fetch_post_rejects_malformed_contract(field, value):
     )
     assert result.ok is False
     assert result.error_code == "BUFFER_CONTRACT_ERROR"
+
+
+def _candidate_page(post_id, *, has_next, cursor):
+    return {
+        "posts": {
+            "edges": [
+                {
+                    "cursor": f"edge-{post_id}",
+                    "node": {
+                        "id": post_id,
+                        "channelId": "ch-1",
+                        "channelService": "linkedin",
+                        "status": "scheduled",
+                        "text": "Final text",
+                        "createdAt": "2026-08-20T01:05:00Z",
+                        "dueAt": "2026-08-20T02:00:00Z",
+                        "sentAt": None,
+                        "schedulingType": "automatic",
+                        "shareMode": "shareNow",
+                        "assets": [
+                            {
+                                "type": "image",
+                                "mimeType": "image/png",
+                                "source": "https://cdn.example.com/a.png",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+        }
+    }
+
+
+def test_unknown_match_search_normalizes_candidates_and_stops_after_three_pages():
+    client = FakeClient()
+    client.post_pages = [
+        _candidate_page("post-1", has_next=True, cursor="page-1"),
+        _candidate_page("post-2", has_next=True, cursor="page-2"),
+        _candidate_page("post-3", has_next=True, cursor="page-3"),
+    ]
+    request = BufferUnknownMatchRequest(
+        credential_reference="vault://buffer/acme",
+        provider_organization_id="org-1",
+        provider_account_id="ch-1",
+        window_start=datetime(2026, 8, 20, 1, 0, tzinfo=timezone.utc),
+        window_end=datetime(2026, 8, 20, 1, 17, tzinfo=timezone.utc),
+    )
+    assert "vault://buffer/acme" not in repr(request)
+
+    result = BufferConnector(client, FakeTokenStore()).search_post_candidates(request)
+
+    assert result.ok is True
+    assert result.truncated is True
+    assert [candidate.post_id for candidate in result.candidates] == ["post-1", "post-2", "post-3"]
+    assert result.candidates[0].assets[0].asset_type == "image"
+    assert result.candidates[0].assets[0].source == "https://cdn.example.com/a.png"
+    assert [call[1]["after"] for call in client.fetched_post_pages] == [None, "page-1", "page-2"]
+    assert len(result.candidates) == 3
 
 
 def _request(expected_org_id="org-1", credential="vault://buffer/acme"):

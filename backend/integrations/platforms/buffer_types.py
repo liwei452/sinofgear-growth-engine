@@ -164,3 +164,51 @@ class BufferPostQueryResult:
     observation: BufferPostObservation | None = None
     error_code: str = ""
     retry_after_seconds: int | None = None
+
+
+@dataclass(frozen=True)
+class BufferAssetIdentity:
+    asset_type: str
+    mime_type: str
+    source: str
+
+
+@dataclass(frozen=True)
+class BufferPostCandidate:
+    post_id: str
+    channel_id: str
+    channel_service: str
+    status: str
+    text: str
+    created_at: datetime
+    due_at: datetime | None
+    sent_at: datetime | None
+    scheduling_type: str
+    share_mode: str
+    assets: tuple[BufferAssetIdentity, ...] = ()
+
+
+@dataclass(frozen=True, repr=False)
+class BufferUnknownMatchRequest:
+    credential_reference: str = field(repr=False)
+    provider_organization_id: str
+    provider_account_id: str
+    window_start: datetime
+    window_end: datetime
+
+    def __repr__(self) -> str:
+        return (
+            "BufferUnknownMatchRequest("
+            f"provider_organization_id={self.provider_organization_id!r}, "
+            f"provider_account_id={self.provider_account_id!r}, "
+            f"window_start={self.window_start!r}, window_end={self.window_end!r})"
+        )
+
+
+@dataclass(frozen=True)
+class BufferCandidateSearchResult:
+    ok: bool
+    candidates: tuple[BufferPostCandidate, ...] = ()
+    truncated: bool = False
+    error_code: str = ""
+    retry_after_seconds: int | None = None

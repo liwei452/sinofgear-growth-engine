@@ -102,6 +102,18 @@ SAFE_PUBLISH_ERRORS = {
     "BUFFER_RECONCILIATION_EXPIRED": {
         "code": "BUFFER_RECONCILIATION_EXPIRED", "message": "The Buffer post remained non-final for too long.",
     },
+    "BUFFER_RECONCILIATION_EVIDENCE_MISSING": {
+        "code": "BUFFER_RECONCILIATION_EVIDENCE_MISSING",
+        "message": "The original Buffer request evidence is unavailable.",
+    },
+    "BUFFER_RECONCILIATION_NO_MATCH": {
+        "code": "BUFFER_RECONCILIATION_NO_MATCH",
+        "message": "No exact Buffer post match was found.",
+    },
+    "BUFFER_RECONCILIATION_AMBIGUOUS": {
+        "code": "BUFFER_RECONCILIATION_AMBIGUOUS",
+        "message": "More than one exact Buffer post match was found.",
+    },
 }
 
 
@@ -372,13 +384,22 @@ def publish_task_is_consistent(task):
                 and task.provider_call_started_at == latest.provider_call_started_at
             )
         if task.status == PublishTask.Status.NEEDS_ATTENTION:
+            unknown_match_error = (
+                task.last_error.get("code") in {
+                    "BUFFER_RECONCILIATION_EVIDENCE_MISSING",
+                    "BUFFER_RECONCILIATION_NO_MATCH",
+                    "BUFFER_RECONCILIATION_AMBIGUOUS",
+                    "BUFFER_RECONCILIATION_EXPIRED",
+                }
+                if isinstance(task.last_error, dict) else False
+            )
             return (
                 content.status == PlatformContent.Status.APPROVED
                 and task.claim_token is None and task.started_at is not None
                 and task.finished_at is not None and task.canceled_at is None
                 and _safe_error_is_exact(task.last_error)
                 and task.retry_not_before is None
-                and task.provider_submission_id
+                and (task.provider_submission_id or unknown_match_error)
                 and post is None and latest is not None
                 and latest.status == PublishAttempt.Status.NEEDS_ATTENTION
                 and latest.started_at == task.started_at
@@ -1217,13 +1238,19 @@ def _build_official_call(task):
 
 
 @transaction.atomic
-def _mark_provider_call_started(task, attempt):
+def _mark_provider_call_started(task, attempt, *, provider_request_fingerprint=""):
     now = timezone.now()
     task.provider_call_started_at = now
+    task.provider_request_fingerprint = provider_request_fingerprint
     attempt.provider_call_started_at = now
+    attempt.provider_request_fingerprint = provider_request_fingerprint
     with publishing_writes():
-        task.save(update_fields=["provider_call_started_at", "updated_at"])
-        attempt.save(update_fields=["provider_call_started_at", "updated_at"])
+        task.save(update_fields=[
+            "provider_call_started_at", "provider_request_fingerprint", "updated_at",
+        ])
+        attempt.save(update_fields=[
+            "provider_call_started_at", "provider_request_fingerprint", "updated_at",
+        ])
 
 
 def _associate_pre_publish_tracking(task, post) -> None:
@@ -1335,7 +1362,19 @@ def execute_publish_task(task_id):
         )
         return None
 
-    _mark_provider_call_started(task, attempt)
+    provider_request_fingerprint = ""
+    if task.social_account.provider == SocialAccount.Provider.BUFFER:
+        try:
+            provider_request_fingerprint = connector.provider_request_fingerprint(request)
+        except Exception:
+            complete_publish_failure(
+                task.id, attempt.claim_token,
+                PublishResult(succeeded=False, error_code="PROVIDER_ERROR"),
+            )
+            return None
+    _mark_provider_call_started(
+        task, attempt, provider_request_fingerprint=provider_request_fingerprint
+    )
 
     try:
         result = connector.publish(request)
@@ -1433,11 +1472,13 @@ def retry_publish_task(task, *, actor=None):
     task.retry_not_before = None
     task.finished_at = None
     task.provider_call_started_at = None
+    task.provider_request_fingerprint = ""
     try:
         with transaction.atomic(), publishing_writes():
             task.save(update_fields=[
                 "status", "last_error", "retry_not_before", "finished_at",
                 "provider_call_started_at", "updated_at",
+                "provider_request_fingerprint",
             ])
     except IntegrityError:
         if _find_blocking_publish_task(

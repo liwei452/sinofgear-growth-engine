@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from json import JSONDecodeError
 
 import httpx
@@ -86,6 +87,37 @@ query BufferPost($input: PostInput!) {
     externalLink
     createdAt
     updatedAt
+  }
+}
+""".strip()
+
+_POSTS_QUERY = """
+query BufferPosts($input: PostsInput!, $first: Int!, $after: String) {
+  posts(input: $input, first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        id
+        channelId
+        channelService
+        status
+        text
+        createdAt
+        dueAt
+        sentAt
+        schedulingType
+        shareMode
+        assets {
+          type
+          mimeType
+          source
+        }
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
   }
 }
 """.strip()
@@ -306,6 +338,37 @@ class BufferGraphQLClient:
             token, _POST_QUERY, {"input": {"id": post_id.strip()}}, operation="post"
         )
 
+    def fetch_posts(
+        self, token: str, *, organization_id: str, channel_id: str,
+        window_start: datetime, window_end: datetime, after: str | None = None,
+        first: int = 50,
+    ) -> BufferGraphQLResponse:
+        organization_id = _bounded_query_id(organization_id)
+        channel_id = _bounded_query_id(channel_id)
+        if (
+            type(first) is not int or not 1 <= first <= 50
+            or after is not None
+            and (type(after) is not str or not after or len(after) > 512)
+        ):
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        start = _query_datetime(window_start)
+        end = _query_datetime(window_end)
+        if window_end <= window_start:
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        variables = {
+            "input": {
+                "organizationId": organization_id,
+                "filter": {
+                    "channelIds": [channel_id],
+                    "createdAt": {"start": start, "end": end},
+                },
+                "sort": [{"field": "createdAt", "direction": "desc"}],
+            },
+            "first": first,
+            "after": after,
+        }
+        return self._execute(token, _POSTS_QUERY, variables, operation="posts")
+
     def _execute(
         self, token: str, query: str, variables: dict, *, mutation: bool = False,
         operation: str = "query",
@@ -473,3 +536,15 @@ def _has_valid_post_data(data) -> bool:
         type(post.get(field)) is str and bool(post[field].strip())
         for field in ("id", "channelId", "channelService", "status")
     )
+
+
+def _bounded_query_id(value: object) -> str:
+    if type(value) is not str or not (value := value.strip()) or len(value) > 255:
+        raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+    return value
+
+
+def _query_datetime(value: object) -> str:
+    if type(value) is not datetime or value.tzinfo is None:
+        raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

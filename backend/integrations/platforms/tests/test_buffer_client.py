@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 import httpx
@@ -115,6 +117,54 @@ def test_valid_post_data_is_kept_when_top_level_warning_is_present():
         )
     )
     assert _client(transport).fetch_post(TOKEN, "post-1").data == {"post": post}
+
+
+def test_posts_query_is_bounded_filtered_sorted_and_cursor_paginated():
+    transport = RecordingTransport(
+        HttpResponse(
+            200,
+            {"data": {"posts": {"edges": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}},
+            {},
+        )
+    )
+    start = datetime(2026, 8, 20, 1, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 20, 1, 17, tzinfo=timezone.utc)
+
+    _client(transport).fetch_posts(
+        TOKEN,
+        organization_id="org-1",
+        channel_id="channel-1",
+        window_start=start,
+        window_end=end,
+        after="cursor-1",
+        first=50,
+    )
+
+    body = transport.requests[0]["json"]
+    assert body["variables"] == {
+        "input": {
+            "organizationId": "org-1",
+            "filter": {
+                "channelIds": ["channel-1"],
+                "createdAt": {
+                    "start": "2026-08-20T01:00:00Z",
+                    "end": "2026-08-20T01:17:00Z",
+                },
+            },
+            "sort": [{"field": "createdAt", "direction": "desc"}],
+        },
+        "first": 50,
+        "after": "cursor-1",
+    }
+    query = body["query"]
+    assert "createPost" not in query
+    for required in (
+        "channelService", "schedulingType", "shareMode", "text", "createdAt",
+        "assets", "mimeType", "source", "hasNextPage", "endCursor",
+    ):
+        assert required in query
+    for forbidden in ("rawError", "author", "email", "metadata"):
+        assert forbidden not in query
 
 
 def test_http_200_with_data_parses_and_returns_rate_limit():

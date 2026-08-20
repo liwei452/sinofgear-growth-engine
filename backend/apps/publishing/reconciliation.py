@@ -2,18 +2,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+import hashlib
+import hmac
 
 from django.db import transaction
+from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.content.models import PlatformContent
 from apps.content.services import transition_content
 from apps.platforms.models import ProviderConnection, SocialAccount
 from integrations.platforms.buffer_types import (
+    BufferCandidateSearchResult,
+    BufferPostCandidate,
     BufferPostObservation,
     BufferPostQueryRequest,
     BufferPostQueryResult,
+    BufferUnknownMatchRequest,
 )
+from integrations.platforms.buffer_connector import provider_candidate_fingerprint
 from integrations.platforms.runtime import get_social_provider_runtime
 
 from .models import (
@@ -30,6 +38,8 @@ BUFFER_RECONCILIATION_BATCH_SIZE = 50
 BUFFER_RECONCILIATION_MAX_AGE = timedelta(days=7)
 BUFFER_RECONCILIATION_MAX_DELAY = timedelta(hours=6)
 BUFFER_RECONCILIATION_DISPATCH_LEASE = timedelta(minutes=5)
+BUFFER_UNKNOWN_WINDOW_BEFORE = timedelta(minutes=2)
+BUFFER_UNKNOWN_WINDOW_AFTER = timedelta(minutes=15)
 
 SAFE_RECONCILIATION_ERRORS = {
     "BUFFER_PUBLISH_FAILED": "Buffer confirmed that publishing failed.",
@@ -41,6 +51,9 @@ SAFE_RECONCILIATION_ERRORS = {
     "BUFFER_PROVIDER_UNAVAILABLE": "Buffer reconciliation is temporarily unavailable.",
     "BUFFER_RECONCILIATION_STALE": "The task changed while Buffer was being queried.",
     "BUFFER_RECONCILIATION_EXPIRED": "The Buffer post remained non-final for too long.",
+    "BUFFER_RECONCILIATION_EVIDENCE_MISSING": "The original Buffer request evidence is unavailable.",
+    "BUFFER_RECONCILIATION_NO_MATCH": "No exact Buffer post match was found.",
+    "BUFFER_RECONCILIATION_AMBIGUOUS": "More than one exact Buffer post match was found.",
 }
 
 
@@ -57,6 +70,29 @@ class ReconciliationSnapshot:
     connection_id: object
     connection_updated_at: object
     credential_reference: str
+    started_at: object
+
+
+@dataclass(frozen=True, repr=False)
+class UnknownReconciliationSnapshot:
+    task_id: object
+    organization_id: object
+    task_updated_at: object
+    account_id: object
+    account_updated_at: object
+    provider_account_id: str
+    platform_code: str
+    connection_id: object
+    connection_updated_at: object
+    provider_organization_id: str
+    credential_reference: str
+    provider_call_started_at: object
+    provider_request_fingerprint: str
+    attempt_id: object
+    attempt_updated_at: object
+    attempt_fingerprint: str
+    window_start: object
+    window_end: object
     started_at: object
 
 
@@ -125,6 +161,129 @@ def reconcile_buffer_publish_task(task_id, *, organization=None, actor=None):
                 ok=False, error_code="BUFFER_PROVIDER_UNAVAILABLE"
             )
     return finalize_buffer_reconciliation(snapshot, result, actor=actor)
+
+
+def load_unknown_reconciliation_snapshot(
+    task_id, *, organization=None
+) -> UnknownReconciliationSnapshot:
+    queryset = PublishTask.objects.select_related(
+        "social_account__platform", "social_account__provider_connection"
+    )
+    if organization is not None:
+        queryset = queryset.filter(organization=organization)
+    try:
+        task = queryset.get(pk=task_id)
+    except (PublishTask.DoesNotExist, ValueError) as exc:
+        raise PublishingConflict("Publish task is not available for reconciliation.") from exc
+    account = task.social_account
+    connection = account.provider_connection
+    attempt = task.attempts.order_by("-number").first()
+    if (
+        task.status != PublishTask.Status.SUBMISSION_UNKNOWN
+        or account.provider != SocialAccount.Provider.BUFFER
+        or connection is None
+        or connection.provider != ProviderConnection.Provider.BUFFER
+        or not _valid_identifier(account.provider_account_id)
+        or attempt is None
+        or attempt.status != PublishAttempt.Status.SUBMISSION_UNKNOWN
+    ):
+        raise PublishingConflict("Only unknown Buffer tasks can be reconciled.")
+    call_started_at = attempt.provider_call_started_at or task.provider_call_started_at
+    window_start = call_started_at - BUFFER_UNKNOWN_WINDOW_BEFORE if call_started_at else None
+    window_end = call_started_at + BUFFER_UNKNOWN_WINDOW_AFTER if call_started_at else None
+    return UnknownReconciliationSnapshot(
+        task_id=task.id,
+        organization_id=task.organization_id,
+        task_updated_at=task.updated_at,
+        account_id=account.id,
+        account_updated_at=account.updated_at,
+        provider_account_id=account.provider_account_id.strip(),
+        platform_code=account.platform.code,
+        connection_id=connection.id,
+        connection_updated_at=connection.updated_at,
+        provider_organization_id=(
+            connection.external_id.strip() if type(connection.external_id) is str else ""
+        ),
+        credential_reference=connection.credential_reference,
+        provider_call_started_at=call_started_at,
+        provider_request_fingerprint=task.provider_request_fingerprint,
+        attempt_id=attempt.id,
+        attempt_updated_at=attempt.updated_at,
+        attempt_fingerprint=attempt.provider_request_fingerprint,
+        window_start=window_start,
+        window_end=window_end,
+        started_at=timezone.now(),
+    )
+
+
+def _has_unknown_evidence(snapshot: UnknownReconciliationSnapshot) -> bool:
+    return (
+        snapshot.provider_call_started_at is not None
+        and snapshot.window_start is not None
+        and snapshot.window_end is not None
+        and _valid_identifier(snapshot.provider_organization_id)
+        and len(snapshot.provider_request_fingerprint) == 64
+        and type(snapshot.provider_request_fingerprint) is str
+        and snapshot.provider_request_fingerprint == snapshot.attempt_fingerprint
+        and all(character in "0123456789abcdef" for character in snapshot.provider_request_fingerprint)
+    )
+
+
+def reconcile_unknown_buffer_publish_task(task_id, *, organization=None, actor=None):
+    snapshot = load_unknown_reconciliation_snapshot(task_id, organization=organization)
+    if (
+        snapshot.provider_call_started_at is not None
+        and snapshot.started_at - snapshot.provider_call_started_at > BUFFER_RECONCILIATION_MAX_AGE
+    ):
+        return finalize_unknown_buffer_reconciliation(
+            snapshot,
+            BufferCandidateSearchResult(
+                ok=False, error_code="BUFFER_RECONCILIATION_EXPIRED"
+            ),
+            actor=actor,
+        )
+    if not _has_unknown_evidence(snapshot):
+        return finalize_unknown_buffer_reconciliation(
+            snapshot,
+            BufferCandidateSearchResult(
+                ok=False, error_code="BUFFER_RECONCILIATION_EVIDENCE_MISSING"
+            ),
+            actor=actor,
+        )
+    account = SocialAccount.objects.select_related("platform", "provider_connection").get(
+        pk=snapshot.account_id
+    )
+    try:
+        connector = get_social_provider_runtime().connector_registry.resolve(account)
+        result = connector.search_post_candidates(
+            BufferUnknownMatchRequest(
+                credential_reference=snapshot.credential_reference,
+                provider_organization_id=snapshot.provider_organization_id,
+                provider_account_id=snapshot.provider_account_id,
+                window_start=snapshot.window_start,
+                window_end=snapshot.window_end,
+            )
+        )
+    except Exception:
+        result = BufferCandidateSearchResult(
+            ok=False, error_code="BUFFER_PROVIDER_UNAVAILABLE"
+        )
+    return finalize_unknown_buffer_reconciliation(snapshot, result, actor=actor)
+
+
+def reconcile_publish_task(task_id, *, organization=None, actor=None):
+    queryset = PublishTask.objects.only("status")
+    if organization is not None:
+        queryset = queryset.filter(organization=organization)
+    try:
+        status = queryset.get(pk=task_id).status
+    except (PublishTask.DoesNotExist, ValueError) as exc:
+        raise PublishingConflict("Publish task is not available for reconciliation.") from exc
+    if status == PublishTask.Status.SUBMISSION_UNKNOWN:
+        return reconcile_unknown_buffer_publish_task(
+            task_id, organization=organization, actor=actor
+        )
+    return reconcile_buffer_publish_task(task_id, organization=organization, actor=actor)
 
 
 def _delay_for(number: int) -> timedelta:
@@ -368,6 +527,254 @@ def _finalize_query_error(task, attempt, account, connection, result, started_at
     return _defer(task, started_at, finished_at, error_code=code)
 
 
+def _unknown_snapshot_matches(snapshot, task, attempt, account, connection) -> bool:
+    return (
+        task.status == PublishTask.Status.SUBMISSION_UNKNOWN
+        and attempt.status == PublishAttempt.Status.SUBMISSION_UNKNOWN
+        and task.updated_at == snapshot.task_updated_at
+        and attempt.updated_at == snapshot.attempt_updated_at
+        and task.provider_request_fingerprint == snapshot.provider_request_fingerprint
+        and attempt.provider_request_fingerprint == snapshot.attempt_fingerprint
+        and account.updated_at == snapshot.account_updated_at
+        and account.provider_account_id == snapshot.provider_account_id
+        and connection.updated_at == snapshot.connection_updated_at
+        and connection.credential_reference == snapshot.credential_reference
+        and connection.external_id == snapshot.provider_organization_id
+    )
+
+
+def _candidate_set_fingerprint(candidates) -> str:
+    identifiers = sorted(candidate.post_id for candidate in candidates)
+    encoded = "\x00".join(identifiers).encode("utf-8")
+    return hmac.new(
+        settings.SECRET_KEY.encode("utf-8"),
+        b"buffer-candidate-set-v1\x00" + encoded,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _record_unknown(
+    task, *, result, snapshot, finished_at, error_code="", candidates=(), matched=None
+):
+    task.reconciliation_attempt_number += 1
+    with publishing_writes():
+        PublishReconciliationAttempt.objects.create(
+            organization_id=task.organization_id,
+            publish_task=task,
+            sequence_number=task.reconciliation_attempt_number,
+            mode=PublishReconciliationAttempt.Mode.UNKNOWN_MATCH,
+            result=result,
+            provider_submission_id=matched.post_id if matched else "",
+            safe_error_code=error_code,
+            candidate_count=len(candidates),
+            matched_provider_post_id=matched.post_id if matched else "",
+            candidate_set_fingerprint=_candidate_set_fingerprint(candidates) if candidates else "",
+            query_window_start=snapshot.window_start,
+            query_window_end=snapshot.window_end,
+            started_at=snapshot.started_at,
+            finished_at=finished_at,
+        )
+
+
+def _save_unknown_task(task, finished_at, *, error_code="", next_at=None):
+    task.last_reconciled_at = finished_at
+    task.next_reconcile_at = next_at
+    task.reconciliation_error_code = error_code
+    with publishing_writes():
+        task.save(update_fields=[
+            "status", "last_error", "finished_at", "provider_submission_id",
+            "reconciliation_attempt_number", "last_reconciled_at", "next_reconcile_at",
+            "reconciliation_error_code", "updated_at",
+        ])
+
+
+def _unknown_needs_attention(task, attempt, snapshot, finished_at, code, candidates=()):
+    error = {"code": code, "message": SAFE_RECONCILIATION_ERRORS[code]}
+    task.status = PublishTask.Status.NEEDS_ATTENTION
+    task.last_error = error
+    task.finished_at = finished_at
+    attempt.status = PublishAttempt.Status.NEEDS_ATTENTION
+    attempt.outcome = "NEEDS_ATTENTION"
+    attempt.error = error
+    attempt.finished_at = finished_at
+    _record_unknown(
+        task,
+        result=PublishReconciliationAttempt.Result.NEEDS_ATTENTION,
+        snapshot=snapshot,
+        finished_at=finished_at,
+        error_code=code,
+        candidates=candidates,
+    )
+    with publishing_writes():
+        attempt.save(update_fields=["status", "outcome", "error", "finished_at", "updated_at"])
+    _save_unknown_task(task, finished_at, error_code=code)
+    return task
+
+
+def _unknown_query_error(task, account, connection, snapshot, result, finished_at):
+    code = result.error_code if type(result.error_code) is str else "BUFFER_PROVIDER_UNAVAILABLE"
+    if code not in {
+        "BUFFER_AUTHENTICATION_REQUIRED", "BUFFER_CONFIGURATION_REQUIRED",
+        "BUFFER_RATE_LIMITED", "BUFFER_PROVIDER_UNAVAILABLE",
+    }:
+        code = "BUFFER_PROVIDER_UNAVAILABLE"
+    if code in {"BUFFER_AUTHENTICATION_REQUIRED", "BUFFER_CONFIGURATION_REQUIRED"}:
+        code = "BUFFER_AUTHENTICATION_REQUIRED"
+        connection.connection_state = ProviderConnection.ConnectionState.REAUTHORIZATION_REQUIRED
+        connection.reauthorization_required_at = finished_at
+        connection.lifecycle_error_code = code
+        account.connection_state = SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED
+        account.reauthorization_required_at = finished_at
+        account.lifecycle_error_code = code
+        connection.save(update_fields=[
+            "connection_state", "reauthorization_required_at", "lifecycle_error_code", "updated_at"
+        ])
+        account.save(update_fields=[
+            "connection_state", "reauthorization_required_at", "lifecycle_error_code", "updated_at"
+        ])
+    retry_after = result.retry_after_seconds if type(result.retry_after_seconds) is int else None
+    delay = timedelta(seconds=min(max(retry_after, 1), 21600)) if retry_after else _delay_for(
+        task.reconciliation_attempt_number + 1
+    )
+    _record_unknown(
+        task,
+        result=PublishReconciliationAttempt.Result.DEFERRED,
+        snapshot=snapshot,
+        finished_at=finished_at,
+        error_code=code,
+    )
+    _save_unknown_task(task, finished_at, error_code=code, next_at=finished_at + delay)
+    return task
+
+
+def _candidate_matches(snapshot, candidate) -> bool:
+    if type(candidate) is not BufferPostCandidate:
+        return False
+    if not (
+        candidate.channel_id == snapshot.provider_account_id
+        and candidate.channel_service.upper() == snapshot.platform_code.upper()
+        and snapshot.window_start <= candidate.created_at <= snapshot.window_end
+        and _valid_identifier(candidate.post_id)
+    ):
+        return False
+    try:
+        return hmac.compare_digest(
+            provider_candidate_fingerprint(candidate),
+            snapshot.provider_request_fingerprint,
+        )
+    except Exception:
+        return False
+
+
+@transaction.atomic
+def finalize_unknown_buffer_reconciliation(snapshot, result, *, actor=None):
+    finished_at = timezone.now()
+    task = PublishTask.objects.select_for_update().select_related("platform_content").get(
+        pk=snapshot.task_id, organization_id=snapshot.organization_id
+    )
+    attempt = PublishAttempt.objects.select_for_update().get(
+        pk=snapshot.attempt_id, task=task, organization_id=snapshot.organization_id
+    )
+    account = SocialAccount.objects.select_for_update().select_related("platform").get(
+        pk=snapshot.account_id, organization_id=snapshot.organization_id
+    )
+    connection = ProviderConnection.objects.select_for_update().get(
+        pk=snapshot.connection_id, organization_id=snapshot.organization_id
+    )
+    if not _unknown_snapshot_matches(snapshot, task, attempt, account, connection):
+        if task.status == PublishTask.Status.SUBMISSION_UNKNOWN:
+            _record_unknown(
+                task,
+                result=PublishReconciliationAttempt.Result.STALE,
+                snapshot=snapshot,
+                finished_at=finished_at,
+                error_code="BUFFER_RECONCILIATION_STALE",
+            )
+            _save_unknown_task(task, finished_at, error_code="BUFFER_RECONCILIATION_STALE")
+        return task
+    if not _has_unknown_evidence(snapshot):
+        return _unknown_needs_attention(
+            task, attempt, snapshot, finished_at,
+            "BUFFER_RECONCILIATION_EVIDENCE_MISSING",
+        )
+    if type(result) is not BufferCandidateSearchResult or not result.ok:
+        if (
+            type(result) is BufferCandidateSearchResult
+            and result.error_code in {
+                "BUFFER_RECONCILIATION_EVIDENCE_MISSING",
+                "BUFFER_RECONCILIATION_EXPIRED",
+            }
+        ):
+            return _unknown_needs_attention(
+                task, attempt, snapshot, finished_at,
+                result.error_code,
+            )
+        safe_result = result if type(result) is BufferCandidateSearchResult else BufferCandidateSearchResult(
+            ok=False, error_code="BUFFER_PROVIDER_UNAVAILABLE"
+        )
+        return _unknown_query_error(task, account, connection, snapshot, safe_result, finished_at)
+    candidates = tuple(candidate for candidate in result.candidates if _candidate_matches(snapshot, candidate))
+    if result.truncated or len(candidates) > 1:
+        return _unknown_needs_attention(
+            task, attempt, snapshot, finished_at,
+            "BUFFER_RECONCILIATION_AMBIGUOUS", candidates,
+        )
+    if not candidates:
+        return _unknown_needs_attention(
+            task, attempt, snapshot, finished_at,
+            "BUFFER_RECONCILIATION_NO_MATCH", candidates,
+        )
+    candidate = candidates[0]
+    task.status = PublishTask.Status.SUBMITTED
+    task.provider_submission_id = candidate.post_id
+    task.last_error = None
+    task.finished_at = None
+    attempt.status = PublishAttempt.Status.SUBMITTED
+    attempt.provider_submission_id = candidate.post_id
+    attempt.outcome = "SUBMITTED"
+    attempt.error = None
+    attempt.finished_at = finished_at
+    _record_unknown(
+        task,
+        result=PublishReconciliationAttempt.Result.MATCHED,
+        snapshot=snapshot,
+        finished_at=finished_at,
+        candidates=candidates,
+        matched=candidate,
+    )
+    with publishing_writes():
+        attempt.save(update_fields=[
+            "status", "provider_submission_id", "outcome", "error", "finished_at", "updated_at"
+        ])
+    _save_unknown_task(task, finished_at)
+    exact_snapshot = ReconciliationSnapshot(
+        task_id=task.id,
+        organization_id=task.organization_id,
+        task_updated_at=task.updated_at,
+        provider_submission_id=candidate.post_id,
+        account_id=account.id,
+        account_updated_at=account.updated_at,
+        provider_account_id=account.provider_account_id,
+        platform_code=account.platform.code,
+        connection_id=connection.id,
+        connection_updated_at=connection.updated_at,
+        credential_reference=connection.credential_reference,
+        started_at=finished_at,
+    )
+    observation = BufferPostObservation(
+        post_id=candidate.post_id,
+        channel_id=candidate.channel_id,
+        channel_service=candidate.channel_service,
+        status=candidate.status,
+        due_at=candidate.due_at,
+        sent_at=candidate.sent_at,
+        created_at=candidate.created_at,
+    )
+    return finalize_buffer_reconciliation(
+        exact_snapshot, BufferPostQueryResult(ok=True, observation=observation), actor=actor
+    )
+
+
 def select_due_buffer_reconciliation_ids(*, limit=BUFFER_RECONCILIATION_BATCH_SIZE, now=None):
     now = now or timezone.now()
     limit = min(max(int(limit), 1), BUFFER_RECONCILIATION_BATCH_SIZE)
@@ -375,10 +782,12 @@ def select_due_buffer_reconciliation_ids(*, limit=BUFFER_RECONCILIATION_BATCH_SI
         tasks = list(
             PublishTask.objects.select_for_update(skip_locked=True)
             .filter(
-                status=PublishTask.Status.SUBMITTED,
                 social_account__provider=SocialAccount.Provider.BUFFER,
             )
-            .exclude(provider_submission_id="")
+            .filter(
+                Q(status=PublishTask.Status.SUBMITTED) & ~Q(provider_submission_id="")
+                | Q(status=PublishTask.Status.SUBMISSION_UNKNOWN)
+            )
             .filter(next_reconcile_at__isnull=True)
             .order_by("created_at", "id")[:limit]
         )
@@ -386,11 +795,13 @@ def select_due_buffer_reconciliation_ids(*, limit=BUFFER_RECONCILIATION_BATCH_SI
             tasks += list(
                 PublishTask.objects.select_for_update(skip_locked=True)
                 .filter(
-                    status=PublishTask.Status.SUBMITTED,
                     social_account__provider=SocialAccount.Provider.BUFFER,
                     next_reconcile_at__lte=now,
                 )
-                .exclude(provider_submission_id="")
+                .filter(
+                    Q(status=PublishTask.Status.SUBMITTED) & ~Q(provider_submission_id="")
+                    | Q(status=PublishTask.Status.SUBMISSION_UNKNOWN)
+                )
                 .exclude(pk__in=[task.pk for task in tasks])
                 .order_by("next_reconcile_at", "id")[: limit - len(tasks)]
             )

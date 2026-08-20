@@ -188,7 +188,7 @@ const statusMessage = computed(() => {
     </section>
 
     <BusinessState
-      v-if="!currentStep && steps.every(step => step.state === 'complete')"
+      v-if="journeyState === 'ready' && selectedMission && !currentStep && steps.every(step => step.state === 'complete')"
       kind="success" title="推广准备记录已齐全" message="请在任务详情中确认后续执行状态。"
     />
   </main>

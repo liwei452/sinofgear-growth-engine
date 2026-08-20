@@ -5,7 +5,9 @@ import { afterEach, expect, it, vi } from "vitest"
 
 import { currentUserQueryOptions } from "../auth/auth"
 import { companyFactsQueryOptions } from "../growth/api"
-import type { GrowthMission } from "../missions/api"
+import { missionsQueryOptions, type GrowthMission } from "../missions/api"
+import { platformAccountKeys } from "../platformAccounts/api"
+import { productQueryKeys } from "../products/api"
 import PromotionWorkspacePage from "./PromotionWorkspacePage.vue"
 
 const mission = (id: string, overrides: Partial<GrowthMission> = {}): GrowthMission => ({
@@ -28,6 +30,8 @@ function renderWorkspace(input: {
   companyFacts?: unknown[]
   assets?: unknown[]
   seedCompanyFacts?: boolean
+  seedFullyComplete?: boolean
+  accounts?: unknown[]
 }) {
   const missions = input.missions ?? [mission("mission-1")]
   vi.stubGlobal("fetch", vi.fn((request: RequestInfo | URL) => {
@@ -38,12 +42,22 @@ function renderWorkspace(input: {
     if (path.includes("growth/missions")) body = missions
     if (path.includes("/products")) body = { next: null, previous: null, results: missions.map(item => ({ id: item.primary_product_id, status: "ACTIVE" })) }
     if (path.includes("/assets")) body = { next: null, previous: null, results: input.assets ?? [] }
-    if (path.includes("social-accounts")) body = { results: [] }
+    if (path.includes("social-accounts")) body = { results: input.accounts ?? [] }
     return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }))
   }))
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   if (input.seedCompanyFacts) {
     queryClient.setQueryData(companyFactsQueryOptions().queryKey, [{ id: "old", verification_status: "VERIFIED" }], { updatedAt: 0 })
+  }
+  if (input.seedFullyComplete) {
+    queryClient.setQueryData(missionsQueryOptions().queryKey, missions, { updatedAt: 0 })
+    queryClient.setQueryData(productQueryKeys.list("o1", { status: "ACTIVE" }), {
+      next: null, previous: null, results: missions.map(item => ({ id: item.primary_product_id, status: "ACTIVE" })),
+    }, { updatedAt: 0 })
+    queryClient.setQueryData(["promotion", ...productQueryKeys.all("o1"), "assets"], {
+      next: null, previous: null, results: input.assets ?? [],
+    }, { updatedAt: 0 })
+    queryClient.setQueryData(platformAccountKeys.accounts("o1"), input.accounts ?? [], { updatedAt: 0 })
   }
   queryClient.setQueryData(currentUserQueryOptions().queryKey, {
     user: { id: 1, username: "operator" }, organization: { id: "o1", name: "Org", slug: "org" },
@@ -77,6 +91,23 @@ it.each([403, 500])("does not derive a journey from a failed company read (%i), 
   )
   expect(screen.queryByRole("list")).not.toBeInTheDocument()
   expect(screen.queryByRole("link", { name: /继续/ })).not.toBeInTheDocument()
+})
+
+it.each([403, 500])("does not show a success conclusion from a fully complete stale journey when a required read fails (%i)", async (companyStatus) => {
+  const completeMission = mission("mission-1", {
+    status: "RUNNING", latest_plan: {
+      id: "plan-1", version: 1, status: "APPROVED", snapshot: {}, generation_mode: "AUTOMATION",
+      provider: "", model: "", approved_by: 1, approved_at: "2026-08-20T00:00:00Z", created_at: "2026-08-20T00:00:00Z",
+    }, lane_counts: { ACQUISITION: 1, OUTREACH: 0, SOCIAL: 0, ATTRIBUTION: 0 },
+  })
+  await renderWorkspace({
+    companyStatus, seedCompanyFacts: true, seedFullyComplete: true, missions: [completeMission],
+    assets: [{ id: "linked", status: "READY", products: [{ id: "product-mission-1" }] }],
+    accounts: [{ id: "account-1", status: "ACTIVE", publish_mode: "MANUAL", credential_configured: false }],
+  })
+
+  expect(await screen.findByRole("alert")).toBeInTheDocument()
+  expect(screen.queryByText("推广准备记录已齐全")).not.toBeInTheDocument()
 })
 
 it("keeps the journey unavailable when a required source is not authorized", async () => {

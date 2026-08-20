@@ -7,15 +7,11 @@ import DashboardPage from "./DashboardPage.vue"
 
 afterEach(() => vi.unstubAllGlobals())
 
-it("leads with the unified today inbox and a mission creation path", async () => {
-  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
-    const path = String(input)
-    const body = path === "/api/v1/growth/missions" ? [] : []
-    return Promise.resolve(new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }))
-  }))
+it("shows the confidence dashboard regions instead of the old today hero", async () => {
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify([]), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  }))))
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -32,7 +28,9 @@ it("leads with the unified today inbox and a mission creation path", async () =>
   })
   await router.isReady()
 
-  expect(await screen.findByRole("heading", { level: 1, name: "今日待办" })).toBeVisible()
-  expect(screen.getByRole("link", { name: "创建增长任务" })).toHaveAttribute("href", "/missions")
-  expect(await screen.findByText("今天没有需要人工处理的事项")).toBeVisible()
+  expect(await screen.findByRole("region", { name: "今日最重要机会" })).toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "当前阻塞" })).toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "最新证据" })).toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "今日待办" })).toBeInTheDocument()
+  expect(screen.queryByText("TODAY'S WORKSPACE")).not.toBeInTheDocument()
 })

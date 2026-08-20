@@ -18,7 +18,7 @@ const platforms = computed(() => {
 </script>
 
 <template>
-  <article class="work-item-card" :data-priority="item.priority">
+  <article class="work-item-card" :data-priority="item.priority" :aria-label="item.title">
     <header>
       <span class="priority">{{ item.priority }}</span>
       <strong>{{ item.title }}</strong>
@@ -32,7 +32,7 @@ const platforms = computed(() => {
       </li>
     </ul>
     <footer>
-      <time>{{ item.created_at }}</time>
+      <time :datetime="item.created_at">{{ item.created_at }}</time>
       <button
         class="button button-primary"
         type="button"

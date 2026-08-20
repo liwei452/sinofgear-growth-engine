@@ -42,6 +42,7 @@ from .models import (
     GoogleMapsDiscoveryConfig,
     GrowthMission,
     GrowthPublishBatch,
+    IntentSignal,
     MissionEntityLink,
     MarketCountryProfile,
     OutreachDraft,
@@ -69,7 +70,7 @@ from .promotion_plan import (
 )
 
 from .manual_imports import import_manual_opportunity
-from .market_pilots import market_profiles_for
+from .market_pilots import market_pilot_summary, market_profiles_for
 from .serializers import (
     ChannelPackageBatchApproveSerializer,
     ChannelPackageBatchPrepareSerializer,
@@ -259,6 +260,21 @@ def discovery_summary(profile):
             },
         ],
     }
+
+
+class MarketRecommendationListView(APIView):
+    """Read the existing, organization-scoped market recommendation summary without mutation."""
+
+    permission_classes = [CanReadLeads]
+
+    @extend_schema(tags=["Growth workspace"], responses={200: OpenApiTypes.OBJECT})
+    def get(self, request):
+        profiles = list(MarketCountryProfile.objects.filter(organization=request.organization))
+        return Response(market_pilot_summary(
+            signals=IntentSignal.objects.filter(organization=request.organization),
+            accounts=TargetAccount.objects.filter(organization=request.organization),
+            profiles=profiles or None,
+        ))
 
 
 class PromotionPlanApproveView(APIView):

@@ -416,6 +416,22 @@ export type MarketPilotSummary = {
   }
 }
 
+export const marketRecommendationQueryKeys = {
+  summary: ["growth", "market-recommendations"] as const,
+}
+
+export function marketRecommendationQueryOptions() {
+  return queryOptions({
+    queryKey: marketRecommendationQueryKeys.summary,
+    queryFn: async () => {
+      const result = await apiRequest<MarketPilotSummary>("/api/v1/growth/market-recommendations")
+      if (!result) throw new Error("市场推荐响应为空。")
+      return result
+    },
+    staleTime: 15_000,
+  })
+}
+
 export type TradeIndicator = {
   formula: string
   value_usd?: string | null

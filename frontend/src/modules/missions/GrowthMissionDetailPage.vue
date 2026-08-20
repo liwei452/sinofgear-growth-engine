@@ -157,7 +157,7 @@ async function reviewConflict(): Promise<void> {
 </script>
 
 <template>
-  <main class="mission-detail-page">
+  <section class="mission-detail-page">
     <header class="detail-hero">
       <div>
         <p class="eyebrow">GROWTH MISSION</p>
@@ -370,7 +370,7 @@ async function reviewConflict(): Promise<void> {
       @platform-generated="refreshContentSummary"
       @conflict="reviewConflict"
     />
-  </main>
+  </section>
 </template>
 
 <style scoped>

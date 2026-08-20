@@ -27,6 +27,7 @@ function renderWorkspace(input: {
   role?: string
   route?: string
   companyStatus?: number
+  marketStatus?: number
   companyFacts?: unknown[]
   assets?: unknown[]
   seedCompanyFacts?: boolean
@@ -36,7 +37,11 @@ function renderWorkspace(input: {
   const missions = input.missions ?? [mission("mission-1")]
   vi.stubGlobal("fetch", vi.fn((request: RequestInfo | URL) => {
     const path = String(request)
-    const status = path.includes("company-facts") ? (input.companyStatus ?? 200) : 200
+    const status = path.includes("company-facts")
+      ? (input.companyStatus ?? 200)
+      : path.includes("market-recommendations")
+        ? (input.marketStatus ?? 200)
+        : 200
     let body: unknown = []
     if (path.includes("company-facts")) body = input.companyFacts ?? [{ id: "fact-1", verification_status: "VERIFIED" }]
     if (path.includes("growth/missions")) body = missions
@@ -115,6 +120,13 @@ it("keeps the journey unavailable when a required source is not authorized", asy
 
   expect(await screen.findByRole("alert")).toHaveTextContent("缺少推广所需查看权限")
   expect(screen.queryByRole("list")).not.toBeInTheDocument()
+})
+
+it("does not present a recommendation or import path when the market read fails", async () => {
+  await renderWorkspace({ marketStatus: 503 })
+
+  expect(await screen.findByText("市场推荐暂时无法读取")).toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "查看候选并导入名单" })).not.toBeInTheDocument()
 })
 
 it("requires a visible selection for multiple missions and uses the selected mission in the detail link", async () => {

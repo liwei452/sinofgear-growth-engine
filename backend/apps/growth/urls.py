@@ -23,6 +23,7 @@ from .views import (
     InboundRfqView,
     LeadVisitView,
     MetricReceiptCreateView,
+    MarketRecommendationListView,
     MarketWatchCreateView,
     MarketWatchView,
     ManualOpportunityImportView,
@@ -68,6 +69,7 @@ from .work_item_views import WorkItemListView
 
 urlpatterns = [
     path("growth/company-facts", CompanyFactListView.as_view(), name="growth-company-facts"),
+    path("growth/market-recommendations", MarketRecommendationListView.as_view(), name="growth-market-recommendations"),
     path("growth/markets/watch", MarketWatchCreateView.as_view(), name="growth-market-watch-create"),
     path("growth/markets/<str:country_code>/watch", MarketWatchView.as_view(), name="growth-market-watch"),
     path("growth/trade-syncs", TradeSyncView.as_view(), name="growth-trade-syncs"),

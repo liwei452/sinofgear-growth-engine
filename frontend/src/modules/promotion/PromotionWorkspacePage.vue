@@ -8,7 +8,7 @@ import BusinessState from "../../shared/components/BusinessState.vue"
 import WorkspaceHeader from "../../shared/components/WorkspaceHeader.vue"
 import { currentUserQueryOptions } from "../auth/auth"
 import { listAssets } from "../assets/api"
-import { companyFactsQueryOptions } from "../growth/api"
+import { companyFactsQueryOptions, marketRecommendationQueryOptions } from "../growth/api"
 import { missionsQueryOptions } from "../missions/api"
 import { listSocialAccounts, platformAccountKeys } from "../platformAccounts/api"
 import { listProducts, productQueryKeys } from "../products/api"
@@ -43,6 +43,10 @@ const accountsQuery = useQuery({
   enabled: computed(() => Boolean(organizationId.value) && canReadPublishing.value),
   retry: false,
 })
+const marketRecommendationsQuery = useQuery(marketRecommendationQueryOptions())
+const marketRecommendations = computed(() => (marketRecommendationsQuery.data.value?.markets ?? [])
+  .filter(market => market.recommendation_reasons.length > 0)
+  .slice(0, 3))
 
 const requestedMissionId = computed(() => typeof route.query.mission === "string" ? route.query.mission : "")
 const selectedMission = computed(() => {
@@ -188,6 +192,25 @@ const statusMessage = computed(() => {
     </section>
 
     <BusinessState
+      v-if="marketRecommendationsQuery.isError.value"
+      kind="error" title="市场推荐暂时无法读取" message="尚未读取到推荐，因此不会显示候选导入入口或推断市场优先级。"
+      action-label="重新加载" @action="marketRecommendationsQuery.refetch()"
+    />
+    <section v-else-if="marketRecommendations.length" class="market-recommendations" aria-labelledby="market-recommendations-title">
+      <div>
+        <h2 id="market-recommendations-title">市场推荐</h2>
+        <p>推荐仅提供已有的市场背景；进入客户机会后仍须导入有权使用的名单并人工审核。</p>
+      </div>
+      <article v-for="market in marketRecommendations" :key="market.country_code">
+        <h3>{{ market.country_label }}</h3>
+        <p>{{ market.recommendation_reasons[0] }}</p>
+        <RouterLink class="button button-secondary" :to="`/opportunities?market=${encodeURIComponent(market.country_code)}`">
+          查看候选并导入名单
+        </RouterLink>
+      </article>
+    </section>
+
+    <BusinessState
       v-if="journeyState === 'ready' && selectedMission && !currentStep && steps.every(step => step.state === 'complete')"
       kind="success" title="推广准备记录已齐全" message="请在任务详情中确认后续执行状态。"
     />
@@ -215,5 +238,10 @@ const statusMessage = computed(() => {
 .step-complete { opacity: .78; }
 .step-blocked { opacity: .68; }
 .safety-note { color: #7b5d22 !important; }
+.market-recommendations { display: grid; gap: 12px; border: 1px solid var(--sg-line); border-radius: 14px; background: #fff; padding: 18px; }
+.market-recommendations h2, .market-recommendations h3, .market-recommendations p { margin: 0; }
+.market-recommendations > div > p, .market-recommendations article p { margin-top: 6px; color: var(--sg-muted); font-size: .82rem; line-height: 1.5; }
+.market-recommendations article { display: grid; gap: 8px; border-top: 1px solid var(--sg-line); padding-top: 12px; }
+.market-recommendations article .button { justify-self: start; }
 @media (max-width: 620px) { .journey-heading, .promotion-steps li { align-items: flex-start; flex-direction: column; } }
 </style>

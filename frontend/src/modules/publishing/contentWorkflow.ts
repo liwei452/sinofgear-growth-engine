@@ -7,6 +7,8 @@ export type PublishStatus =
 export type ContentWorkflowStage =
   | "PREPARE" | "AI_DRAFT" | "REVIEW" | "SCHEDULED" | "SUBMITTED" | "PUBLISHED" | "NEEDS_ATTENTION"
 
+export type ContentWorkflowGroup = "PENDING" | "PLANNED" | "COMPLETED"
+
 export type ContentWorkflowFacts = {
   contentStatus: ContentStatus
   publishStatus: PublishStatus
@@ -33,6 +35,21 @@ export function contentWorkflowStage({ contentStatus, publishStatus }: ContentWo
         default: return "NEEDS_ATTENTION"
       }
     default: return "NEEDS_ATTENTION"
+  }
+}
+
+export function contentWorkflowGroup(stage: ContentWorkflowStage): ContentWorkflowGroup {
+  switch (stage) {
+    case "AI_DRAFT":
+    case "REVIEW":
+    case "NEEDS_ATTENTION":
+      return "PENDING"
+    case "PREPARE":
+    case "SCHEDULED":
+    case "SUBMITTED":
+      return "PLANNED"
+    case "PUBLISHED":
+      return "COMPLETED"
   }
 }
 

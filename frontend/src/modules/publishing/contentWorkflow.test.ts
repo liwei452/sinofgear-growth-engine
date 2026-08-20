@@ -1,6 +1,6 @@
 import { expect, it } from "vitest"
 
-import { canOfferRetry, contentWorkflowStage } from "./contentWorkflow"
+import { canOfferRetry, contentWorkflowGroup, contentWorkflowStage } from "./contentWorkflow"
 
 it("routes content and publication facts into the correct operational stage", () => {
   expect(contentWorkflowStage({ contentStatus: "DRAFT", publishStatus: null })).toBe("AI_DRAFT")
@@ -16,4 +16,14 @@ it("does not offer a duplicate publication retry when submission confirmation is
 
 it("uses the neutral attention state for an unrecognized runtime status", () => {
   expect(contentWorkflowStage({ contentStatus: "APPROVED", publishStatus: "NEW_SERVER_STATUS" as never })).toBe("NEEDS_ATTENTION")
+})
+
+it("groups all seven operational statuses into three operator-facing stages", () => {
+  expect(contentWorkflowGroup("AI_DRAFT")).toBe("PENDING")
+  expect(contentWorkflowGroup("REVIEW")).toBe("PENDING")
+  expect(contentWorkflowGroup("NEEDS_ATTENTION")).toBe("PENDING")
+  expect(contentWorkflowGroup("PREPARE")).toBe("PLANNED")
+  expect(contentWorkflowGroup("SCHEDULED")).toBe("PLANNED")
+  expect(contentWorkflowGroup("SUBMITTED")).toBe("PLANNED")
+  expect(contentWorkflowGroup("PUBLISHED")).toBe("COMPLETED")
 })

@@ -19,7 +19,10 @@ const candidate = {
 async function renderPage() {
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: "/opportunities", component: OpportunityWorkspacePage }],
+    routes: [
+      { path: "/opportunities", component: OpportunityWorkspacePage },
+      { path: "/promotion", component: { template: "<div />" } },
+    ],
   })
   await router.push("/opportunities?q=gear&stage=ALL&sort=score")
   return { router, ...render(OpportunityWorkspacePage, {
@@ -53,6 +56,28 @@ it("reports a failed candidate feed instead of inventing opportunities", async (
   vi.stubGlobal("fetch", vi.fn(async () => new Response("forbidden", { status: 403 })))
   await renderPage()
   expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法读取客户机会")
+})
+
+it("offers two clearly explained next paths when no customer opportunity exists", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    enabled: true,
+    source_label: "Manual",
+    schedule_label: "Manual",
+    product_scope_label: "Gear",
+    next_run_at: null,
+    last_run: null,
+    candidate_count: 0,
+    candidates: [],
+    enrichment_candidates: [],
+    available_sources: [],
+  }), { status: 200, headers: { "Content-Type": "application/json" } })))
+
+  await renderPage()
+
+  expect(await screen.findByRole("link", { name: "创建增长任务 / 开始推广" })).toHaveAttribute("href", "/promotion")
+  expect(screen.getByRole("button", { name: "导入候选名单" })).toBeVisible()
+  expect(screen.getByText("先定义目标市场和推广路径，由增长任务产生后续客户机会。", { exact: true })).toBeVisible()
+  expect(screen.getByText("已有合法候选名单时直接导入，进入人工审核，不会自动联系。", { exact: true })).toBeVisible()
 })
 
 it("imports a supplied candidate list for human review without claiming it was scraped", async () => {

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
 import { computed, ref } from "vue"
-import { useRoute, useRouter } from "vue-router"
+import { RouterLink, useRoute, useRouter } from "vue-router"
+
+import WorkspaceHeader from "../../shared/components/WorkspaceHeader.vue"
 
 import {
   addCandidateToFollowUp,
@@ -155,9 +157,13 @@ async function importCandidates(): Promise<void> {
 <template>
   <section class="opportunity-workspace">
     <p v-if="marketRecommendation" class="market-recommendation-context" role="status">市场推荐 {{ marketRecommendation }} 已带入；请导入有权使用的候选名单并进行人工审核。</p>
-    <header class="workspace-header">
-      <div><p class="eyebrow">CUSTOMER OPPORTUNITIES</p><h1>客户机会</h1><p>候选公司、意向信号、联系人和入站线索保持独立；仅展示已返回的资料与动作结果。</p></div><button type="button" @click="importOpen = !importOpen">导入候选名单</button>
-    </header>
+    <WorkspaceHeader
+      class="opportunity-header"
+      title="客户机会"
+      description="候选公司、意向信号、联系人和入站线索保持独立；仅展示已返回的资料与动作结果。"
+    >
+      <template v-if="candidates.length" #actions><button class="button button-primary" type="button" @click="importOpen = !importOpen">导入候选名单</button></template>
+    </WorkspaceHeader>
 
     <form v-if="importOpen" class="import-form" @submit.prevent="importCandidates"><label>候选名单内容<textarea v-model="importContent" aria-label="候选名单内容" required placeholder="company_name,country,website,industry" /></label><p>仅导入你提供且有权使用的名单；导入后必须人工审核，不会自动抓取或联系。</p><button type="submit" :disabled="importMutation.isPending.value || !importContent.trim()">导入并进入人工审核</button><p v-if="importMessage" role="status">{{ importMessage }}</p></form>
 
@@ -169,7 +175,24 @@ async function importCandidates(): Promise<void> {
 
     <p v-if="opportunitiesQuery.isLoading.value" class="state">正在读取客户机会…</p>
     <p v-else-if="opportunitiesQuery.isError.value" class="state error" role="alert">暂时无法读取客户机会；未生成候选、抓取结果或联系结果。</p>
-    <p v-else-if="!candidates.length" class="state">当前没有可展示的客户机会。</p>
+    <section v-else-if="!candidates.length" class="opportunity-empty" aria-labelledby="opportunity-empty-title">
+      <div class="empty-intro">
+        <h2 id="opportunity-empty-title">从合适的客户来源开始</h2>
+        <p>还没有进入人工审核的客户机会。请选择一种来源，后续每条客户记录都会保留证据与状态。</p>
+      </div>
+      <div class="empty-paths">
+        <article>
+          <h3>从市场与推广开始</h3>
+          <p>先定义目标市场和推广路径，由增长任务产生后续客户机会。</p>
+          <RouterLink class="button button-primary" to="/promotion">创建增长任务 / 开始推广</RouterLink>
+        </article>
+        <article>
+          <h3>导入已有候选名单</h3>
+          <p>已有合法候选名单时直接导入，进入人工审核，不会自动联系。</p>
+          <button class="button button-secondary" type="button" @click="importOpen = true">导入候选名单</button>
+        </article>
+      </div>
+    </section>
     <div v-else class="workspace-grid" :class="{ 'detail-selected': selected }">
       <section class="opportunity-list-panel" :class="{ 'mobile-hidden': selected }">
         <ul class="opportunity-list" aria-label="客户机会列表">
@@ -207,5 +230,45 @@ async function importCandidates(): Promise<void> {
 </template>
 
 <style scoped>
-.opportunity-workspace{display:grid;gap:1rem}.market-recommendation-context{margin:0;border:1px solid #b7d8ef;border-radius:1rem;background:#f3f9fd;padding:1rem;color:#14577d}.workspace-header,.filters,.opportunity-row,.opportunity-detail,.state,.import-form{border:1px solid #dce6f0;border-radius:1rem;background:#fff;padding:1rem}.workspace-header{display:flex;align-items:start;justify-content:space-between;gap:1rem;background:linear-gradient(120deg,#0d3e69,#19689a);color:#fff}.workspace-header h1,.workspace-header p,.opportunity-detail h2,.opportunity-detail p{margin:.25rem 0}.workspace-header button,.import-form button{padding:.5rem .7rem;border:0;border-radius:.5rem;background:#fff;color:#14669a;font-weight:700;cursor:pointer}.import-form{display:grid;gap:.6rem}.import-form label{display:grid;gap:.35rem;font-weight:700}.import-form textarea{min-height:6rem;padding:.55rem;border:1px solid #b9c8d6;border-radius:.5rem}.import-form p{margin:0;color:#526779;font-size:.8rem}.import-form button{justify-self:start;background:#14669a;color:#fff}.eyebrow{font-size:.7rem;font-weight:800;letter-spacing:.08em}.filters{display:grid;grid-template-columns:2fr 1fr 1fr;gap:.75rem}.filters label{display:grid;gap:.35rem;font-size:.8rem;font-weight:700}.filters input,.filters select{min-height:44px;padding:.55rem;border:1px solid #b9c8d6;border-radius:.5rem}.workspace-grid{display:grid;grid-template-columns:minmax(320px,.9fr) minmax(420px,1.1fr);gap:1rem}.opportunity-list{display:grid;gap:.75rem;margin:0;padding:0;list-style:none}.opportunity-row{display:flex;align-items:center;justify-content:space-between;gap:.75rem}.opportunity-row p{margin:.25rem 0;color:#526779;font-size:.8rem}.opportunity-detail{display:grid;align-content:start;gap:1rem}.opportunity-detail section{border-top:1px solid #e7edf3;padding-top:.75rem}.opportunity-detail h3{margin:0 0 .4rem;font-size:.95rem}.opportunity-detail a{display:block;margin:.3rem 0}.actions{display:flex;flex-wrap:wrap;gap:.5rem}.actions button,.opportunity-row button,.back{padding:.5rem .7rem;border:0;border-radius:.5rem;background:#14669a;color:#fff;cursor:pointer}.actions button:disabled{opacity:.6}.state{color:#526779}.error{color:#9b2b20;background:#fff4f2}@media(max-width:760px){.workspace-header,.filters,.workspace-grid{grid-template-columns:1fr;flex-direction:column}.detail-selected .mobile-hidden{display:none}.opportunity-row{align-items:flex-start;flex-direction:column}.opportunity-row button{width:100%}}
+.opportunity-workspace { display: grid; gap: 1rem; }
+.market-recommendation-context { margin: 0; border: 1px solid #b7d8ef; border-radius: 1rem; background: #f3f9fd; padding: 1rem; color: #14577d; }
+.opportunity-header { border: 1px solid #cfe4f6; border-radius: 1rem; background: linear-gradient(120deg, #f5faff, #e9f5ff); padding: 1.25rem; color: #15324a; }
+.opportunity-header :deep(h1), .opportunity-header :deep(p), .opportunity-detail h2, .opportunity-detail p { margin: .25rem 0; }
+.button, .import-form button, .actions button, .opportunity-row button, .back { min-height: 40px; padding: .55rem .8rem; border: 1px solid transparent; border-radius: .65rem; font-weight: 700; cursor: pointer; text-decoration: none; }
+.button-primary, .import-form button, .actions button, .opportunity-row button, .back { background: #1677c8; color: #fff; }
+.button-secondary { border-color: #9fc8e8; background: #fff; color: #14669a; }
+.filters, .opportunity-row, .opportunity-detail, .state, .import-form, .opportunity-empty { border: 1px solid #dce6f0; border-radius: 1rem; background: #fff; padding: 1rem; }
+.import-form { display: grid; gap: .6rem; }
+.import-form label { display: grid; gap: .35rem; font-weight: 700; }
+.import-form textarea { min-height: 6rem; padding: .55rem; border: 1px solid #b9c8d6; border-radius: .5rem; }
+.import-form p { margin: 0; color: #526779; font-size: .8rem; }
+.import-form button { justify-self: start; }
+.filters { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: .75rem; }
+.filters label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 700; }
+.filters input, .filters select { min-height: 44px; padding: .55rem; border: 1px solid #b9c8d6; border-radius: .5rem; }
+.opportunity-empty { display: grid; gap: 1rem; background: #fbfdff; }
+.empty-intro h2, .empty-intro p, .empty-paths h3, .empty-paths p { margin: 0; }
+.empty-intro p, .empty-paths p { color: #526779; line-height: 1.55; }
+.empty-paths { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.empty-paths article { display: grid; align-content: start; gap: .65rem; padding: 1rem; border-radius: .85rem; background: #eef7ff; }
+.empty-paths .button { justify-self: start; }
+.workspace-grid { display: grid; grid-template-columns: minmax(320px, .9fr) minmax(420px, 1.1fr); gap: 1rem; }
+.opportunity-list { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; }
+.opportunity-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.opportunity-row p { margin: .25rem 0; color: #526779; font-size: .8rem; }
+.opportunity-detail { display: grid; align-content: start; gap: 1rem; }
+.opportunity-detail section { border-top: 1px solid #e7edf3; padding-top: .75rem; }
+.opportunity-detail h3 { margin: 0 0 .4rem; font-size: .95rem; }
+.opportunity-detail a { display: block; margin: .3rem 0; }
+.eyebrow { font-size: .7rem; font-weight: 800; letter-spacing: .08em; }
+.actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.actions button:disabled { opacity: .6; }
+.state { color: #526779; }
+.error { color: #9b2b20; background: #fff4f2; }
+@media (max-width: 760px) {
+  .filters, .workspace-grid, .empty-paths { grid-template-columns: 1fr; }
+  .detail-selected .mobile-hidden { display: none; }
+  .opportunity-row { align-items: flex-start; flex-direction: column; }
+  .opportunity-row button, .empty-paths .button { width: 100%; text-align: center; }
+}
 </style>

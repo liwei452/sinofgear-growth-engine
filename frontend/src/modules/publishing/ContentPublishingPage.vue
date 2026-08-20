@@ -1,12 +1,28 @@
 <script setup lang="ts">
 import { useQuery, useQueryClient } from "@tanstack/vue-query"
 import { computed, nextTick, ref } from "vue"
+import { RouterLink } from "vue-router"
 
 import { apiRequest } from "../../api/client"
+import WorkspaceHeader from "../../shared/components/WorkspaceHeader.vue"
 import { currentUserQueryOptions } from "../auth/auth"
 import ContentReviewDialog from "../content/ContentReviewDialog.vue"
-import { getCursorPage, listMasterContents, listPlatformContents, listPlatforms, type CursorPage, type MasterContent, type PlatformContent } from "../content/api"
-import { contentWorkflowStage, type ContentWorkflowStage, type PublishStatus } from "./contentWorkflow"
+import {
+  getCursorPage,
+  listMasterContents,
+  listPlatformContents,
+  listPlatforms,
+  type CursorPage,
+  type MasterContent,
+  type PlatformContent,
+} from "../content/api"
+import {
+  contentWorkflowGroup,
+  contentWorkflowStage,
+  type ContentWorkflowGroup,
+  type ContentWorkflowStage,
+  type PublishStatus,
+} from "./contentWorkflow"
 
 type PublishTask = {
   id: string
@@ -25,12 +41,27 @@ type WorkflowItem = {
   task: PublishTask | null
 }
 
-const labels: Record<ContentWorkflowStage, string> = {
-  PREPARE: "准备发布", AI_DRAFT: "AI 草稿", REVIEW: "待人工审核", SCHEDULED: "已排期",
-  SUBMITTED: "已提交", PUBLISHED: "已发布", NEEDS_ATTENTION: "需要处理",
+const statusLabels: Record<ContentWorkflowStage, string> = {
+  PREPARE: "准备发布",
+  AI_DRAFT: "AI 草稿",
+  REVIEW: "待人工审核",
+  SCHEDULED: "已排期",
+  SUBMITTED: "已提交",
+  PUBLISHED: "已发布",
+  NEEDS_ATTENTION: "需要处理",
 }
-const stages = Object.keys(labels) as ContentWorkflowStage[]
-const activeStage = ref<ContentWorkflowStage>("REVIEW")
+const groups: Array<{
+  id: ContentWorkflowGroup
+  label: string
+  stages: ContentWorkflowStage[]
+}> = [
+  { id: "PENDING", label: "待处理", stages: ["AI_DRAFT", "REVIEW", "NEEDS_ATTENTION"] },
+  { id: "PLANNED", label: "计划中", stages: ["PREPARE", "SCHEDULED", "SUBMITTED"] },
+  { id: "COMPLETED", label: "已完成", stages: ["PUBLISHED"] },
+]
+
+const activeGroup = ref<ContentWorkflowGroup>("PENDING")
+const activeDetailStage = ref<ContentWorkflowStage | null>(null)
 const reviewing = ref<WorkflowItem | null>(null)
 const tabRefs = ref<HTMLButtonElement[]>([])
 const queryClient = useQueryClient()
@@ -47,43 +78,97 @@ async function readAllPages<T>(first: Promise<CursorPage<T>>, exactPath: string)
   }
 }
 
-const masterQuery = useQuery({ queryKey: ["publishing-workspace", "masters"], queryFn: () => readAllPages(listMasterContents({ page_size: 50 }), "/api/v1/master-contents"), retry: false })
-const platformQuery = useQuery({ queryKey: ["publishing-workspace", "platforms-content"], queryFn: () => readAllPages(listPlatformContents({ page_size: 50 }), "/api/v1/platform-contents"), retry: false })
+const masterQuery = useQuery({
+  queryKey: ["publishing-workspace", "masters"],
+  queryFn: () => readAllPages(listMasterContents({ page_size: 50 }), "/api/v1/master-contents"),
+  retry: false,
+})
+const platformQuery = useQuery({
+  queryKey: ["publishing-workspace", "platforms-content"],
+  queryFn: () => readAllPages(listPlatformContents({ page_size: 50 }), "/api/v1/platform-contents"),
+  retry: false,
+})
 const tasksQuery = useQuery({
   queryKey: ["publishing-workspace", "tasks"],
   queryFn: async () => readAllPages(
-    apiRequest<CursorPage<PublishTask>>("/api/v1/publish-tasks?page_size=50").then(page => page ?? { next: null, previous: null, results: [] }),
+    apiRequest<CursorPage<PublishTask>>("/api/v1/publish-tasks?page_size=50")
+      .then(page => page ?? { next: null, previous: null, results: [] }),
     "/api/v1/publish-tasks",
   ),
   retry: false,
 })
-const platformDefinitionsQuery = useQuery({ queryKey: ["content", "platforms"], queryFn: listPlatforms, retry: false })
+const platformDefinitionsQuery = useQuery({
+  queryKey: ["content", "platforms"],
+  queryFn: listPlatforms,
+  retry: false,
+})
 const currentUserQuery = useQuery(currentUserQueryOptions())
 
 const workflowItems = computed<WorkflowItem[]>(() => {
   const tasksByContentId = new Map<string, PublishTask[]>()
   for (const task of tasksQuery.data.value ?? []) {
-    tasksByContentId.set(task.platform_content_id, [...(tasksByContentId.get(task.platform_content_id) ?? []), task])
+    tasksByContentId.set(
+      task.platform_content_id,
+      [...(tasksByContentId.get(task.platform_content_id) ?? []), task],
+    )
   }
   const masterItems = (masterQuery.data.value ?? []).map(item => ({
-    id: `master-${item.id}`, item, kind: "master" as const,
-    stage: contentWorkflowStage({ contentStatus: item.status, publishStatus: null }), task: null,
+    id: "master-" + item.id,
+    item,
+    kind: "master" as const,
+    stage: contentWorkflowStage({ contentStatus: item.status, publishStatus: null }),
+    task: null,
   }))
   const platformItems = (platformQuery.data.value ?? []).flatMap(item => {
     const tasks = tasksByContentId.get(item.id) ?? []
-    if (!tasks.length) return [{ id: `platform-${item.id}`, item, kind: "platform" as const, task: null,
-      stage: contentWorkflowStage({ contentStatus: item.status, publishStatus: null }) }]
-    return tasks.map(task => ({ id: `platform-${item.id}-task-${task.id}`, item, kind: "platform" as const, task,
-      stage: contentWorkflowStage({ contentStatus: item.status, publishStatus: task.status }) }))
+    if (!tasks.length) {
+      return [{
+        id: "platform-" + item.id,
+        item,
+        kind: "platform" as const,
+        task: null,
+        stage: contentWorkflowStage({ contentStatus: item.status, publishStatus: null }),
+      }]
+    }
+    return tasks.map(task => ({
+      id: "platform-" + item.id + "-task-" + task.id,
+      item,
+      kind: "platform" as const,
+      task,
+      stage: contentWorkflowStage({ contentStatus: item.status, publishStatus: task.status }),
+    }))
   })
   return [...masterItems, ...platformItems]
 })
-const counts = computed(() => Object.fromEntries(stages.map(stage => [stage, workflowItems.value.filter(item => item.stage === stage).length])))
-const permissions = computed(() => currentUserQuery.data.value?.membership.permissions ?? [])
-const workflowReadFailed = computed(() => masterQuery.isError.value || platformQuery.isError.value || tasksQuery.isError.value)
 
-function itemsFor(stage: ContentWorkflowStage): WorkflowItem[] {
-  return workflowItems.value.filter(item => item.stage === stage)
+const groupCounts = computed(() => Object.fromEntries(
+  groups.map(group => [
+    group.id,
+    workflowItems.value.filter(item => contentWorkflowGroup(item.stage) === group.id).length,
+  ]),
+))
+const statusCounts = computed(() => Object.fromEntries(
+  Object.keys(statusLabels).map(stage => [
+    stage,
+    workflowItems.value.filter(item => item.stage === stage).length,
+  ]),
+))
+const permissions = computed(() => currentUserQuery.data.value?.membership.permissions ?? [])
+const permissionSet = computed(() => new Set(permissions.value))
+const isAdministrator = computed(() => currentUserQuery.data.value?.membership.role === "ADMINISTRATOR")
+const workflowReadFailed = computed(() => (
+  masterQuery.isError.value || platformQuery.isError.value || tasksQuery.isError.value
+))
+
+function groupDefinition(group: ContentWorkflowGroup) {
+  return groups.find(candidate => candidate.id === group) ?? groups[0]
+}
+
+function itemsFor(group: ContentWorkflowGroup): WorkflowItem[] {
+  return workflowItems.value.filter((item) => (
+    contentWorkflowGroup(item.stage) === group
+    && (!activeDetailStage.value || item.stage === activeDetailStage.value)
+  ))
 }
 
 function platformName(item: WorkflowItem): string {
@@ -93,7 +178,11 @@ function platformName(item: WorkflowItem): string {
 }
 
 function deliveryFact(item: WorkflowItem): string {
-  if (!item.task) return item.kind === "platform" && item.item.publish_package_id ? "发布包已准备，尚未提交平台" : "尚未准备发布"
+  if (!item.task) {
+    return item.kind === "platform" && item.item.publish_package_id
+      ? "发布包已准备，尚未提交平台"
+      : "尚未准备发布"
+  }
   switch (item.task.status) {
     case "SUBMISSION_UNKNOWN": return "平台提交状态待确认；请勿重复发布"
     case "FAILED": return "平台发布失败；请人工检查后处理"
@@ -111,18 +200,34 @@ function deliveryFact(item: WorkflowItem): string {
   return "手工导出或待人工提交；导出不代表已发布"
 }
 
-function activateStage(stage: ContentWorkflowStage, focus = false): void {
-  activeStage.value = stage
-  if (focus) void nextTick(() => tabRefs.value[stages.indexOf(stage)]?.focus())
+function activateGroup(group: ContentWorkflowGroup, focus = false): void {
+  activeGroup.value = group
+  activeDetailStage.value = null
+  if (focus) {
+    const index = groups.findIndex(candidate => candidate.id === group)
+    void nextTick(() => tabRefs.value[index]?.focus())
+  }
 }
 
 function onTabKeydown(event: KeyboardEvent, index: number): void {
-  const target = event.key === "ArrowRight" ? (index + 1) % stages.length
-    : event.key === "ArrowLeft" ? (index - 1 + stages.length) % stages.length
-      : event.key === "Home" ? 0 : event.key === "End" ? stages.length - 1 : -1
+  const target = event.key === "ArrowRight" ? (index + 1) % groups.length
+    : event.key === "ArrowLeft" ? (index - 1 + groups.length) % groups.length
+      : event.key === "Home" ? 0 : event.key === "End" ? groups.length - 1 : -1
   if (target < 0) return
   event.preventDefault()
-  activateStage(stages[target], true)
+  activateGroup(groups[target].id, true)
+}
+
+function emptyTitle(group: ContentWorkflowGroup): string {
+  if (group === "PENDING") return "目前没有待处理内容"
+  if (group === "PLANNED") return "目前没有计划中的内容"
+  return "目前没有已完成发布"
+}
+
+function emptyMessage(group: ContentWorkflowGroup): string {
+  if (group === "PENDING") return "可以从生成内容开始；有审核权限时也可直接查看待审核任务。"
+  if (group === "PLANNED") return "先创建社媒计划并配置可用的平台账户，再安排提交。"
+  return "已完成只统计平台确认的发布记录；导出或未知提交不会计入。"
 }
 
 async function refreshWorkspace(): Promise<void> {
@@ -137,13 +242,10 @@ async function refreshWorkspace(): Promise<void> {
 
 <template>
   <section class="content-area page-stack publishing-workspace">
-    <header class="workspace-header">
-      <div class="workspace-header-copy">
-        <p class="eyebrow">内容工作台</p>
-        <h1>内容与发布</h1>
-        <p class="workspace-description">按下一步结果管理素材、草稿、审核与发布。预览或导出不是发布；只有平台确认的回执才会显示为“已发布”。</p>
-      </div>
-    </header>
+    <WorkspaceHeader
+      title="内容与发布"
+      description="按待处理、计划中和已完成管理内容。具体状态仍保留在二级筛选和内容标签中。"
+    />
 
     <section v-if="workflowReadFailed" class="form-error" role="alert">
       <p>内容或发布状态暂时无法读取；不会将旧缓存或空白当作当前状态。</p>
@@ -152,27 +254,95 @@ async function refreshWorkspace(): Promise<void> {
 
     <template v-else>
       <section class="workflow-tabs" aria-label="内容发布状态">
-        <div role="tablist" aria-label="内容发布阶段">
-          <button v-for="(stage, index) in stages" :id="`publishing-tab-${stage}`" :key="stage" :ref="element => { if (element) tabRefs[index] = element as HTMLButtonElement }" type="button" role="tab" :tabindex="activeStage === stage ? 0 : -1" :aria-selected="activeStage === stage" :aria-controls="`publishing-panel-${stage}`" :class="{ active: activeStage === stage }" @click="activateStage(stage)" @keydown="onTabKeydown($event, index)">
-            {{ labels[stage] }} <span>{{ counts[stage] }}</span>
+        <div role="tablist" aria-label="内容发布主阶段">
+          <button
+            v-for="(group, index) in groups"
+            :id="'publishing-tab-' + group.id"
+            :key="group.id"
+            :ref="element => { if (element) tabRefs[index] = element as HTMLButtonElement }"
+            type="button"
+            role="tab"
+            :tabindex="activeGroup === group.id ? 0 : -1"
+            :aria-selected="activeGroup === group.id"
+            :aria-controls="'publishing-panel-' + group.id"
+            :class="{ active: activeGroup === group.id }"
+            @click="activateGroup(group.id)"
+            @keydown="onTabKeydown($event, index)"
+          >
+            <span class="tab-label">{{ group.label }}</span>
+            <span class="tab-count">{{ groupCounts[group.id] }}</span>
           </button>
         </div>
       </section>
 
-      <section v-for="stage in stages" :id="`publishing-panel-${stage}`" :key="stage" class="outcome-list" role="tabpanel" :aria-labelledby="`publishing-tab-${stage}`" :aria-label="labels[stage]" :hidden="activeStage !== stage">
-        <template v-if="itemsFor(stage).length">
-          <article v-for="entry in itemsFor(stage)" :key="entry.id" class="outcome-card">
+      <section
+        v-for="group in groups"
+        :id="'publishing-panel-' + group.id"
+        :key="group.id"
+        class="outcome-panel"
+        role="tabpanel"
+        :aria-labelledby="'publishing-tab-' + group.id"
+        :aria-label="group.label"
+        :hidden="activeGroup !== group.id"
+      >
+        <div class="status-filters" aria-label="具体状态筛选">
+          <button
+            type="button"
+            :class="{ active: activeDetailStage === null }"
+            @click="activeDetailStage = null"
+          >
+            全部 {{ groupCounts[group.id] }}
+          </button>
+          <button
+            v-for="stage in groupDefinition(group.id).stages"
+            :key="stage"
+            type="button"
+            :class="{ active: activeDetailStage === stage }"
+            @click="activeDetailStage = stage"
+          >
+            {{ statusLabels[stage] }} {{ statusCounts[stage] }}
+          </button>
+        </div>
+
+        <div v-if="itemsFor(group.id).length" class="outcome-list">
+          <article v-for="entry in itemsFor(group.id)" :key="entry.id" class="outcome-card">
             <div>
-              <p class="eyebrow">{{ platformName(entry) }} · {{ entry.item.status }}</p>
+              <div class="content-meta">
+                <span>{{ platformName(entry) }}</span>
+                <span class="status-badge">{{ statusLabels[entry.stage] }}</span>
+              </div>
               <h2>{{ entry.item.payload.title }}</h2>
               <p>{{ deliveryFact(entry) }}</p>
               <p v-if="entry.task" class="account-id">账号：{{ entry.task.social_account_id }}</p>
               <p v-if="entry.task?.provider_submission_id" class="submission-id">提交编号：{{ entry.task.provider_submission_id }}</p>
             </div>
-            <button type="button" class="button button-secondary" :aria-label="`查看内容：${entry.item.payload.title}`" @click="reviewing = entry">查看内容</button>
+            <button
+              type="button"
+              class="button button-secondary"
+              :aria-label="'查看内容：' + entry.item.payload.title"
+              @click="reviewing = entry"
+            >
+              查看内容
+            </button>
           </article>
-        </template>
-        <section v-else class="empty-state"><div class="empty-state-icon">○</div><div><h2>{{ labels[stage] }}暂无内容</h2><p>切换状态查看其他内容。系统不会把未知提交或手工导出误报为已发布。</p></div></section>
+        </div>
+
+        <section v-else class="empty-state publishing-empty">
+          <div>
+            <h2>{{ emptyTitle(group.id) }}</h2>
+            <p>{{ emptyMessage(group.id) }}</p>
+          </div>
+          <div class="empty-state-actions">
+            <template v-if="group.id === 'PENDING'">
+              <RouterLink v-if="permissionSet.has('content.manage')" class="button button-primary" to="/promotion">生成内容</RouterLink>
+              <RouterLink v-if="permissionSet.has('content.review')" class="button button-secondary" to="/missions">前往审核</RouterLink>
+            </template>
+            <template v-else>
+              <RouterLink class="button button-primary" to="/promotion">创建社媒计划</RouterLink>
+              <RouterLink v-if="isAdministrator" class="button button-secondary" to="/platform-accounts">配置平台账户</RouterLink>
+            </template>
+          </div>
+        </section>
       </section>
 
       <ContentReviewDialog
@@ -192,5 +362,187 @@ async function refreshWorkspace(): Promise<void> {
 </template>
 
 <style scoped>
-.publishing-workspace{gap:20px}.workflow-tabs{overflow:auto;border-bottom:1px solid var(--sg-line)}[role="tablist"]{display:flex;min-width:max-content;gap:4px}[role="tab"]{border:0;border-bottom:3px solid transparent;background:transparent;padding:10px 12px;color:var(--sg-muted);font-weight:750;cursor:pointer}[role="tab"].active{border-color:var(--sg-brand);color:var(--sg-brand-strong)}[role="tab"] span{margin-left:5px;border-radius:999px;background:var(--sg-brand-soft);padding:2px 7px;font-size:.78rem}.outcome-list{display:grid;gap:12px}.outcome-list[hidden]{display:none}.outcome-card{display:flex;align-items:center;justify-content:space-between;gap:20px;border:1px solid var(--sg-line);border-radius:var(--sg-radius-md);background:var(--sg-surface);padding:20px;box-shadow:var(--sg-shadow-sm)}.outcome-card h2,.outcome-card p{margin:0}.outcome-card h2{font-size:1.08rem}.outcome-card p:not(.eyebrow){margin-top:7px;color:var(--sg-muted);line-height:1.5}.submission-id{font-family:ui-monospace,monospace;font-size:.8rem}@media(max-width:560px){.outcome-card{align-items:stretch;flex-direction:column}.outcome-card .button{width:100%}}
+.publishing-workspace {
+  gap: 20px;
+}
+
+.workflow-tabs {
+  border-bottom: 1px solid var(--sg-line);
+}
+
+[role="tablist"] {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  gap: 6px;
+}
+
+[role="tab"] {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  padding: 11px 8px;
+  color: var(--sg-muted);
+  font-weight: 750;
+  cursor: pointer;
+}
+
+[role="tab"].active {
+  border-color: var(--sg-brand);
+  color: var(--sg-brand-strong);
+}
+
+.tab-label {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.tab-count {
+  min-width: 24px;
+  border-radius: 999px;
+  background: var(--sg-brand-soft);
+  padding: 2px 7px;
+  font-size: .76rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.outcome-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.outcome-panel[hidden] {
+  display: none;
+}
+
+.status-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.status-filters button {
+  min-height: 38px;
+  border: 1px solid var(--sg-line);
+  border-radius: 999px;
+  background: var(--sg-surface);
+  padding: 7px 11px;
+  color: var(--sg-muted);
+  font-size: .78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.status-filters button.active {
+  border-color: #9ecfff;
+  background: var(--sg-brand-soft);
+  color: var(--sg-brand-strong);
+}
+
+.outcome-list {
+  display: grid;
+  gap: 12px;
+}
+
+.outcome-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border: 1px solid var(--sg-line);
+  border-radius: var(--sg-radius-md);
+  background: var(--sg-surface);
+  padding: 20px;
+}
+
+.outcome-card h2,
+.outcome-card p {
+  margin: 0;
+}
+
+.outcome-card h2 {
+  margin-top: 8px;
+  font-size: 1.08rem;
+}
+
+.outcome-card p {
+  margin-top: 7px;
+  color: var(--sg-muted);
+  line-height: 1.5;
+}
+
+.content-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--sg-muted);
+  font-size: .75rem;
+  font-weight: 750;
+}
+
+.status-badge {
+  border-radius: 999px;
+  background: var(--sg-brand-soft);
+  padding: 4px 8px;
+  color: var(--sg-brand-strong);
+}
+
+.submission-id {
+  font-family: ui-monospace, monospace;
+  font-size: .8rem;
+}
+
+.publishing-empty {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.publishing-empty h2,
+.publishing-empty p {
+  margin: 0;
+}
+
+.publishing-empty h2 {
+  font-size: 1rem;
+}
+
+.publishing-empty p {
+  margin-top: 5px;
+}
+
+@media (max-width: 560px) {
+  [role="tablist"] {
+    gap: 2px;
+  }
+
+  [role="tab"] {
+    gap: 4px;
+    padding-inline: 4px;
+    font-size: .82rem;
+  }
+
+  .tab-count {
+    min-width: 21px;
+    padding-inline: 5px;
+  }
+
+  .outcome-card {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 17px;
+  }
+
+  .outcome-card .button {
+    width: 100%;
+  }
+
+  .publishing-empty {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

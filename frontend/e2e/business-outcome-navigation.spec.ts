@@ -150,35 +150,54 @@ test.describe("business outcome navigation", () => {
     })
 
     await page.getByRole("navigation", { name: "主导航" }).locator('a[href="/content-factory"]').click()
-    const stages = ["PREPARE", "AI_DRAFT", "REVIEW", "SCHEDULED", "SUBMITTED", "PUBLISHED", "NEEDS_ATTENTION"]
-    for (const stage of stages) {
-      const tab = page.locator(`#publishing-tab-${stage}`)
-      await expect(tab).toHaveAttribute("aria-controls", `publishing-panel-${stage}`)
-      await expect(page.locator(`#publishing-panel-${stage}`)).toHaveCount(1)
+    const groups = ["PENDING", "PLANNED", "COMPLETED"]
+    for (const group of groups) {
+      const tab = page.locator(`#publishing-tab-${group}`)
+      await expect(tab).toHaveAttribute("aria-controls", `publishing-panel-${group}`)
+      await expect(page.locator(`#publishing-panel-${group}`)).toHaveCount(1)
     }
-    const reviewTab = page.locator("#publishing-tab-REVIEW")
-    await reviewTab.focus()
+    const pendingTab = page.locator("#publishing-tab-PENDING")
+    await pendingTab.focus()
     await page.keyboard.press("ArrowRight")
-    await expect(page.locator("#publishing-tab-SCHEDULED")).toBeFocused()
+    await expect(page.locator("#publishing-tab-PLANNED")).toBeFocused()
     await page.keyboard.press("End")
-    await expect(page.locator("#publishing-tab-NEEDS_ATTENTION")).toBeFocused()
+    await expect(page.locator("#publishing-tab-COMPLETED")).toBeFocused()
     await page.keyboard.press("Home")
-    await expect(page.locator("#publishing-tab-PREPARE")).toBeFocused()
-    await page.locator("#publishing-tab-SUBMITTED").click()
-    await expect(page.locator("#publishing-panel-SUBMITTED")).toBeVisible()
-    for (const stage of stages.filter(stage => stage !== "SUBMITTED")) {
-      await expect(page.locator(`#publishing-panel-${stage}`)).not.toBeVisible()
+    await expect(page.locator("#publishing-tab-PENDING")).toBeFocused()
+    await page.locator("#publishing-tab-PLANNED").click()
+    await page.getByRole("button", { name: "已提交 1" }).click()
+    await expect(page.locator("#publishing-panel-PLANNED")).toBeVisible()
+    for (const group of groups.filter(group => group !== "PLANNED")) {
+      await expect(page.locator(`#publishing-panel-${group}`)).not.toBeVisible()
     }
     await expect(page.getByText("平台提交状态待确认；请勿重复发布")).toBeVisible()
     await expect(page.getByText("已发布", { exact: true })).toHaveCount(0)
     await expect(page.getByRole("button", { name: /重试|运行发布|再次发布/ })).toHaveCount(0)
-    await page.locator("#publishing-tab-NEEDS_ATTENTION").click()
-    await expect(page.locator("#publishing-panel-NEEDS_ATTENTION")).toBeVisible()
-    for (const stage of stages.filter(stage => stage !== "NEEDS_ATTENTION")) {
-      await expect(page.locator(`#publishing-panel-${stage}`)).not.toBeVisible()
-    }
     expect(blockedSideEffects).toEqual([])
     expect(externalRequests).toEqual([])
+  })
+
+  test("360px content workflow shows all three primary stages without horizontal guessing", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 800 })
+    await login(page)
+    await page.goto("/content-factory")
+
+    const tabs = page.getByRole("tab")
+    await expect(tabs).toHaveCount(3)
+    for (const label of [/^待处理/, /^计划中/, /^已完成/]) {
+      const tab = page.getByRole("tab", { name: label })
+      await expect(tab).toBeVisible()
+      const box = await tab.boundingBox()
+      expect(box).not.toBeNull()
+      expect(box!.x).toBeGreaterThanOrEqual(0)
+      expect(box!.x + box!.width).toBeLessThanOrEqual(360)
+    }
+    const dimensions = await page.getByRole("tablist", { name: "内容发布主阶段" }).evaluate(element => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }))
+    expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth)
+    await expectNoHorizontalOverflow(page)
   })
 
   test("promotion read failure stays explicitly unknown instead of becoming completed", async ({ page }) => {
@@ -258,16 +277,25 @@ test.describe("business outcome navigation", () => {
 const visualAuditDirectory = process.env.SINO_VISUAL_AUDIT_DIR
 
 if (visualAuditDirectory) {
-  test("visual audit saves the seven key pages at desktop and mobile sizes", async ({ page }) => {
+  test("visual audit saves the four core pages at desktop and mobile sizes", async ({ page }) => {
+    await page.route("**/api/v1/auth/me", async (route) => {
+      const upstream = await route.fetch()
+      const body = await upstream.json()
+      await route.fulfill({
+        response: upstream,
+        json: {
+          ...body,
+          user: { ...body.user, username: "演示管理员" },
+          organization: { ...body.organization, name: "星沣传动（演示）" },
+        },
+      })
+    })
     await login(page)
     const pages = [
       { name: "today", path: "/", heading: "今日" },
-      { name: "promotion", path: "/promotion", heading: "开始推广" },
       { name: "opportunities", path: "/opportunities", heading: "客户机会" },
       { name: "content-publishing", path: "/content-factory", heading: "内容与发布" },
       { name: "results", path: "/analytics", heading: "效果" },
-      { name: "company", path: "/company", heading: "我的公司" },
-      { name: "settings", path: "/settings", heading: "设置中心" },
     ]
     const viewports = [
       { name: "desktop", width: 1440, height: 900 },
@@ -284,7 +312,7 @@ if (visualAuditDirectory) {
         await expectNoHorizontalOverflow(page)
         await page.screenshot({
           path: join(visualAuditDirectory, `${viewport.name}-${auditPage.name}.png`),
-          fullPage: true,
+          fullPage: false,
         })
       }
     }

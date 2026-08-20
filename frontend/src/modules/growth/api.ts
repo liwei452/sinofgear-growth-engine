@@ -275,6 +275,22 @@ export type DiscoverySummary = {
   available_sources: DiscoverySourceSummary[]
 }
 
+export const discoveryQueryKeys = {
+  profile: ["growth", "discovery", "profile"] as const,
+}
+
+export function discoverySummaryQueryOptions() {
+  return queryOptions({
+    queryKey: discoveryQueryKeys.profile,
+    queryFn: async () => {
+      const result = await apiRequest<DiscoverySummary>("/api/v1/growth/discovery/profile")
+      if (!result) throw new Error("客户机会响应为空。")
+      return result
+    },
+    staleTime: 15_000,
+  })
+}
+
 export type CandidateEnrichmentPreview = {
   candidate_id: string
   mode: "FAKE_PREVIEW" | "IMPORTED_FACTS_REVIEW" | "OFFICIAL" | "VERIFIED_MANUAL" | "WEBSITE_PUBLIC"

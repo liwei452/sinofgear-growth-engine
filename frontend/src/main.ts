@@ -9,6 +9,7 @@ import LoginPage from "./modules/auth/LoginPage.vue"
 import DashboardPage from "./modules/dashboard/DashboardPage.vue"
 import RoleHomePage from "./modules/dashboard/RoleHomePage.vue"
 import CompanyPage from "./modules/growth/CompanyPage.vue"
+import OpportunityWorkspacePage from "./modules/opportunities/OpportunityWorkspacePage.vue"
 import HelpPage from "./modules/help/HelpPage.vue"
 import GrowthMissionsPage from "./modules/missions/GrowthMissionsPage.vue"
 import GrowthMissionDetailPage from "./modules/missions/GrowthMissionDetailPage.vue"
@@ -25,7 +26,7 @@ const router = createAppRouter(queryClient, {
     Dashboard: DashboardPage,
     RoleHome: RoleHomePage,
     Promotion: PromotionWorkspacePage,
-    Opportunities: PlaceholderPage,
+    Opportunities: OpportunityWorkspacePage,
     ContentPublishing: PlaceholderPage,
     Results: PlaceholderPage,
     Missions: GrowthMissionsPage,

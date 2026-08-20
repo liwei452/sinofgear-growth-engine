@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test"
+import { join } from "node:path"
 
 const password = "PhaseA-E2E-Only!"
 
@@ -246,3 +247,39 @@ test.describe("business outcome navigation", () => {
     await expect(navigation.getByRole("link", { name: "效果" })).toBeVisible()
   })
 })
+
+const visualAuditDirectory = process.env.SINO_VISUAL_AUDIT_DIR
+
+if (visualAuditDirectory) {
+  test("visual audit saves the seven key pages at desktop and mobile sizes", async ({ page }) => {
+    await login(page)
+    const pages = [
+      { name: "today", path: "/", heading: "今日" },
+      { name: "promotion", path: "/promotion", heading: "开始推广" },
+      { name: "opportunities", path: "/opportunities", heading: "客户机会" },
+      { name: "content-publishing", path: "/content-factory", heading: "内容与发布" },
+      { name: "results", path: "/analytics", heading: "效果" },
+      { name: "company", path: "/company", heading: "我的公司" },
+      { name: "settings", path: "/settings", heading: "设置中心" },
+    ]
+    const viewports = [
+      { name: "desktop", width: 1440, height: 900 },
+      { name: "mobile", width: 390, height: 844 },
+    ]
+
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport)
+      for (const auditPage of pages) {
+        await page.goto(auditPage.path)
+        await expect(page.getByRole("heading", { name: auditPage.heading, level: 1 })).toBeVisible()
+        await expect(page.locator("main")).toHaveCount(1)
+        await expect(page.locator("main").getByText(/正在读取/)).toHaveCount(0)
+        await expectNoHorizontalOverflow(page)
+        await page.screenshot({
+          path: join(visualAuditDirectory, `${viewport.name}-${auditPage.name}.png`),
+          fullPage: true,
+        })
+      }
+    }
+  })
+}

@@ -9,11 +9,24 @@ import {
   buildE2EEnvironment,
   cleanupOwnedRun,
   generateOwnershipSecret,
+  parseVisualAuditArguments,
   removeOwnedRunRoot,
   RUN_MARKER,
   spawnOwnedChild,
   stopOwnedChildTree,
 } from "./launcher.mjs"
+
+test("visual audit accepts only the two bounded SDD batches", () => {
+  const auditRoot = join(process.cwd(), "..", ".superpowers", "sdd", "2026-08-20-business-outcome-navigation-ia", "visual-audit")
+  assert.deepEqual(
+    parseVisualAuditArguments(["--visual-audit", join(auditRoot, "initial")], auditRoot),
+    { auditDirectory: join(auditRoot, "initial"), playwrightArgs: ["business-outcome-navigation.spec.ts", "--grep", "visual audit"] },
+  )
+  assert.throws(
+    () => parseVisualAuditArguments(["--visual-audit", join(auditRoot, "unbounded")], auditRoot),
+    /initial or confirmation/,
+  )
+})
 
 test("cleanup accepts only marked child-owned temporary roots", async () => {
   const temporaryRoot = join(process.cwd(), ".tmp-launcher-test")

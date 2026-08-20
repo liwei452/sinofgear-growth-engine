@@ -25,6 +25,10 @@ textarea {
   font: inherit;
 }
 
+button {
+  min-block-size: 44px;
+}
+
 img,
 svg {
   max-width: 100%;
@@ -46,7 +50,7 @@ a {
 
 .button {
   display: inline-flex;
-  min-height: 42px;
+  min-block-size: 44px;
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
@@ -398,15 +402,6 @@ a {
   min-width: 0;
 }
 
-.workspace-eyebrow {
-  margin: 0 0 var(--sg-space-2);
-  color: var(--sg-accent);
-  font-size: 0.75rem;
-  font-weight: 800;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-}
-
 .workspace-header h1 {
   margin: 0;
   font-size: clamp(1.75rem, 3vw, 2.5rem);
@@ -422,9 +417,52 @@ a {
   line-height: 1.65;
 }
 
-.workspace-meta {
-  margin-top: var(--sg-space-3);
+.workspace-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sg-space-2);
+  margin: var(--sg-space-3) 0 0;
+  color: var(--sg-muted);
+  font-size: .84rem;
+  line-height: 1.5;
 }
+
+.workspace-status strong { color: var(--sg-ink); }
+.workspace-status-info strong { color: var(--sg-brand-strong); }
+.workspace-status-warning strong { color: var(--sg-warning, #8b5a00); }
+.workspace-status-danger strong { color: var(--sg-danger); }
+.workspace-status-success strong { color: var(--sg-success, #19795b); }
+
+.business-state {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sg-space-4);
+  border: 1px solid var(--sg-line);
+  border-radius: var(--sg-radius-md);
+  background: var(--sg-surface);
+  padding: var(--sg-space-5);
+}
+
+.business-state-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: var(--sg-radius-sm);
+}
+
+.business-state-copy h2,
+.business-state-copy p { margin: 0; }
+.business-state-copy h2 { font-size: 1rem; }
+.business-state-copy p { margin-top: var(--sg-space-1); color: var(--sg-muted); line-height: 1.55; }
+.business-state-loading { color: var(--sg-brand); }
+.business-state-blocked { color: var(--sg-warning, #8b5a00); }
+.business-state-error { color: var(--sg-danger); }
+.business-state-success { color: var(--sg-success, #19795b); }
+.business-state-empty,
+.business-state-unknown { color: var(--sg-muted); }
 
 .workspace-header-actions,
 .empty-state-actions {
@@ -770,6 +808,15 @@ a {
 
   .empty-state-actions {
     grid-column: 1 / -1;
+  }
+
+  .business-state {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .business-state .button {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .workspace-header-actions,

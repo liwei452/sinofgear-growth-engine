@@ -746,8 +746,15 @@ def claim_publish_task(task_id=None):
 
 
 def _safe_error(result):
-    code = getattr(result, "error_code", "")
-    code = code if code in SAFE_PUBLISH_ERRORS else "PROVIDER_ERROR"
+    try:
+        code = getattr(result, "error_code", "")
+    except Exception:
+        code = ""
+    code = (
+        code
+        if isinstance(code, str) and code in SAFE_PUBLISH_ERRORS
+        else "PROVIDER_ERROR"
+    )
     return SAFE_PUBLISH_ERRORS[code]
 
 

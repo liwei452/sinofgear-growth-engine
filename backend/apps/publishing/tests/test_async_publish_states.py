@@ -1,4 +1,5 @@
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from django.utils import timezone
@@ -6,6 +7,7 @@ from django.utils import timezone
 from apps.content.models import PlatformContent
 from apps.publishing.models import (
     PublishedPost,
+    PublishAttempt,
     PublishTask,
     publishing_writes,
 )
@@ -14,6 +16,7 @@ from apps.publishing.services import (
     PublishingConflict,
     cancel_publish_task,
     claim_publish_task,
+    complete_publish_failure,
     complete_publish_submitted,
     create_publish_task,
     execute_publish_task,
@@ -200,6 +203,66 @@ def test_safe_error_defaults_for_result_without_error_code():
     from apps.publishing.services import SAFE_PUBLISH_ERRORS, _safe_error
 
     assert _safe_error(object()) == SAFE_PUBLISH_ERRORS["PROVIDER_ERROR"]
+
+
+class _ExplodingErrorCode:
+    @property
+    def error_code(self):
+        raise RuntimeError("provider error detail must not escape")
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        pytest.param(_ExplodingErrorCode(), id="property-raises"),
+        pytest.param(SimpleNamespace(error_code=[]), id="list"),
+        pytest.param(SimpleNamespace(error_code={}), id="dict"),
+        pytest.param(SimpleNamespace(error_code=123), id="integer"),
+    ],
+)
+def test_safe_error_defaults_for_malformed_error_code(result):
+    from apps.publishing.services import SAFE_PUBLISH_ERRORS, _safe_error
+
+    assert _safe_error(result) == SAFE_PUBLISH_ERRORS["PROVIDER_ERROR"]
+
+
+def test_safe_error_preserves_exact_rate_limited_mapping():
+    from apps.publishing.services import SAFE_PUBLISH_ERRORS, _safe_error
+
+    result = SimpleNamespace(error_code="RATE_LIMITED", retry_after_seconds=42)
+
+    assert _safe_error(result) == SAFE_PUBLISH_ERRORS["RATE_LIMITED"]
+
+
+def test_complete_publish_failure_safely_handles_malformed_error_code(
+    publishing_context,
+):
+    context = publishing_context
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="async-malformed-failure-finalizer",
+        actor=context["actor"],
+    )
+    running_task, attempt = claim_publish_task(task.id)
+
+    completed = complete_publish_failure(
+        running_task.id,
+        attempt.claim_token,
+        _ExplodingErrorCode(),
+    )
+
+    completed.refresh_from_db()
+    attempt = PublishAttempt.objects.get(pk=attempt.pk)
+    assert completed.status == PublishTask.Status.FAILED
+    assert completed.last_error == {
+        "code": "PROVIDER_ERROR",
+        "message": "Provider rejected the publish request.",
+    }
+    assert completed.retry_not_before is None
+    assert attempt.status == PublishAttempt.Status.FAILED
+    assert attempt.outcome == "PROVIDER_ERROR"
+    assert attempt.error == completed.last_error
 
 
 def test_provider_acceptance_stays_submitted(publishing_context, monkeypatch):

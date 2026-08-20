@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 MAX_SCHEDULE_AHEAD = timedelta(days=366)
 MAX_PUBLISH_ATTEMPTS = 10
 PUBLISH_LEASE_SECONDS = 300
+BUFFER_INITIAL_RECONCILIATION_DELAY = timedelta(seconds=60)
 SAFE_PUBLISH_ERRORS = {
     "PUBLISH_NOT_ELIGIBLE": {
         "code": "PUBLISH_NOT_ELIGIBLE",
@@ -113,6 +114,10 @@ SAFE_PUBLISH_ERRORS = {
     "BUFFER_RECONCILIATION_AMBIGUOUS": {
         "code": "BUFFER_RECONCILIATION_AMBIGUOUS",
         "message": "More than one exact Buffer post match was found.",
+    },
+    "MANUALLY_CLOSED_NO_POST": {
+        "code": "MANUALLY_CLOSED_NO_POST",
+        "message": "An authorized operator confirmed that no provider post exists.",
     },
 }
 
@@ -1050,6 +1055,7 @@ def complete_publish_submitted(task_id, claim_token, result):
     task.retry_not_before = None
     task.provider_submission_id = submission_id
     task.finished_at = now
+    task.next_reconcile_at = now + BUFFER_INITIAL_RECONCILIATION_DELAY
     attempt.status = PublishAttempt.Status.SUBMITTED
     attempt.outcome = "SUBMITTED"
     attempt.error = None
@@ -1060,6 +1066,7 @@ def complete_publish_submitted(task_id, claim_token, result):
         task.save(update_fields=[
             "status", "claim_token", "last_error", "retry_not_before",
             "provider_submission_id", "finished_at", "updated_at",
+            "next_reconcile_at",
         ])
         attempt.save(update_fields=[
             "status", "outcome", "error", "retry_at",
@@ -1089,6 +1096,7 @@ def complete_publish_unknown(task_id, claim_token, result):
     task.last_error = error
     task.retry_not_before = None
     task.finished_at = now
+    task.next_reconcile_at = now + BUFFER_INITIAL_RECONCILIATION_DELAY
     attempt.status = PublishAttempt.Status.SUBMISSION_UNKNOWN
     attempt.outcome = "OUTCOME_UNKNOWN"
     attempt.error = error
@@ -1097,7 +1105,7 @@ def complete_publish_unknown(task_id, claim_token, result):
     with publishing_writes():
         task.save(update_fields=[
             "status", "claim_token", "last_error", "retry_not_before",
-            "finished_at", "updated_at",
+            "finished_at", "next_reconcile_at", "updated_at",
         ])
         attempt.save(update_fields=[
             "status", "outcome", "error", "retry_at", "finished_at", "updated_at",
@@ -1450,6 +1458,10 @@ def retry_publish_task(task, *, actor=None):
         )
     if task.status != PublishTask.Status.FAILED:
         raise PublishingConflict("Only failed publish tasks can be retried.")
+    if (task.last_error or {}).get("code") == "MANUALLY_CLOSED_NO_POST":
+        raise PublishingConflict(
+            "This task was manually closed. Create a new publish task to send again."
+        )
     if task.attempt_number >= MAX_PUBLISH_ATTEMPTS:
         raise PublishingConflict("Publish attempt limit has been reached.")
     if (task.last_error or {}).get("code") == "TOKEN_EXPIRED":

@@ -2,7 +2,13 @@ from collections import defaultdict
 from zoneinfo import ZoneInfo
 
 from django.http import Http404
-from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiTypes,
+    PolymorphicProxySerializer,
+    extend_schema,
+)
+from drf_spectacular.openapi import AutoSchema
 from rest_framework import status
 from rest_framework.exceptions import NotFound
 from rest_framework.pagination import CursorPagination
@@ -17,7 +23,9 @@ from apps.platforms.models import SocialAccount
 from .models import PublishTask
 from .serializers import (
     CalendarFilterSerializer, EmptyActionSerializer, PublishCreateSerializer,
+    ConfirmNotPublishedResolutionSerializer, ConfirmPublishedResolutionSerializer,
     PublishCalendarEnvelopeSerializer, PublishFilterSerializer,
+    PublishResolutionSerializer,
     PublishingErrorSerializer, PublishTaskCursorEnvelopeSerializer,
     PublishTaskSerializer,
 )
@@ -27,9 +35,18 @@ from .services import (
     retry_publish_task, run_publish_task_now, validate_idempotency_key,
 )
 from .reconciliation import reconcile_publish_task
+from .resolution import resolve_publish_task
 
 
 MAX_CALENDAR_ENTRIES = 200
+
+
+class RequiredPolymorphicRequestSchema(AutoSchema):
+    def _get_request_for_media_type(self, serializer, direction="request"):
+        schema, required = super()._get_request_for_media_type(serializer, direction)
+        if isinstance(serializer, PolymorphicProxySerializer):
+            required = True
+        return schema, required
 
 
 class PublishPagination(CursorPagination):
@@ -267,6 +284,42 @@ class PublishReconcileView(APIView):
                 },
                 status=status_mapping[error_code],
             )
+        return Response(PublishTaskSerializer(_task(request.organization, task.id)).data)
+
+
+@extend_schema(tags=["PublishTasks"])
+class PublishResolveView(APIView):
+    permission_classes = [CanManagePublishing]
+    serializer_class = PublishResolutionSerializer
+    schema = RequiredPolymorphicRequestSchema()
+
+    @extend_schema(
+        request=PolymorphicProxySerializer(
+            component_name="PublishResolutionRequest",
+            serializers={
+                "CONFIRM_PUBLISHED": ConfirmPublishedResolutionSerializer,
+                "CONFIRM_NOT_PUBLISHED": ConfirmNotPublishedResolutionSerializer,
+            },
+            resource_type_field_name="resolution",
+            required=True,
+        ),
+        responses={200: PublishTaskSerializer, 409: PublishingErrorSerializer},
+    )
+    def post(self, request, task_id):
+        serializer = PublishResolutionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return _validation(serializer.errors)
+        task = _task(request.organization, task_id)
+        try:
+            task = resolve_publish_task(
+                task,
+                resolution=serializer.validated_data["resolution"],
+                provider_post_id=serializer.validated_data.get("provider_post_id", ""),
+                actor=request.user,
+                organization=request.organization,
+            )
+        except PublishingConflict as exc:
+            return _conflict(exc)
         return Response(PublishTaskSerializer(_task(request.organization, task.id)).data)
 
 

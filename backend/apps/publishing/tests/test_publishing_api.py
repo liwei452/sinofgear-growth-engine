@@ -293,6 +293,26 @@ def test_publishing_openapi_documents_header_actions_and_calendar(publishing_con
     assert "post" in schema["paths"]["/api/v1/publish-tasks/{task_id}/cancel"]
     assert "post" in schema["paths"]["/api/v1/publish-tasks/{task_id}/retry"]
     assert "post" in schema["paths"]["/api/v1/publish-tasks/{task_id}/reconcile"]
+    resolve = schema["paths"]["/api/v1/publish-tasks/{task_id}/resolve"]["post"]
+    assert resolve["requestBody"]["required"] is True
+    request_schema = resolve["requestBody"]["content"]["application/json"]["schema"]
+    if "$ref" in request_schema:
+        request_schema = schema["components"]["schemas"][
+            request_schema["$ref"].rsplit("/", 1)[-1]
+        ]
+    assert len(request_schema["oneOf"]) == 2
+    variants = [
+        schema["components"]["schemas"][item["$ref"].rsplit("/", 1)[-1]]
+        for item in request_schema["oneOf"]
+    ]
+    assert {frozenset(variant["required"]) for variant in variants} == {
+        frozenset({"provider_post_id", "resolution"}),
+        frozenset({"resolution"}),
+    }
+    assert {frozenset(variant["properties"]) for variant in variants} == {
+        frozenset({"provider_post_id", "resolution"}),
+        frozenset({"resolution"}),
+    }
     assert "get" in schema["paths"]["/api/v1/publish-calendar"]
     assert set(schema["paths"]["/api/v1/publish-tasks/schedule"]) == {"post"}
 

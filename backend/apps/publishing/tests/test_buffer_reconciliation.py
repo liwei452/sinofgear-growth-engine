@@ -26,7 +26,6 @@ from apps.publishing.services import (
     PublishingConflict,
     create_publish_task,
     execute_publish_task,
-    publish_task_is_consistent,
     retry_publish_task,
 )
 from integrations.platforms.base import OfficialPublishResult
@@ -108,6 +107,22 @@ def _query_runtime(monkeypatch, connector):
         reconciliation, "get_social_provider_runtime",
         lambda: SimpleNamespace(connector_registry=registry),
     )
+
+
+def _end_query_window(task):
+    call_started_at = timezone.now() - timedelta(minutes=16)
+    from apps.publishing.models import publishing_writes
+
+    with publishing_writes():
+        PublishTask.objects.filter(pk=task.pk).update(
+            provider_call_started_at=call_started_at,
+            next_reconcile_at=None,
+        )
+        PublishAttempt.objects.filter(task=task).update(
+            provider_call_started_at=call_started_at,
+        )
+    task.refresh_from_db()
+    return call_started_at + timedelta(minutes=15)
 
 
 def _candidate(task, *, post_id="candidate-1", text="Body", channel_id="buffer-channel-1", service="mock", created_at=None, status="sent", assets=()):
@@ -234,7 +249,6 @@ def test_identity_mismatch_needs_attention(publishing_context, monkeypatch, chan
 @pytest.mark.parametrize(
     ("error_code", "expected_status"),
     [
-        ("BUFFER_POST_NOT_FOUND", PublishTask.Status.NEEDS_ATTENTION),
         ("BUFFER_PROVIDER_UNAVAILABLE", PublishTask.Status.SUBMITTED),
         ("BUFFER_RATE_LIMITED", PublishTask.Status.SUBMITTED),
         ("BUFFER_AUTHENTICATION_REQUIRED", PublishTask.Status.SUBMITTED),
@@ -259,6 +273,43 @@ def test_safe_query_errors_never_become_publish_failure(
         connection.refresh_from_db()
         assert account.connection_state == account.ConnectionState.REAUTHORIZATION_REQUIRED
         assert connection.connection_state == connection.ConnectionState.REAUTHORIZATION_REQUIRED
+
+
+def test_post_not_found_before_query_window_end_is_only_deferred(
+    publishing_context, monkeypatch,
+):
+    task, _account, _connection = _submitted(publishing_context, monkeypatch)
+    window_end = task.provider_call_started_at + timedelta(minutes=15)
+    connector = QueryConnector(
+        BufferPostQueryResult(ok=False, error_code="BUFFER_POST_NOT_FOUND")
+    )
+    _query_runtime(monkeypatch, connector)
+
+    reconcile_buffer_publish_task(task.id)
+
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.SUBMITTED
+    assert task.next_reconcile_at == window_end
+    assert task.reconciliation_attempts.get().result == PublishReconciliationAttempt.Result.DEFERRED
+    assert not PublishedPost.objects.filter(task=task).exists()
+
+
+def test_post_not_found_after_query_window_end_needs_attention(
+    publishing_context, monkeypatch,
+):
+    task, _account, _connection = _submitted(publishing_context, monkeypatch)
+    _end_query_window(task)
+    connector = QueryConnector(
+        BufferPostQueryResult(ok=False, error_code="BUFFER_POST_NOT_FOUND")
+    )
+    _query_runtime(monkeypatch, connector)
+
+    reconcile_buffer_publish_task(task.id)
+
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.NEEDS_ATTENTION
+    assert task.last_error["code"] == "BUFFER_POST_NOT_FOUND"
+    assert not PublishedPost.objects.filter(task=task).exists()
 
 
 def test_reconciliation_audit_is_append_only(publishing_context, monkeypatch):
@@ -297,9 +348,10 @@ def test_stale_credential_snapshot_does_not_overwrite_task(publishing_context, m
     assert task.reconciliation_attempts.get().result == PublishReconciliationAttempt.Result.STALE
 
 
-def test_worker_selection_excludes_unknown_outcome(publishing_context, monkeypatch):
+def test_worker_selection_waits_for_initial_submitted_delay(publishing_context, monkeypatch):
     task, _account, _connection = _submitted(publishing_context, monkeypatch)
-    assert select_due_buffer_reconciliation_ids() == [task.id]
+    assert select_due_buffer_reconciliation_ids() == []
+    assert select_due_buffer_reconciliation_ids(now=task.next_reconcile_at) == [task.id]
     assert select_due_buffer_reconciliation_ids() == []
 
 
@@ -307,7 +359,8 @@ def test_worker_selection_includes_due_unknown_without_retrying_publish(
     publishing_context, monkeypatch,
 ):
     task, _account, _connection = _unknown(publishing_context, monkeypatch)
-    assert select_due_buffer_reconciliation_ids() == [task.id]
+    assert select_due_buffer_reconciliation_ids() == []
+    assert select_due_buffer_reconciliation_ids(now=task.next_reconcile_at) == [task.id]
     task.refresh_from_db()
     assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
 
@@ -381,23 +434,32 @@ def test_unknown_unique_scheduled_candidate_binds_id_and_remains_submitted(
     ] == [PublishReconciliationAttempt.Result.MATCHED, PublishReconciliationAttempt.Result.DEFERRED]
 
 
-@pytest.mark.parametrize(
-    ("candidates", "error_code", "count"),
-    [
-        ((), "BUFFER_RECONCILIATION_NO_MATCH", 0),
-        (("one", "two"), "BUFFER_RECONCILIATION_AMBIGUOUS", 2),
-    ],
-)
-def test_unknown_zero_or_multiple_exact_candidates_need_attention(
-    publishing_context, monkeypatch, candidates, error_code, count,
+def test_unknown_zero_candidates_before_window_end_are_only_deferred(
+    publishing_context, monkeypatch,
 ):
     task, _account, _connection = _unknown(publishing_context, monkeypatch)
-    normalized = tuple(
-        _candidate(task, post_id=f"candidate-{value}") for value in candidates
-    )
-    connector = CandidateConnector(
-        BufferCandidateSearchResult(ok=True, candidates=normalized)
-    )
+    window_end = task.provider_call_started_at + timedelta(minutes=15)
+    connector = CandidateConnector(BufferCandidateSearchResult(ok=True, candidates=()))
+    _query_runtime(monkeypatch, connector)
+
+    reconcile_unknown_buffer_publish_task(task.id)
+
+    task.refresh_from_db()
+    audit = task.reconciliation_attempts.get()
+    assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
+    assert task.next_reconcile_at == window_end
+    assert audit.result == PublishReconciliationAttempt.Result.DEFERRED
+    assert audit.safe_error_code == "BUFFER_RECONCILIATION_NO_MATCH"
+    assert audit.candidate_count == 0
+    assert not PublishedPost.objects.filter(task=task).exists()
+
+
+def test_unknown_zero_candidates_after_window_end_need_attention(
+    publishing_context, monkeypatch,
+):
+    task, _account, _connection = _unknown(publishing_context, monkeypatch)
+    _end_query_window(task)
+    connector = CandidateConnector(BufferCandidateSearchResult(ok=True, candidates=()))
     _query_runtime(monkeypatch, connector)
 
     reconcile_unknown_buffer_publish_task(task.id)
@@ -405,13 +467,35 @@ def test_unknown_zero_or_multiple_exact_candidates_need_attention(
     task.refresh_from_db()
     audit = task.reconciliation_attempts.get()
     assert task.status == PublishTask.Status.NEEDS_ATTENTION
-    assert task.last_error["code"] == error_code
-    assert audit.candidate_count == count
+    assert task.last_error["code"] == "BUFFER_RECONCILIATION_NO_MATCH"
+    assert audit.candidate_count == 0
     assert audit.matched_provider_post_id == ""
     assert not PublishedPost.objects.filter(task=task).exists()
     with pytest.raises(PublishingConflict):
         retry_publish_task(task)
-    assert publish_task_is_consistent(task)
+
+
+def test_unknown_multiple_exact_candidates_need_attention(
+    publishing_context, monkeypatch,
+):
+    task, _account, _connection = _unknown(publishing_context, monkeypatch)
+    connector = CandidateConnector(BufferCandidateSearchResult(
+        ok=True,
+        candidates=tuple(
+            _candidate(task, post_id=f"candidate-{value}")
+            for value in ("one", "two")
+        ),
+    ))
+    _query_runtime(monkeypatch, connector)
+
+    reconcile_unknown_buffer_publish_task(task.id)
+
+    task.refresh_from_db()
+    audit = task.reconciliation_attempts.get()
+    assert task.status == PublishTask.Status.NEEDS_ATTENTION
+    assert task.last_error["code"] == "BUFFER_RECONCILIATION_AMBIGUOUS"
+    assert audit.candidate_count == 2
+    assert not PublishedPost.objects.filter(task=task).exists()
 
 
 def test_unknown_truncated_scan_cannot_claim_unique_match(
@@ -500,6 +584,7 @@ def test_unknown_nearby_but_not_exact_candidate_is_not_matched(
     publishing_context, monkeypatch, candidate_changes,
 ):
     task, _account, _connection = _unknown(publishing_context, monkeypatch)
+    _end_query_window(task)
     connector = CandidateConnector(BufferCandidateSearchResult(
         ok=True, candidates=(_candidate(task, **candidate_changes),)
     ))

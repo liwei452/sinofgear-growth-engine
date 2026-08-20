@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from datetime import timedelta
 
 import pytest
 from django.db import IntegrityError, transaction
@@ -109,6 +110,7 @@ def test_buffer_acceptance_becomes_submitted_without_published_post(
     publishing_context["content"].refresh_from_db()
     attempt = PublishAttempt.objects.get(task=task)
     assert task.status == PublishTask.Status.SUBMITTED
+    assert task.next_reconcile_at == task.finished_at + timedelta(seconds=60)
     assert attempt.status == PublishAttempt.Status.SUBMITTED
     assert task.provider_submission_id == attempt.provider_submission_id == "buffer-post-1"
     assert publishing_context["content"].status == PlatformContent.Status.APPROVED
@@ -176,6 +178,7 @@ def test_unclassified_exception_after_provider_call_is_unknown_and_not_retryable
     assert len(connector.requests) == 1
     assert task.provider_call_started_at is not None
     assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
+    assert task.next_reconcile_at == task.finished_at + timedelta(seconds=60)
     assert attempt.status == PublishAttempt.Status.SUBMISSION_UNKNOWN
     assert task.last_error["code"] == "OUTCOME_UNKNOWN"
     with pytest.raises(PublishingConflict, match="reconciliation, not retry"):

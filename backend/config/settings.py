@@ -220,6 +220,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.publishing.tasks.queue_due_publish_tasks",
         "schedule": 60.0,
     },
+    "publishing-buffer-reconciliation-minute": {
+        "task": "apps.publishing.tasks.reconcile_buffer_publish_tasks",
+        "schedule": 60.0,
+    },
     "jobs-reap-stale-minute": {
         "task": "apps.jobs.tasks.reap_stale_jobs",
         "schedule": 60.0,

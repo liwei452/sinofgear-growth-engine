@@ -40,6 +40,7 @@ class RecordingConnector:
             "channelId": request.provider_account_id,
             "mode": "shareNow",
             "schedulingType": "automatic",
+            "needsApproval": False,
             "text": request.payload["commentary"],
             "assets": [],
         })

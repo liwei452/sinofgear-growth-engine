@@ -298,6 +298,8 @@ def _build_post_input(request: OfficialPublishRequest) -> dict:
         "text": _require_publish_text(request.payload.get(text_field)),
         "schedulingType": "automatic",
         "mode": "shareNow",
+        "assets": [],
+        "needsApproval": False,
     }
     image_url = _optional_public_https_url(request.payload.get("image_url"))
     video_url = _optional_public_https_url(request.payload.get("video_url"))
@@ -329,6 +331,7 @@ def _provider_request_identity(post_input: dict) -> dict:
         "channelId": post_input["channelId"],
         "mode": post_input["mode"],
         "schedulingType": post_input["schedulingType"],
+        "needsApproval": post_input["needsApproval"],
         "text": post_input["text"],
         "assets": assets,
     }
@@ -354,6 +357,7 @@ def provider_candidate_fingerprint(candidate: BufferPostCandidate) -> str:
         "channelId": candidate.channel_id,
         "mode": candidate.share_mode,
         "schedulingType": candidate.scheduling_type,
+        "needsApproval": candidate.status == "needs_approval",
         "text": _require_publish_text(candidate.text),
         "assets": assets,
     }

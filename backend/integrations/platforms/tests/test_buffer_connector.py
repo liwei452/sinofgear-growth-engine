@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+import hmac
+import json
 
 import pytest
+from django.conf import settings
 
 from integrations.platforms.base import ConnectorConfigurationRequired, OfficialPublishRequest
 from integrations.platforms.buffer_client import BufferGraphQLResponse
@@ -152,9 +156,26 @@ def test_provider_request_fingerprint_uses_final_input_but_not_credential():
     )
 
     fingerprint = provider_request_fingerprint(base)
+    expected_identity = {
+        "channelId": "buffer-channel-1",
+        "mode": "shareNow",
+        "schedulingType": "automatic",
+        "needsApproval": False,
+        "text": "Final text",
+        "assets": [{"type": "image", "source": "https://cdn.example.com/a.png"}],
+    }
+    expected = hmac.new(
+        settings.SECRET_KEY.encode("utf-8"),
+        b"buffer-provider-request-v1\x00"
+        + json.dumps(
+            expected_identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
     assert len(fingerprint) == 64
     assert set(fingerprint) <= set("0123456789abcdef")
+    assert fingerprint == expected
     assert fingerprint == provider_request_fingerprint(rotated)
     assert fingerprint != provider_request_fingerprint(changed_text)
     assert "vault" not in fingerprint
@@ -318,20 +339,24 @@ def _post_success(**overrides):
         ("LINKEDIN", {"commentary": "LinkedIn text"}, {
             "channelId": "ch-1", "text": "LinkedIn text",
             "schedulingType": "automatic", "mode": "shareNow",
+            "assets": [], "needsApproval": False,
         }),
         ("FACEBOOK", {"message": "Facebook text", "image_url": "https://cdn.example/a.jpg"}, {
             "channelId": "ch-1", "text": "Facebook text",
             "schedulingType": "automatic", "mode": "shareNow",
+            "needsApproval": False,
             "assets": [{"image": {"url": "https://cdn.example/a.jpg"}}],
         }),
         ("INSTAGRAM", {"caption": "Instagram image", "image_url": "https://cdn.example/i.jpg", "media_type": "IMAGE"}, {
             "channelId": "ch-1", "text": "Instagram image",
             "schedulingType": "automatic", "mode": "shareNow",
+            "needsApproval": False,
             "assets": [{"image": {"url": "https://cdn.example/i.jpg"}}],
         }),
         ("INSTAGRAM", {"caption": "Instagram video", "video_url": "https://cdn.example/v.mp4", "media_type": "REELS"}, {
             "channelId": "ch-1", "text": "Instagram video",
             "schedulingType": "automatic", "mode": "shareNow",
+            "needsApproval": False,
             "assets": [{"video": {"url": "https://cdn.example/v.mp4"}}],
         }),
     ],

@@ -7,7 +7,7 @@ import { currentUserQueryOptions } from "../auth/auth"
 import { listSocialAccounts, platformAccountKeys } from "../platformAccounts/api"
 import { getProductAIStatus } from "./api"
 
-type Destination = { label: string; to: string; permission?: string }
+type Destination = { label: string; to: string; permission?: string; administratorOnly?: boolean }
 type SettingsGroup = {
   title: string
   description: string
@@ -37,9 +37,9 @@ const aiStatus = computed(() => {
   if (productAI.isError.value) return "产品 AI 状态暂时无法读取"
   const status = productAI.data.value
   if (!status) return "产品 AI 状态尚未配置"
-  if (status.mode === "CONFIGURED_AI") return `${status.provider_label} · ${status.model} · 已启用真实请求`
-  if (status.mode === "CONFIGURATION_REQUIRED") return "真实 AI 配置不完整 · 当前不会发起请求"
-  return "Fake / 离线演示 · 未启用真实请求"
+  if (status.mode === "CONFIGURED_AI") return "可生成待确认事实"
+  if (status.mode === "CONFIGURATION_REQUIRED") return "当前不能生成待确认事实；真实 AI 配置不完整"
+  return "当前不能生成待确认事实"
 })
 const channelStatus = computed(() => {
   if (!canReadPublishing.value) return "没有渠道账户查看权限；手工发布包仍可用"
@@ -74,13 +74,13 @@ const primaryGroups: SettingsGroup[] = [
   {
     title: "AI 模型",
     description: "模型状态会影响产品资料能否生成待确认事实，不会代替人工确认。",
-    destinations: [{ label: "查看资料与事实", to: "/company" }],
+    destinations: [{ label: "查看资料与事实", to: "/company", administratorOnly: true }],
   },
   {
     title: "推广与发布连接",
     description: "连接状态决定内容能否进入对应渠道；未连接时仍可使用人工发布包。",
     destinations: [
-      { label: "渠道账户", to: "/platform-accounts", permission: "publishing.read" },
+      { label: "渠道账户", to: "/platform-accounts", permission: "publishing.read", administratorOnly: true },
       { label: "内容审核与发布", to: "/content-factory", permission: "publishing.read" },
     ],
   },
@@ -146,7 +146,8 @@ function visibleGroups(groups: SettingsGroup[]) {
       : group.title === "AI 模型" ? aiStatus.value
         : group.title === "当前阻塞" && blocked.value ? "当前页面缺少所需权限，请联系管理员" : group.status,
     destinations: group.destinations.filter(destination => (
-      !destination.permission || permissions.value.has(destination.permission)
+      (!destination.permission || permissions.value.has(destination.permission))
+      && (!destination.administratorOnly || isAdministrator.value)
     )),
   }))
 }
@@ -188,7 +189,7 @@ const visibleAdvancedGroups = computed(() => visibleGroups(advancedGroups))
         </nav>
       </section>
     </div>
-    <button class="button button-quiet" type="button" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">{{ advancedOpen ? "收起高级设置" : "展开高级设置" }}</button>
+    <button v-if="isAdministrator" class="button button-quiet" type="button" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">{{ advancedOpen ? "收起高级设置" : "展开高级设置" }}</button>
     <div v-if="advancedOpen && visibleAdvancedGroups.length" class="settings-grid">
       <section v-for="group in visibleAdvancedGroups" :key="group.title" class="settings-card" role="region" :aria-label="group.title">
         <div><h2>{{ group.title }}</h2><p>{{ group.description }}</p></div>

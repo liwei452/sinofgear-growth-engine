@@ -42,12 +42,12 @@ it("shows only real permission-backed destinations and truthful unconfigured sta
 
   expect(screen.getByRole("heading", { name: "设置中心" })).toBeInTheDocument()
   expect(screen.getAllByTestId("settings-primary-group")).toHaveLength(4)
-  expect(screen.getByRole("button", { name: "展开高级设置" })).toHaveAttribute("aria-expanded", "false")
-  expect(screen.getByRole("link", { name: "查看资料与事实" })).toHaveAttribute("href", "/company")
-  expect(screen.getByRole("link", { name: "渠道账户" })).toHaveAttribute("href", "/platform-accounts")
+  expect(screen.queryByRole("button", { name: "展开高级设置" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "查看资料与事实" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "渠道账户" })).not.toBeInTheDocument()
   expect(screen.getByRole("link", { name: "内容审核与发布" })).toHaveAttribute("href", "/content-factory")
   expect(await screen.findByText("尚未添加渠道账户；手工发布包仍可用")).toBeInTheDocument()
-  expect(await screen.findByText("Fake / 离线演示 · 未启用真实请求")).toBeInTheDocument()
+  expect(await screen.findByText("当前不能生成待确认事实")).toBeInTheDocument()
 
   const crm = screen.getByRole("region", { name: "通知与 CRM" })
   expect(within(crm).getByText("尚未配置")).toBeInTheDocument()
@@ -69,14 +69,14 @@ it("keeps advanced settings collapsed until an administrator requests them", asy
   expect(screen.getByRole("region", { name: "高级管理" })).toBeInTheDocument()
 })
 
-it("shows a configured real product provider without exposing a key", async () => {
+it("shows the business consequence of a configured product provider without exposing technical details", async () => {
   await renderSettings("OPERATOR", [], [], {
     mode: "CONFIGURED_AI", provider_label: "DeepSeek 官方 API", model: "deepseek-chat",
     configured: true, real_requests_enabled: true,
   })
 
-  expect(await screen.findByText("DeepSeek 官方 API · deepseek-chat · 已启用真实请求")).toBeInTheDocument()
-  expect(document.body.textContent).not.toMatch(/api[_ -]?key|secret|bearer/i)
+  expect(await screen.findByText("可生成待确认事实")).toBeInTheDocument()
+  expect(document.body.textContent).not.toMatch(/deepseek|api[_ -]?key|secret|bearer/i)
 })
 
 it("summarizes saved channel accounts without claiming a real connection", async () => {

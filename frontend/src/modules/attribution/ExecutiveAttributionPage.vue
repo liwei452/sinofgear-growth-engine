@@ -56,6 +56,7 @@ function observed(value: number | string | null | undefined): string {
 
     <div v-if="!selectedMissionId" class="empty">请选择一个增长任务查看归因。</div>
     <div v-else-if="attributionQuery.isLoading.value" class="empty">正在读取归因…</div>
+    <div v-else-if="attributionQuery.isError.value" class="empty" role="alert"><p>归因数据暂时无法读取，因此不会显示未经证实的结果。</p><button class="button button-quiet" type="button" @click="attributionQuery.refetch()">重新读取归因</button></div>
     <template v-else-if="attribution">
       <section class="outcome-grid">
         <div class="metric"><span class="chip">{{ attribution.outcomes.confirmed_replies === null ? "未知" : "确定" }}</span><strong>{{ observed(attribution.outcomes.confirmed_replies) }}</strong><em>有效回复</em></div>

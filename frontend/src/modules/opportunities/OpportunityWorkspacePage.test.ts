@@ -74,3 +74,51 @@ it("imports a supplied candidate list for human review without claiming it was s
   await user.click(screen.getByRole("button", { name: "导入并进入人工审核" }))
   expect(await screen.findByText("已导入 1 条候选公司，等待人工审核。", { exact: true })).toBeInTheDocument()
 })
+
+it("keeps an accepted candidate visible in the enrichment stage after refetch", async () => {
+  document.cookie = "csrftoken=opportunity-review-token; path=/"
+  let accepted = false
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/v1/growth/discovery/profile") return new Response(JSON.stringify({
+      enabled: true, source_label: "Licensed directory", schedule_label: "Manual", product_scope_label: "Gear",
+      next_run_at: null, last_run: null, candidate_count: accepted ? 0 : 1,
+      candidates: accepted ? [] : [candidate],
+      enrichment_candidates: accepted ? [{ ...candidate, status: "ACCEPTED", status_label: "待资料补全", latest_preview: null, workflow: { account_id: null, follow_up_status: null, draft: null } }] : [],
+      available_sources: [],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (String(input).endsWith("/review") && init?.method === "POST") {
+      accepted = true
+      return new Response(JSON.stringify({ id: candidate.id, status: "ACCEPTED", status_label: "待资料补全", message: "已接受" }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    throw new Error(`Unexpected request: ${String(input)}`)
+  }))
+  const user = userEvent.setup()
+  await renderPage()
+  await user.click(await screen.findByRole("button", { name: "查看 Atlas Gear Works 的证据" }))
+  await user.click(screen.getByRole("button", { name: "人工接受候选" }))
+  expect(await screen.findByRole("button", { name: "准备资料补全" })).toBeInTheDocument()
+})
+
+it("creates a draft only for the selected candidate's server-associated account and restores it from the URL", async () => {
+  document.cookie = "csrftoken=opportunity-draft-token; path=/"
+  let drafted = false
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/v1/growth/discovery/profile") return new Response(JSON.stringify({
+      enabled: true, source_label: "Licensed directory", schedule_label: "Manual", product_scope_label: "Gear",
+      next_run_at: null, last_run: null, candidate_count: 0, candidates: [],
+      enrichment_candidates: [{ ...candidate, status: "ACCEPTED", latest_preview: { candidate_id: candidate.id, mode: "IMPORTED_FACTS_REVIEW", data_label: "Imported", facts: [], public_contact_paths: [], uncertainties: [], message: "Prepared", created: false }, evidence_links: [{ label: "公开公司网页证据", url: "https://atlas.example/evidence" }], workflow: { account_id: "account-atlas", follow_up_status: "OPEN", draft: drafted ? { status: "DRAFT", delivery: "NEVER_SENT" } : null } }], available_sources: [],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (String(input) === "/api/v1/growth/opportunities/account-atlas/draft" && init?.method === "POST") {
+      drafted = true
+      return new Response(JSON.stringify({ id: "draft-atlas", status: "DRAFT", delivery: "NEVER_SENT", "English draft": "Hello", "Chinese explanation": "草稿" }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }
+    throw new Error(`Unexpected request: ${String(input)}`)
+  }))
+  const user = userEvent.setup()
+  await renderPage()
+  await user.click(await screen.findByRole("button", { name: "查看 Atlas Gear Works 的证据" }))
+  expect(screen.getByRole("link", { name: "公开公司网页证据" })).toHaveAttribute("href", "https://atlas.example/evidence")
+  await user.click(screen.getByRole("button", { name: "生成联系草稿" }))
+  expect(await screen.findByText("已生成联系草稿（DRAFT），状态为未发送。", { exact: true })).toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "生成联系草稿" })).not.toBeInTheDocument()
+})

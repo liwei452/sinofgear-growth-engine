@@ -1,6 +1,7 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import serializers
+from urllib.parse import urlparse
 
 from .models import (
     CRMHandoff,
@@ -308,9 +309,11 @@ class CandidateEnrichmentResultSerializer(serializers.Serializer):
 
 class EnrichmentCandidateSerializer(DiscoveryCandidateSerializer):
     latest_preview = serializers.SerializerMethodField()
+    workflow = serializers.SerializerMethodField()
+    evidence_links = serializers.SerializerMethodField()
 
     class Meta(DiscoveryCandidateSerializer.Meta):
-        fields = [*DiscoveryCandidateSerializer.Meta.fields, "latest_preview"]
+        fields = [*DiscoveryCandidateSerializer.Meta.fields, "latest_preview", "workflow", "evidence_links"]
 
     def get_latest_preview(self, obj):
         try:
@@ -318,6 +321,36 @@ class EnrichmentCandidateSerializer(DiscoveryCandidateSerializer):
         except CandidateEnrichmentSnapshot.DoesNotExist:
             return None
         return enrichment_payload(snapshot, created=False)
+
+    def get_workflow(self, obj):
+        try:
+            snapshot = obj.enrichment_snapshot
+        except CandidateEnrichmentSnapshot.DoesNotExist:
+            return {"account_id": None, "follow_up_status": None, "draft": None}
+        if snapshot.target_account_id is None:
+            return {"account_id": None, "follow_up_status": None, "draft": None}
+        account = snapshot.target_account
+        follow_up = account.follow_ups.order_by("-updated_at", "-id").first()
+        draft = account.outreach_drafts.order_by("-updated_at", "-id").first()
+        return {
+            "account_id": str(account.id),
+            "follow_up_status": follow_up.status if follow_up else None,
+            "draft": (
+                {"status": draft.status, "delivery": "NEVER_SENT"}
+                if draft else None
+            ),
+        }
+
+    def get_evidence_links(self, obj):
+        try:
+            snapshot = obj.enrichment_snapshot
+        except CandidateEnrichmentSnapshot.DoesNotExist:
+            return []
+        source_url = snapshot.evidence_envelope.get("source_url")
+        parsed = urlparse(source_url) if isinstance(source_url, str) else None
+        if snapshot.mode != "WEBSITE_PUBLIC" or not parsed or parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return []
+        return [{"label": "公开公司网页证据", "url": source_url}]
 
 
 class DiscoverySummarySerializer(serializers.Serializer):

@@ -304,6 +304,12 @@ export type CandidateEnrichmentPreview = {
 
 export type EnrichmentCandidate = DiscoveryCandidate & {
   latest_preview: CandidateEnrichmentPreview | null
+  evidence_links: Array<{ label: string; url: string }>
+  workflow: {
+    account_id: string | null
+    follow_up_status: string | null
+    draft: { status: string; delivery: "NEVER_SENT" } | null
+  }
 }
 
 export type DiscoveryCandidate = {

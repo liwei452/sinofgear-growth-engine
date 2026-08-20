@@ -21,16 +21,23 @@ import {
   type OpportunityStage,
 } from "./opportunityFilters"
 
-type CandidateWithPreview = DiscoveryCandidate & { latest_preview: CandidateEnrichmentPreview | null }
+type CandidateWithPreview = DiscoveryCandidate & {
+  latest_preview: CandidateEnrichmentPreview | null
+  evidence_links: Array<{ label: string; url: string }>
+  workflow: CandidateWorkflow
+}
+type CandidateWorkflow = {
+  account_id: string | null
+  follow_up_status: string | null
+  draft: { status: string; delivery: "NEVER_SENT" } | null
+}
 
 const route = useRoute()
 const router = useRouter()
 const queryClient = useQueryClient()
 const opportunitiesQuery = useQuery(discoverySummaryQueryOptions())
 const actionError = ref("")
-const activeAccountId = ref<string | null>(null)
-const completedFollowUps = ref(new Set<string>())
-const createdDrafts = ref(new Map<string, string>())
+const actionMessage = ref("")
 const importOpen = ref(false)
 const importContent = ref("")
 const importMessage = ref("")
@@ -39,13 +46,23 @@ const filters = computed(() => parseOpportunityFilters(new URLSearchParams(route
 const candidates = computed<CandidateWithPreview[]>(() => {
   const summary = opportunitiesQuery.data.value
   if (!summary) return []
-  const previews = new Map((summary.enrichment_candidates ?? []).map(item => [item.id, item.latest_preview]))
-  return (summary.candidates ?? []).map(item => ({ ...item, latest_preview: previews.get(item.id) ?? null }))
+  const all = new Map<string, CandidateWithPreview>()
+  for (const candidate of summary.candidates ?? []) {
+    all.set(candidate.id, { ...candidate, latest_preview: null, evidence_links: [], workflow: emptyWorkflow() })
+  }
+  for (const candidate of summary.enrichment_candidates ?? []) {
+    all.set(candidate.id, {
+      ...candidate,
+      evidence_links: candidate.evidence_links ?? [],
+      workflow: candidate.workflow ?? emptyWorkflow(),
+    })
+  }
+  return [...all.values()]
 })
 
 function stageFor(candidate: CandidateWithPreview): OpportunityStage {
-  if (createdDrafts.value.has(candidate.id)) return "DRAFT"
-  if (completedFollowUps.value.has(candidate.id)) return "FOLLOW_UP"
+  if (candidate.workflow.draft) return "DRAFT"
+  if (candidate.workflow.follow_up_status) return "FOLLOW_UP"
   if (candidate.latest_preview || candidate.status === "ACCEPTED") return "ENRICHMENT"
   return "CANDIDATE"
 }
@@ -60,6 +77,11 @@ const visibleCandidates = computed(() => {
       : new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
 })
 const selected = computed(() => candidates.value.find(candidate => candidate.id === filters.value.selected) ?? null)
+const selectedMissing = computed(() => Boolean(filters.value.selected && !selected.value))
+
+function emptyWorkflow(): CandidateWorkflow {
+  return { account_id: null, follow_up_status: null, draft: null }
+}
 
 function replaceFilters(next: OpportunityFilters): void {
   const query = Object.fromEntries(new URLSearchParams(serializeOpportunityFilters(next)))
@@ -89,18 +111,11 @@ const reviewMutation = useMutation({
 const enrichmentMutation = useMutation({ mutationFn: prepareCandidateEnrichment, onSuccess: refresh })
 const followUpMutation = useMutation({
   mutationFn: addCandidateToFollowUp,
-  onSuccess: (result, candidateId) => {
-    completedFollowUps.value = new Set([...completedFollowUps.value, candidateId])
-    activeAccountId.value = result.account_id
-  },
+  onSuccess: refresh,
 })
 const draftMutation = useMutation({
-  mutationFn: createOpportunityDraft,
-  onSuccess: (result, accountId) => {
-    const candidate = candidates.value.find(item => item.id === selected.value?.id)
-    if (candidate) createdDrafts.value = new Map(createdDrafts.value).set(candidate.id, result.id)
-    activeAccountId.value = accountId
-  },
+  mutationFn: ({ accountId }: { candidateId: string; accountId: string }) => createOpportunityDraft(accountId),
+  onSuccess: refresh,
 })
 const importMutation = useMutation({
   mutationFn: importCandidateList,
@@ -113,7 +128,9 @@ const importMutation = useMutation({
 
 async function perform(action: () => Promise<unknown>): Promise<void> {
   actionError.value = ""
-  await action().catch(() => { actionError.value = "操作未完成，当前没有新增客户、联系方式或联系结果。" })
+  actionMessage.value = ""
+  await action().then(() => { actionMessage.value = "操作已保存；页面已从服务端重新读取当前阶段。" })
+    .catch(() => { actionError.value = "操作未完成，当前没有新增客户、联系方式或联系结果。" })
 }
 
 function preview(candidate: CandidateWithPreview): CandidateEnrichmentPreview | null {
@@ -165,20 +182,23 @@ async function importCandidates(): Promise<void> {
         <p v-if="!visibleCandidates.length" class="state">没有符合当前筛选条件的客户机会。</p>
       </section>
 
+      <p v-if="selectedMissing" class="state error" role="alert">所选客户机会已不在当前结果中；筛选条件保持不变。</p>
+
       <section v-if="selected" class="opportunity-detail" role="region" aria-label="客户机会详情">
         <button class="back" type="button" aria-label="返回客户机会列表" @click="backToList">返回列表</button>
         <header><p class="eyebrow">{{ selected.grade }} · {{ stageFor(selected) }}</p><h2>{{ selected.company_name }}</h2><p>{{ selected.country }} · {{ selected.industry }} · {{ selected.website || '未提供公开网站' }}</p></header>
         <section><h3>推荐原因</h3><p>意向评分 {{ selected.intent_score }}，综合评分 {{ selected.score }}。评分构成：{{ Object.entries(selected.intent_breakdown).map(([name, score]) => `${name} ${score}`).join('；') || '尚未提供评分构成' }}。</p></section>
-        <section><h3>证据与来源</h3><p>{{ selected.source_owner }} · 使用约束：{{ selected.license_contract }}。</p><p>当前没有可公开展示的证据链接。</p></section>
+        <section><h3>证据与来源</h3><p>{{ selected.source_owner }} · 使用约束：{{ selected.license_contract }}。</p><template v-if="selected.evidence_links.length"><a v-for="link in selected.evidence_links" :key="link.url" :href="link.url" target="_blank" rel="noreferrer">{{ link.label }}</a></template><p v-else>当前没有可公开展示的证据链接。</p></section>
         <section><h3>公司资料</h3><p>国家：{{ selected.country }}；行业：{{ selected.industry }}；网站：{{ selected.website || '未提供' }}。</p></section>
         <section><h3>公开联系路径</h3><template v-if="preview(selected)?.public_contact_paths.length"><a v-for="(path, index) in preview(selected)?.public_contact_paths" :key="index" :href="path.url" target="_blank" rel="noreferrer">{{ path.label || path.url }}</a></template><p v-else>尚未补全公开联系路径</p></section>
-        <section><h3>资料补全与活动</h3><p v-if="preview(selected)">{{ preview(selected)?.message }} · {{ preview(selected)?.data_label }}</p><p v-else>尚未准备资料补全；不会假定存在联系人、抓取结果或联系方式。</p><p v-if="completedFollowUps.has(selected.id)">已加入跟进，尚未外发联系。</p><p v-if="createdDrafts.has(selected.id)">已生成联系草稿，状态为未发送。</p></section>
+        <section><h3>资料补全与活动</h3><p v-if="preview(selected)">{{ preview(selected)?.message }} · {{ preview(selected)?.data_label }}</p><p v-else>尚未准备资料补全；不会假定存在联系人、抓取结果或联系方式。</p><p v-if="selected.workflow.follow_up_status">已加入跟进（{{ selected.workflow.follow_up_status }}），尚未外发联系。</p><p v-if="selected.workflow.draft">已生成联系草稿（{{ selected.workflow.draft.status }}），{{ selected.workflow.draft.delivery === 'NEVER_SENT' ? '状态为未发送。' : '投递状态未接入。' }}</p></section>
         <div class="actions">
           <template v-if="selected.status === 'PENDING_REVIEW'"><button type="button" :disabled="reviewMutation.isPending.value" @click="perform(() => reviewMutation.mutateAsync({ id: selected!.id, decision: 'ACCEPT' }))">人工接受候选</button><button type="button" :disabled="reviewMutation.isPending.value" @click="perform(() => reviewMutation.mutateAsync({ id: selected!.id, decision: 'DISMISS' }))">人工驳回候选</button></template>
           <button v-if="selected.status === 'ACCEPTED' && !preview(selected)" type="button" :disabled="enrichmentMutation.isPending.value" @click="perform(() => enrichmentMutation.mutateAsync(selected!.id))">准备资料补全</button>
-          <button v-if="preview(selected) && !completedFollowUps.has(selected.id)" type="button" :disabled="followUpMutation.isPending.value" @click="perform(() => followUpMutation.mutateAsync(selected!.id))">加入跟进</button>
-          <button v-if="completedFollowUps.has(selected.id) && activeAccountId && !createdDrafts.has(selected.id)" type="button" :disabled="draftMutation.isPending.value" @click="perform(() => draftMutation.mutateAsync(activeAccountId!))">生成联系草稿</button>
+          <button v-if="preview(selected) && !selected.workflow.follow_up_status" type="button" :disabled="followUpMutation.isPending.value" @click="perform(() => followUpMutation.mutateAsync(selected!.id))">加入跟进</button>
+          <button v-if="selected.workflow.follow_up_status && selected.workflow.account_id && !selected.workflow.draft" type="button" :disabled="draftMutation.isPending.value" @click="perform(() => draftMutation.mutateAsync({ candidateId: selected!.id, accountId: selected!.workflow.account_id! }))">生成联系草稿</button>
         </div>
+        <p v-if="actionMessage" role="status">{{ actionMessage }}</p>
         <p v-if="actionError" role="alert" class="error">{{ actionError }}</p>
       </section>
     </div>

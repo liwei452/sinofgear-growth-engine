@@ -198,3 +198,38 @@ def test_prepared_candidate_can_be_added_to_follow_up_without_inventing_intent(o
     assert OutreachDraft.objects.filter(organization=organization, account=account).count() == 1
     assert draft.data["delivery"] == "NEVER_SENT"
     assert "Jakarta Drives" in draft.data["English draft"]
+
+
+def test_discovery_profile_persists_candidate_scoped_follow_up_and_draft_state(organization):
+    candidate = _candidate(organization)
+    client = _client(organization, suffix="workspace-state")
+    client.post(f"/api/v1/growth/enrichment/candidates/{candidate.id}/prepare", {}, format="json")
+    follow_up = client.post(f"/api/v1/growth/enrichment/candidates/{candidate.id}/follow-up", {}, format="json")
+    client.post(f"/api/v1/growth/opportunities/{follow_up.data['account_id']}/draft", {}, format="json")
+
+    summary = client.get("/api/v1/growth/discovery/profile")
+
+    item = summary.data["enrichment_candidates"][0]
+    assert item["workflow"] == {
+        "account_id": follow_up.data["account_id"],
+        "follow_up_status": "OPEN",
+        "draft": {"status": "DRAFT", "delivery": "NEVER_SENT"},
+    }
+
+
+def test_discovery_profile_exposes_only_authorized_evidence_links(organization):
+    candidate = _candidate(organization)
+    CandidateEnrichmentSnapshot.objects.create(
+        organization=organization,
+        candidate=candidate,
+        mode="WEBSITE_PUBLIC",
+        evidence_envelope={"source_url": "https://jakarta.example.invalid/evidence"},
+    )
+    client = _client(organization, suffix="workspace-evidence")
+
+    summary = client.get("/api/v1/growth/discovery/profile")
+
+    assert summary.data["enrichment_candidates"][0]["evidence_links"] == [{
+        "label": "公开公司网页证据",
+        "url": "https://jakarta.example.invalid/evidence",
+    }]

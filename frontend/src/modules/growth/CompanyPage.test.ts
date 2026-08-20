@@ -36,6 +36,9 @@ it("loads company provenance and persists human verification", async () => {
   render(CompanyPage, { global: { plugins: [[VueQueryPlugin, { queryClient }], router] } })
 
   expect(await screen.findByText("Product library")).toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "公司事实" })).toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "内容准备" })).toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "渠道准备" })).toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "确认 DIN 6" }))
   await waitFor(() => expect(screen.getByText("已确认", { selector: "span" })).toBeInTheDocument())
   expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/verify"))).toBe(true)

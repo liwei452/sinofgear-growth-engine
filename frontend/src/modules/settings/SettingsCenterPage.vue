@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useQuery } from "@tanstack/vue-query"
-import { computed } from "vue"
+import { computed, ref } from "vue"
 import { RouterLink, useRoute } from "vue-router"
 
 import { currentUserQueryOptions } from "../auth/auth"
@@ -62,45 +62,37 @@ const returnTarget = computed(() => {
   return candidate
 })
 const blocked = computed(() => typeof route.query.blocked === "string")
+const advancedOpen = ref(false)
 
-const groups: SettingsGroup[] = [
+const primaryGroups: SettingsGroup[] = [
   {
-    title: "公司与产品",
-    description: "维护公司资料、产品和经过人工确认的事实。",
-    destinations: [
-      { label: "公司资料", to: "/company" },
-      { label: "产品库", to: "/products", permission: "products.read" },
-      { label: "素材与资料理解", to: "/assets", permission: "assets.read" },
-    ],
+    title: "当前阻塞",
+    description: "显示会影响当前业务推进的真实缺口；没有阻塞时不会虚构待办。",
+    status: "当前没有已记录的阻塞",
+    destinations: [{ label: "查看增长任务", to: "/missions", permission: "missions.read" }],
   },
   {
-    title: "AI与资料理解",
-    description: "资料解析只产生待确认事实，不会自动写入宣传内容。",
-    status: "产品 AI 状态尚未配置",
-    destinations: [{ label: "查看上传资料", to: "/assets", permission: "assets.read" }],
+    title: "AI 模型",
+    description: "模型状态会影响产品资料能否生成待确认事实，不会代替人工确认。",
+    destinations: [{ label: "查看资料与事实", to: "/company" }],
   },
   {
-    title: "获客与市场",
-    description: "选择市场并导入有许可的名单或公开线索。",
-    destinations: [
-      { label: "谷歌地图自动获客", to: "/maps-discovery" },
-      { label: "市场与客户来源", to: "/missions" },
-    ],
-  },
-  {
-    title: "渠道与发布",
-    description: "查看真实连接状态；未连接时使用人工发布包。",
+    title: "推广与发布连接",
+    description: "连接状态决定内容能否进入对应渠道；未连接时仍可使用人工发布包。",
     destinations: [
       { label: "渠道账户", to: "/platform-accounts", permission: "publishing.read" },
-      { label: "内容审核与发布", to: "/missions", permission: "publishing.read" },
+      { label: "内容审核与发布", to: "/content-factory", permission: "publishing.read" },
     ],
   },
   {
-    title: "CRM与通知",
+    title: "通知与 CRM",
     description: "CRM、邮件和 Webhook 尚未接入；当前不会向外发送。",
     status: "尚未配置",
     destinations: [],
   },
+]
+
+const advancedGroups: SettingsGroup[] = [
   {
     title: "团队与权限",
     description: "当前权限来自组织成员角色；成员管理界面尚未开放。",
@@ -112,6 +104,25 @@ const groups: SettingsGroup[] = [
     description: "费用预算与安全总览尚未配置；系统不会展示或回显密钥。",
     status: "尚未配置",
     destinations: [],
+  },
+  {
+    title: "公司与产品",
+    description: "维护公司资料、产品和经过人工确认的事实。",
+    administratorOnly: true,
+    destinations: [
+      { label: "公司资料", to: "/company" },
+      { label: "产品库", to: "/products", permission: "products.read" },
+      { label: "素材与资料理解", to: "/assets", permission: "assets.read" },
+    ],
+  },
+  {
+    title: "获客与市场",
+    description: "选择市场并导入有许可的名单或公开线索。",
+    administratorOnly: true,
+    destinations: [
+      { label: "谷歌地图自动获客", to: "/maps-discovery", permission: "leads.manage" },
+      { label: "市场与客户来源", to: "/missions", permission: "missions.read" },
+    ],
   },
   {
     title: "高级管理",
@@ -126,16 +137,21 @@ const groups: SettingsGroup[] = [
   },
 ]
 
-const visibleGroups = computed(() => groups
+function visibleGroups(groups: SettingsGroup[]) {
+  return groups
   .filter(group => !group.administratorOnly || isAdministrator.value)
   .map(group => ({
     ...group,
-    status: group.title === "渠道与发布" ? channelStatus.value
-      : group.title === "AI与资料理解" ? aiStatus.value : group.status,
+    status: group.title === "推广与发布连接" ? channelStatus.value
+      : group.title === "AI 模型" ? aiStatus.value
+        : group.title === "当前阻塞" && blocked.value ? "当前页面缺少所需权限，请联系管理员" : group.status,
     destinations: group.destinations.filter(destination => (
       !destination.permission || permissions.value.has(destination.permission)
     )),
-  })))
+  }))
+}
+const visiblePrimaryGroups = computed(() => visibleGroups(primaryGroups))
+const visibleAdvancedGroups = computed(() => visibleGroups(advancedGroups))
 </script>
 
 <template>
@@ -153,11 +169,12 @@ const visibleGroups = computed(() => groups
 
     <div class="settings-grid">
       <section
-        v-for="group in visibleGroups"
+        v-for="group in visiblePrimaryGroups"
         :key="group.title"
         class="settings-card"
         role="region"
         :aria-label="group.title"
+        data-testid="settings-primary-group"
       >
         <div>
           <h2>{{ group.title }}</h2>
@@ -169,6 +186,14 @@ const visibleGroups = computed(() => groups
             {{ destination.label }}
           </RouterLink>
         </nav>
+      </section>
+    </div>
+    <button class="button button-quiet" type="button" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">{{ advancedOpen ? "收起高级设置" : "展开高级设置" }}</button>
+    <div v-if="advancedOpen && visibleAdvancedGroups.length" class="settings-grid">
+      <section v-for="group in visibleAdvancedGroups" :key="group.title" class="settings-card" role="region" :aria-label="group.title">
+        <div><h2>{{ group.title }}</h2><p>{{ group.description }}</p></div>
+        <span v-if="group.status" class="settings-status">{{ group.status }}</span>
+        <nav v-if="group.destinations.length" :aria-label="`${group.title}入口`"><RouterLink v-for="destination in group.destinations" :key="destination.to" :to="destination.to">{{ destination.label }}</RouterLink></nav>
       </section>
     </div>
   </main>

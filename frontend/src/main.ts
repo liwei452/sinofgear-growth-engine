@@ -16,6 +16,7 @@ import GrowthMissionDetailPage from "./modules/missions/GrowthMissionDetailPage.
 import PromotionWorkspacePage from "./modules/promotion/PromotionWorkspacePage.vue"
 import ContentPublishingPage from "./modules/publishing/ContentPublishingPage.vue"
 import ExecutiveAttributionPage from "./modules/attribution/ExecutiveAttributionPage.vue"
+import ResultsPage from "./modules/results/ResultsPage.vue"
 import PlaceholderPage from "./shared/components/PlaceholderPage.vue"
 import "./styles/tokens.css"
 import "./styles/base.css"
@@ -29,7 +30,7 @@ const router = createAppRouter(queryClient, {
     Promotion: PromotionWorkspacePage,
     Opportunities: OpportunityWorkspacePage,
     ContentPublishing: ContentPublishingPage,
-    Results: PlaceholderPage,
+    Results: ResultsPage,
     Missions: GrowthMissionsPage,
     MissionDetail: GrowthMissionDetailPage,
     Company: CompanyPage,

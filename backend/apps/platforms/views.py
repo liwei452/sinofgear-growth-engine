@@ -50,6 +50,7 @@ from .oauth import (
     consume_authorization_attempt,
     create_authorization_attempt,
 )
+from .permissions import CanAdministerBuffer
 from .serializers import (
     ConnectorCredentialCreateSerializer, ConnectorCredentialListSerializer,
     ConnectorCredentialReadSerializer, ConnectorCredentialUpdateSerializer,
@@ -119,7 +120,7 @@ class SocialAccountListView(APIView):
     def get(self, request: Request) -> Response:
         accounts = SocialAccount.objects.filter(organization=request.organization).select_related(
             "platform", "credential", "provider_connection"
-        )
+        ).prefetch_related("platform__capability_definitions")
         return Response({"results": SocialAccountReadSerializer(accounts, many=True).data})
 
     @extend_schema(
@@ -591,6 +592,8 @@ def _buffer_error_response(error: BufferConnectionError) -> Response:
 
 
 _BUFFER_ERROR_RESPONSES = {
+    401: OpenApiTypes.OBJECT,
+    403: OpenApiTypes.OBJECT,
     404: OpenApiTypes.OBJECT,
     409: OpenApiTypes.OBJECT,
     429: OpenApiTypes.OBJECT,
@@ -601,7 +604,7 @@ _BUFFER_ERROR_RESPONSES = {
 
 @extend_schema(tags=["BufferProviderConnection"])
 class BufferProviderConnectionView(APIView):
-    permission_classes = [IsAuthenticated, CanManageCredentials]
+    permission_classes = [IsAuthenticated, CanAdministerBuffer]
 
     @extend_schema(responses={200: BufferProviderConnectionReadSerializer, **_BUFFER_ERROR_RESPONSES})
     def get(self, request: Request) -> Response:
@@ -656,7 +659,7 @@ class BufferProviderConnectionView(APIView):
 
 @extend_schema(tags=["BufferProviderConnection"])
 class BufferProviderConnectionProbeView(APIView):
-    permission_classes = [IsAuthenticated, CanManageCredentials]
+    permission_classes = [IsAuthenticated, CanAdministerBuffer]
 
     @extend_schema(
         request=None,
@@ -676,7 +679,7 @@ class BufferProviderConnectionProbeView(APIView):
 
 @extend_schema(tags=["BufferProviderConnection"])
 class BufferProviderConnectionSyncView(APIView):
-    permission_classes = [IsAuthenticated, CanManageCredentials]
+    permission_classes = [IsAuthenticated, CanAdministerBuffer]
 
     @extend_schema(
         request=None,
@@ -710,7 +713,7 @@ class BufferProviderConnectionSyncView(APIView):
 
 @extend_schema(tags=["BufferProviderConnection"])
 class BufferProviderConnectionDisconnectView(APIView):
-    permission_classes = [IsAuthenticated, CanManageCredentials]
+    permission_classes = [IsAuthenticated, CanAdministerBuffer]
 
     @extend_schema(
         request=BufferProviderConnectionDisconnectSerializer,

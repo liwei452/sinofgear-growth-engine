@@ -20,6 +20,14 @@ it("translates dashboard health and platform connection states", () => {
   expect(businessStatus("NOT_CONNECTED")).toMatchObject({ label: "尚未连接", tone: "warning" })
 })
 
+it.each([
+  ["BUDGET_EXCEEDED", "预算已超限", "warning"],
+  ["KEY_REQUIRED", "需要密钥", "warning"],
+  ["SKIPPED", "已跳过", "neutral"],
+] as const)("translates rendered %s status", (status, label, tone) => {
+  expect(businessStatus(status)).toMatchObject({ label, tone })
+})
+
 it("keeps unrecognized values neutral and explainable", () => {
   expect(businessStatus("UNRECOGNIZED")).toEqual({
     label: "状态待确认",

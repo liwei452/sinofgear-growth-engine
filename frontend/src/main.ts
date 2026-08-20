@@ -12,6 +12,7 @@ import CompanyPage from "./modules/growth/CompanyPage.vue"
 import HelpPage from "./modules/help/HelpPage.vue"
 import GrowthMissionsPage from "./modules/missions/GrowthMissionsPage.vue"
 import GrowthMissionDetailPage from "./modules/missions/GrowthMissionDetailPage.vue"
+import PromotionWorkspacePage from "./modules/promotion/PromotionWorkspacePage.vue"
 import ExecutiveAttributionPage from "./modules/attribution/ExecutiveAttributionPage.vue"
 import PlaceholderPage from "./shared/components/PlaceholderPage.vue"
 import "./styles/tokens.css"
@@ -23,7 +24,7 @@ const router = createAppRouter(queryClient, {
     Shell: AppShell,
     Dashboard: DashboardPage,
     RoleHome: RoleHomePage,
-    Promotion: PlaceholderPage,
+    Promotion: PromotionWorkspacePage,
     Opportunities: PlaceholderPage,
     ContentPublishing: PlaceholderPage,
     Results: PlaceholderPage,

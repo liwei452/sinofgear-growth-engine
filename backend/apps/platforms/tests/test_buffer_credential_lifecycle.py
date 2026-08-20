@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
+from django.utils import timezone
 
 from apps.platforms.models import (
     EncryptedOAuthCredential,
@@ -128,9 +130,21 @@ def test_orphan_reclamation_command_reclaims_only_unreferenced_credentials(organ
         key_version="v1",
         status=EncryptedOAuthCredential.Status.ACTIVE,
     )
-    orphan = EncryptedOAuthCredential.objects.create(
+    old_orphan = EncryptedOAuthCredential.objects.create(
         organization=organization,
-        reference="vault://buffer/orphan",
+        reference="vault://buffer/orphan-old",
+        actor_identifier="actor",
+        platform_code="BUFFER",
+        connection_attempt_id=uuid4(),
+        key_version="v1",
+        status=EncryptedOAuthCredential.Status.ACTIVE,
+    )
+    EncryptedOAuthCredential.objects.filter(pk=old_orphan.pk).update(
+        updated_at=timezone.now() - timedelta(hours=2),
+    )
+    fresh_orphan = EncryptedOAuthCredential.objects.create(
+        organization=organization,
+        reference="vault://buffer/orphan-fresh",
         actor_identifier="actor",
         platform_code="BUFFER",
         connection_attempt_id=uuid4(),
@@ -142,6 +156,8 @@ def test_orphan_reclamation_command_reclaims_only_unreferenced_credentials(organ
     call_command("reclaim_orphan_buffer_credentials", verbosity=0)
 
     kept.refresh_from_db()
-    orphan.refresh_from_db()
+    old_orphan.refresh_from_db()
+    fresh_orphan.refresh_from_db()
     assert kept.status == EncryptedOAuthCredential.Status.ACTIVE
-    assert orphan.status == EncryptedOAuthCredential.Status.DISCONNECTED
+    assert old_orphan.status == EncryptedOAuthCredential.Status.DISCONNECTED
+    assert fresh_orphan.status == EncryptedOAuthCredential.Status.ACTIVE

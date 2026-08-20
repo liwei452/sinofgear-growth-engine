@@ -269,7 +269,7 @@ def connect_buffer(
             locked = ProviderConnection.objects.filter(
                 organization=organization,
                 provider=ProviderConnection.Provider.BUFFER,
-            ).first()
+            ).select_for_update().first()
             if locked is not None and locked.connection_state == ProviderConnection.ConnectionState.CONNECTED:
                 raise BufferConnectionError("BUFFER_ALREADY_CONNECTED")
             old_reference = locked.credential_reference if locked is not None else ""

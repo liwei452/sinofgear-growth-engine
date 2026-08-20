@@ -163,6 +163,35 @@ def test_concurrent_first_connect_is_detected(organization, admin_client, buffer
 
 
 @pytest.mark.django_db
+def test_reconnect_detects_connection_made_during_probe(organization, admin_client, buffer_api):
+    connection = ProviderConnection.objects.create(
+        organization=organization,
+        provider=ProviderConnection.Provider.BUFFER,
+        credential_reference="vault://buffer/old",
+        external_id="org-1",
+        connection_state=ProviderConnection.ConnectionState.DISCONNECTED,
+    )
+    client, _user = admin_client
+    token_store, connector = buffer_api
+    connector.probe_result = probe_ok()
+
+    def make_connected(_request):
+        ProviderConnection.objects.filter(pk=connection.pk).update(
+            connection_state=ProviderConnection.ConnectionState.CONNECTED,
+        )
+
+    connector.on_probe = make_connected
+
+    response = client.post(
+        API, {"api_key": "sk-new", "organization_id": "org-1"}, format="json",
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "BUFFER_ALREADY_CONNECTED"
+    assert token_store.deleted == [token_store.stored[-1]]
+
+
+@pytest.mark.django_db
 def test_rotate_success_deletes_old_credential(admin_client, buffer_api):
     client, _user = admin_client
     token_store, connector = buffer_api

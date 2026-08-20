@@ -15,8 +15,9 @@ def get_connector(code, account):
 
 
 class ConnectorRegistry:
-    def __init__(self, *, official_connectors=None):
+    def __init__(self, *, official_connectors=None, provider_connectors=None):
         self.official_connectors = dict(official_connectors or {})
+        self.provider_connectors = dict(provider_connectors or {})
 
     def resolve(self, account):
         metadata = account.connector_metadata if isinstance(account.connector_metadata, dict) else {}
@@ -25,6 +26,16 @@ class ConnectorRegistry:
             connection_kind = "demo_fake"
         if connection_kind == "demo_fake":
             return ManualPackageFakeConnector()
+        provider = getattr(account, "provider", "DIRECT")
+        if provider == "BUFFER":
+            try:
+                return self.provider_connectors[provider]
+            except KeyError as exc:
+                raise ConnectorConfigurationRequired(
+                    "Provider publishing connector is not configured."
+                ) from exc
+        if provider != "DIRECT":
+            raise ConnectorConfigurationRequired("Unsupported social account provider.")
         if connection_kind != "official_oauth":
             raise ConnectorConfigurationRequired("Platform account is not connected through official OAuth.")
         try:

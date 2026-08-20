@@ -13,12 +13,48 @@ def test_linkedin_payload_uses_commentary():
         content_payload={"body": "Hello engineering team"},
     ) == {"commentary": "Hello engineering team"}
 
+    assert build_publish_payload(
+        platform_code="LINKEDIN",
+        content_payload={"body": "Hello engineering team"},
+        media_url="https://media.example/gear.jpg",
+        media_kind="IMAGE",
+    ) == {
+        "commentary": "Hello engineering team",
+        "image_url": "https://media.example/gear.jpg",
+    }
+
 
 def test_facebook_payload_uses_message_and_link():
     assert build_publish_payload(
         platform_code="FACEBOOK",
         content_payload={"body": "Capability summary", "landing_page_url": "https://x.example"},
     ) == {"message": "Capability summary", "link": "https://x.example"}
+
+    assert build_publish_payload(
+        platform_code="FACEBOOK",
+        content_payload={"body": "Capability summary"},
+        media_url="https://media.example/gear.jpg",
+        media_kind="IMAGE",
+    ) == {
+        "message": "Capability summary",
+        "image_url": "https://media.example/gear.jpg",
+    }
+
+
+def test_official_request_repr_hides_credential_reference():
+    from integrations.platforms.base import OfficialPublishRequest
+
+    request = OfficialPublishRequest(
+        channel="LINKEDIN",
+        account_external_id="legacy-id",
+        provider_account_id="channel-1",
+        credential_reference="vault://secret-reference",
+        payload={"commentary": "Hello"},
+        idempotency_key="task-1",
+        consent={},
+    )
+
+    assert "vault://secret-reference" not in repr(request)
 
 
 def test_instagram_requires_media_url():

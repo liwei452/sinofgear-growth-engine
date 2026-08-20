@@ -138,3 +138,17 @@ def test_youtube_authorization_and_upload_readiness_are_separate() -> None:
     assert without_media.readiness["YOUTUBE"].publishing_ready is False
     assert with_media.readiness["YOUTUBE"].publishing_ready is True
     assert transports["YOUTUBE"].calls == []
+
+
+def test_runtime_registers_one_buffer_connector_without_network() -> None:
+    runtime, transports = build({}, {})
+    account = SimpleNamespace(
+        provider="BUFFER",
+        platform=SimpleNamespace(code="LINKEDIN"),
+        connector_metadata={},
+    )
+
+    connector = runtime.connector_registry.resolve(account)
+
+    assert connector is runtime.connector_registry.provider_connectors["BUFFER"]
+    assert transports == {}

@@ -11,6 +11,9 @@ class BufferErrorCode(str, Enum):
     PROVIDER_UNAVAILABLE = "BUFFER_PROVIDER_UNAVAILABLE"
     CONTRACT_ERROR = "BUFFER_CONTRACT_ERROR"
     ORGANIZATION_NOT_FOUND = "BUFFER_ORGANIZATION_NOT_FOUND"
+    OUTCOME_UNKNOWN = "BUFFER_OUTCOME_UNKNOWN"
+    INVALID_INPUT = "BUFFER_INVALID_INPUT"
+    CHANNEL_NOT_FOUND = "BUFFER_CHANNEL_NOT_FOUND"
 
 
 SAFE_BUFFER_MESSAGES: dict[BufferErrorCode, str] = {
@@ -20,6 +23,9 @@ SAFE_BUFFER_MESSAGES: dict[BufferErrorCode, str] = {
     BufferErrorCode.PROVIDER_UNAVAILABLE: "Buffer 服务暂时不可用，请稍后重试。",
     BufferErrorCode.CONTRACT_ERROR: "Buffer 返回了无法识别的数据。",
     BufferErrorCode.ORGANIZATION_NOT_FOUND: "未找到匹配的 Buffer 组织。",
+    BufferErrorCode.OUTCOME_UNKNOWN: "Buffer 提交结果无法确定，请先对账后再处理。",
+    BufferErrorCode.INVALID_INPUT: "Buffer 发布内容未通过校验。",
+    BufferErrorCode.CHANNEL_NOT_FOUND: "Buffer 渠道不存在或已失效。",
 }
 
 

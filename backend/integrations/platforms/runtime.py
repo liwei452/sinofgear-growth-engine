@@ -20,6 +20,8 @@ from django.conf import settings
 from django.utils import timezone
 
 from .authorization_registry import AuthorizationAdapterRegistry
+from .buffer_client import BufferGraphQLClient, BufferHttpTransport
+from .buffer_connector import BufferConnector
 from .encrypted_token_store import EncryptedDatabaseTokenStore
 from .linkedin import LinkedInConnector
 from .linkedin_authorization import LinkedInAuthorizationAdapter
@@ -120,8 +122,13 @@ def build_social_provider_runtime(
 ) -> SocialProviderRuntime:
     adapters = {}
     connectors = {}
+    provider_connectors = {}
     readiness = {code: _unavailable() for code in ("FACEBOOK", "INSTAGRAM", "LINKEDIN", "TIKTOK", "YOUTUBE")}
     token_store_ready = not isinstance(token_store, DisabledTokenStore)
+    if token_store_ready:
+        provider_connectors["BUFFER"] = BufferConnector(
+            BufferGraphQLClient(BufferHttpTransport()), token_store
+        )
     for provider_code in ("META", "LINKEDIN", "TIKTOK", "YOUTUBE"):
         config = configs.get(provider_code)
         if config is None or not config.enabled or not token_store_ready:
@@ -221,7 +228,10 @@ def build_social_provider_runtime(
             )
     return SocialProviderRuntime(
         AuthorizationAdapterRegistry(adapters),
-        ConnectorRegistry(official_connectors=connectors),
+        ConnectorRegistry(
+            official_connectors=connectors,
+            provider_connectors=provider_connectors,
+        ),
         token_store,
         readiness,
     )

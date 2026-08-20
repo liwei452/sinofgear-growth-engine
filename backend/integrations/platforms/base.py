@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -35,10 +35,11 @@ class ConnectorConfigurationRequired(RuntimeError):
 class OfficialPublishRequest:
     channel: str
     account_external_id: str
-    credential_reference: str
+    credential_reference: str = field(repr=False)
     payload: dict
     idempotency_key: str
     consent: dict
+    provider_account_id: str = ""
 
 
 @dataclass(frozen=True)

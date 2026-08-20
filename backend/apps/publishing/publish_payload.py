@@ -28,7 +28,12 @@ def build_publish_payload(
     if code == "LINKEDIN":
         if not body:
             raise PublishPayloadError("LinkedIn content is missing body text.")
-        return {"commentary": _with_tracking(body)}
+        payload = {"commentary": _with_tracking(body)}
+        if media_url:
+            if media_kind != "IMAGE" or not media_url.startswith("https://"):
+                raise PublishPayloadError("LinkedIn supports one public HTTPS image.")
+            payload["image_url"] = media_url
+        return payload
 
     if code == "FACEBOOK":
         if not body:
@@ -36,6 +41,10 @@ def build_publish_payload(
         payload = {"message": _with_tracking(body)}
         if landing_page_url:
             payload["link"] = landing_page_url
+        if media_url:
+            if media_kind != "IMAGE" or not media_url.startswith("https://"):
+                raise PublishPayloadError("Facebook supports one public HTTPS image.")
+            payload["image_url"] = media_url
         return payload
 
     if code == "INSTAGRAM":

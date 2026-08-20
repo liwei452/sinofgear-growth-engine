@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from integrations.platforms.base import ConnectorConfigurationRequired
+from integrations.platforms.base import ConnectorConfigurationRequired, OfficialPublishRequest
 from integrations.platforms.buffer_client import BufferGraphQLResponse
 from integrations.platforms.buffer_connector import BufferConnector
 from integrations.platforms.buffer_types import (
+    BufferApiError,
     BufferDiscoveryRequest,
     BufferErrorCode,
     BufferRateLimitResult,
@@ -47,6 +48,9 @@ class FakeClient:
         self.channels_data = channels_data
         self.fetched_account_tokens = []
         self.fetched_channel_orgs = []
+        self.created_posts = []
+        self.create_post_data = None
+        self.create_post_error = None
 
     def fetch_account(self, token):
         self.fetched_account_tokens.append(token)
@@ -58,6 +62,14 @@ class FakeClient:
         self.fetched_channel_orgs.append((token, organization_id))
         return BufferGraphQLResponse(
             data=self.channels_data, rate_limit=BufferRateLimitResult()
+        )
+
+    def create_post(self, token, post_input):
+        self.created_posts.append((token, post_input))
+        if self.create_post_error is not None:
+            raise self.create_post_error
+        return BufferGraphQLResponse(
+            data=self.create_post_data, rate_limit=BufferRateLimitResult()
         )
 
 
@@ -103,6 +115,178 @@ def _connector(token_store=None, client=None):
         client=client or FakeClient(),
         token_store=token_store or FakeTokenStore(),
     )
+
+
+def _publish_request(channel="LINKEDIN", payload=None):
+    return OfficialPublishRequest(
+        channel=channel,
+        account_external_id="legacy-external-id",
+        provider_account_id="ch-1",
+        credential_reference="vault://buffer/acme",
+        payload=payload or {"commentary": "Precision gears"},
+        idempotency_key="task-1",
+        consent={},
+    )
+
+
+def _post_success(**overrides):
+    post = {
+        "id": "buffer-post-1", "channelId": "ch-1", "status": "scheduled",
+        "dueAt": None, "createdAt": "2026-08-20T00:00:00Z",
+    }
+    post.update(overrides)
+    return {"createPost": {"__typename": "PostActionSuccess", "post": post}}
+
+
+@pytest.mark.parametrize(
+    ("channel", "payload", "expected"),
+    [
+        ("LINKEDIN", {"commentary": "LinkedIn text"}, {
+            "channelId": "ch-1", "text": "LinkedIn text",
+            "schedulingType": "automatic", "mode": "shareNow",
+        }),
+        ("FACEBOOK", {"message": "Facebook text", "image_url": "https://cdn.example/a.jpg"}, {
+            "channelId": "ch-1", "text": "Facebook text",
+            "schedulingType": "automatic", "mode": "shareNow",
+            "assets": [{"image": {"url": "https://cdn.example/a.jpg"}}],
+        }),
+        ("INSTAGRAM", {"caption": "Instagram image", "image_url": "https://cdn.example/i.jpg", "media_type": "IMAGE"}, {
+            "channelId": "ch-1", "text": "Instagram image",
+            "schedulingType": "automatic", "mode": "shareNow",
+            "assets": [{"image": {"url": "https://cdn.example/i.jpg"}}],
+        }),
+        ("INSTAGRAM", {"caption": "Instagram video", "video_url": "https://cdn.example/v.mp4", "media_type": "REELS"}, {
+            "channelId": "ch-1", "text": "Instagram video",
+            "schedulingType": "automatic", "mode": "shareNow",
+            "assets": [{"video": {"url": "https://cdn.example/v.mp4"}}],
+        }),
+    ],
+)
+def test_publish_maps_supported_channels_to_buffer_create_post(channel, payload, expected):
+    client = FakeClient()
+    client.create_post_data = _post_success()
+
+    result = _connector(client=client).publish(_publish_request(channel, payload))
+
+    assert result.status == "SUBMITTED"
+    assert result.submission_id == "buffer-post-1"
+    assert client.created_posts == [("buffer-token", expected)]
+
+
+def test_instagram_without_media_fails_before_network():
+    client = FakeClient()
+
+    result = _connector(client=client).publish(
+        _publish_request("INSTAGRAM", {"caption": "No media"})
+    )
+
+    assert result.status == "FAILED"
+    assert result.error_code == "VALIDATION_REJECTED"
+    assert client.created_posts == []
+
+
+@pytest.mark.parametrize("channel,text_field", [("LINKEDIN", "commentary"), ("FACEBOOK", "message")])
+def test_text_channels_reject_video_before_network(channel, text_field):
+    client = FakeClient()
+
+    result = _connector(client=client).publish(
+        _publish_request(
+            channel,
+            {text_field: "No unsupported video", "video_url": "https://cdn.example/v.mp4"},
+        )
+    )
+
+    assert result.status == "FAILED"
+    assert result.error_code == "VALIDATION_REJECTED"
+    assert client.created_posts == []
+
+
+@pytest.mark.parametrize("post_id", ["", "   ", 123, "x" * 256])
+def test_invalid_success_identity_is_submission_unknown(post_id):
+    client = FakeClient()
+    client.create_post_data = _post_success(id=post_id)
+
+    result = _connector(client=client).publish(_publish_request())
+
+    assert result.status == "FAILED"
+    assert result.error_code == "OUTCOME_UNKNOWN"
+
+
+def test_mismatched_success_channel_is_submission_unknown():
+    client = FakeClient()
+    client.create_post_data = _post_success(channelId="other-channel")
+
+    result = _connector(client=client).publish(_publish_request())
+
+    assert result.error_code == "OUTCOME_UNKNOWN"
+
+
+@pytest.mark.parametrize(
+    ("typename", "error_code"),
+    [
+        ("InvalidInputError", "VALIDATION_REJECTED"),
+        ("LimitReachedError", "BUFFER_PROVIDER_CAPACITY"),
+        ("NotFoundError", "BUFFER_CHANNEL_NOT_FOUND"),
+    ],
+)
+def test_explicit_mutation_errors_are_safe_failures(typename, error_code):
+    client = FakeClient()
+    client.create_post_data = {
+        "createPost": {"__typename": typename, "message": "raw provider detail"}
+    }
+
+    result = _connector(client=client).publish(_publish_request())
+
+    assert result.status == "FAILED"
+    assert result.error_code == error_code
+    assert "raw provider detail" not in result.error_message
+
+
+@pytest.mark.parametrize(
+    ("provider_error", "error_code", "retry_after"),
+    [
+        (BufferErrorCode.AUTHENTICATION_REQUIRED, "REAUTHORIZATION_REQUIRED", None),
+        (BufferErrorCode.RATE_LIMITED, "RATE_LIMITED", 41),
+        (BufferErrorCode.OUTCOME_UNKNOWN, "OUTCOME_UNKNOWN", None),
+        (BufferErrorCode.CHANNEL_NOT_FOUND, "BUFFER_CHANNEL_NOT_FOUND", None),
+    ],
+)
+def test_provider_failures_map_without_leaking_raw_details(
+    provider_error, error_code, retry_after,
+):
+    client = FakeClient()
+    client.create_post_error = BufferApiError(
+        provider_error,
+        message="raw secret provider detail",
+        retry_after_seconds=retry_after,
+    )
+
+    result = _connector(client=client).publish(_publish_request())
+
+    assert result.error_code == error_code
+    assert result.retry_after_seconds == retry_after
+    assert "raw secret provider detail" not in result.error_message
+
+
+def test_stale_credential_reference_fails_without_network_or_secret_disclosure():
+    client = FakeClient()
+    request = _publish_request()
+
+    result = _connector(token_store=FailingTokenStore(), client=client).publish(request)
+
+    assert result.error_code == "PUBLISH_NOT_ELIGIBLE"
+    assert client.created_posts == []
+    assert request.credential_reference not in repr(request)
+
+
+def test_even_sent_success_remains_submitted_until_reconciliation():
+    client = FakeClient()
+    client.create_post_data = _post_success(status="sent")
+
+    result = _connector(client=client).publish(_publish_request())
+
+    assert result.status == "SUBMITTED"
+    assert result.submission_id == "buffer-post-1"
 
 
 def test_probe_returns_account_and_organizations():

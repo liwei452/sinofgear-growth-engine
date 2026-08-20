@@ -53,6 +53,27 @@ query BufferChannels($organizationId: OrganizationId!) {
 }
 """.strip()
 
+_CREATE_POST_MUTATION = """
+mutation BufferCreatePost($input: CreatePostInput!) {
+  createPost(input: $input) {
+    __typename
+    ... on PostActionSuccess {
+      post {
+        id
+        channelId
+        status
+        dueAt
+        createdAt
+      }
+    }
+    ... on MutationError {
+      __typename
+      message
+    }
+  }
+}
+""".strip()
+
 
 @dataclass(frozen=True)
 class BufferGraphQLResponse:
@@ -252,7 +273,19 @@ class BufferGraphQLClient:
     def fetch_channels(self, token: str, organization_id: str) -> BufferGraphQLResponse:
         return self._execute(token, _CHANNELS_QUERY, {"organizationId": organization_id})
 
-    def _execute(self, token: str, query: str, variables: dict) -> BufferGraphQLResponse:
+    def create_post(self, token: str, post_input: dict) -> BufferGraphQLResponse:
+        if not isinstance(post_input, dict):
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        return self._execute(
+            token,
+            _CREATE_POST_MUTATION,
+            {"input": post_input},
+            mutation=True,
+        )
+
+    def _execute(
+        self, token: str, query: str, variables: dict, *, mutation: bool = False,
+    ) -> BufferGraphQLResponse:
         if not isinstance(token, str) or not token.strip():
             raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
         headers = {
@@ -268,15 +301,25 @@ class BufferGraphQLClient:
                 timeout_seconds=self._timeout_seconds,
             )
         except TimeoutError:
-            raise BufferApiError(BufferErrorCode.PROVIDER_UNAVAILABLE) from None
+            raise BufferApiError(
+                BufferErrorCode.OUTCOME_UNKNOWN
+                if mutation else BufferErrorCode.PROVIDER_UNAVAILABLE
+            ) from None
         except BufferResponseTooLarge:
+            if mutation:
+                raise BufferApiError(BufferErrorCode.OUTCOME_UNKNOWN) from None
             raise BufferApiError(
                 BufferErrorCode.CONTRACT_ERROR, message="Buffer 返回数据过大。"
             ) from None
 
         status_code = response.status_code
-        rate_limit = parse_rate_limits(response.headers)
+        header_retry_after = _parse_int(response.headers.get("retry-after"))
+        rate_limit = parse_rate_limits(
+            response.headers, retry_after_seconds=header_retry_after,
+        )
         if 300 <= status_code < 400:
+            if mutation:
+                raise BufferApiError(BufferErrorCode.OUTCOME_UNKNOWN)
             raise BufferApiError(
                 BufferErrorCode.CONTRACT_ERROR, message="Buffer 返回了不安全的跳转。"
             )
@@ -288,26 +331,50 @@ class BufferGraphQLClient:
                 BufferErrorCode.RATE_LIMITED, retry_after_seconds=retry_after
             )
         if status_code >= 500:
-            raise BufferApiError(BufferErrorCode.PROVIDER_UNAVAILABLE)
+            raise BufferApiError(
+                BufferErrorCode.OUTCOME_UNKNOWN
+                if mutation else BufferErrorCode.PROVIDER_UNAVAILABLE
+            )
         if status_code != 200:
-            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+            raise BufferApiError(
+                BufferErrorCode.OUTCOME_UNKNOWN
+                if mutation else BufferErrorCode.CONTRACT_ERROR
+            )
 
         body = response.json_body
         if not isinstance(body, dict):
-            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+            raise BufferApiError(
+                BufferErrorCode.OUTCOME_UNKNOWN
+                if mutation else BufferErrorCode.CONTRACT_ERROR
+            )
         errors = body.get("errors")
         if errors:
-            self._raise_graphql_error(errors)
+            self._raise_graphql_error(
+                errors,
+                mutation=mutation,
+                retry_after_seconds=header_retry_after,
+            )
         data = body.get("data")
         if data is None:
+            if mutation:
+                raise BufferApiError(BufferErrorCode.OUTCOME_UNKNOWN)
             raise BufferApiError(
                 BufferErrorCode.CONTRACT_ERROR, message="Buffer 返回了空数据。"
             )
         if not isinstance(data, dict):
-            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+            raise BufferApiError(
+                BufferErrorCode.OUTCOME_UNKNOWN
+                if mutation else BufferErrorCode.CONTRACT_ERROR
+            )
         return BufferGraphQLResponse(data=data, rate_limit=rate_limit)
 
-    def _raise_graphql_error(self, errors) -> None:
+    def _raise_graphql_error(
+        self,
+        errors,
+        *,
+        mutation: bool = False,
+        retry_after_seconds: int | None = None,
+    ) -> None:
         code = None
         if isinstance(errors, list) and errors:
             first = errors[0]
@@ -321,7 +388,23 @@ class BufferGraphQLClient:
             "UNAUTHORIZED": BufferErrorCode.AUTHENTICATION_REQUIRED,
             "FORBIDDEN": BufferErrorCode.AUTHENTICATION_REQUIRED,
             "RATE_LIMIT_EXCEEDED": BufferErrorCode.RATE_LIMITED,
-            "NOT_FOUND": BufferErrorCode.ORGANIZATION_NOT_FOUND,
-            "UNEXPECTED": BufferErrorCode.PROVIDER_UNAVAILABLE,
+            "NOT_FOUND": (
+                BufferErrorCode.CHANNEL_NOT_FOUND
+                if mutation else BufferErrorCode.ORGANIZATION_NOT_FOUND
+            ),
+            "UNEXPECTED": (
+                BufferErrorCode.OUTCOME_UNKNOWN
+                if mutation else BufferErrorCode.PROVIDER_UNAVAILABLE
+            ),
         }
-        raise BufferApiError(mapping.get(code, BufferErrorCode.CONTRACT_ERROR))
+        fallback = (
+            BufferErrorCode.OUTCOME_UNKNOWN if mutation else BufferErrorCode.CONTRACT_ERROR
+        )
+        normalized = mapping.get(code, fallback)
+        raise BufferApiError(
+            normalized,
+            retry_after_seconds=(
+                retry_after_seconds
+                if normalized is BufferErrorCode.RATE_LIMITED else None
+            ),
+        )

@@ -19,7 +19,12 @@ from apps.platforms.capabilities import resolve_account_capabilities
 from apps.platforms.codes import AccountCapability
 from apps.platforms.models import ConnectorCredential, PlatformCapability, SocialAccount
 
-from integrations.platforms.base import OfficialPublishRequest, PublishRequest, PublishResult
+from integrations.platforms.base import (
+    ConnectorConfigurationRequired,
+    OfficialPublishRequest,
+    PublishRequest,
+    PublishResult,
+)
 from integrations.platforms.runtime import get_social_provider_runtime
 
 
@@ -43,6 +48,18 @@ SAFE_PUBLISH_ERRORS = {
     },
     "RATE_LIMITED": {
         "code": "RATE_LIMITED", "message": "Provider rate limit reached.",
+    },
+    "VALIDATION_REJECTED": {
+        "code": "VALIDATION_REJECTED", "message": "Publish payload was rejected.",
+    },
+    "REAUTHORIZATION_REQUIRED": {
+        "code": "REAUTHORIZATION_REQUIRED", "message": "Provider authorization must be renewed.",
+    },
+    "BUFFER_PROVIDER_CAPACITY": {
+        "code": "BUFFER_PROVIDER_CAPACITY", "message": "Buffer provider capacity was reached.",
+    },
+    "BUFFER_CHANNEL_NOT_FOUND": {
+        "code": "BUFFER_CHANNEL_NOT_FOUND", "message": "Buffer channel was not found.",
     },
     "TOKEN_EXPIRED": {
         "code": "TOKEN_EXPIRED", "message": "Account authorization has expired.",
@@ -584,9 +601,9 @@ def claim_publish_task(task_id=None):
         "platform", "master_content__brief", "master_content__generation_job",
         "master_content__ai_run", "master_content__previous_version", "previous_version",
     ).get(pk=task.platform_content_id)
-    account = SocialAccount.objects.select_for_update().select_related("platform").get(
-        pk=task.social_account_id
-    )
+    account = SocialAccount.objects.select_for_update().select_related(
+        "platform", "provider_connection",
+    ).get(pk=task.social_account_id)
     credential = None
     if account.credential_id:
         credential = ConnectorCredential.objects.select_for_update().filter(
@@ -599,6 +616,26 @@ def claim_publish_task(task_id=None):
     )
     task._state.fields_cache["platform_content"] = content
     task._state.fields_cache["social_account"] = account
+    direct_eligible = (
+        account.provider == SocialAccount.Provider.DIRECT
+        and credential is not None
+        and credential.organization_id == account.organization_id
+        and credential.platform_id == account.platform_id
+        and (credential.expires_at is None or credential.expires_at > now)
+    )
+    provider_connection = account.provider_connection
+    buffer_eligible = (
+        account.provider == SocialAccount.Provider.BUFFER
+        and credential is None
+        and account.connection_state == SocialAccount.ConnectionState.CONNECTED
+        and bool(account.provider_account_id.strip())
+        and provider_connection is not None
+        and provider_connection.provider == provider_connection.Provider.BUFFER
+        and provider_connection.organization_id == account.organization_id
+        and provider_connection.connection_state
+        == provider_connection.ConnectionState.CONNECTED
+        and bool(provider_connection.credential_reference.strip())
+    )
     eligible = (
         publish_task_is_consistent(task)
         and content_is_consistent(content)
@@ -611,10 +648,7 @@ def claim_publish_task(task_id=None):
         and task.content_version == content.version
         and account.status == SocialAccount.Status.ACTIVE
         and account.publish_mode == SocialAccount.PublishMode.API_AUTO
-        and credential is not None
-        and credential.organization_id == account.organization_id
-        and credential.platform_id == account.platform_id
-        and (credential.expires_at is None or credential.expires_at > now)
+        and (direct_eligible or buffer_eligible)
         and AccountCapability.PUBLISH in resolve_account_capabilities(account.id)
     )
     if not eligible:
@@ -975,13 +1009,23 @@ def _build_official_call(task):
     if not isinstance(consent, dict):
         consent = {}
     connector = get_social_provider_runtime().connector_registry.resolve(task.social_account)
+    if getattr(
+        task.social_account, "provider", SocialAccount.Provider.DIRECT
+    ) == SocialAccount.Provider.BUFFER:
+        connection = getattr(task.social_account, "provider_connection", None)
+        credential_reference = connection.credential_reference if connection else ""
+        provider_account_id = task.social_account.provider_account_id
+    else:
+        credential_reference = (
+            task.social_account.credential.secret_reference
+            if task.social_account.credential else ""
+        )
+        provider_account_id = ""
     return connector, OfficialPublishRequest(
         channel=task.platform.code,
         account_external_id=task.social_account.external_id,
-        credential_reference=(
-            task.social_account.credential.secret_reference
-            if task.social_account.credential else ""
-        ),
+        provider_account_id=provider_account_id,
+        credential_reference=credential_reference,
         payload=payload,
         idempotency_key=str(task.id),
         consent=consent,
@@ -1025,7 +1069,8 @@ def execute_publish_task(task_id):
         return PublishedPost.objects.filter(task_id=task_id).first()
     task, attempt = claimed
     task = PublishTask.objects.select_related(
-        "platform", "platform_content", "social_account", "social_account__credential"
+        "platform", "platform_content", "social_account", "social_account__credential",
+        "social_account__provider_connection",
     ).get(pk=task.pk)
 
     metadata = task.social_account.connector_metadata if isinstance(
@@ -1036,7 +1081,9 @@ def execute_publish_task(task_id):
         connection_kind = "demo_fake"
 
     try:
-        if connection_kind == "official_oauth":
+        if task.social_account.provider == SocialAccount.Provider.BUFFER:
+            connector, request = _build_official_call(task)
+        elif connection_kind == "official_oauth":
             connector, request = _build_official_call(task)
         elif connection_kind == "demo_fake" or getattr(settings, "PUBLISHING_MOCK_ENABLED", False):
             connector, request = _build_mock_call(task, attempt.number)
@@ -1054,6 +1101,12 @@ def execute_publish_task(task_id):
         complete_publish_failure(
             task.id, attempt.claim_token,
             PublishResult(succeeded=False, error_code="VALIDATION_REJECTED", error_message=str(exc)),
+        )
+        return None
+    except ConnectorConfigurationRequired:
+        complete_publish_failure(
+            task.id, attempt.claim_token,
+            PublishResult(succeeded=False, error_code="PUBLISH_NOT_ELIGIBLE"),
         )
         return None
     except Exception:

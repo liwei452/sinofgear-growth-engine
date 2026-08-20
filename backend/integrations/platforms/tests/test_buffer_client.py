@@ -342,3 +342,101 @@ def test_rate_limit_parse_failure_returns_empty_windows():
     result = parse_rate_limits({"ratelimit": "garbage;no;valid;fields"})
     assert result.windows == ()
     assert result.retry_after_seconds is None
+
+
+def test_create_post_uses_exact_mutation_and_variables_without_retry():
+    transport = RecordingTransport(HttpResponse(200, {"data": {"createPost": {
+        "__typename": "PostActionSuccess",
+        "post": {
+            "id": "post-1", "channelId": "channel-1", "status": "scheduled",
+            "dueAt": None, "createdAt": "2026-08-20T00:00:00Z",
+        },
+    }}}, {}))
+    post_input = {
+        "channelId": "channel-1", "text": "Hello",
+        "schedulingType": "automatic", "mode": "shareNow",
+    }
+
+    result = _client(transport).create_post(TOKEN, post_input)
+
+    assert result.data["createPost"]["post"]["id"] == "post-1"
+    assert len(transport.requests) == 1
+    request = transport.requests[0]
+    assert request["method"] == "POST"
+    assert request["url"] == BUFFER_GRAPHQL_ENDPOINT
+    assert request["json"]["variables"] == {"input": post_input}
+    query = request["json"]["query"]
+    assert "mutation BufferCreatePost($input: CreatePostInput!)" in query
+    assert "createPost(input: $input)" in query
+    for field in ("__typename", "id", "channelId", "status", "dueAt", "createdAt", "message"):
+        assert field in query
+
+
+@pytest.mark.parametrize(
+    "response,error",
+    [
+        (None, TimeoutError("sent then timed out")),
+        (HttpResponse(500, {}, {}), None),
+        (HttpResponse(200, {}, {}), None),
+        (HttpResponse(200, {"errors": [{"extensions": {"code": "UNEXPECTED"}}]}, {}), None),
+    ],
+)
+def test_create_post_ambiguous_transport_and_contract_failures_are_outcome_unknown(
+    response, error,
+):
+    transport = RecordingTransport(response=response, error=error)
+
+    with pytest.raises(BufferApiError) as exc_info:
+        _client(transport).create_post(TOKEN, {"channelId": "channel-1"})
+
+    assert exc_info.value.code is BufferErrorCode.OUTCOME_UNKNOWN
+    assert len(transport.requests) == 1
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_create_post_authentication_failure_is_explicit(status):
+    transport = RecordingTransport(HttpResponse(status, {}, {}))
+
+    with pytest.raises(BufferApiError) as exc_info:
+        _client(transport).create_post(TOKEN, {"channelId": "channel-1"})
+
+    assert exc_info.value.code is BufferErrorCode.AUTHENTICATION_REQUIRED
+
+
+def test_create_post_rate_limit_preserves_retry_after():
+    transport = RecordingTransport(
+        HttpResponse(429, {}, {"retry-after": "37"})
+    )
+
+    with pytest.raises(BufferApiError) as exc_info:
+        _client(transport).create_post(TOKEN, {"channelId": "channel-1"})
+
+    assert exc_info.value.code is BufferErrorCode.RATE_LIMITED
+    assert exc_info.value.retry_after_seconds == 37
+
+
+def test_create_post_graphql_rate_limit_preserves_retry_after():
+    transport = RecordingTransport(HttpResponse(
+        200,
+        {"errors": [{"extensions": {"code": "RATE_LIMIT_EXCEEDED"}}]},
+        {"retry-after": "29"},
+    ))
+
+    with pytest.raises(BufferApiError) as exc_info:
+        _client(transport).create_post(TOKEN, {"channelId": "channel-1"})
+
+    assert exc_info.value.code is BufferErrorCode.RATE_LIMITED
+    assert exc_info.value.retry_after_seconds == 29
+
+
+def test_create_post_graphql_not_found_is_explicit_channel_failure():
+    transport = RecordingTransport(HttpResponse(
+        200,
+        {"errors": [{"extensions": {"code": "NOT_FOUND"}}]},
+        {},
+    ))
+
+    with pytest.raises(BufferApiError) as exc_info:
+        _client(transport).create_post(TOKEN, {"channelId": "missing-channel"})
+
+    assert exc_info.value.code is BufferErrorCode.CHANNEL_NOT_FOUND

@@ -12,6 +12,7 @@ from .buffer_types import (
     BufferOrganization,
     BufferProbeResult,
 )
+from .base import OfficialPublishRequest, OfficialPublishResult
 
 
 SUPPORTED_BUFFER_SERVICES = {
@@ -80,6 +81,30 @@ class BufferConnector:
             rate_limit=channels_response.rate_limit,
         )
 
+    def publish(self, request: OfficialPublishRequest) -> OfficialPublishResult:
+        try:
+            token = self._resolve_publish_token(request)
+            post_input = _build_post_input(request)
+        except BufferApiError as error:
+            return _publish_failure(error)
+        try:
+            response = self._client.create_post(token, post_input)
+        except BufferApiError as error:
+            return _publish_failure(error)
+        return _parse_publish_result(response.data, request.provider_account_id)
+
+    def _resolve_publish_token(self, request: OfficialPublishRequest) -> str:
+        reference = request.credential_reference
+        if not isinstance(reference, str) or not reference.strip():
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        try:
+            token = self._token_store.resolve(reference).access_token
+        except Exception:
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED) from None
+        if not isinstance(token, str) or not token.strip():
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        return token
+
     def _resolve(self, request: BufferDiscoveryRequest) -> tuple[str, str]:
         expected_organization_id = request.expected_organization_id
         if not isinstance(expected_organization_id, str) or not expected_organization_id.strip():
@@ -112,6 +137,132 @@ def _discovery_failure(error: BufferApiError) -> BufferDiscoveryResult:
         ok=False,
         error_code=error.code.value,
         error_message=error.message,
+    )
+
+
+_SAFE_PUBLISH_MESSAGES = {
+    "VALIDATION_REJECTED": "Buffer 发布内容未通过校验。",
+    "BUFFER_PROVIDER_CAPACITY": "Buffer 发布容量已达到限制。",
+    "BUFFER_CHANNEL_NOT_FOUND": "Buffer 渠道不存在或已失效。",
+    "PUBLISH_NOT_ELIGIBLE": "Buffer 发布连接尚未完成配置。",
+    "REAUTHORIZATION_REQUIRED": "Buffer 授权已失效，请重新连接。",
+    "RATE_LIMITED": "Buffer 请求过于频繁，请稍后重试。",
+    "OUTCOME_UNKNOWN": "Buffer 提交结果无法确定，请先对账后再处理。",
+}
+
+
+def _publish_failure(error: BufferApiError) -> OfficialPublishResult:
+    mapping = {
+        BufferErrorCode.CONFIGURATION_REQUIRED: "PUBLISH_NOT_ELIGIBLE",
+        BufferErrorCode.AUTHENTICATION_REQUIRED: "REAUTHORIZATION_REQUIRED",
+        BufferErrorCode.RATE_LIMITED: "RATE_LIMITED",
+        BufferErrorCode.OUTCOME_UNKNOWN: "OUTCOME_UNKNOWN",
+        BufferErrorCode.INVALID_INPUT: "VALIDATION_REJECTED",
+        BufferErrorCode.CHANNEL_NOT_FOUND: "BUFFER_CHANNEL_NOT_FOUND",
+    }
+    code = mapping.get(error.code, "OUTCOME_UNKNOWN")
+    return OfficialPublishResult(
+        status="FAILED",
+        error_code=code,
+        error_message=_SAFE_PUBLISH_MESSAGES[code],
+        retryable=code == "RATE_LIMITED",
+        retry_after_seconds=error.retry_after_seconds,
+    )
+
+
+def _require_publish_text(value) -> str:
+    if not isinstance(value, str) or not (value := value.strip()) or len(value) > 50_000:
+        raise BufferApiError(BufferErrorCode.INVALID_INPUT)
+    return value
+
+
+def _optional_public_https_url(value) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not (value := value.strip()):
+        raise BufferApiError(BufferErrorCode.INVALID_INPUT)
+    if len(value) > 2_048 or not value.startswith("https://"):
+        raise BufferApiError(BufferErrorCode.INVALID_INPUT)
+    return value
+
+
+def _build_post_input(request: OfficialPublishRequest) -> dict:
+    channel_id = request.provider_account_id
+    if (
+        not isinstance(channel_id, str)
+        or not (channel_id := channel_id.strip())
+        or len(channel_id) > MAX_FIELD_LENGTH
+        or not isinstance(request.payload, dict)
+    ):
+        raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+    channel = (request.channel or "").strip().upper()
+    text_field = {
+        "LINKEDIN": "commentary",
+        "FACEBOOK": "message",
+        "INSTAGRAM": "caption",
+    }.get(channel)
+    if text_field is None:
+        raise BufferApiError(BufferErrorCode.INVALID_INPUT)
+    result = {
+        "channelId": channel_id,
+        "text": _require_publish_text(request.payload.get(text_field)),
+        "schedulingType": "automatic",
+        "mode": "shareNow",
+    }
+    image_url = _optional_public_https_url(request.payload.get("image_url"))
+    video_url = _optional_public_https_url(request.payload.get("video_url"))
+    if image_url and video_url:
+        raise BufferApiError(BufferErrorCode.INVALID_INPUT)
+    if channel in {"LINKEDIN", "FACEBOOK"} and video_url:
+        raise BufferApiError(BufferErrorCode.INVALID_INPUT)
+    if channel == "INSTAGRAM" and not (image_url or video_url):
+        raise BufferApiError(BufferErrorCode.INVALID_INPUT)
+    if image_url:
+        result["assets"] = [{"image": {"url": image_url}}]
+    elif video_url:
+        result["assets"] = [{"video": {"url": video_url}}]
+    return result
+
+
+def _parse_publish_result(data: dict, expected_channel_id: str) -> OfficialPublishResult:
+    create_post = data.get("createPost") if isinstance(data, dict) else None
+    if not isinstance(create_post, dict):
+        return _unknown_publish_result()
+    typename = create_post.get("__typename")
+    if typename == "PostActionSuccess":
+        post = create_post.get("post")
+        if not isinstance(post, dict):
+            return _unknown_publish_result()
+        post_id = post.get("id")
+        channel_id = post.get("channelId")
+        if (
+            not isinstance(post_id, str)
+            or not (post_id := post_id.strip())
+            or len(post_id) > MAX_FIELD_LENGTH
+            or channel_id != expected_channel_id
+        ):
+            return _unknown_publish_result()
+        return OfficialPublishResult(status="SUBMITTED", submission_id=post_id)
+    error_mapping = {
+        "InvalidInputError": "VALIDATION_REJECTED",
+        "LimitReachedError": "BUFFER_PROVIDER_CAPACITY",
+        "NotFoundError": "BUFFER_CHANNEL_NOT_FOUND",
+    }
+    code = error_mapping.get(typename)
+    if code is None:
+        return _unknown_publish_result()
+    return OfficialPublishResult(
+        status="FAILED",
+        error_code=code,
+        error_message=_SAFE_PUBLISH_MESSAGES[code],
+    )
+
+
+def _unknown_publish_result() -> OfficialPublishResult:
+    return OfficialPublishResult(
+        status="FAILED",
+        error_code="OUTCOME_UNKNOWN",
+        error_message=_SAFE_PUBLISH_MESSAGES["OUTCOME_UNKNOWN"],
     )
 
 

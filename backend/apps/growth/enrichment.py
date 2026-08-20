@@ -18,7 +18,7 @@ class CandidateLicenseConfirmationRequired(Exception):
 
 def has_confirmed_candidate_license(candidate: DiscoveryCandidate) -> bool:
     contract = str(candidate.source_governance.get("license_contract", "")).strip()
-    return bool(contract) and "待人工确认" not in contract
+    return "待人工确认" not in contract
 
 
 @transaction.atomic

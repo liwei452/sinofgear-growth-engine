@@ -14,7 +14,7 @@ async function expectNoSeededDemo(page: Page) {
   await expect(page.getByText(/Demo \/ Fake|Demo\/Fake/)).toHaveCount(0)
 }
 
-test("formal workspace stays clean and persists only explicitly recorded data", async ({ page }) => {
+test("formal workspace remains free of seeded demo data while preserving recorded data", async ({ page }) => {
   await login(page)
 
   // Settings stay reachable from the user menu and keep the truthful
@@ -23,31 +23,36 @@ test("formal workspace stays clean and persists only explicitly recorded data", 
   await page.getByRole("menuitem", { name: "设置" }).click()
   await expect(page).toHaveURL(/\/settings\?from=/)
   await expect(page.getByRole("heading", { name: "设置中心" })).toBeVisible()
-  await expect(page.getByText("Fake / 离线演示 · 未启用真实请求")).toBeVisible()
+  await expect(page.getByText("当前不能生成待确认事实")).toBeVisible()
   await page.getByRole("link", { name: "返回工作台" }).click()
   await expect(page).toHaveURL(/\/$/)
 
-  // The dashboard starts empty and shows no seeded demo data.
-  await expect(page.getByRole("heading", { name: "今日待办", level: 1 })).toBeVisible()
-  await expect(page.getByText("没有需要人工处理的事项")).toBeVisible()
+  // Other E2E flows may have recorded real Phase A data in this isolated run.
+  // This audit must remain valid in that state and prove that no demo fixture is
+  // substituted for recorded data.
+  await expect(page.getByRole("heading", { name: "今日", level: 1 })).toBeVisible()
+  await expect(page.locator("main")).toHaveCount(1)
   await expectNoSeededDemo(page)
 
-  // Missions list starts empty; the administrator owns the single creation
-  // entry point and no demo missions are seeded.
+  // Missions may contain work created by an earlier E2E flow, but must never
+  // acquire a seeded demo mission. The administrator keeps the single creation
+  // entry point.
   await page.goto("/missions")
   await expect(page.getByRole("heading", { name: "增长任务" })).toBeVisible()
-  await expect(page.getByText("还没有增长任务")).toBeVisible()
+  await expect(page.locator("main")).toHaveCount(1)
   await expect(page.getByRole("button", { name: "创建增长任务" })).toBeVisible()
   await expectNoSeededDemo(page)
 
   // Attribution stays empty without explicitly recorded results.
   await page.goto("/attribution")
   await expect(page.getByRole("heading", { name: "数据归因" })).toBeVisible()
+  await expect(page.locator("main")).toHaveCount(1)
   await expectNoSeededDemo(page)
 
   // Company facts stay empty until an owner uploads evidence.
   await page.goto("/company")
   await expect(page.getByRole("heading", { name: "我的公司" })).toBeVisible()
+  await expect(page.locator("main")).toHaveCount(1)
   await expect(page.getByText("还没有已保存的公司事实")).toBeVisible()
   await expect(page.getByText("ISO 9001")).toHaveCount(0)
   await expectNoSeededDemo(page)

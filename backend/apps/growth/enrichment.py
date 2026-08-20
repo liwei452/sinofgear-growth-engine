@@ -12,6 +12,15 @@ class CandidateEnrichmentRequired(Exception):
     pass
 
 
+class CandidateLicenseConfirmationRequired(Exception):
+    pass
+
+
+def has_confirmed_candidate_license(candidate: DiscoveryCandidate) -> bool:
+    contract = str(candidate.source_governance.get("license_contract", "")).strip()
+    return "待人工确认" not in contract
+
+
 @transaction.atomic
 def prepare_candidate_enrichment(*, candidate: DiscoveryCandidate):
     locked = DiscoveryCandidate.objects.select_for_update().get(pk=candidate.pk)
@@ -93,6 +102,8 @@ def add_candidate_to_follow_up(*, candidate: DiscoveryCandidate):
         snapshot = CandidateEnrichmentSnapshot.objects.select_for_update().get(candidate=locked)
     except CandidateEnrichmentSnapshot.DoesNotExist as error:
         raise CandidateEnrichmentRequired from error
+    if not has_confirmed_candidate_license(locked):
+        raise CandidateLicenseConfirmationRequired
 
     account, account_created = TargetAccount.objects.get_or_create(
         organization=locked.organization,

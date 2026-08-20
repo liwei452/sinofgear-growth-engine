@@ -22,15 +22,19 @@ test("operator workspace is role-correct across the consolidated pages", async (
   await expectNoSeededDemo(page)
 
   await page.goto("/products")
-  await expect(page.getByRole("heading", { name: "产品库" })).toBeVisible({ timeout: 15000 })
-  await expectNoSeededDemo(page)
+  await expect(page).toHaveURL(/\/\?blocked=administrator/)
 
   await page.goto("/assets")
   await expect(page.getByRole("heading", { name: "素材库" })).toBeVisible()
   await expectNoSeededDemo(page)
 
-  // Legacy workflow URLs now consolidate onto missions.
-  for (const legacy of ["/promotion", "/opportunities", "/reviews", "/publishing-calendar"]) {
+  // Only discontinued legacy URLs consolidate onto missions; the outcome
+  // workspaces remain direct, permission-aware destinations.
+  await page.goto("/promotion")
+  await expect(page.getByRole("heading", { name: "开始推广" })).toBeVisible()
+  await page.goto("/opportunities")
+  await expect(page.getByRole("heading", { name: "客户机会" })).toBeVisible()
+  for (const legacy of ["/reviews", "/publishing-calendar"]) {
     await page.goto(legacy)
     await expect(page).toHaveURL(/\/missions$/)
   }

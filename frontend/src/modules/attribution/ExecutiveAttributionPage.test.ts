@@ -1,5 +1,6 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
 import { render, screen } from "@testing-library/vue"
+import userEvent from "@testing-library/user-event"
 import { createMemoryHistory, createRouter } from "vue-router"
 import { afterEach, expect, it, vi } from "vitest"
 
@@ -75,4 +76,20 @@ it("leads with confirmed outcomes and keeps impressions under diagnostics", asyn
   expect(screen.getByText("900")).toBeVisible()
   expect(screen.queryByRole("button", { name: "录入指标" })).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "API 设置" })).not.toBeInTheDocument()
+})
+
+it("offers an accessible retry when attribution cannot be read", async () => {
+  let attempts = 0
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    const body = String(input).includes("/attribution") && attempts++ === 0 ? { detail: "Forbidden" } : String(input).includes("/attribution") ? attribution : [mission]
+    return Promise.resolve(new Response(JSON.stringify(body), { status: String(input).includes("/attribution") && attempts === 1 ? 403 : 200, headers: { "Content-Type": "application/json" } }))
+  }))
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/attribution", component: ExecutiveAttributionPage }] })
+  await router.push("/attribution")
+  render(ExecutiveAttributionPage, { global: { plugins: [[VueQueryPlugin, { queryClient: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }], router] } })
+  await router.isReady()
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("归因数据暂时无法读取")
+  await userEvent.setup().click(screen.getByRole("button", { name: "重新读取归因" }))
+  expect(await screen.findByText("有效回复")).toBeVisible()
 })

@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process"
 import { randomBytes } from "node:crypto"
 import { existsSync, realpathSync } from "node:fs"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join, resolve } from "node:path"
@@ -37,6 +37,20 @@ export async function removeOwnedRunRoot(candidate, temporaryDirectory = tmpdir(
 
 export function generateOwnershipSecret() {
   return randomBytes(32).toString("hex")
+}
+
+export function parseVisualAuditArguments(args, auditRoot) {
+  if (args[0] !== "--visual-audit") return null
+  if (args.length !== 2) throw new Error("Visual audit requires one bounded output directory.")
+  const root = resolve(auditRoot)
+  const auditDirectory = resolve(args[1])
+  if (dirname(auditDirectory) !== root || !["initial", "confirmation"].includes(basename(auditDirectory))) {
+    throw new Error("Visual audit output must be the initial or confirmation directory directly inside the SDD audit root.")
+  }
+  return {
+    auditDirectory,
+    playwrightArgs: ["business-outcome-navigation.spec.ts", "--grep", "visual audit"],
+  }
 }
 
 export function buildE2EEnvironment(runRoot, { apiOrigin, webOrigin, browser, ownershipSecret }) {
@@ -214,12 +228,20 @@ async function main() {
   const webPort = await reservePort()
   const apiOrigin = `http://127.0.0.1:${apiPort}`
   const webOrigin = `http://127.0.0.1:${webPort}`
-  const environment = buildE2EEnvironment(runRoot, {
-    apiOrigin,
-    webOrigin,
-    browser,
-    ownershipSecret: generateOwnershipSecret(),
-  })
+  const visualAudit = parseVisualAuditArguments(
+    process.argv.slice(2),
+    join(repositoryDir, ".superpowers", "sdd", "2026-08-20-business-outcome-navigation-ia", "visual-audit"),
+  )
+  if (visualAudit) await mkdir(visualAudit.auditDirectory, { recursive: true })
+  const environment = {
+    ...buildE2EEnvironment(runRoot, {
+      apiOrigin,
+      webOrigin,
+      browser,
+      ownershipSecret: generateOwnershipSecret(),
+    }),
+    ...(visualAudit ? { SINO_VISUAL_AUDIT_DIR: visualAudit.auditDirectory } : {}),
+  }
   const children = []
   let cleanupPromise
   const cleanup = () => {
@@ -256,7 +278,7 @@ async function main() {
     ])
     const playwright = localNodeInvocation(
       ["@playwright", "test", "cli.js"],
-      ["test", ...process.argv.slice(2)],
+      ["test", ...(visualAudit?.playwrightArgs ?? process.argv.slice(2))],
     )
     await run(playwright.command, playwright.args, {
       cwd: frontendDir, env: environment, children,

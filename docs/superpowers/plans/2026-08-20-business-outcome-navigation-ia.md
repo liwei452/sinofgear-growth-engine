@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace SinoFGear's system-object navigation with five business-outcome workspaces while preserving every existing API, permission, safety check, stored record, and legacy deep link.
+**Goal:** Replace SinoFGear's system-object navigation with five business-outcome workspaces while preserving permissions, safety checks, stored records, and legacy deep links; the approved design-spec exceptions permit only the organization-scoped market-recommendation read endpoint and the minimal persisted candidate workflow read model.
 
 **Architecture:** Keep Vue Router, TanStack Query, and existing API modules as the data and behavior owners. Add route-owned presentation pages for Promotion, Opportunities, Content & Publishing, and Results; compose existing mission, growth, content, publishing, and attribution capabilities behind these pages. Keep `/missions` and all current secondary routes as compatible deep links, but remove them from primary navigation.
 
@@ -14,7 +14,7 @@
 
 - Primary navigation contains exactly: `今日`, `开始推广`, `客户机会`, `内容与发布`, `效果`.
 - Sidebar utilities contain `我的公司`, `帮助`, `设置`; identity/session remains in the user menu.
-- Preserve all backend models, APIs, migrations, permissions, AI behavior, OAuth, publishing, discovery, tracking, CRM, storage, and security behavior.
+- Preserve all backend models, migrations, permissions, AI behavior, OAuth, publishing, discovery, tracking, CRM, storage, and security behavior. Do not add API surface beyond the two minimal read-only exceptions named in the design spec, and do not expose candidate evidence links through the discovery profile.
 - Preserve manual approval before outreach or publication.
 - Do not create fake customers, opportunities, contacts, scores, charts, dates, metrics, readiness, notifications, or AI results.
 - Missing values render as unavailable or not yet recorded, never as zero unless the stored value is zero.

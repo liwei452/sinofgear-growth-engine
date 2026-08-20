@@ -29,10 +29,13 @@ const attributionQuery = useQuery({
 })
 
 const attribution = computed(() => attributionQuery.data.value)
+function observed(value: number | string | null | undefined): string {
+  return value === null || value === undefined || value === "" ? "尚未记录" : String(value)
+}
 </script>
 
 <template>
-  <main class="attribution-page">
+  <section class="attribution-page">
     <header class="attribution-hero">
       <div>
         <p class="eyebrow">EXECUTIVE ATTRIBUTION</p>
@@ -53,18 +56,19 @@ const attribution = computed(() => attributionQuery.data.value)
 
     <div v-if="!selectedMissionId" class="empty">请选择一个增长任务查看归因。</div>
     <div v-else-if="attributionQuery.isLoading.value" class="empty">正在读取归因…</div>
+    <div v-else-if="attributionQuery.isError.value" class="empty" role="alert"><p>归因数据暂时无法读取，因此不会显示未经证实的结果。</p><button class="button button-quiet" type="button" @click="attributionQuery.refetch()">重新读取归因</button></div>
     <template v-else-if="attribution">
       <section class="outcome-grid">
-        <div class="metric"><span class="chip">确定</span><strong>{{ attribution.outcomes.confirmed_replies }}</strong><em>有效回复</em></div>
-        <div class="metric"><span class="chip">确定</span><strong>{{ attribution.outcomes.confirmed_rfqs }}</strong><em>RFQ</em></div>
-        <div class="metric"><span class="chip">确定</span><strong>{{ attribution.outcomes.won_revenue.amount }}</strong><em>收入</em></div>
-        <div class="metric"><span class="chip">{{ attribution.availability.email === "CONNECTED" ? "确定" : "未接通" }}</span><strong>{{ attribution.outcomes.emails_sent ?? "—" }}</strong><em>邮件发送</em></div>
-        <div class="metric"><span class="chip">成本</span><strong>{{ attribution.outcomes.cost_per_result ?? "—" }}</strong><em>单位成果成本</em></div>
+        <div class="metric"><span class="chip">{{ attribution.outcomes.confirmed_replies === null ? "未知" : "确定" }}</span><strong>{{ observed(attribution.outcomes.confirmed_replies) }}</strong><em>有效回复</em></div>
+        <div class="metric"><span class="chip">{{ attribution.outcomes.confirmed_rfqs === null ? "未知" : "确定" }}</span><strong>{{ observed(attribution.outcomes.confirmed_rfqs) }}</strong><em>RFQ</em></div>
+        <div class="metric"><span class="chip">{{ attribution.outcomes.won_revenue?.amount == null ? "未知" : "确定" }}</span><strong>{{ observed(attribution.outcomes.won_revenue?.amount) }}</strong><em>收入</em></div>
+        <div class="metric"><span class="chip">{{ attribution.availability.email === "CONNECTED" ? "确定" : "未接通" }}</span><strong>{{ observed(attribution.outcomes.emails_sent) }}</strong><em>邮件发送</em></div>
+        <div class="metric"><span class="chip">成本</span><strong>{{ observed(attribution.outcomes.cost_per_result) }}</strong><em>单位成果成本</em></div>
       </section>
 
       <section class="diagnostics">
         <h2>辅助诊断</h2>
-        <div class="metric"><strong>{{ attribution.diagnostics.impressions }}</strong><em>曝光</em></div>
+        <div class="metric"><strong>{{ observed(attribution.diagnostics.impressions) }}</strong><em>曝光</em></div>
       </section>
 
       <button class="button button-quiet" type="button" @click="showEvidence = true">查看依据</button>
@@ -75,7 +79,7 @@ const attribution = computed(() => attributionQuery.data.value)
         @close="showEvidence = false"
       />
     </template>
-  </main>
+  </section>
 </template>
 
 <style scoped>

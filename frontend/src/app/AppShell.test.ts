@@ -8,7 +8,7 @@ import { afterEach, expect, it, vi } from "vitest"
 import { currentUserQueryOptions } from "../modules/auth/auth"
 import AppShell from "./AppShell.vue"
 
-const Page = defineComponent({ template: "<h1>首页内容</h1>" })
+const Page = defineComponent({ template: "<h1>Page content</h1>" })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
 function useViewport() {
@@ -26,24 +26,31 @@ function useViewport() {
 
 async function renderShell({
   role = "OPERATOR",
-  permissions = ["missions.read", "leads.read", "content.read"],
+  permissions = ["missions.read", "leads.manage", "publishing.read"],
 } = {}) {
   useViewport()
   const history = createMemoryHistory()
   const router = createRouter({
     history,
-    routes: [
-      {
-        path: "/",
-        component: AppShell,
-        children: [{ path: "", component: Page, meta: { title: "今日待办" } }],
-      },
-    ],
+    routes: [{
+      path: "/",
+      component: AppShell,
+      children: [
+        { path: "", component: Page, meta: { title: "Today" } },
+        { path: "promotion", component: Page },
+        { path: "opportunities", component: Page },
+        { path: "content-factory", component: Page },
+        { path: "analytics", component: Page },
+        { path: "company", component: Page },
+        { path: "help", component: Page },
+        { path: "settings", component: Page },
+      ],
+    }],
   })
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   queryClient.setQueryData(currentUserQueryOptions().queryKey, {
     user: { id: 1, username: "operator" },
-    organization: { id: "org-1", name: "示例组织", slug: "demo" },
+    organization: { id: "org-1", name: "Demo organization", slug: "demo" },
     membership: { id: "m1", role, status: "ACTIVE", permissions },
   })
   render(Root, { global: { plugins: [[VueQueryPlugin, { queryClient }], router] } })
@@ -56,25 +63,23 @@ afterEach(() => {
   document.cookie = "csrftoken=; Max-Age=0; path=/"
 })
 
-it("shows the five ordinary destinations and hides legacy module links", async () => {
+it("hides administrator utilities from an operator", async () => {
   await renderShell()
 
-  expect(screen.getByRole("link", { name: "今日待办" })).toHaveAttribute("href", "/")
-  expect(screen.getByRole("link", { name: "增长任务" })).toHaveAttribute("href", "/missions")
-  expect(screen.getByRole("link", { name: "数据归因" })).toHaveAttribute("href", "/attribution")
-  expect(screen.queryByRole("link", { name: "客户与商机" })).not.toBeInTheDocument()
-  expect(screen.queryByRole("link", { name: "内容与素材" })).not.toBeInTheDocument()
-  expect(screen.queryByRole("link", { name: "Agent 工作台" })).not.toBeInTheDocument()
-  expect(screen.queryByRole("link", { name: "审核中心" })).not.toBeInTheDocument()
+  expect(screen.getAllByRole("link").filter((link) =>
+    ["\u4eca\u65e5", "\u5f00\u59cb\u63a8\u5e7f", "\u5ba2\u6237\u673a\u4f1a", "\u5185\u5bb9\u4e0e\u53d1\u5e03", "\u6548\u679c"].includes(link.textContent ?? ""),
+  )).toHaveLength(5)
+  expect(screen.getByRole("link", { name: "\u5e2e\u52a9" })).toHaveAttribute("href", "/help")
+  expect(screen.queryByRole("link", { name: "\u6211\u7684\u516c\u53f8" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "\u8bbe\u7f6e" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "\u589e\u957f\u4efb\u52a1" })).not.toBeInTheDocument()
 })
 
-it("shows system configuration only to administrators with credential access", async () => {
-  await renderShell({
-    role: "ADMINISTRATOR",
-    permissions: ["missions.read", "leads.read", "content.read", "credentials.manage"],
-  })
+it("shows company and settings utilities to an administrator", async () => {
+  await renderShell({ role: "ADMINISTRATOR" })
 
-  expect(screen.getByRole("link", { name: "系统配置" })).toHaveAttribute("href", "/settings")
+  expect(screen.getByRole("link", { name: "\u6211\u7684\u516c\u53f8" })).toHaveAttribute("href", "/company")
+  expect(screen.getByRole("link", { name: "\u8bbe\u7f6e" })).toHaveAttribute("href", "/settings")
 })
 
 it("opens the user menu and exposes logout", async () => {
@@ -83,7 +88,7 @@ it("opens the user menu and exposes logout", async () => {
   const user = userEvent.setup()
   await renderShell()
 
-  await user.click(screen.getByRole("button", { name: "打开用户菜单" }))
+  await user.click(screen.getByRole("button", { name: "\u6253\u5f00\u7528\u6237\u83dc\u5355" }))
   expect(screen.getByRole("menu")).toBeInTheDocument()
-  expect(screen.getByRole("menuitem", { name: "退出登录" })).toBeInTheDocument()
+  expect(screen.getByRole("menuitem", { name: "\u9000\u51fa\u767b\u5f55" })).toBeInTheDocument()
 })

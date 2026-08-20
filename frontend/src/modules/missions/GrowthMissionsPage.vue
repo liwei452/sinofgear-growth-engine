@@ -23,7 +23,7 @@ function onCreated(): void {
 </script>
 
 <template>
-  <main class="missions-page">
+  <section class="missions-page">
     <header class="missions-hero">
       <div>
         <p class="eyebrow">GROWTH MISSIONS</p>
@@ -82,7 +82,7 @@ function onCreated(): void {
       @cancel="createOpen = false"
       @created="onCreated"
     />
-  </main>
+  </section>
 </template>
 
 <style scoped>

@@ -1,5 +1,6 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
 import { render, screen } from "@testing-library/vue"
+import userEvent from "@testing-library/user-event"
 import { createMemoryHistory, createRouter } from "vue-router"
 import { afterEach, expect, it, vi } from "vitest"
 
@@ -57,7 +58,10 @@ const items: WorkItem[] = [
   },
 ]
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  document.cookie = "csrftoken=; Max-Age=0"
+})
 
 it("shows mixed work items with one primary action each", async () => {
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify(items), {
@@ -83,4 +87,30 @@ it("shows mixed work items with one primary action each", async () => {
   expect(screen.getByRole("button", { name: "批准并排期" })).toBeVisible()
   expect(screen.getByText("平台连接失效")).toBeVisible()
   expect(screen.queryByRole("link", { name: "先去审核中心" })).not.toBeInTheDocument()
+})
+
+it("announces a completed work-item action before refreshing the dashboard records", async () => {
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify(items), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  }))))
+  document.cookie = "csrftoken=test"
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: "/", component: TodayWorkInbox },
+      { path: "/missions", component: { template: "<p>missions</p>" } },
+    ],
+  })
+  await router.push("/")
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(TodayWorkInbox, {
+    global: { plugins: [[VueQueryPlugin, { queryClient }], router] },
+  })
+  await router.isReady()
+
+  await userEvent.click(await screen.findByRole("button", { name: "批准并发送" }))
+
+  expect(await screen.findByText("已完成；相关任务和机会状态已更新。"))
+    .toHaveAttribute("aria-live", "polite")
 })

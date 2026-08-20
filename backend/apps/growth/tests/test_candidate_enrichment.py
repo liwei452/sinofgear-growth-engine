@@ -198,3 +198,42 @@ def test_prepared_candidate_can_be_added_to_follow_up_without_inventing_intent(o
     assert OutreachDraft.objects.filter(organization=organization, account=account).count() == 1
     assert draft.data["delivery"] == "NEVER_SENT"
     assert "Jakarta Drives" in draft.data["English draft"]
+
+
+def test_pending_candidate_list_license_blocks_follow_up_and_contact_draft(organization):
+    candidate = _candidate(organization)
+    candidate.source_governance["license_contract"] = "待人工确认使用范围"
+    candidate.save(update_fields=["source_governance", "updated_at"])
+    client = _client(organization, suffix="pending-license")
+    client.post(f"/api/v1/growth/enrichment/candidates/{candidate.id}/prepare", {}, format="json")
+
+    follow_up = client.post(f"/api/v1/growth/enrichment/candidates/{candidate.id}/follow-up", {}, format="json")
+
+    assert follow_up.status_code == 409
+    assert follow_up.data["code"] == "CANDIDATE_LICENSE_CONFIRMATION_REQUIRED"
+    assert TargetAccount.objects.filter(organization=organization).count() == 0
+    assert FollowUp.objects.filter(organization=organization).count() == 0
+
+
+def test_discovery_profile_preserves_minimum_workflow_read_model_without_evidence_contract(organization):
+    candidate = _candidate(organization)
+    snapshot = CandidateEnrichmentSnapshot.objects.create(
+        organization=organization,
+        candidate=candidate,
+        mode="WEBSITE_PUBLIC",
+        evidence_envelope={"source_url": "https://jakarta.example.invalid/evidence"},
+    )
+    client = _client(organization, suffix="summary-boundary")
+    follow_up = client.post(f"/api/v1/growth/enrichment/candidates/{candidate.id}/follow-up", {}, format="json")
+    assert follow_up.status_code == 201
+    snapshot.refresh_from_db()
+
+    summary = client.get("/api/v1/growth/discovery/profile")
+
+    item = summary.data["enrichment_candidates"][0]
+    assert item["workflow"] == {
+        "account_id": follow_up.data["account_id"],
+        "follow_up_status": "OPEN",
+        "draft": None,
+    }
+    assert "evidence_links" not in item

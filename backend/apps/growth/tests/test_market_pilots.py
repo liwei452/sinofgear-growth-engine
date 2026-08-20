@@ -198,3 +198,61 @@ def test_market_radar_profiles_are_persistent_and_can_move_through_five_stages()
     chile.status = "SMALL_PILOT"
     chile.save(update_fields=["status", "updated_at"])
     assert market_profiles_for(organization)[2].status == "SMALL_PILOT"
+
+
+@pytest.mark.django_db
+def test_market_recommendations_are_read_only_and_organization_scoped():
+    organization = Organization.objects.create(name="Recommendation reader", slug="recommendation-reader")
+    other = Organization.objects.create(name="Other recommendation reader", slug="other-recommendation-reader")
+    role = Role.objects.create_operator()
+    user = get_user_model().objects.create_user(username="recommendation-reader", password="password")
+    Membership.objects.create(user=user, organization=organization, role=role)
+    ours = market_profiles_for(organization)[0]
+    other_profile = market_profiles_for(other)[0]
+    ours.is_watched = True
+    ours.save(update_fields=["is_watched", "updated_at"])
+    client = APIClient()
+    assert client.login(username=user.username, password="password")
+
+    response = client.get("/api/v1/growth/market-recommendations")
+
+    assert response.status_code == 200
+    assert response.data["markets"]
+    returned = next(item for item in response.data["markets"] if item["country_code"] == ours.country_code)
+    assert set(response.data) == {"markets"}
+    assert set(returned) == {
+        "country_code", "country_label", "is_demo", "recommendation_reasons",
+    }
+    assert MarketCountryProfile.objects.get(pk=other_profile.pk).is_watched is False
+    assert returned["recommendation_reasons"]
+    assert MarketCountryProfile.objects.filter(organization=organization).count() == 21
+
+
+@pytest.mark.django_db
+def test_market_recommendations_do_not_materialize_profiles_for_an_empty_organization():
+    organization = Organization.objects.create(name="Empty recommendation reader", slug="empty-recommendation-reader")
+    role = Role.objects.create_operator()
+    user = get_user_model().objects.create_user(username="empty-recommendation-reader", password="password")
+    Membership.objects.create(user=user, organization=organization, role=role)
+    client = APIClient()
+    assert client.login(username=user.username, password="password")
+
+    response = client.get("/api/v1/growth/market-recommendations")
+
+    assert response.status_code == 200
+    assert response.data == {"markets": []}
+    assert MarketCountryProfile.objects.filter(organization=organization).count() == 0
+
+
+@pytest.mark.django_db
+def test_market_recommendations_require_leads_read_permission():
+    organization = Organization.objects.create(name="Restricted recommendation reader", slug="restricted-recommendation-reader")
+    user = get_user_model().objects.create_user(username="restricted-recommendation-reader", password="password")
+    Membership.objects.create(user=user, organization=organization, role=Role.objects.create_read_only())
+    client = APIClient()
+    assert client.login(username=user.username, password="password")
+
+    response = client.get("/api/v1/growth/market-recommendations")
+
+    assert response.status_code == 403
+    assert MarketCountryProfile.objects.filter(organization=organization).count() == 0

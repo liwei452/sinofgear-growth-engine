@@ -1,5 +1,6 @@
 import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query"
 import { render, screen, within } from "@testing-library/vue"
+import userEvent from "@testing-library/user-event"
 import { createMemoryHistory, createRouter } from "vue-router"
 import { afterEach, expect, it, vi } from "vitest"
 
@@ -40,15 +41,15 @@ it("shows only real permission-backed destinations and truthful unconfigured sta
   await renderSettings("OPERATOR", ["products.read", "assets.read", "publishing.read"])
 
   expect(screen.getByRole("heading", { name: "设置中心" })).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "公司资料" })).toHaveAttribute("href", "/company")
-  expect(screen.getByRole("link", { name: "产品库" })).toHaveAttribute("href", "/products")
-  expect(screen.getByRole("link", { name: "素材与资料理解" })).toHaveAttribute("href", "/assets")
-  expect(screen.getByRole("link", { name: "渠道账户" })).toHaveAttribute("href", "/platform-accounts")
-  expect(screen.getByRole("link", { name: "内容审核与发布" })).toHaveAttribute("href", "/missions")
+  expect(screen.getAllByTestId("settings-primary-group")).toHaveLength(4)
+  expect(screen.queryByRole("button", { name: "展开高级设置" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "查看资料与事实" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "渠道账户" })).not.toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "内容审核与发布" })).toHaveAttribute("href", "/content-factory")
   expect(await screen.findByText("尚未添加渠道账户；手工发布包仍可用")).toBeInTheDocument()
-  expect(await screen.findByText("Fake / 离线演示 · 未启用真实请求")).toBeInTheDocument()
+  expect(await screen.findByText("当前不能生成待确认事实")).toBeInTheDocument()
 
-  const crm = screen.getByRole("region", { name: "CRM与通知" })
+  const crm = screen.getByRole("region", { name: "通知与 CRM" })
   expect(within(crm).getByText("尚未配置")).toBeInTheDocument()
   expect(within(crm).queryByRole("button")).not.toBeInTheDocument()
   expect(within(crm).queryByRole("link")).not.toBeInTheDocument()
@@ -56,14 +57,26 @@ it("shows only real permission-backed destinations and truthful unconfigured sta
   expect(screen.queryByText(/secret|api[_ -]?key/i)).not.toBeInTheDocument()
 })
 
-it("shows a configured real product provider without exposing a key", async () => {
+it("keeps advanced settings collapsed until an administrator requests them", async () => {
+  await renderSettings("ADMINISTRATOR", ["knowledge.read", "missions.read"])
+
+  const user = userEvent.setup()
+  const toggle = screen.getByRole("button", { name: "展开高级设置" })
+  expect(toggle).toHaveAttribute("aria-expanded", "false")
+  expect(screen.queryByRole("region", { name: "高级管理" })).not.toBeInTheDocument()
+  await user.click(toggle)
+  expect(toggle).toHaveAttribute("aria-expanded", "true")
+  expect(screen.getByRole("region", { name: "高级管理" })).toBeInTheDocument()
+})
+
+it("shows the business consequence of a configured product provider without exposing technical details", async () => {
   await renderSettings("OPERATOR", [], [], {
     mode: "CONFIGURED_AI", provider_label: "DeepSeek 官方 API", model: "deepseek-chat",
     configured: true, real_requests_enabled: true,
   })
 
-  expect(await screen.findByText("DeepSeek 官方 API · deepseek-chat · 已启用真实请求")).toBeInTheDocument()
-  expect(document.body.textContent).not.toMatch(/api[_ -]?key|secret|bearer/i)
+  expect(await screen.findByText("可生成待确认事实")).toBeInTheDocument()
+  expect(document.body.textContent).not.toMatch(/deepseek|api[_ -]?key|secret|bearer/i)
 })
 
 it("summarizes saved channel accounts without claiming a real connection", async () => {
@@ -73,7 +86,7 @@ it("summarizes saved channel accounts without claiming a real connection", async
     { id: "old", platform_id: "facebook", display_name: "Facebook", publish_mode: "API_AUTO", status: "INACTIVE", effective_capabilities: ["PUBLISH"], credential_configured: true },
   ])
 
-  const channels = screen.getByRole("region", { name: "渠道与发布" })
+  const channels = screen.getByRole("region", { name: "推广与发布连接" })
   expect(await within(channels).findByText("2 个有效渠道账户，其中 1 个已配置接口凭据")).toBeInTheDocument()
   expect(within(channels).queryByText(/发布成功|已连接/)).not.toBeInTheDocument()
 })
@@ -83,6 +96,7 @@ it("shows administrator-only advanced destinations without inventing provider st
     "knowledge.read", "tracking.read", "missions.read", "products.read", "assets.read", "publishing.read",
   ])
 
+  await userEvent.setup().click(screen.getByRole("button", { name: "展开高级设置" }))
   const advanced = screen.getByRole("region", { name: "高级管理" })
   expect(within(advanced).getByRole("link", { name: "AI 模型" })).toHaveAttribute("href", "/settings/ai-model")
   expect(within(advanced).getByRole("link", { name: "知识库" })).toHaveAttribute("href", "/knowledge")

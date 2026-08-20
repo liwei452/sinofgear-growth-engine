@@ -53,6 +53,14 @@ const platformPayloadV2 = computed<PlatformPayloadV2 | null>(() => {
   return props.kind === "platform" && "schema_version" in payload && payload.schema_version === 2
     ? payload as PlatformPayloadV2 : null
 })
+const platformName = computed(() => {
+  const code = platformPayloadV2.value?.platform_code
+  return props.platforms.find((platform) => platform.code === code)?.name ?? code ?? ""
+})
+const evidenceFactIds = computed(() => {
+  const payload = masterPayloadV2.value ?? platformPayloadV2.value
+  return payload?.evidence_fact_ids ?? []
+})
 
 useModalFocus({ backdrop, dialog, initialFocus: title, close: () => emit("close") })
 const has = (permission: string) => props.permissions.includes(permission)
@@ -241,7 +249,8 @@ async function preparePublishing(): Promise<void> {
             <div v-if="masterPayloadV2 || platformPayloadV2"><h3>发布语言</h3><p>{{ (masterPayloadV2 || platformPayloadV2)?.language }}</p></div>
             <div><h3>正文</h3><p class="body-copy">{{ item.payload.body }}</p></div><div><h3>行动号召</h3><p>{{ item.payload.cta }}</p></div>
             <div v-if="'concept_codes' in item.payload"><h3>知识代码</h3><div class="chips"><span v-for="code in item.payload.concept_codes" :key="code">{{ code }}</span></div></div>
-            <div v-if="'platform_code' in item.payload"><h3>平台代码</h3><p>{{ item.payload.platform_code }}</p></div>
+            <div v-if="'platform_code' in item.payload"><h3>平台</h3><p>{{ platformName }}（{{ item.payload.platform_code }}）</p></div>
+            <div v-if="evidenceFactIds.length"><h3>证据</h3><p>{{ evidenceFactIds.join("、") }}</p></div>
             <div v-if="platformPayloadV2?.hashtags.length"><h3>标签</h3><p>{{ platformPayloadV2.hashtags.join(' ') }}</p></div>
             <div v-if="platformPayloadV2?.platform_code === 'TIKTOK'"><h3>TikTok 成片要求</h3><p>{{ platformPayloadV2.duration_seconds }} 秒 · {{ platformPayloadV2.aspect_ratio }}</p><p><strong>目标语言口播：</strong>{{ platformPayloadV2.voiceover }}</p><p><strong>目标语言字幕：</strong>{{ platformPayloadV2.subtitles }}</p></div>
             <details v-if="masterPayloadV2?.internal_translation_zh"><summary>内部中文释义（不会发布）</summary><p>{{ masterPayloadV2.internal_translation_zh }}</p></details>
@@ -254,7 +263,7 @@ async function preparePublishing(): Promise<void> {
 
           <form v-if="rejecting" class="reject-form" @submit.prevent="act('reject')"><label>驳回原因（必填）<textarea v-model="rejectionReason" aria-label="驳回原因（必填）" rows="3" /></label><div class="dialog-actions"><button type="button" @click="rejecting = false">取消</button><button type="submit">确认驳回</button></div></form>
           <section v-if="platformPicker" class="platform-picker"><h3>为已选平台生成版本</h3><p v-if="!selectedPlatforms.length">源需求没有可用平台。</p><button v-for="platform in selectedPlatforms" :key="platform.id" type="button" :disabled="busy" @click="generate(platform)">为 {{ platform.name }} 生成</button></section>
-<footer class="dialog-actions"><button v-if="canRevise" type="button" @click="editing = true">创建修改版</button><button v-if="canSubmit" type="button" @click="act('submit-review')">提交审核</button><button v-if="canReview" class="primary-action" type="button" @click="act('approve')">通过</button><button v-if="canReview" type="button" @click="rejecting = true; alert = ''">驳回</button><button v-if="canArchive" type="button" @click="act('archive')">归档</button><button v-if="canGeneratePlatform" type="button" @click="choosePlatform">生成平台版本</button><button v-if="canPreparePublishing" class="primary-action" type="button" :disabled="busy || packagePrepared" @click="preparePublishing">{{ packagePrepared ? '发布包已生成' : '生成发布包' }}</button><RouterLink v-if="packagePrepared" to="/promotion">前往推广页审核</RouterLink></footer>
+          <footer class="dialog-actions"><button v-if="canRevise" type="button" @click="editing = true">创建修改版</button><button v-if="canSubmit" type="button" @click="act('submit-review')">提交审核</button><button v-if="canReview" class="primary-action" type="button" @click="act('approve')">通过</button><button v-if="canReview" type="button" @click="rejecting = true; alert = ''">驳回</button><button v-if="canArchive" type="button" @click="act('archive')">归档</button><button v-if="canGeneratePlatform" type="button" @click="choosePlatform">生成平台版本</button><button v-if="canPreparePublishing" class="primary-action" type="button" :disabled="busy || packagePrepared" @click="preparePublishing">{{ packagePrepared ? '发布包已生成' : '生成发布包' }}</button><RouterLink v-if="packagePrepared" to="/promotion">前往推广页审核</RouterLink></footer>
         </template>
       </section>
     </div>

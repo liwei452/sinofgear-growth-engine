@@ -6,14 +6,20 @@ import {
 
 import { ApiError } from "../api/client"
 import { currentUserQueryOptions } from "../modules/auth/auth"
+import { ADMINISTRATOR_ROLE } from "./navigation"
 
 export type AppRouteComponents = {
   Login: Component
   Shell: Component
   Dashboard: Component
+  Promotion: Component
+  Opportunities: Component
+  ContentPublishing: Component
+  Results: Component
   Missions: Component
   MissionDetail: Component
   Company: Component
+  Help: Component
   Settings: Component
   AIModelSettings: Component
   MapsDiscovery: Component
@@ -53,19 +59,20 @@ export function safeRedirect(value: unknown): string {
 
 export function createAppRouter(queryClient: QueryClient, options: RouterOptions) {
   const childRoutes: RouteRecordRaw[] = [
+    { path: "help", name: "help", component: options.components.Help, meta: { title: "帮助" } },
     {
       path: "",
       name: "home",
       component: options.components.RoleHome,
       meta: { title: "今天" },
     },
-    { path: "promotion", redirect: { name: "missions" } },
-    { path: "opportunities", redirect: { name: "missions" } },
+    { path: "promotion", name: "promotion", component: options.components.Promotion, meta: { title: "开始推广", requiredPermission: "missions.read" } },
+    { path: "opportunities", name: "opportunities", component: options.components.Opportunities, meta: { title: "客户机会", requiredPermission: "leads.manage" } },
     { path: "agent-approvals", name: "agent-approvals", redirect: { name: "home", query: { view: "approvals" } } },
     { path: "missions", name: "missions", component: options.components.Missions, meta: { title: "增长任务", requiredPermission: "missions.read" } },
     { path: "missions/:missionId", name: "mission-detail", component: options.components.MissionDetail, meta: { title: "增长任务详情", requiredPermission: "missions.read" } },
-    { path: "company", name: "company", component: options.components.Company, meta: { title: "我的公司", requiredRole: "ADMINISTRATOR" } },
-    { path: "settings", name: "settings", component: options.components.Settings, meta: { title: "设置中心", requiredRole: "ADMINISTRATOR" } },
+    { path: "company", name: "company", component: options.components.Company, meta: { title: "我的公司", requiredRole: ADMINISTRATOR_ROLE } },
+    { path: "settings", name: "settings", component: options.components.Settings, meta: { title: "设置中心", requiredRole: ADMINISTRATOR_ROLE } },
     { path: "settings/ai-model", name: "ai-model-settings", component: options.components.AIModelSettings, meta: { title: "AI 模型", requiredRole: "ADMINISTRATOR", requiredPermission: "credentials.manage" } },
     { path: "maps-discovery", name: "maps-discovery", component: options.components.MapsDiscovery, meta: { title: "谷歌地图获客", requiredRole: "ADMINISTRATOR", requiredPermission: "leads.manage" } },
     {
@@ -80,12 +87,12 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
       component: options.components.Knowledge,
       meta: { title: "知识库", requiredPermission: "knowledge.read" },
     },
-    { path: "content-factory", redirect: { name: "missions" } },
+    { path: "content-factory", name: "content-publishing", component: options.components.ContentPublishing, meta: { title: "内容与发布", requiredPermission: "publishing.read" } },
     { path: "reviews", redirect: { name: "missions" } },
     { path: "assets", name: "assets", component: options.components.Assets, meta: { title: "素材库", requiredPermission: "assets.read" } },
     { path: "publishing-calendar", redirect: { name: "missions" } },
     { path: "platform-accounts", name: "platform-accounts", component: options.components.PlatformAccounts, meta: { title: "平台账户", requiredRole: "ADMINISTRATOR", requiredPermission: "publishing.read" } },
-    { path: "analytics", name: "analytics", redirect: { name: "attribution" } },
+    { path: "analytics", name: "results", component: options.components.Results, meta: { title: "效果", requiredPermission: "missions.read" } },
     { path: "attribution", name: "attribution", component: options.components.Attribution, meta: { title: "数据归因", requiredPermission: "missions.read" } },
     { path: "content", redirect: { name: "assets" } },
   ]

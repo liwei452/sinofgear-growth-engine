@@ -161,6 +161,17 @@ class MarketWatchCreateSerializer(serializers.Serializer):
         return value.upper()
 
 
+class MarketRecommendationSerializer(serializers.Serializer):
+    country_code = serializers.CharField()
+    country_label = serializers.CharField()
+    is_demo = serializers.BooleanField()
+    recommendation_reasons = serializers.ListField(child=serializers.CharField())
+
+
+class MarketRecommendationListSerializer(serializers.Serializer):
+    markets = MarketRecommendationSerializer(many=True)
+
+
 class StrictFieldsSerializer(serializers.Serializer):
     def to_internal_value(self, data):
         unknown = sorted(set(data) - set(self.fields))
@@ -308,9 +319,10 @@ class CandidateEnrichmentResultSerializer(serializers.Serializer):
 
 class EnrichmentCandidateSerializer(DiscoveryCandidateSerializer):
     latest_preview = serializers.SerializerMethodField()
+    workflow = serializers.SerializerMethodField()
 
     class Meta(DiscoveryCandidateSerializer.Meta):
-        fields = [*DiscoveryCandidateSerializer.Meta.fields, "latest_preview"]
+        fields = [*DiscoveryCandidateSerializer.Meta.fields, "latest_preview", "workflow"]
 
     def get_latest_preview(self, obj):
         try:
@@ -319,6 +331,32 @@ class EnrichmentCandidateSerializer(DiscoveryCandidateSerializer):
             return None
         return enrichment_payload(snapshot, created=False)
 
+    def get_workflow(self, obj):
+        try:
+            snapshot = obj.enrichment_snapshot
+        except CandidateEnrichmentSnapshot.DoesNotExist:
+            return {"account_id": None, "follow_up_status": None, "draft": None}
+        if snapshot.target_account_id is None:
+            return {"account_id": None, "follow_up_status": None, "draft": None}
+        account = snapshot.target_account
+        if account.organization_id != obj.organization_id:
+            return {"account_id": None, "follow_up_status": None, "draft": None}
+        follow_up = account.follow_ups.filter(organization=obj.organization).order_by("-updated_at", "-id").first()
+        draft = account.outreach_drafts.filter(organization=obj.organization).order_by("-updated_at", "-id").first()
+        message = draft.outreach_messages.filter(
+            organization=obj.organization,
+            account=account,
+        ).order_by("-created_at", "-id").first() if draft else None
+        return {
+            "account_id": str(account.id),
+            "follow_up_status": follow_up.status if follow_up else None,
+            "draft": ({
+                "status": draft.status,
+                "delivery": message.status if message else "NEVER_SENT",
+                "message_id": str(message.id) if message else None,
+                "sent_at": message.sent_at.isoformat() if message and message.sent_at else None,
+            } if draft else None),
+        }
 
 class DiscoverySummarySerializer(serializers.Serializer):
     enabled = serializers.BooleanField()

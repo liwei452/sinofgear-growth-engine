@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query"
-import { computed } from "vue"
+import { computed, nextTick, ref } from "vue"
 import { useRouter } from "vue-router"
 
 import { executeWorkItemAction, workItemsQueryOptions, type WorkItem } from "./api"
@@ -11,10 +11,13 @@ const router = useRouter()
 const itemsQuery = useQuery(workItemsQueryOptions())
 
 const items = computed(() => itemsQuery.data.value ?? [])
+const completionMessage = ref("")
 
 const actionMutation = useMutation({
   mutationFn: (item: WorkItem) => executeWorkItemAction(item),
   onSuccess: async () => {
+    completionMessage.value = "已完成；相关任务和机会状态已更新。"
+    await nextTick()
     await queryClient.invalidateQueries({ queryKey: ["growth", "work-items"] })
     await queryClient.invalidateQueries({ queryKey: ["growth", "agent-runs"] })
     await queryClient.invalidateQueries({ queryKey: ["growth", "missions"] })
@@ -36,6 +39,7 @@ function runAction(item: WorkItem): void {
 
 <template>
   <section class="inbox" aria-labelledby="today-inbox-title">
+    <p v-if="completionMessage" class="sr-only" aria-live="polite">{{ completionMessage }}</p>
     <header>
       <h2 id="today-inbox-title">今日待办</h2>
       <span>{{ items.length }} 项</span>

@@ -27,6 +27,7 @@ from integrations.sources.base import SourceAdapterError
 from .candidate_imports import CandidateImportInvalid, import_candidate_list
 from .discovery import DiscoveryAlreadyRunning, run_discovery
 from .enrichment import (
+    CandidateLicenseConfirmationRequired,
     CandidateEnrichmentRequired,
     CandidateReviewRequired,
     add_candidate_to_follow_up,
@@ -42,6 +43,7 @@ from .models import (
     GoogleMapsDiscoveryConfig,
     GrowthMission,
     GrowthPublishBatch,
+    IntentSignal,
     MissionEntityLink,
     MarketCountryProfile,
     OutreachDraft,
@@ -69,7 +71,7 @@ from .promotion_plan import (
 )
 
 from .manual_imports import import_manual_opportunity
-from .market_pilots import market_profiles_for
+from .market_pilots import market_pilot_summary, market_profiles_for
 from .serializers import (
     ChannelPackageBatchApproveSerializer,
     ChannelPackageBatchPrepareSerializer,
@@ -99,6 +101,7 @@ from .serializers import (
     IntentSignalSerializer,
     ManualOpportunityImportResponseSerializer,
     ManualOpportunityImportSerializer,
+    MarketRecommendationListSerializer,
     MarketWatchCreateSerializer,
     MetricReceiptSerializer,
     OpportunityReviewCreateSerializer,
@@ -259,6 +262,24 @@ def discovery_summary(profile):
             },
         ],
     }
+
+
+class MarketRecommendationListView(APIView):
+    """Read the existing, organization-scoped market recommendation summary without mutation."""
+
+    permission_classes = [CanReadLeads]
+
+    @extend_schema(tags=["Growth workspace"], responses={200: MarketRecommendationListSerializer})
+    def get(self, request):
+        profiles = list(MarketCountryProfile.objects.filter(organization=request.organization))
+        if not profiles:
+            return Response({"markets": []})
+        summary = market_pilot_summary(
+            signals=IntentSignal.objects.filter(organization=request.organization),
+            accounts=TargetAccount.objects.filter(organization=request.organization),
+            profiles=profiles,
+        )
+        return Response(MarketRecommendationListSerializer({"markets": summary["markets"]}).data)
 
 
 class PromotionPlanApproveView(APIView):
@@ -555,6 +576,12 @@ class CandidateEnrichmentFollowUpView(APIView):
         )
         try:
             account, follow_up, created = add_candidate_to_follow_up(candidate=candidate)
+        except CandidateLicenseConfirmationRequired:
+            return Response({
+                "code": "CANDIDATE_LICENSE_CONFIRMATION_REQUIRED",
+                "message": "候选名单的使用许可尚待人工确认，暂不能加入跟进或生成联系草稿。",
+                "recovery_action": "确认名单来源、许可合同和允许使用范围后，再继续后续处理。",
+            }, status=409)
         except CandidateEnrichmentRequired:
             return Response({
                 "code": "CANDIDATE_ENRICHMENT_REQUIRED",

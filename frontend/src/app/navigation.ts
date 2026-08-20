@@ -14,25 +14,20 @@ export type NavigationSection = {
   items: NavigationItem[]
 }
 
-export const navigationSections: NavigationSection[] = [
-  {
-    items: [{ label: "今日待办", to: "/", icon: "calendar-days" }],
-  },
-  {
-    group: "增长",
-    items: [
-      { label: "增长任务", to: "/missions", icon: "clipboard-check", requiredPermission: "missions.read" },
-      { label: "数据归因", to: "/attribution", icon: "chart-column", requiredPermission: "missions.read" },
-    ],
-  },
-]
+export const ADMINISTRATOR_ROLE = "ADMINISTRATOR" as const
+
+export const navigationSections: NavigationSection[] = [{
+  items: [
+    { label: "今日", to: "/", icon: "calendar-days" },
+    { label: "开始推广", to: "/promotion", icon: "send", requiredPermission: "missions.read" },
+    { label: "客户机会", to: "/opportunities", icon: "users-round", requiredPermission: "leads.manage" },
+    { label: "内容与发布", to: "/content-factory", icon: "clipboard-check", requiredPermission: "publishing.read" },
+    { label: "效果", to: "/analytics", icon: "chart-column", requiredPermission: "missions.read" },
+  ],
+}]
 
 export const utilityNavigation: NavigationItem[] = [
-  {
-    label: "系统配置",
-    to: "/settings",
-    icon: "settings",
-    requiredRole: "ADMINISTRATOR",
-    requiresPermission: "credentials.manage",
-  },
+  { label: "我的公司", to: "/company", icon: "building-2", requiredRole: ADMINISTRATOR_ROLE },
+  { label: "帮助", to: "/help", icon: "book-open" },
+  { label: "设置", to: "/settings", icon: "settings", requiredRole: ADMINISTRATOR_ROLE },
 ]

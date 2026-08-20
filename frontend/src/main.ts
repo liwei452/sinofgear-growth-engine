@@ -9,9 +9,14 @@ import LoginPage from "./modules/auth/LoginPage.vue"
 import DashboardPage from "./modules/dashboard/DashboardPage.vue"
 import RoleHomePage from "./modules/dashboard/RoleHomePage.vue"
 import CompanyPage from "./modules/growth/CompanyPage.vue"
+import OpportunityWorkspacePage from "./modules/opportunities/OpportunityWorkspacePage.vue"
+import HelpPage from "./modules/help/HelpPage.vue"
 import GrowthMissionsPage from "./modules/missions/GrowthMissionsPage.vue"
 import GrowthMissionDetailPage from "./modules/missions/GrowthMissionDetailPage.vue"
+import PromotionWorkspacePage from "./modules/promotion/PromotionWorkspacePage.vue"
+import ContentPublishingPage from "./modules/publishing/ContentPublishingPage.vue"
 import ExecutiveAttributionPage from "./modules/attribution/ExecutiveAttributionPage.vue"
+import ResultsPage from "./modules/results/ResultsPage.vue"
 import PlaceholderPage from "./shared/components/PlaceholderPage.vue"
 import "./styles/tokens.css"
 import "./styles/base.css"
@@ -22,9 +27,14 @@ const router = createAppRouter(queryClient, {
     Shell: AppShell,
     Dashboard: DashboardPage,
     RoleHome: RoleHomePage,
+    Promotion: PromotionWorkspacePage,
+    Opportunities: OpportunityWorkspacePage,
+    ContentPublishing: ContentPublishingPage,
+    Results: ResultsPage,
     Missions: GrowthMissionsPage,
     MissionDetail: GrowthMissionDetailPage,
     Company: CompanyPage,
+    Help: HelpPage,
     Settings: defineAsyncComponent(() => import("./modules/settings/SettingsCenterPage.vue")),
     AIModelSettings: defineAsyncComponent(() => import("./modules/settings/AIModelSettingsPage.vue")),
     MapsDiscovery: defineAsyncComponent(() => import("./modules/growth/GoogleMapsDiscoverySettings.vue")),

@@ -11,12 +11,12 @@ export type AttributionTrace = {
 export type MissionAttribution = {
   outcomes: {
     emails_sent: number | null
-    confirmed_replies: number
-    confirmed_rfqs: number
-    won_revenue: { amount: string }
+    confirmed_replies: number | null
+    confirmed_rfqs: number | null
+    won_revenue?: { amount?: string | null } | null
     cost_per_result: number | null
   }
-  diagnostics: { impressions: number }
+  diagnostics: { impressions: number | null }
   availability: { email: string }
   traces: AttributionTrace[]
 }

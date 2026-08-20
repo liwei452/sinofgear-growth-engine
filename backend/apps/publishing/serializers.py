@@ -6,7 +6,9 @@ from django.utils.dateparse import parse_datetime
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from .models import PublishAttempt, PublishedPost, PublishTask
+from .models import (
+    PublishAttempt, PublishedPost, PublishReconciliationAttempt, PublishTask,
+)
 from .services import MAX_PUBLISH_ATTEMPTS
 
 
@@ -60,9 +62,22 @@ class PublishedPostSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class PublishReconciliationAttemptSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PublishReconciliationAttempt
+        fields = [
+            "id", "sequence_number", "mode", "provider",
+            "provider_submission_id", "observed_provider_status", "result",
+            "safe_error_code", "provider_post_id", "provider_channel_id",
+            "provider_sent_at", "started_at", "finished_at",
+        ]
+        read_only_fields = fields
+
+
 class PublishTaskSerializer(serializers.ModelSerializer):
     attempts = serializers.SerializerMethodField()
     published_post = serializers.SerializerMethodField()
+    reconciliation_attempts = serializers.SerializerMethodField()
 
     class Meta:
         model = PublishTask
@@ -72,6 +87,8 @@ class PublishTaskSerializer(serializers.ModelSerializer):
             "requested_timezone", "attempt_number", "retry_not_before", "last_error",
             "provider_submission_id", "provider_call_started_at", "started_at",
             "finished_at", "canceled_at", "created_at", "attempts", "published_post",
+            "reconciliation_attempt_number", "last_reconciled_at", "next_reconcile_at",
+            "reconciliation_error_code", "reconciliation_attempts",
         ]
         read_only_fields = fields
 
@@ -92,6 +109,15 @@ class PublishTaskSerializer(serializers.ModelSerializer):
         except PublishedPost.DoesNotExist:
             return None
         return PublishedPostSerializer(post).data
+
+    @extend_schema_field(PublishReconciliationAttemptSerializer(many=True))
+    def get_reconciliation_attempts(self, task):
+        attempts = getattr(task, "_safe_reconciliation_attempts", None)
+        if attempts is None:
+            attempts = task.reconciliation_attempts.order_by("-sequence_number")[:20]
+        return PublishReconciliationAttemptSerializer(
+            reversed(list(attempts)), many=True
+        ).data
 
 
 class PublishCreateSerializer(StrictMixin, serializers.Serializer):

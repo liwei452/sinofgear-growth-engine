@@ -35,6 +35,7 @@ from integrations.platforms.registry import CONNECTOR_FACTORIES
 from .models import (
     LIVE_PUBLISH_TASK_STATUSES,
     PublishAttempt,
+    PublishReconciliationAttempt,
     PublishedPost,
     PublishTask,
     publishing_writes,
@@ -85,6 +86,21 @@ SAFE_PUBLISH_ERRORS = {
     "OUTCOME_UNKNOWN": {
         "code": "OUTCOME_UNKNOWN",
         "message": "Provider outcome could not be determined.",
+    },
+    "BUFFER_PUBLISH_FAILED": {
+        "code": "BUFFER_PUBLISH_FAILED", "message": "Buffer confirmed that publishing failed.",
+    },
+    "BUFFER_POST_NOT_FOUND": {
+        "code": "BUFFER_POST_NOT_FOUND", "message": "The submitted Buffer post could not be found.",
+    },
+    "BUFFER_POST_MISMATCH": {
+        "code": "BUFFER_POST_MISMATCH", "message": "The Buffer post did not match the submitted task.",
+    },
+    "BUFFER_CONTRACT_ERROR": {
+        "code": "BUFFER_CONTRACT_ERROR", "message": "Buffer returned an invalid post status response.",
+    },
+    "BUFFER_RECONCILIATION_EXPIRED": {
+        "code": "BUFFER_RECONCILIATION_EXPIRED", "message": "The Buffer post remained non-final for too long.",
     },
 }
 
@@ -198,6 +214,14 @@ def _attempt_history_is_consistent(task, post):
             and attempt.finished_at is not None
         ):
             return False
+        if attempt.status == PublishAttempt.Status.NEEDS_ATTENTION and not (
+            attempt.outcome == "NEEDS_ATTENTION"
+            and _safe_error_is_exact(attempt.error)
+            and attempt.retry_at is None
+            and not attempt.external_id
+            and attempt.finished_at is not None
+        ):
+            return False
         if attempt.retry_at is not None and attempt.retry_at < attempt.finished_at:
             return False
         previous = attempt
@@ -207,6 +231,7 @@ def _attempt_history_is_consistent(task, post):
             PublishAttempt.Status.RUNNING,
             PublishAttempt.Status.SUBMITTED,
             PublishAttempt.Status.SUBMISSION_UNKNOWN,
+            PublishAttempt.Status.NEEDS_ATTENTION,
             PublishAttempt.Status.SUCCEEDED,
             PublishAttempt.Status.CANCELED,
         }
@@ -304,7 +329,8 @@ def publish_task_is_consistent(task):
                 and post is not None and latest is not None
                 and latest.status == PublishAttempt.Status.SUCCEEDED
                 and latest.started_at == task.started_at
-                and latest.finished_at == task.finished_at == post.published_at
+                and latest.finished_at == task.finished_at
+                and post.published_at <= task.finished_at
                 and post.organization_id == task.organization_id
                 and post.platform_content_id == task.platform_content_id
                 and post.social_account_id == task.social_account_id
@@ -344,6 +370,21 @@ def publish_task_is_consistent(task):
                 and latest.error == task.last_error
                 and task.provider_call_started_at is not None
                 and task.provider_call_started_at == latest.provider_call_started_at
+            )
+        if task.status == PublishTask.Status.NEEDS_ATTENTION:
+            return (
+                content.status == PlatformContent.Status.APPROVED
+                and task.claim_token is None and task.started_at is not None
+                and task.finished_at is not None and task.canceled_at is None
+                and _safe_error_is_exact(task.last_error)
+                and task.retry_not_before is None
+                and task.provider_submission_id
+                and post is None and latest is not None
+                and latest.status == PublishAttempt.Status.NEEDS_ATTENTION
+                and latest.started_at == task.started_at
+                and latest.finished_at == task.finished_at
+                and latest.error == task.last_error
+                and latest.provider_submission_id == task.provider_submission_id
             )
         if task.status == PublishTask.Status.FAILED:
             return (
@@ -420,7 +461,12 @@ def publish_task_consistency_queryset(organization):
                     :MAX_PUBLISH_ATTEMPTS + 1
                 ],
                 to_attr="_safe_attempts",
-            )
+            ),
+            Prefetch(
+                "reconciliation_attempts",
+                queryset=PublishReconciliationAttempt.objects.order_by("-sequence_number")[:20],
+                to_attr="_safe_reconciliation_attempts",
+            ),
         )
         .annotate(
             _selected_platform=Exists(
@@ -567,6 +613,7 @@ def create_publish_task(
                 PublishTask.Status.RUNNING,
                 PublishTask.Status.SUBMITTED,
                 PublishTask.Status.SUBMISSION_UNKNOWN,
+                PublishTask.Status.NEEDS_ATTENTION,
             ],
         ).count()
         if published_today + pending >= limit:
@@ -1357,6 +1404,7 @@ def retry_publish_task(task, *, actor=None):
     task = PublishTask.objects.select_for_update().get(pk=task.pk)
     if task.status in {
         PublishTask.Status.SUBMITTED, PublishTask.Status.SUBMISSION_UNKNOWN,
+        PublishTask.Status.NEEDS_ATTENTION,
     }:
         raise PublishingConflict(
             "Submitted or unknown-outcome tasks require reconciliation, not retry."

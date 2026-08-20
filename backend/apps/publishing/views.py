@@ -26,6 +26,7 @@ from .services import (
     publish_task_consistency_queryset, publish_task_is_consistent,
     retry_publish_task, run_publish_task_now, validate_idempotency_key,
 )
+from .reconciliation import reconcile_buffer_publish_task
 
 
 MAX_CALENDAR_ENTRIES = 200
@@ -220,6 +221,50 @@ class PublishRetryView(PublishActionView):
 
 class PublishRunView(PublishActionView):
     action = "run"
+
+
+@extend_schema(tags=["PublishTasks"])
+class PublishReconcileView(APIView):
+    permission_classes = [CanManagePublishing]
+    serializer_class = EmptyActionSerializer
+
+    @extend_schema(
+        request=EmptyActionSerializer,
+        responses={
+            200: PublishTaskSerializer,
+            409: PublishingErrorSerializer,
+            429: PublishingErrorSerializer,
+            502: PublishingErrorSerializer,
+            503: PublishingErrorSerializer,
+        },
+    )
+    def post(self, request, task_id):
+        serializer = EmptyActionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return _validation(serializer.errors)
+        _task(request.organization, task_id)
+        try:
+            task = reconcile_buffer_publish_task(
+                task_id, organization=request.organization, actor=request.user
+            )
+        except PublishingConflict as exc:
+            return _conflict(exc)
+        error_code = task.reconciliation_error_code
+        status_mapping = {
+            "BUFFER_AUTHENTICATION_REQUIRED": status.HTTP_409_CONFLICT,
+            "BUFFER_RATE_LIMITED": status.HTTP_429_TOO_MANY_REQUESTS,
+            "BUFFER_PROVIDER_UNAVAILABLE": status.HTTP_503_SERVICE_UNAVAILABLE,
+        }
+        if error_code in status_mapping and task.status == PublishTask.Status.SUBMITTED:
+            return Response(
+                {
+                    "code": error_code.lower(),
+                    "message": "Buffer reconciliation could not complete safely.",
+                    "recovery_action": "Wait until the recorded next reconciliation time or reconnect Buffer.",
+                },
+                status=status_mapping[error_code],
+            )
+        return Response(PublishTaskSerializer(_task(request.organization, task.id)).data)
 
 
 @extend_schema(tags=["PublishTasks"])

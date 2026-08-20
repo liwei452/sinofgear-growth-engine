@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from urllib.parse import urlparse
+
 from .buffer_client import BufferGraphQLClient
 from .buffer_types import (
     BufferAccount,
@@ -11,6 +14,9 @@ from .buffer_types import (
     BufferIgnoredChannel,
     BufferOrganization,
     BufferProbeResult,
+    BufferPostObservation,
+    BufferPostQueryRequest,
+    BufferPostQueryResult,
 )
 from .base import OfficialPublishRequest, OfficialPublishResult
 
@@ -92,6 +98,31 @@ class BufferConnector:
         except BufferApiError as error:
             return _publish_failure(error)
         return _parse_publish_result(response.data, request.provider_account_id)
+
+    def fetch_post(self, request: BufferPostQueryRequest) -> BufferPostQueryResult:
+        try:
+            token = self._resolve_query_token(request)
+            response = self._client.fetch_post(token, request.provider_submission_id)
+            observation = _parse_post_observation(response.data)
+        except BufferApiError as error:
+            return BufferPostQueryResult(
+                ok=False,
+                error_code=error.code.value,
+                retry_after_seconds=error.retry_after_seconds,
+            )
+        return BufferPostQueryResult(ok=True, observation=observation)
+
+    def _resolve_query_token(self, request: BufferPostQueryRequest) -> str:
+        reference = request.credential_reference
+        if type(reference) is not str or not reference.strip():
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        try:
+            token = self._token_store.resolve(reference).access_token
+        except Exception:
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED) from None
+        if type(token) is not str or not token.strip():
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        return token
 
     def _resolve_publish_token(self, request: OfficialPublishRequest) -> str:
         reference = request.credential_reference
@@ -263,6 +294,68 @@ def _unknown_publish_result() -> OfficialPublishResult:
         status="FAILED",
         error_code="OUTCOME_UNKNOWN",
         error_message=_SAFE_PUBLISH_MESSAGES["OUTCOME_UNKNOWN"],
+    )
+
+
+_POST_STATUSES = {"draft", "error", "needs_approval", "scheduled", "sending", "sent"}
+_POST_SERVICES = {key for key in SUPPORTED_BUFFER_SERVICES}
+
+
+def _bounded_native_string(value, *, allow_blank=False, maximum=255) -> str:
+    if type(value) is not str:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    value = value.strip()
+    if (not allow_blank and not value) or len(value) > maximum:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    return value
+
+
+def _optional_timestamp(value):
+    if value is None:
+        return None
+    value = _bounded_native_string(value, maximum=64)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR) from None
+    if parsed.tzinfo is None:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    parsed = parsed.astimezone(timezone.utc)
+    if not (datetime(2000, 1, 1, tzinfo=timezone.utc) <= parsed <= datetime(2100, 1, 1, tzinfo=timezone.utc)):
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    return parsed
+
+
+def _optional_public_url(value) -> str:
+    if value is None or value == "":
+        return ""
+    value = _bounded_native_string(value, maximum=2048)
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    return value
+
+
+def _parse_post_observation(data) -> BufferPostObservation:
+    post = data.get("post") if type(data) is dict else None
+    if type(post) is not dict:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    post_id = _bounded_native_string(post.get("id"))
+    channel_id = _bounded_native_string(post.get("channelId"))
+    service = _bounded_native_string(post.get("channelService"), maximum=32).lower()
+    status = _bounded_native_string(post.get("status"), maximum=32).lower()
+    if service not in _POST_SERVICES or status not in _POST_STATUSES:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    return BufferPostObservation(
+        post_id=post_id,
+        channel_id=channel_id,
+        channel_service=service,
+        status=status,
+        due_at=_optional_timestamp(post.get("dueAt")),
+        sent_at=_optional_timestamp(post.get("sentAt")),
+        external_link=_optional_public_url(post.get("externalLink")),
+        created_at=_optional_timestamp(post.get("createdAt")),
+        updated_at=_optional_timestamp(post.get("updatedAt")),
     )
 
 

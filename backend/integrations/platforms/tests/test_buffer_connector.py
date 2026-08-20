@@ -10,6 +10,7 @@ from integrations.platforms.buffer_types import (
     BufferDiscoveryRequest,
     BufferErrorCode,
     BufferRateLimitResult,
+    BufferPostQueryRequest,
 )
 from integrations.platforms.token_store import OAuthTokenSet
 
@@ -51,6 +52,9 @@ class FakeClient:
         self.created_posts = []
         self.create_post_data = None
         self.create_post_error = None
+        self.post_data = None
+        self.post_error = None
+        self.fetched_posts = []
 
     def fetch_account(self, token):
         self.fetched_account_tokens.append(token)
@@ -71,6 +75,67 @@ class FakeClient:
         return BufferGraphQLResponse(
             data=self.create_post_data, rate_limit=BufferRateLimitResult()
         )
+
+    def fetch_post(self, token, post_id):
+        self.fetched_posts.append((token, post_id))
+        if self.post_error is not None:
+            raise self.post_error
+        return BufferGraphQLResponse(
+            data=self.post_data, rate_limit=BufferRateLimitResult()
+        )
+
+
+def test_fetch_post_normalizes_strict_official_contract():
+    client = FakeClient()
+    client.post_data = {
+        "post": {
+            "id": "post-1", "channelId": "ch-1", "channelService": "linkedin",
+            "status": "sent", "dueAt": None, "sentAt": "2026-08-20T01:02:03Z",
+            "externalLink": "https://www.linkedin.com/feed/update/1",
+            "createdAt": "2026-08-20T01:00:00Z", "updatedAt": "2026-08-20T01:02:03Z",
+        }
+    }
+    connector = BufferConnector(client, FakeTokenStore())
+
+    request = BufferPostQueryRequest(
+        credential_reference="vault://buffer/acme", provider_submission_id="post-1"
+    )
+    assert "vault://buffer/acme" not in repr(request)
+    result = connector.fetch_post(request)
+
+    assert result.ok is True
+    assert result.observation.post_id == "post-1"
+    assert result.observation.status == "sent"
+    assert result.observation.sent_at.isoformat() == "2026-08-20T01:02:03+00:00"
+    assert client.fetched_posts == [("buffer-token", "post-1")]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("status", "unknown"),
+        ("channelService", "unsupported"),
+        ("sentAt", "not-a-time"),
+        ("externalLink", "file:///secret"),
+    ],
+)
+def test_fetch_post_rejects_malformed_contract(field, value):
+    client = FakeClient()
+    client.post_data = {
+        "post": {
+            "id": "post-1", "channelId": "ch-1", "channelService": "linkedin",
+            "status": "sent", "dueAt": None, "sentAt": "2026-08-20T01:02:03Z",
+            "externalLink": "https://example.com/post/1", "createdAt": None, "updatedAt": None,
+            field: value,
+        }
+    }
+    result = BufferConnector(client, FakeTokenStore()).fetch_post(
+        BufferPostQueryRequest(
+            credential_reference="vault://buffer/acme", provider_submission_id="post-1"
+        )
+    )
+    assert result.ok is False
+    assert result.error_code == "BUFFER_CONTRACT_ERROR"
 
 
 def _request(expected_org_id="org-1", credential="vault://buffer/acme"):

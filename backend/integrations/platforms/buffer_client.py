@@ -74,6 +74,22 @@ mutation BufferCreatePost($input: CreatePostInput!) {
 }
 """.strip()
 
+_POST_QUERY = """
+query BufferPost($input: PostInput!) {
+  post(input: $input) {
+    id
+    channelId
+    channelService
+    status
+    dueAt
+    sentAt
+    externalLink
+    createdAt
+    updatedAt
+  }
+}
+""".strip()
+
 
 @dataclass(frozen=True)
 class BufferGraphQLResponse:
@@ -283,8 +299,16 @@ class BufferGraphQLClient:
             mutation=True,
         )
 
+    def fetch_post(self, token: str, post_id: str) -> BufferGraphQLResponse:
+        if type(post_id) is not str or not post_id.strip() or len(post_id.strip()) > 255:
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        return self._execute(
+            token, _POST_QUERY, {"input": {"id": post_id.strip()}}, operation="post"
+        )
+
     def _execute(
         self, token: str, query: str, variables: dict, *, mutation: bool = False,
+        operation: str = "query",
     ) -> BufferGraphQLResponse:
         if not isinstance(token, str) or not token.strip():
             raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
@@ -350,11 +374,14 @@ class BufferGraphQLClient:
         data = body.get("data")
         if mutation and _has_valid_create_post_success(data):
             return BufferGraphQLResponse(data=data, rate_limit=rate_limit)
+        if operation == "post" and _has_valid_post_data(data):
+            return BufferGraphQLResponse(data=data, rate_limit=rate_limit)
         errors = body.get("errors")
         if errors:
             self._raise_graphql_error(
                 errors,
                 mutation=mutation,
+                operation=operation,
                 retry_after_seconds=header_retry_after,
             )
         if data is None:
@@ -375,6 +402,7 @@ class BufferGraphQLClient:
         errors,
         *,
         mutation: bool = False,
+        operation: str = "query",
         retry_after_seconds: int | None = None,
     ) -> None:
         code = None
@@ -392,7 +420,10 @@ class BufferGraphQLClient:
             "RATE_LIMIT_EXCEEDED": BufferErrorCode.RATE_LIMITED,
             "NOT_FOUND": (
                 BufferErrorCode.CHANNEL_NOT_FOUND
-                if mutation else BufferErrorCode.ORGANIZATION_NOT_FOUND
+                if mutation else (
+                    BufferErrorCode.POST_NOT_FOUND
+                    if operation == "post" else BufferErrorCode.ORGANIZATION_NOT_FOUND
+                )
             ),
             "UNEXPECTED": (
                 BufferErrorCode.OUTCOME_UNKNOWN
@@ -431,4 +462,14 @@ def _has_valid_create_post_success(data) -> bool:
         and bool(post_id.strip())
         and isinstance(channel_id, str)
         and bool(channel_id.strip())
+    )
+
+
+def _has_valid_post_data(data) -> bool:
+    if type(data) is not dict or type(data.get("post")) is not dict:
+        return False
+    post = data["post"]
+    return all(
+        type(post.get(field)) is str and bool(post[field].strip())
+        for field in ("id", "channelId", "channelService", "status")
     )

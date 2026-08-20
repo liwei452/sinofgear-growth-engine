@@ -6,32 +6,34 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { createAppRouter, safeRedirect } from "./router"
 
-const Login = defineComponent({ name: "LoginStub", template: "<p>登录页面</p>" })
+const Login = defineComponent({ name: "LoginStub", template: "<p>Login</p>" })
 const Shell = defineComponent({ name: "ShellStub", template: "<router-view />" })
-const Stub = (name: string, label: string) => defineComponent({
-  name,
-  template: `<p>${label}</p>`,
-})
+const Stub = (name: string, label: string) => defineComponent({ name, template: `<p>${label}</p>` })
 const Root = defineComponent({ setup: () => () => h(RouterView) })
 
 function makeComponents() {
   return {
     Login,
     Shell,
-    Dashboard: Stub("DashboardStub", "首页"),
-    Missions: Stub("MissionsStub", "增长任务"),
-    MissionDetail: Stub("MissionDetailStub", "任务详情"),
-    Company: Stub("CompanyStub", "公司"),
-    Settings: Stub("SettingsStub", "设置中心"),
-    AIModelSettings: Stub("AIModelSettingsStub", "AI 模型"),
-    MapsDiscovery: Stub("MapsDiscoveryStub", "地图获客"),
-    Products: Stub("ProductsStub", "产品库"),
-    Knowledge: Stub("KnowledgeStub", "知识库"),
-    Assets: Stub("AssetsStub", "素材库"),
-    PlatformAccounts: Stub("AccountsStub", "平台账户"),
-    RoleHome: Stub("RoleHomeStub", "首页"),
-    Attribution: Stub("AttributionStub", "数据归因"),
-    Placeholder: Stub("PlaceholderStub", "占位"),
+    Dashboard: Stub("DashboardStub", "Dashboard"),
+    Promotion: Stub("PromotionStub", "Promotion"),
+    Opportunities: Stub("OpportunitiesStub", "Opportunities"),
+    ContentPublishing: Stub("ContentPublishingStub", "Content publishing"),
+    Results: Stub("ResultsStub", "Results"),
+    Missions: Stub("MissionsStub", "Missions"),
+    MissionDetail: Stub("MissionDetailStub", "Mission detail"),
+    Company: Stub("CompanyStub", "Company"),
+    Help: Stub("HelpStub", "Help"),
+    Settings: Stub("SettingsStub", "Settings"),
+    AIModelSettings: Stub("AIModelSettingsStub", "AI model"),
+    MapsDiscovery: Stub("MapsDiscoveryStub", "Maps discovery"),
+    Products: Stub("ProductsStub", "Products"),
+    Knowledge: Stub("KnowledgeStub", "Knowledge"),
+    Assets: Stub("AssetsStub", "Assets"),
+    PlatformAccounts: Stub("AccountsStub", "Platform accounts"),
+    RoleHome: Stub("RoleHomeStub", "Home"),
+    Attribution: Stub("AttributionStub", "Attribution"),
+    Placeholder: Stub("PlaceholderStub", "Placeholder"),
   }
 }
 
@@ -55,61 +57,53 @@ function router(client = queryClient(), initialPath?: string) {
 
 afterEach(() => vi.unstubAllGlobals())
 
-describe("growth-mission routing", () => {
-  it("mounts mission, assets, and attribution routes", async () => {
+describe("business-outcome routing", () => {
+  it("mounts the five business workspaces without changing mission deep links", async () => {
+    const client = queryClient()
+    setUser(client, "OPERATOR", ["missions.read", "leads.manage", "publishing.read"])
+    const appRouter = router(client)
+    render(Root, { global: { plugins: [appRouter] } })
+
+    await appRouter.push("/promotion")
+    expect(appRouter.currentRoute.value.name).toBe("promotion")
+    await appRouter.push("/opportunities")
+    expect(appRouter.currentRoute.value.name).toBe("opportunities")
+    await appRouter.push("/content-factory")
+    expect(appRouter.currentRoute.value.name).toBe("content-publishing")
+    await appRouter.push("/analytics")
+    expect(appRouter.currentRoute.value.name).toBe("results")
+    await appRouter.push("/missions/mission-1")
+    expect(appRouter.currentRoute.value.name).toBe("mission-detail")
+  })
+
+  it("preserves existing module routes", async () => {
     const client = queryClient()
     setUser(client, "OPERATOR", ["missions.read", "assets.read"])
     const appRouter = router(client)
     render(Root, { global: { plugins: [appRouter] } })
 
     await appRouter.push("/missions")
-    expect(await screen.findByText("增长任务")).toBeInTheDocument()
+    expect(await screen.findByText("Missions")).toBeInTheDocument()
     await appRouter.push("/assets")
-    expect(await screen.findByText("素材库")).toBeInTheDocument()
+    expect(await screen.findByText("Assets")).toBeInTheDocument()
     await appRouter.push("/attribution")
-    expect(await screen.findByText("数据归因")).toBeInTheDocument()
+    expect(await screen.findByText("Attribution")).toBeInTheDocument()
   })
 
-  it("redirects legacy workflow paths to the mission surfaces", async () => {
-    const client = queryClient()
-    setUser(client, "OPERATOR", ["missions.read", "agents.approve", "assets.read"])
-    const appRouter = router(client)
-    render(Root, { global: { plugins: [appRouter] } })
+  it("keeps administrator and granular permission guards for existing deep links", async () => {
+    const operatorClient = queryClient()
+    setUser(operatorClient, "OPERATOR", ["products.read"])
+    const operatorRouter = router(operatorClient)
+    await operatorRouter.push("/products")
+    expect(operatorRouter.currentRoute.value.name).toBe("home")
+    expect(operatorRouter.currentRoute.value.query.blocked).toBe("administrator")
 
-    for (const path of ["/promotion", "/opportunities", "/content-factory", "/reviews", "/publishing-calendar"]) {
-      await appRouter.push(path)
-      expect(appRouter.currentRoute.value.name).toBe("missions")
-    }
-
-    await appRouter.push("/content")
-    expect(appRouter.currentRoute.value.name).toBe("assets")
-
-    await appRouter.push("/analytics?range=7")
-    expect(appRouter.currentRoute.value.name).toBe("attribution")
-
-    await appRouter.push("/agent-approvals")
-    expect(appRouter.currentRoute.value.name).toBe("home")
-    expect(appRouter.currentRoute.value.query.view).toBe("approvals")
-  })
-
-  it("sends a non-administrator home for an administrator-only route", async () => {
-    const client = queryClient()
-    setUser(client, "OPERATOR", ["products.read"])
-    const appRouter = router(client)
-
-    await appRouter.push("/products")
-    expect(appRouter.currentRoute.value.name).toBe("home")
-    expect(appRouter.currentRoute.value.query.blocked).toBe("administrator")
-  })
-
-  it("keeps a missing granular permission on the administrator settings page", async () => {
-    const client = queryClient()
-    setUser(client, "ADMINISTRATOR", [])
-    const appRouter = router(client)
-
-    await appRouter.push("/products")
-    expect(appRouter.currentRoute.value.name).toBe("settings")
-    expect(appRouter.currentRoute.value.query.blocked).toBe("products.read")
+    const administratorClient = queryClient()
+    setUser(administratorClient, "ADMINISTRATOR", [])
+    const administratorRouter = router(administratorClient)
+    await administratorRouter.push("/products")
+    expect(administratorRouter.currentRoute.value.name).toBe("settings")
+    expect(administratorRouter.currentRoute.value.query.blocked).toBe("products.read")
   })
 
   it.each([401, 403])("redirects status %s to login with the local target", async (status) => {
@@ -118,7 +112,7 @@ describe("growth-mission routing", () => {
 
     await appRouter.push("/analytics?range=7")
     expect(appRouter.currentRoute.value.name).toBe("login")
-    expect(appRouter.currentRoute.value.query.redirect).toBe("/attribution?range=7")
+    expect(appRouter.currentRoute.value.query.redirect).toBe("/analytics?range=7")
   })
 })
 
@@ -128,13 +122,8 @@ describe("safeRedirect", () => {
   })
 
   it.each([
-    "https://evil.example/steal",
-    "//evil.example/steal",
-    "\\evil.example\\steal",
-    "/safe\nLocation:https://evil.example",
-    "products",
-    ["/products", "//evil.example"],
-    undefined,
+    "https://evil.example/steal", "//evil.example/steal", "\\evil.example\\steal",
+    "/safe\nLocation:https://evil.example", "products", ["/products", "//evil.example"], undefined,
   ])("drops an unsafe redirect value %#", (value) => {
     expect(safeRedirect(value)).toBe("/")
   })

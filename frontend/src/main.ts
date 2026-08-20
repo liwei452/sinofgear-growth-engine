@@ -9,6 +9,7 @@ import LoginPage from "./modules/auth/LoginPage.vue"
 import DashboardPage from "./modules/dashboard/DashboardPage.vue"
 import RoleHomePage from "./modules/dashboard/RoleHomePage.vue"
 import CompanyPage from "./modules/growth/CompanyPage.vue"
+import HelpPage from "./modules/help/HelpPage.vue"
 import GrowthMissionsPage from "./modules/missions/GrowthMissionsPage.vue"
 import GrowthMissionDetailPage from "./modules/missions/GrowthMissionDetailPage.vue"
 import ExecutiveAttributionPage from "./modules/attribution/ExecutiveAttributionPage.vue"
@@ -22,9 +23,14 @@ const router = createAppRouter(queryClient, {
     Shell: AppShell,
     Dashboard: DashboardPage,
     RoleHome: RoleHomePage,
+    Promotion: PlaceholderPage,
+    Opportunities: PlaceholderPage,
+    ContentPublishing: PlaceholderPage,
+    Results: PlaceholderPage,
     Missions: GrowthMissionsPage,
     MissionDetail: GrowthMissionDetailPage,
     Company: CompanyPage,
+    Help: HelpPage,
     Settings: defineAsyncComponent(() => import("./modules/settings/SettingsCenterPage.vue")),
     AIModelSettings: defineAsyncComponent(() => import("./modules/settings/AIModelSettingsPage.vue")),
     MapsDiscovery: defineAsyncComponent(() => import("./modules/growth/GoogleMapsDiscoverySettings.vue")),

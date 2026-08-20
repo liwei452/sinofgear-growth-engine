@@ -204,6 +204,7 @@ class PublishReconciliationAttempt(ProtectedPublishingModel):
     class Mode(models.TextChoices):
         EXACT_ID = "EXACT_ID", "Exact provider id"
         UNKNOWN_MATCH = "UNKNOWN_MATCH", "Unknown submission match"
+        MANUAL = "MANUAL", "Manual resolution"
 
     class Provider(models.TextChoices):
         BUFFER = "BUFFER", "Buffer"
@@ -234,6 +235,13 @@ class PublishReconciliationAttempt(ProtectedPublishingModel):
     candidate_set_fingerprint = models.CharField(max_length=64, blank=True, default="")
     query_window_start = models.DateTimeField(null=True, blank=True)
     query_window_end = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="publish_reconciliation_resolutions",
+    )
     started_at = models.DateTimeField()
     finished_at = models.DateTimeField()
 

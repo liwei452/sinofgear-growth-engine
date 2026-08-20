@@ -70,6 +70,7 @@ class ReconciliationSnapshot:
     connection_id: object
     connection_updated_at: object
     credential_reference: str
+    window_end: object
     started_at: object
 
 
@@ -133,6 +134,11 @@ def load_reconciliation_snapshot(task_id, *, organization=None) -> Reconciliatio
         connection_id=connection.id,
         connection_updated_at=connection.updated_at,
         credential_reference=connection.credential_reference,
+        window_end=(
+            task.provider_call_started_at + BUFFER_UNKNOWN_WINDOW_AFTER
+            if task.provider_call_started_at
+            else None
+        ),
         started_at=timezone.now(),
     )
 
@@ -403,15 +409,27 @@ def _save_task_reconciliation(task, finished_at, *, error_code="", next_at=None)
         ])
 
 
-def _defer(task, started_at, finished_at, *, error_code="", retry_after=None, observation=None):
-    delay = timedelta(seconds=min(max(retry_after or 0, 1), 21600)) if retry_after else _delay_for(task.reconciliation_attempt_number + 1)
+def _defer(
+    task, started_at, finished_at, *, error_code="", retry_after=None,
+    observation=None, next_at=None,
+):
+    delay = (
+        timedelta(seconds=min(max(retry_after or 0, 1), 21600))
+        if retry_after
+        else _delay_for(task.reconciliation_attempt_number + 1)
+    )
     _record(
         task, result=PublishReconciliationAttempt.Result.DEFERRED,
         started_at=started_at, finished_at=finished_at,
         observed=observation.status if observation else "", error_code=error_code,
         observation=observation,
     )
-    _save_task_reconciliation(task, finished_at, error_code=error_code, next_at=finished_at + delay)
+    _save_task_reconciliation(
+        task,
+        finished_at,
+        error_code=error_code,
+        next_at=next_at or finished_at + delay,
+    )
     return task
 
 
@@ -501,6 +519,16 @@ def _succeed(task, attempt, started_at, finished_at, observation, actor):
 def _finalize_query_error(task, attempt, account, connection, result, started_at, finished_at):
     code = result.error_code if type(result.error_code) is str else "BUFFER_CONTRACT_ERROR"
     if code == "BUFFER_POST_NOT_FOUND":
+        if task.provider_call_started_at:
+            window_end = task.provider_call_started_at + BUFFER_UNKNOWN_WINDOW_AFTER
+            if finished_at < window_end:
+                return _defer(
+                    task,
+                    started_at,
+                    finished_at,
+                    error_code=code,
+                    next_at=window_end,
+                )
         return _needs_attention(task, attempt, started_at, finished_at, code)
     if code in {"BUFFER_AUTHENTICATION_REQUIRED", "BUFFER_CONFIGURATION_REQUIRED"}:
         connection.connection_state = ProviderConnection.ConnectionState.REAUTHORIZATION_REQUIRED
@@ -647,6 +675,25 @@ def _unknown_query_error(task, account, connection, snapshot, result, finished_a
     return task
 
 
+def _unknown_defer_no_match(task, snapshot, finished_at, candidates=()):
+    code = "BUFFER_RECONCILIATION_NO_MATCH"
+    _record_unknown(
+        task,
+        result=PublishReconciliationAttempt.Result.DEFERRED,
+        snapshot=snapshot,
+        finished_at=finished_at,
+        error_code=code,
+        candidates=candidates,
+    )
+    _save_unknown_task(
+        task,
+        finished_at,
+        error_code=code,
+        next_at=snapshot.window_end,
+    )
+    return task
+
+
 def _candidate_matches(snapshot, candidate) -> bool:
     if type(candidate) is not BufferPostCandidate:
         return False
@@ -720,6 +767,10 @@ def finalize_unknown_buffer_reconciliation(snapshot, result, *, actor=None):
             "BUFFER_RECONCILIATION_AMBIGUOUS", candidates,
         )
     if not candidates:
+        if snapshot.window_end is not None and finished_at < snapshot.window_end:
+            return _unknown_defer_no_match(
+                task, snapshot, finished_at, candidates,
+            )
         return _unknown_needs_attention(
             task, attempt, snapshot, finished_at,
             "BUFFER_RECONCILIATION_NO_MATCH", candidates,
@@ -759,6 +810,7 @@ def finalize_unknown_buffer_reconciliation(snapshot, result, *, actor=None):
         connection_id=connection.id,
         connection_updated_at=connection.updated_at,
         credential_reference=connection.credential_reference,
+        window_end=snapshot.window_end,
         started_at=finished_at,
     )
     observation = BufferPostObservation(

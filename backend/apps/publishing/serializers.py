@@ -35,6 +35,13 @@ class AwareDateTimeField(serializers.DateTimeField):
         return super().to_internal_value(value)
 
 
+class NativeStringField(serializers.CharField):
+    def to_internal_value(self, data):
+        if type(data) is not str:
+            self.fail("invalid")
+        return super().to_internal_value(data)
+
+
 def validate_timezone_name(value):
     try:
         return ZoneInfo(value).key
@@ -69,7 +76,7 @@ class PublishReconciliationAttemptSerializer(serializers.ModelSerializer):
             "id", "sequence_number", "mode", "provider",
             "provider_submission_id", "observed_provider_status", "result",
             "safe_error_code", "provider_post_id", "provider_channel_id",
-            "provider_sent_at", "started_at", "finished_at",
+            "provider_sent_at", "resolved_by_id", "started_at", "finished_at",
         ]
         read_only_fields = fields
 
@@ -129,6 +136,40 @@ class PublishCreateSerializer(StrictMixin, serializers.Serializer):
 
 class EmptyActionSerializer(StrictMixin, serializers.Serializer):
     pass
+
+
+class PublishResolutionSerializer(StrictMixin, serializers.Serializer):
+    resolution = serializers.ChoiceField(
+        choices=["CONFIRM_PUBLISHED", "CONFIRM_NOT_PUBLISHED"]
+    )
+    provider_post_id = NativeStringField(
+        required=False,
+        allow_blank=True,
+        trim_whitespace=True,
+        max_length=255,
+    )
+
+    def validate(self, attrs):
+        resolution = attrs["resolution"]
+        provider_post_id = attrs.get("provider_post_id", "")
+        if resolution == "CONFIRM_PUBLISHED" and not provider_post_id:
+            raise serializers.ValidationError(
+                {"provider_post_id": "Buffer post ID is required."}
+            )
+        if resolution == "CONFIRM_NOT_PUBLISHED" and provider_post_id:
+            raise serializers.ValidationError(
+                {"provider_post_id": "Omit the post ID when confirming no post."}
+            )
+        return attrs
+
+
+class ConfirmPublishedResolutionSerializer(StrictMixin, serializers.Serializer):
+    resolution = serializers.ChoiceField(choices=["CONFIRM_PUBLISHED"])
+    provider_post_id = NativeStringField(trim_whitespace=True, max_length=255)
+
+
+class ConfirmNotPublishedResolutionSerializer(StrictMixin, serializers.Serializer):
+    resolution = serializers.ChoiceField(choices=["CONFIRM_NOT_PUBLISHED"])
 
 
 class PublishFilterSerializer(StrictMixin, serializers.Serializer):

@@ -35,7 +35,7 @@ function observed(value: number | string | null | undefined): string {
 </script>
 
 <template>
-  <main class="attribution-page">
+  <section class="attribution-page">
     <header class="attribution-hero">
       <div>
         <p class="eyebrow">EXECUTIVE ATTRIBUTION</p>
@@ -79,7 +79,7 @@ function observed(value: number | string | null | undefined): string {
         @close="showEvidence = false"
       />
     </template>
-  </main>
+  </section>
 </template>
 
 <style scoped>

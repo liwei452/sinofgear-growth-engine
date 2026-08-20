@@ -132,7 +132,7 @@ async function refreshWorkspace(): Promise<void> {
 </script>
 
 <template>
-  <main class="content-area page-stack publishing-workspace">
+  <section class="content-area page-stack publishing-workspace">
     <header class="workspace-header">
       <div class="workspace-header-copy">
         <p class="eyebrow">内容工作台</p>
@@ -178,7 +178,7 @@ async function refreshWorkspace(): Promise<void> {
       @platform-generated="refreshWorkspace"
       @conflict="reviewing = null"
     />
-  </main>
+  </section>
 </template>
 
 <style scoped>

@@ -41,7 +41,7 @@ const funnelSteps = computed<FunnelStep[]>(() => {
 </script>
 
 <template>
-  <main class="results-page">
+  <section class="results-page">
     <header class="results-hero"><div><p class="eyebrow">BUSINESS OUTCOMES</p><h1>效果</h1><p>只显示系统中已经保存、可核验的结果；没有记录时明确标注。</p></div><RouterLink class="button button-quiet" to="/attribution">查看归因依据</RouterLink></header>
     <label class="mission-picker">增长任务<select v-model="selectedMissionId"><option value="" disabled>选择任务</option><option v-for="mission in missions" :key="mission.id" :value="mission.id">{{ mission.title }}</option></select></label>
     <p v-if="!selectedMissionId" class="empty">请选择一个增长任务查看效果。</p><p v-else-if="attributionQuery.isLoading.value" class="empty">正在读取已保存的结果…</p>
@@ -51,7 +51,7 @@ const funnelSteps = computed<FunnelStep[]>(() => {
       <section aria-labelledby="funnel-table-title" class="table-card"><h2 id="funnel-table-title">漏斗数据表</h2><table><thead><tr><th>阶段</th><th>已记录结果</th><th>说明</th></tr></thead><tbody><tr v-for="(step, index) in funnelSteps" :key="step.label"><th scope="row" :aria-label="step.label">阶段 {{ index + 1 }}</th><td>{{ observed(step.value) }}</td><td>{{ step.detail }}</td></tr></tbody></table></section>
       <button class="button button-quiet" type="button" @click="showEvidence = true">查看归因依据</button><AttributionEvidenceDrawer v-if="showEvidence" :traces="attribution.traces" @close="showEvidence = false" />
     </template>
-  </main>
+  </section>
 </template>
 
 <style scoped>

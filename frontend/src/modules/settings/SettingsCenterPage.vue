@@ -156,7 +156,7 @@ const visibleAdvancedGroups = computed(() => visibleGroups(advancedGroups))
 </script>
 
 <template>
-  <main class="settings-page">
+  <section class="settings-page">
     <header class="settings-heading">
       <div>
         <p class="eyebrow">账户与系统</p>
@@ -197,7 +197,7 @@ const visibleAdvancedGroups = computed(() => visibleGroups(advancedGroups))
         <nav v-if="group.destinations.length" :aria-label="`${group.title}入口`"><RouterLink v-for="destination in group.destinations" :key="destination.to" :to="destination.to">{{ destination.label }}</RouterLink></nav>
       </section>
     </div>
-  </main>
+  </section>
 </template>
 
 <style scoped>

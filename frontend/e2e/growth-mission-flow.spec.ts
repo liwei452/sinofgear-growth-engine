@@ -26,7 +26,7 @@ async function createMission(page: Page, title: string) {
 test("growth mission operating flow", async ({ page }) => {
   await login(page)
 
-  await expect(page.getByRole("heading", { name: "今日待办", level: 1 })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "今日", level: 1 })).toBeVisible()
   await page.getByRole("link", { name: "增长任务" }).click()
   await expect(page.getByRole("heading", { name: "增长任务" })).toBeVisible()
 
@@ -38,6 +38,6 @@ test("growth mission operating flow", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "社媒增长" })).toBeVisible()
   await expect(page.locator('nav[aria-label="任务分区"]')).toBeVisible()
 
-  await page.getByRole("link", { name: "数据归因" }).click()
+  await page.goto("/attribution")
   await expect(page.getByRole("heading", { name: "数据归因" })).toBeVisible()
 })

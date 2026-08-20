@@ -128,7 +128,7 @@ const statusMessage = computed(() => {
 </script>
 
 <template>
-  <main class="promotion-page">
+  <section class="promotion-page">
     <WorkspaceHeader
       title="开始推广"
       description="按已保存的公司、任务、素材和渠道状态继续推进；页面不会估算或补造进度。"
@@ -191,7 +191,7 @@ const statusMessage = computed(() => {
       v-if="journeyState === 'ready' && selectedMission && !currentStep && steps.every(step => step.state === 'complete')"
       kind="success" title="推广准备记录已齐全" message="请在任务详情中确认后续执行状态。"
     />
-  </main>
+  </section>
 </template>
 
 <style scoped>

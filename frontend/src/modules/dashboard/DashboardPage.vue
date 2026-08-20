@@ -31,7 +31,7 @@ function isForbidden(error: unknown): boolean {
 </script>
 
 <template>
-  <main class="today-page">
+  <section class="today-page">
     <WorkspaceHeader
       title="今日"
       description="基于当前任务和增长记录，先确认机会、阻塞、证据与下一步。"
@@ -158,7 +158,7 @@ function isForbidden(error: unknown): boolean {
 
       <TodayWorkInbox id="today-todo" class="today-inbox" />
     </div>
-  </main>
+  </section>
 </template>
 
 <style scoped>

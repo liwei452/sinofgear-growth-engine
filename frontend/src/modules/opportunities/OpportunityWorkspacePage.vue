@@ -153,7 +153,7 @@ async function importCandidates(): Promise<void> {
 </script>
 
 <template>
-  <main class="opportunity-workspace">
+  <section class="opportunity-workspace">
     <header class="workspace-header">
       <div><p class="eyebrow">CUSTOMER OPPORTUNITIES</p><h1>客户机会</h1><p>候选公司、意向信号、联系人和入站线索保持独立；仅展示已返回的资料与动作结果。</p></div><button type="button" @click="importOpen = !importOpen">导入候选名单</button>
     </header>
@@ -202,7 +202,7 @@ async function importCandidates(): Promise<void> {
         <p v-if="actionError" role="alert" class="error">{{ actionError }}</p>
       </section>
     </div>
-  </main>
+  </section>
 </template>
 
 <style scoped>

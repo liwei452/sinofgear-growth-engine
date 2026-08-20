@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useQuery } from "@tanstack/vue-query"
 import { computed } from "vue"
+import { useRoute } from "vue-router"
 
 import { ApiError } from "../../api/client"
 import BusinessState from "../../shared/components/BusinessState.vue"
@@ -16,8 +17,10 @@ import { promotionSteps } from "./promotionProgress"
 const currentUserQuery = useQuery(currentUserQueryOptions())
 const companyFactsQuery = useQuery(companyFactsQueryOptions())
 const missionsQuery = useQuery(missionsQueryOptions())
+const route = useRoute()
 const permissions = computed(() => new Set(currentUserQuery.data.value?.membership.permissions ?? []))
 const organizationId = computed(() => currentUserQuery.data.value?.organization.id ?? "")
+const isAdministrator = computed(() => currentUserQuery.data.value?.membership.role === "ADMINISTRATOR")
 const canReadProducts = computed(() => permissions.value.has("products.read"))
 const canReadAssets = computed(() => permissions.value.has("assets.read"))
 const canReadPublishing = computed(() => permissions.value.has("publishing.read"))
@@ -41,12 +44,34 @@ const accountsQuery = useQuery({
   retry: false,
 })
 
-const primaryMission = computed(() => missionsQuery.data.value?.[0] ?? null)
+const requestedMissionId = computed(() => typeof route.query.mission === "string" ? route.query.mission : "")
+const selectedMission = computed(() => {
+  const missions = missionsQuery.data.value ?? []
+  if (requestedMissionId.value) return missions.find(mission => mission.id === requestedMissionId.value) ?? null
+  return missions.length === 1 ? missions[0] : null
+})
+const requiresMissionSelection = computed(() => (missionsQuery.data.value?.length ?? 0) > 1 && !selectedMission.value)
+function isForbidden(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403
+}
+
+const journeyState = computed<"loading" | "permission" | "forbidden" | "error" | "ready">(() => {
+  if (currentUserQuery.isPending.value || companyFactsQuery.isPending.value || missionsQuery.isPending.value) return "loading"
+  if (!canReadProducts.value || !canReadAssets.value || !canReadPublishing.value) return "permission"
+  if (productsQuery.isPending.value || assetsQuery.isPending.value || accountsQuery.isPending.value) return "loading"
+  if ([companyFactsQuery, missionsQuery, productsQuery, assetsQuery, accountsQuery]
+    .some(query => query.isError.value && isForbidden(query.error.value))) return "forbidden"
+  if (companyFactsQuery.isError.value || missionsQuery.isError.value || productsQuery.isError.value || assetsQuery.isError.value || accountsQuery.isError.value) return "error"
+  return "ready"
+})
 const steps = computed(() => {
-  const mission = primaryMission.value
+  const mission = selectedMission.value
   const verifiedFacts = (companyFactsQuery.data.value ?? []).some(fact => fact.verification_status === "VERIFIED" && !fact.is_demo)
   const productExists = (productsQuery.data.value?.results ?? []).some(product => product.id === mission?.primary_product_id)
-  const assetsReady = (assetsQuery.data.value?.results ?? []).some(asset => asset.status === "READY")
+  const assetsReady = (assetsQuery.data.value?.results ?? []).some(asset => (
+    asset.status === "READY" && Boolean(mission?.primary_product_id)
+      && asset.products.some(product => product.id === mission?.primary_product_id)
+  ))
   const activeAccounts = (accountsQuery.data.value ?? []).filter(account => account.status === "ACTIVE")
   return promotionSteps({
     companyConfigured: verifiedFacts,
@@ -66,9 +91,25 @@ const steps = computed(() => {
           : step.id === "content" && !canReadAssets.value
             ? "当前账户无权读取素材，无法确认内容是否已准备。"
             : step.summary
-    if (step.id === "discovery" && mission) return { ...step, summary, route: `/missions/${mission.id}?view=customer` }
-    if (step.id === "approval" && mission) return { ...step, summary, route: `/missions/${mission.id}` }
-    return { ...step, summary }
+    const eligibleRoute = step.id === "company"
+      ? (isAdministrator.value ? "/company" : undefined)
+      : step.id === "market"
+        ? "/missions"
+        : step.id === "icp"
+          ? (isAdministrator.value ? "/products" : undefined)
+          : step.id === "discovery"
+            ? (mission ? `/missions/${mission.id}?view=customer` : "/missions")
+            : step.id === "content"
+              ? "/assets"
+              : step.id === "channels"
+                ? (isAdministrator.value ? "/platform-accounts" : undefined)
+                : mission ? `/missions/${mission.id}` : "/missions"
+    const unavailableRoute = step.state === "current" && !eligibleRoute
+    return {
+      ...step,
+      summary: unavailableRoute ? "需要管理员权限才能继续此步骤，请联系管理员完成配置。" : summary,
+      route: eligibleRoute,
+    }
   })
 })
 
@@ -84,9 +125,6 @@ const statusMessage = computed(() => {
     : `${active.length} 个有效渠道账户，尚未配置自动发布接口。`
 })
 
-function isForbidden(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 403
-}
 </script>
 
 <template>
@@ -97,28 +135,42 @@ function isForbidden(error: unknown): boolean {
     />
 
     <BusinessState
-      v-if="companyFactsQuery.isPending.value || missionsQuery.isPending.value"
+      v-if="journeyState === 'loading'"
       kind="loading" title="正在读取推广记录" message="完成读取后才会确认当前步骤。"
     />
     <BusinessState
-      v-else-if="companyFactsQuery.isError.value && isForbidden(companyFactsQuery.error.value)"
-      kind="blocked" title="无权读取公司事实" message="无法确认公司资料是否已准备完成。"
+      v-else-if="journeyState === 'permission'"
+      kind="blocked" title="缺少推广所需查看权限" message="无法确认产品、素材或渠道状态，工作台不会推导进度。"
     />
     <BusinessState
-      v-else-if="companyFactsQuery.isError.value || missionsQuery.isError.value"
+      v-else-if="journeyState === 'forbidden'"
+      kind="blocked" title="无权读取推广记录" message="服务端拒绝读取所需记录，工作台不会推导进度。"
+    />
+    <BusinessState
+      v-else-if="journeyState === 'error' && (companyFactsQuery.isError.value || missionsQuery.isError.value || accountsQuery.isError.value)"
       kind="error" title="推广状态暂时无法读取" message="请稍后重试；未读取到的数据不会被标记为已完成。"
-      action-label="重新加载" @action="companyFactsQuery.refetch(); missionsQuery.refetch()"
+      action-label="重新加载" @action="companyFactsQuery.refetch(); missionsQuery.refetch(); accountsQuery.refetch()"
     />
     <BusinessState
-      v-else-if="productsQuery.isError.value || assetsQuery.isError.value"
+      v-else-if="journeyState === 'error'"
       kind="error" title="产品或素材状态暂时无法读取" message="无法确认客户画像或内容准备状态，未读取的数据不会被标记为已完成。"
       action-label="重新加载" @action="productsQuery.refetch(); assetsQuery.refetch()"
     />
 
-    <section class="journey" aria-labelledby="promotion-journey-title">
+    <section v-if="journeyState === 'ready' && requiresMissionSelection" class="mission-selection" aria-labelledby="mission-selection-title">
+      <h2 id="mission-selection-title">请选择要推进的增长任务</h2>
+      <p>不同任务的市场、客户、内容与审核记录互不混用。</p>
+      <nav aria-label="选择增长任务">
+        <RouterLink v-for="mission in missionsQuery.data.value" :key="mission.id" :to="`/promotion?mission=${encodeURIComponent(mission.id)}`">
+          选择 {{ mission.title }}
+        </RouterLink>
+      </nav>
+    </section>
+
+    <section v-else-if="journeyState === 'ready'" class="journey" aria-labelledby="promotion-journey-title">
       <div class="journey-heading">
         <h2 id="promotion-journey-title">推广工作台</h2>
-        <p>当前步骤仅来自服务端保存的记录。</p>
+        <p>{{ selectedMission ? `当前任务：${selectedMission.title}` : "尚未创建增长任务" }}</p>
       </div>
       <ol class="promotion-steps">
         <li v-for="step in steps" :key="step.id" :class="`step-${step.state}`">
@@ -145,6 +197,11 @@ function isForbidden(error: unknown): boolean {
 <style scoped>
 .promotion-page { display: grid; gap: 18px; }
 .journey { border: 1px solid var(--sg-line); border-radius: 14px; background: #fff; padding: 18px; }
+.mission-selection { display: grid; gap: 10px; border: 1px solid var(--sg-line); border-radius: 14px; background: #fff; padding: 18px; }
+.mission-selection h2, .mission-selection p { margin: 0; }
+.mission-selection p { color: var(--sg-muted); font-size: .82rem; }
+.mission-selection nav { display: flex; flex-wrap: wrap; gap: 10px; }
+.mission-selection a { color: var(--sg-brand); font-size: .84rem; font-weight: 800; text-decoration: none; }
 .journey-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 12px; }
 .journey-heading h2, .step-copy h3, .step-copy p { margin: 0; }
 .journey-heading p, .step-copy p { color: var(--sg-muted); font-size: .82rem; line-height: 1.5; }

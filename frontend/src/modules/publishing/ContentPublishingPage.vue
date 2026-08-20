@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { useQuery } from "@tanstack/vue-query"
-import { computed, ref } from "vue"
+import { useQuery, useQueryClient } from "@tanstack/vue-query"
+import { computed, nextTick, ref } from "vue"
 
 import { apiRequest } from "../../api/client"
 import { currentUserQueryOptions } from "../auth/auth"
 import ContentReviewDialog from "../content/ContentReviewDialog.vue"
-import { listMasterContents, listPlatformContents, listPlatforms, type MasterContent, type PlatformContent } from "../content/api"
+import { getCursorPage, listMasterContents, listPlatformContents, listPlatforms, type CursorPage, type MasterContent, type PlatformContent } from "../content/api"
 import { contentWorkflowStage, type ContentWorkflowStage, type PublishStatus } from "./contentWorkflow"
 
 type PublishTask = {
   id: string
   platform_content_id: string
+  social_account_id: string
   connector_code: string
   status: Exclude<PublishStatus, null>
   provider_submission_id: string | null
@@ -31,27 +32,49 @@ const labels: Record<ContentWorkflowStage, string> = {
 const stages = Object.keys(labels) as ContentWorkflowStage[]
 const activeStage = ref<ContentWorkflowStage>("REVIEW")
 const reviewing = ref<WorkflowItem | null>(null)
+const tabRefs = ref<HTMLButtonElement[]>([])
+const queryClient = useQueryClient()
 
-const masterQuery = useQuery({ queryKey: ["publishing-workspace", "masters"], queryFn: () => listMasterContents({ page_size: 50 }), retry: false })
-const platformQuery = useQuery({ queryKey: ["publishing-workspace", "platforms-content"], queryFn: () => listPlatformContents({ page_size: 50 }), retry: false })
+async function readAllPages<T>(first: Promise<CursorPage<T>>, exactPath: string): Promise<T[]> {
+  const results: T[] = []
+  const visited = new Set<string>()
+  let page = await first
+  while (true) {
+    results.push(...page.results)
+    if (!page.next || visited.has(page.next)) return results
+    visited.add(page.next)
+    page = await getCursorPage<T>(page.next, exactPath)
+  }
+}
+
+const masterQuery = useQuery({ queryKey: ["publishing-workspace", "masters"], queryFn: () => readAllPages(listMasterContents({ page_size: 50 }), "/api/v1/master-contents"), retry: false })
+const platformQuery = useQuery({ queryKey: ["publishing-workspace", "platforms-content"], queryFn: () => readAllPages(listPlatformContents({ page_size: 50 }), "/api/v1/platform-contents"), retry: false })
 const tasksQuery = useQuery({
   queryKey: ["publishing-workspace", "tasks"],
-  queryFn: async () => (await apiRequest<{ results: PublishTask[] }>("/api/v1/publish-tasks?page_size=50"))?.results ?? [],
+  queryFn: async () => readAllPages(
+    apiRequest<CursorPage<PublishTask>>("/api/v1/publish-tasks?page_size=50").then(page => page ?? { next: null, previous: null, results: [] }),
+    "/api/v1/publish-tasks",
+  ),
   retry: false,
 })
 const platformDefinitionsQuery = useQuery({ queryKey: ["content", "platforms"], queryFn: listPlatforms, retry: false })
 const currentUserQuery = useQuery(currentUserQueryOptions())
 
 const workflowItems = computed<WorkflowItem[]>(() => {
-  const tasksByContentId = new Map((tasksQuery.data.value ?? []).map(task => [task.platform_content_id, task]))
-  const masterItems = (masterQuery.data.value?.results ?? []).map(item => ({
+  const tasksByContentId = new Map<string, PublishTask[]>()
+  for (const task of tasksQuery.data.value ?? []) {
+    tasksByContentId.set(task.platform_content_id, [...(tasksByContentId.get(task.platform_content_id) ?? []), task])
+  }
+  const masterItems = (masterQuery.data.value ?? []).map(item => ({
     id: `master-${item.id}`, item, kind: "master" as const,
     stage: contentWorkflowStage({ contentStatus: item.status, publishStatus: null }), task: null,
   }))
-  const platformItems = (platformQuery.data.value?.results ?? []).map(item => {
-    const task = tasksByContentId.get(item.id) ?? null
-    return { id: `platform-${item.id}`, item, kind: "platform" as const, task,
-      stage: contentWorkflowStage({ contentStatus: item.status, publishStatus: task?.status ?? null }) }
+  const platformItems = (platformQuery.data.value ?? []).flatMap(item => {
+    const tasks = tasksByContentId.get(item.id) ?? []
+    if (!tasks.length) return [{ id: `platform-${item.id}`, item, kind: "platform" as const, task: null,
+      stage: contentWorkflowStage({ contentStatus: item.status, publishStatus: null }) }]
+    return tasks.map(task => ({ id: `platform-${item.id}-task-${task.id}`, item, kind: "platform" as const, task,
+      stage: contentWorkflowStage({ contentStatus: item.status, publishStatus: task.status }) }))
   })
   return [...masterItems, ...platformItems]
 })
@@ -72,6 +95,29 @@ function deliveryFact(item: WorkflowItem): string {
   if (connector.includes("OFFICIAL")) return "通过官方 API 提交；请以平台回执为准"
   return "手工导出或待人工提交；导出不代表已发布"
 }
+
+function activateStage(stage: ContentWorkflowStage, focus = false): void {
+  activeStage.value = stage
+  if (focus) void nextTick(() => tabRefs.value[stages.indexOf(stage)]?.focus())
+}
+
+function onTabKeydown(event: KeyboardEvent, index: number): void {
+  const target = event.key === "ArrowRight" ? (index + 1) % stages.length
+    : event.key === "ArrowLeft" ? (index - 1 + stages.length) % stages.length
+      : event.key === "Home" ? 0 : event.key === "End" ? stages.length - 1 : -1
+  if (target < 0) return
+  event.preventDefault()
+  activateStage(stages[target], true)
+}
+
+async function refreshWorkspace(): Promise<void> {
+  reviewing.value = null
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["publishing-workspace", "masters"] }),
+    queryClient.invalidateQueries({ queryKey: ["publishing-workspace", "platforms-content"] }),
+    queryClient.invalidateQueries({ queryKey: ["publishing-workspace", "tasks"] }),
+  ])
+}
 </script>
 
 <template>
@@ -86,25 +132,28 @@ function deliveryFact(item: WorkflowItem): string {
 
     <section class="workflow-tabs" aria-label="内容发布状态">
       <div role="tablist" aria-label="内容发布阶段">
-        <button v-for="stage in stages" :key="stage" type="button" role="tab" :aria-selected="activeStage === stage" :class="{ active: activeStage === stage }" @click="activeStage = stage">
+        <button v-for="(stage, index) in stages" :id="`publishing-tab-${stage}`" :key="stage" :ref="element => { if (element) tabRefs[index] = element as HTMLButtonElement }" type="button" role="tab" :tabindex="activeStage === stage ? 0 : -1" :aria-selected="activeStage === stage" :aria-controls="`publishing-panel-${stage}`" :class="{ active: activeStage === stage }" @click="activateStage(stage)" @keydown="onTabKeydown($event, index)">
           {{ labels[stage] }} <span>{{ counts[stage] }}</span>
         </button>
       </div>
     </section>
 
     <p v-if="masterQuery.isError.value || platformQuery.isError.value || tasksQuery.isError.value" class="form-error">部分状态暂时无法读取；未读取到的内容不会被当作已发布。</p>
-    <section v-if="filteredItems.length" class="outcome-list" :aria-label="labels[activeStage]">
-      <article v-for="entry in filteredItems" :key="entry.id" class="outcome-card">
-        <div>
-          <p class="eyebrow">{{ platformName(entry) }} · {{ entry.item.status }}</p>
-          <h2>{{ entry.item.payload.title }}</h2>
-          <p>{{ deliveryFact(entry) }}</p>
-          <p v-if="entry.task?.provider_submission_id" class="submission-id">提交编号：{{ entry.task.provider_submission_id }}</p>
-        </div>
-        <button type="button" class="button button-secondary" :aria-label="`查看内容：${entry.item.payload.title}`" @click="reviewing = entry">查看内容</button>
-      </article>
+    <section :id="`publishing-panel-${activeStage}`" class="outcome-list" role="tabpanel" :aria-labelledby="`publishing-tab-${activeStage}`" :aria-label="labels[activeStage]">
+      <template v-if="filteredItems.length">
+        <article v-for="entry in filteredItems" :key="entry.id" class="outcome-card">
+          <div>
+            <p class="eyebrow">{{ platformName(entry) }} · {{ entry.item.status }}</p>
+            <h2>{{ entry.item.payload.title }}</h2>
+            <p>{{ deliveryFact(entry) }}</p>
+            <p v-if="entry.task" class="account-id">账号：{{ entry.task.social_account_id }}</p>
+            <p v-if="entry.task?.provider_submission_id" class="submission-id">提交编号：{{ entry.task.provider_submission_id }}</p>
+          </div>
+          <button type="button" class="button button-secondary" :aria-label="`查看内容：${entry.item.payload.title}`" @click="reviewing = entry">查看内容</button>
+        </article>
+      </template>
+      <section v-else class="empty-state"><div class="empty-state-icon">○</div><div><h2>{{ labels[activeStage] }}暂无内容</h2><p>切换状态查看其他内容。系统不会把未知提交或手工导出误报为已发布。</p></div></section>
     </section>
-    <section v-else class="empty-state"><div class="empty-state-icon">○</div><div><h2>{{ labels[activeStage] }}暂无内容</h2><p>切换状态查看其他内容。系统不会把未知提交或手工导出误报为已发布。</p></div></section>
 
     <ContentReviewDialog
       v-if="reviewing"
@@ -114,8 +163,8 @@ function deliveryFact(item: WorkflowItem): string {
       :current-head="reviewing.item.is_current_head"
       :platforms="platformDefinitionsQuery.data.value ?? []"
       @close="reviewing = null"
-      @updated="reviewing = null"
-      @platform-generated="reviewing = null"
+      @updated="refreshWorkspace"
+      @platform-generated="refreshWorkspace"
       @conflict="reviewing = null"
     />
   </main>

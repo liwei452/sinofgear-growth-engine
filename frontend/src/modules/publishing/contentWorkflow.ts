@@ -30,7 +30,9 @@ export function contentWorkflowStage({ contentStatus, publishStatus }: ContentWo
         case "PUBLISHED": return "PUBLISHED"
         case "REJECTED":
         case "ARCHIVED": return "NEEDS_ATTENTION"
+        default: return "NEEDS_ATTENTION"
       }
+    default: return "NEEDS_ATTENTION"
   }
 }
 

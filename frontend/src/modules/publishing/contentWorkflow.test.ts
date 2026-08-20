@@ -13,3 +13,7 @@ it("does not offer a duplicate publication retry when submission confirmation is
   expect(canOfferRetry("SUBMISSION_UNKNOWN")).toBe(false)
   expect(canOfferRetry("FAILED")).toBe(true)
 })
+
+it("uses the neutral attention state for an unrecognized runtime status", () => {
+  expect(contentWorkflowStage({ contentStatus: "APPROVED", publishStatus: "NEW_SERVER_STATUS" as never })).toBe("NEEDS_ATTENTION")
+})

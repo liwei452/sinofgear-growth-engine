@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -745,6 +746,85 @@ def claim_publish_task(task_id=None):
     return task, attempt
 
 
+@dataclass(frozen=True)
+class _NormalizedProviderResult:
+    succeeded: bool
+    submitted: bool
+    submission_id: str
+    external_id: str
+    error_code: str
+    retry_after_seconds: int | None
+    malformed: bool
+
+
+_MISSING_RESULT_FIELD = object()
+
+
+def _read_provider_result_field(result, field, default):
+    try:
+        value = getattr(result, field, _MISSING_RESULT_FIELD)
+    except Exception:
+        return default, True, True
+    if value is _MISSING_RESULT_FIELD:
+        return default, False, False
+    return value, False, True
+
+
+def _normalize_provider_result(result):
+    if type(result) is _NormalizedProviderResult:
+        return result
+
+    succeeded, succeeded_error, succeeded_present = _read_provider_result_field(
+        result, "succeeded", False
+    )
+    submitted, submitted_error, _ = _read_provider_result_field(
+        result, "submitted", False
+    )
+    submission_id, submission_id_error, submission_id_present = (
+        _read_provider_result_field(result, "submission_id", "")
+    )
+    external_id, external_id_error, external_id_present = _read_provider_result_field(
+        result, "external_id", ""
+    )
+    error_code, error_code_error, error_code_present = _read_provider_result_field(
+        result, "error_code", ""
+    )
+    retry_after_seconds, retry_error, retry_present = _read_provider_result_field(
+        result, "retry_after_seconds", None
+    )
+
+    malformed = any(
+        (
+            succeeded_error,
+            submitted_error,
+            submission_id_error,
+            external_id_error,
+            error_code_error,
+            retry_error,
+            not succeeded_present,
+            type(succeeded) is not bool,
+            type(submitted) is not bool,
+            submission_id_present and type(submission_id) is not str,
+            external_id_present and type(external_id) is not str,
+            error_code_present and type(error_code) is not str,
+            retry_present
+            and retry_after_seconds is not None
+            and type(retry_after_seconds) is not int,
+        )
+    )
+    return _NormalizedProviderResult(
+        succeeded=succeeded if type(succeeded) is bool else False,
+        submitted=submitted if type(submitted) is bool else False,
+        submission_id=submission_id if type(submission_id) is str else "",
+        external_id=external_id if type(external_id) is str else "",
+        error_code=error_code if type(error_code) is str else "",
+        retry_after_seconds=(
+            retry_after_seconds if type(retry_after_seconds) is int else None
+        ),
+        malformed=malformed,
+    )
+
+
 def _safe_error(result):
     try:
         code = getattr(result, "error_code", "")
@@ -752,7 +832,7 @@ def _safe_error(result):
         code = ""
     code = (
         code
-        if isinstance(code, str) and code in SAFE_PUBLISH_ERRORS
+        if type(code) is str and code in SAFE_PUBLISH_ERRORS
         else "PROVIDER_ERROR"
     )
     return SAFE_PUBLISH_ERRORS[code]
@@ -760,6 +840,7 @@ def _safe_error(result):
 
 @transaction.atomic
 def complete_publish_failure(task_id, claim_token, result):
+    result = _normalize_provider_result(result)
     task = PublishTask.objects.select_for_update().get(pk=task_id)
     attempt = PublishAttempt.objects.select_for_update().get(
         task=task, claim_token=claim_token
@@ -800,6 +881,7 @@ def complete_publish_failure(task_id, claim_token, result):
 
 @transaction.atomic
 def complete_publish_success(task_id, claim_token, result, *, actor=None):
+    result = _normalize_provider_result(result)
     task = PublishTask.objects.select_for_update().select_related(
         "platform_content"
     ).get(pk=task_id)
@@ -854,7 +936,7 @@ def complete_publish_success(task_id, claim_token, result, *, actor=None):
 
 
 def _normalize_submission_id(value) -> str | None:
-    if not isinstance(value, str):
+    if type(value) is not str:
         return None
     normalized = value.strip()
     if not normalized or len(normalized) > 255:
@@ -863,21 +945,23 @@ def _normalize_submission_id(value) -> str | None:
 
 
 def _result_kind(result):
-    if getattr(result, "succeeded", False):
+    result = _normalize_provider_result(result)
+    if result.malformed:
+        return "unknown"
+    if result.succeeded:
         return "succeeded"
-    if getattr(result, "submitted", False):
-        submission_id = _normalize_submission_id(
-            getattr(result, "submission_id", "")
-        )
+    if result.submitted:
+        submission_id = _normalize_submission_id(result.submission_id)
         return "submitted" if submission_id else "unknown"
-    if getattr(result, "error_code", "") == "OUTCOME_UNKNOWN":
+    if result.error_code == "OUTCOME_UNKNOWN":
         return "unknown"
     return "failed"
 
 
 @transaction.atomic
 def complete_publish_submitted(task_id, claim_token, result):
-    submission_id = _normalize_submission_id(getattr(result, "submission_id", ""))
+    result = _normalize_provider_result(result)
+    submission_id = _normalize_submission_id(result.submission_id)
     if submission_id is None:
         raise PublishingConflict("Connector submission id is invalid.")
     task = PublishTask.objects.select_for_update().get(pk=task_id)
@@ -1115,6 +1199,7 @@ def _associate_pre_publish_tracking(task, post) -> None:
 
 def _finalize_provider_result(task, attempt, result):
     try:
+        result = _normalize_provider_result(result)
         kind = _result_kind(result)
         if kind == "succeeded":
             post = complete_publish_success(
@@ -1131,7 +1216,7 @@ def _finalize_provider_result(task, attempt, result):
         complete_publish_failure(task.id, attempt.claim_token, result)
         return None
     except Exception:
-        logger.exception("Provider result finalization failed; outcome is unknown.")
+        logger.error("Provider result finalization failed; outcome is unknown.")
         try:
             complete_publish_unknown(
                 task.id,
@@ -1139,7 +1224,7 @@ def _finalize_provider_result(task, attempt, result):
                 PublishResult(succeeded=False, error_code="OUTCOME_UNKNOWN"),
             )
         except Exception:
-            logger.exception("Unable to persist the unknown provider outcome.")
+            logger.error("Unable to persist the unknown provider outcome.")
         return None
 
 

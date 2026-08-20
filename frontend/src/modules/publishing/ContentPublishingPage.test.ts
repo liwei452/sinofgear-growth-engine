@@ -133,7 +133,14 @@ it("uses outcome-specific copy and keeps every tab panel target in the DOM", asy
   const submitted = await screen.findByRole("tab", { name: /已提交/ })
   expect(submitted).toHaveAttribute("aria-controls", "publishing-panel-SUBMITTED")
   expect(document.getElementById(submitted.getAttribute("aria-controls") ?? "")).toBeInTheDocument()
+  for (const stage of ["PREPARE", "AI_DRAFT", "SCHEDULED", "SUBMITTED", "PUBLISHED", "NEEDS_ATTENTION"]) {
+    expect(document.getElementById(`publishing-panel-${stage}`)).toHaveProperty("hidden", true)
+  }
   await userEvent.setup().click(submitted)
+  expect(document.getElementById("publishing-panel-SUBMITTED")).toHaveProperty("hidden", false)
+  for (const stage of ["PREPARE", "AI_DRAFT", "REVIEW", "SCHEDULED", "PUBLISHED", "NEEDS_ATTENTION"]) {
+    expect(document.getElementById(`publishing-panel-${stage}`)).toHaveProperty("hidden", true)
+  }
   expect(await screen.findByText("平台提交状态待确认；请勿重复发布")).toBeInTheDocument()
   await userEvent.setup().click(screen.getByRole("tab", { name: /需要处理/ }))
   expect(await screen.findByText("平台发布失败；请人工检查后处理")).toBeInTheDocument()

@@ -152,9 +152,17 @@ test.describe("business outcome navigation", () => {
     await expect(page.locator("#publishing-tab-PREPARE")).toBeFocused()
     await page.locator("#publishing-tab-SUBMITTED").click()
     await expect(page.locator("#publishing-panel-SUBMITTED")).toBeVisible()
+    for (const stage of stages.filter(stage => stage !== "SUBMITTED")) {
+      await expect(page.locator(`#publishing-panel-${stage}`)).not.toBeVisible()
+    }
     await expect(page.getByText("平台提交状态待确认；请勿重复发布")).toBeVisible()
     await expect(page.getByText("已发布", { exact: true })).toHaveCount(0)
     await expect(page.getByRole("button", { name: /重试|运行发布|再次发布/ })).toHaveCount(0)
+    await page.locator("#publishing-tab-NEEDS_ATTENTION").click()
+    await expect(page.locator("#publishing-panel-NEEDS_ATTENTION")).toBeVisible()
+    for (const stage of stages.filter(stage => stage !== "NEEDS_ATTENTION")) {
+      await expect(page.locator(`#publishing-panel-${stage}`)).not.toBeVisible()
+    }
     expect(blockedSideEffects).toEqual([])
     expect(externalRequests).toEqual([])
   })

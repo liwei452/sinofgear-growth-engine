@@ -27,13 +27,17 @@ test("growth mission operating flow", async ({ page }) => {
   await login(page)
 
   await expect(page.getByRole("heading", { name: "今日", level: 1 })).toBeVisible()
-  await page.getByRole("link", { name: "增长任务" }).click()
+  // Missions are a supported deep-link workflow, not one of the five
+  // outcome-primary sidebar destinations. Exercise the actual routed page
+  // directly instead of waiting for a non-existent sidebar link.
+  await page.goto("/missions")
   await expect(page.getByRole("heading", { name: "增长任务" })).toBeVisible()
 
-  await createMission(page, "E2E mission")
+  const missionTitle = "E2E growth mission flow"
+  await createMission(page, missionTitle)
 
-  await page.getByRole("link", { name: "E2E mission" }).click()
-  await expect(page.getByRole("heading", { name: "E2E mission", level: 1 })).toBeVisible()
+  await page.getByRole("link", { name: missionTitle }).click()
+  await expect(page.getByRole("heading", { name: missionTitle, level: 1 })).toBeVisible()
   await expect(page.getByRole("heading", { name: "客户开发" })).toBeVisible()
   await expect(page.getByRole("heading", { name: "社媒增长" })).toBeVisible()
   await expect(page.locator('nav[aria-label="任务分区"]')).toBeVisible()

@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from datetime import timedelta
 
 import pytest
 from django.db import IntegrityError, transaction
@@ -32,6 +33,18 @@ class RecordingConnector:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
+
+    def provider_request_fingerprint(self, request):
+        from integrations.platforms.buffer_connector import _provider_identity_fingerprint
+
+        return _provider_identity_fingerprint({
+            "channelId": request.provider_account_id,
+            "mode": "shareNow",
+            "schedulingType": "automatic",
+            "needsApproval": False,
+            "text": request.payload["commentary"],
+            "assets": [],
+        })
 
 
 def _buffer_account(context, monkeypatch):
@@ -97,6 +110,7 @@ def test_buffer_acceptance_becomes_submitted_without_published_post(
     publishing_context["content"].refresh_from_db()
     attempt = PublishAttempt.objects.get(task=task)
     assert task.status == PublishTask.Status.SUBMITTED
+    assert task.next_reconcile_at == task.finished_at + timedelta(seconds=60)
     assert attempt.status == PublishAttempt.Status.SUBMITTED
     assert task.provider_submission_id == attempt.provider_submission_id == "buffer-post-1"
     assert publishing_context["content"].status == PlatformContent.Status.APPROVED
@@ -109,6 +123,39 @@ def test_buffer_acceptance_becomes_submitted_without_published_post(
 
     execute_publish_task(task.id)
     assert len(connector.requests) == 1
+
+
+def test_buffer_request_fingerprint_is_persisted_before_provider_call(
+    publishing_context, monkeypatch,
+):
+    account, _connection = _buffer_account(publishing_context, monkeypatch)
+
+    class InspectingConnector(RecordingConnector):
+        def provider_request_fingerprint(self, request):
+            return "a" * 64
+
+        def publish(self, request):
+            task = PublishTask.objects.get(pk=request.idempotency_key)
+            attempt = PublishAttempt.objects.get(task=task)
+            assert task.provider_request_fingerprint == "a" * 64
+            assert attempt.provider_request_fingerprint == "a" * 64
+            return super().publish(request)
+
+    connector = InspectingConnector(
+        OfficialPublishResult(status="SUBMITTED", submission_id="buffer-post-fingerprint")
+    )
+    _runtime(monkeypatch, connector)
+    task = create_publish_task(
+        content=publishing_context["content"], account=account,
+        idempotency_key="buffer-fingerprint-before-call",
+        actor=publishing_context["actor"],
+    )
+
+    execute_publish_task(task.id)
+
+    task.refresh_from_db()
+    attempt = PublishAttempt.objects.get(task=task)
+    assert task.provider_request_fingerprint == attempt.provider_request_fingerprint == "a" * 64
 
 
 def test_unclassified_exception_after_provider_call_is_unknown_and_not_retryable(
@@ -131,6 +178,7 @@ def test_unclassified_exception_after_provider_call_is_unknown_and_not_retryable
     assert len(connector.requests) == 1
     assert task.provider_call_started_at is not None
     assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
+    assert task.next_reconcile_at == task.finished_at + timedelta(seconds=60)
     assert attempt.status == PublishAttempt.Status.SUBMISSION_UNKNOWN
     assert task.last_error["code"] == "OUTCOME_UNKNOWN"
     with pytest.raises(PublishingConflict, match="reconciliation, not retry"):

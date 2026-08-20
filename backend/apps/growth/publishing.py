@@ -362,6 +362,7 @@ def sync_publish_item_from_task(*, task_id):
         item.last_error = None
     elif task.status in {
         PublishTask.Status.SUBMITTED, PublishTask.Status.SUBMISSION_UNKNOWN,
+        PublishTask.Status.NEEDS_ATTENTION,
     }:
         item.status = GrowthPublishItem.Status.DELEGATED
         item.last_error = task.last_error or None

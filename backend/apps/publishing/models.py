@@ -17,6 +17,7 @@ LIVE_PUBLISH_TASK_STATUSES = (
     "RUNNING",
     "SUBMITTED",
     "SUBMISSION_UNKNOWN",
+    "NEEDS_ATTENTION",
     "SUCCEEDED",
 )
 
@@ -37,14 +38,20 @@ class ProtectedPublishingQuerySet(models.QuerySet):
             raise ValidationError("Publishing history may change only through services.")
 
     def update(self, **kwargs):
+        if self.model.__name__ == "PublishReconciliationAttempt":
+            raise ValidationError("Publishing reconciliation audits are append-only.")
         self._guard()
         return super().update(**kwargs)
 
     def bulk_create(self, objs, **kwargs):
+        if self.model.__name__ == "PublishReconciliationAttempt":
+            raise ValidationError("Publishing reconciliation audits must be appended individually.")
         self._guard()
         return super().bulk_create(objs, **kwargs)
 
     def bulk_update(self, objs, fields, **kwargs):
+        if self.model.__name__ == "PublishReconciliationAttempt":
+            raise ValidationError("Publishing reconciliation audits are append-only.")
         self._guard()
         return super().bulk_update(objs, fields, **kwargs)
 
@@ -76,6 +83,7 @@ class PublishTask(ProtectedPublishingModel):
         RUNNING = "RUNNING", "Running"
         SUBMITTED = "SUBMITTED", "Submitted"
         SUBMISSION_UNKNOWN = "SUBMISSION_UNKNOWN", "Submission unknown"
+        NEEDS_ATTENTION = "NEEDS_ATTENTION", "Needs attention"
         SUCCEEDED = "SUCCEEDED", "Succeeded"
         FAILED = "FAILED", "Failed"
         CANCELED = "CANCELED", "Canceled"
@@ -101,11 +109,16 @@ class PublishTask(ProtectedPublishingModel):
     retry_not_before = models.DateTimeField(null=True, blank=True)
     last_error = models.JSONField(null=True, blank=True)
     provider_submission_id = models.CharField(max_length=255, blank=True, default="")
+    provider_request_fingerprint = models.CharField(max_length=64, blank=True, default="")
     provider_call_started_at = models.DateTimeField(null=True, blank=True)
     heartbeat_at = models.DateTimeField(null=True, blank=True)
     lease_expires_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    reconciliation_attempt_number = models.PositiveIntegerField(default=0)
+    last_reconciled_at = models.DateTimeField(null=True, blank=True)
+    next_reconcile_at = models.DateTimeField(null=True, blank=True)
+    reconciliation_error_code = models.CharField(max_length=64, blank=True, default="")
     canceled_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
@@ -137,6 +150,7 @@ class PublishAttempt(ProtectedPublishingModel):
         RUNNING = "RUNNING", "Running"
         SUBMITTED = "SUBMITTED", "Submitted"
         SUBMISSION_UNKNOWN = "SUBMISSION_UNKNOWN", "Submission unknown"
+        NEEDS_ATTENTION = "NEEDS_ATTENTION", "Needs attention"
         SUCCEEDED = "SUCCEEDED", "Succeeded"
         FAILED = "FAILED", "Failed"
         CANCELED = "CANCELED", "Canceled"
@@ -152,6 +166,7 @@ class PublishAttempt(ProtectedPublishingModel):
     retry_at = models.DateTimeField(null=True, blank=True)
     external_id = models.CharField(max_length=255, blank=True)
     provider_submission_id = models.CharField(max_length=255, blank=True, default="")
+    provider_request_fingerprint = models.CharField(max_length=64, blank=True, default="")
     provider_call_started_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField()
     finished_at = models.DateTimeField(null=True, blank=True)
@@ -183,6 +198,71 @@ class PublishedPost(ProtectedPublishingModel):
 
     class Meta(ProtectedPublishingModel.Meta):
         ordering = ["-published_at", "-id"]
+
+
+class PublishReconciliationAttempt(ProtectedPublishingModel):
+    class Mode(models.TextChoices):
+        EXACT_ID = "EXACT_ID", "Exact provider id"
+        UNKNOWN_MATCH = "UNKNOWN_MATCH", "Unknown submission match"
+        MANUAL = "MANUAL", "Manual resolution"
+
+    class Provider(models.TextChoices):
+        BUFFER = "BUFFER", "Buffer"
+
+    class Result(models.TextChoices):
+        DEFERRED = "DEFERRED", "Deferred"
+        SUCCEEDED = "SUCCEEDED", "Succeeded"
+        FAILED = "FAILED", "Failed"
+        NEEDS_ATTENTION = "NEEDS_ATTENTION", "Needs attention"
+        STALE = "STALE", "Stale snapshot"
+        MATCHED = "MATCHED", "Unique match"
+
+    publish_task = models.ForeignKey(
+        PublishTask, on_delete=models.PROTECT, related_name="reconciliation_attempts"
+    )
+    sequence_number = models.PositiveIntegerField()
+    mode = models.CharField(max_length=16, choices=Mode.choices, default=Mode.EXACT_ID)
+    provider = models.CharField(max_length=16, choices=Provider.choices, default=Provider.BUFFER)
+    provider_submission_id = models.CharField(max_length=255)
+    observed_provider_status = models.CharField(max_length=32, blank=True, default="")
+    result = models.CharField(max_length=32, choices=Result.choices)
+    safe_error_code = models.CharField(max_length=64, blank=True, default="")
+    provider_post_id = models.CharField(max_length=255, blank=True, default="")
+    provider_channel_id = models.CharField(max_length=255, blank=True, default="")
+    provider_sent_at = models.DateTimeField(null=True, blank=True)
+    candidate_count = models.PositiveIntegerField(default=0)
+    matched_provider_post_id = models.CharField(max_length=255, blank=True, default="")
+    candidate_set_fingerprint = models.CharField(max_length=64, blank=True, default="")
+    query_window_start = models.DateTimeField(null=True, blank=True)
+    query_window_end = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="publish_reconciliation_resolutions",
+    )
+    started_at = models.DateTimeField()
+    finished_at = models.DateTimeField()
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("Publishing reconciliation audits are append-only.")
+        if (
+            self.publish_task_id
+            and self.organization_id != self.publish_task.organization_id
+        ):
+            raise ValidationError("Reconciliation audit organization must match its task.")
+        return super().save(*args, **kwargs)
+
+    class Meta(ProtectedPublishingModel.Meta):
+        ordering = ["publish_task_id", "sequence_number"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["publish_task", "sequence_number"],
+                name="publishing_unique_reconciliation_number",
+            ),
+        ]
 
 
 class PostMetric(ProtectedPublishingModel):

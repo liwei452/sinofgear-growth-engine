@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from json import JSONDecodeError
 
 import httpx
@@ -69,6 +70,53 @@ mutation BufferCreatePost($input: CreatePostInput!) {
     ... on MutationError {
       __typename
       message
+    }
+  }
+}
+""".strip()
+
+_POST_QUERY = """
+query BufferPost($input: PostInput!) {
+  post(input: $input) {
+    id
+    channelId
+    channelService
+    status
+    dueAt
+    sentAt
+    externalLink
+    createdAt
+    updatedAt
+  }
+}
+""".strip()
+
+_POSTS_QUERY = """
+query BufferPosts($input: PostsInput!, $first: Int!, $after: String) {
+  posts(input: $input, first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        id
+        channelId
+        channelService
+        status
+        text
+        createdAt
+        dueAt
+        sentAt
+        schedulingType
+        shareMode
+        assets {
+          type
+          mimeType
+          source
+        }
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
     }
   }
 }
@@ -283,8 +331,47 @@ class BufferGraphQLClient:
             mutation=True,
         )
 
+    def fetch_post(self, token: str, post_id: str) -> BufferGraphQLResponse:
+        if type(post_id) is not str or not post_id.strip() or len(post_id.strip()) > 255:
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        return self._execute(
+            token, _POST_QUERY, {"input": {"id": post_id.strip()}}, operation="post"
+        )
+
+    def fetch_posts(
+        self, token: str, *, organization_id: str, channel_id: str,
+        window_start: datetime, window_end: datetime, after: str | None = None,
+        first: int = 50,
+    ) -> BufferGraphQLResponse:
+        organization_id = _bounded_query_id(organization_id)
+        channel_id = _bounded_query_id(channel_id)
+        if (
+            type(first) is not int or not 1 <= first <= 50
+            or after is not None
+            and (type(after) is not str or not after or len(after) > 512)
+        ):
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        start = _query_datetime(window_start)
+        end = _query_datetime(window_end)
+        if window_end <= window_start:
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        variables = {
+            "input": {
+                "organizationId": organization_id,
+                "filter": {
+                    "channelIds": [channel_id],
+                    "createdAt": {"start": start, "end": end},
+                },
+                "sort": [{"field": "createdAt", "direction": "desc"}],
+            },
+            "first": first,
+            "after": after,
+        }
+        return self._execute(token, _POSTS_QUERY, variables, operation="posts")
+
     def _execute(
         self, token: str, query: str, variables: dict, *, mutation: bool = False,
+        operation: str = "query",
     ) -> BufferGraphQLResponse:
         if not isinstance(token, str) or not token.strip():
             raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
@@ -350,11 +437,14 @@ class BufferGraphQLClient:
         data = body.get("data")
         if mutation and _has_valid_create_post_success(data):
             return BufferGraphQLResponse(data=data, rate_limit=rate_limit)
+        if operation == "post" and _has_valid_post_data(data):
+            return BufferGraphQLResponse(data=data, rate_limit=rate_limit)
         errors = body.get("errors")
         if errors:
             self._raise_graphql_error(
                 errors,
                 mutation=mutation,
+                operation=operation,
                 retry_after_seconds=header_retry_after,
             )
         if data is None:
@@ -375,6 +465,7 @@ class BufferGraphQLClient:
         errors,
         *,
         mutation: bool = False,
+        operation: str = "query",
         retry_after_seconds: int | None = None,
     ) -> None:
         code = None
@@ -392,7 +483,10 @@ class BufferGraphQLClient:
             "RATE_LIMIT_EXCEEDED": BufferErrorCode.RATE_LIMITED,
             "NOT_FOUND": (
                 BufferErrorCode.CHANNEL_NOT_FOUND
-                if mutation else BufferErrorCode.ORGANIZATION_NOT_FOUND
+                if mutation else (
+                    BufferErrorCode.POST_NOT_FOUND
+                    if operation == "post" else BufferErrorCode.ORGANIZATION_NOT_FOUND
+                )
             ),
             "UNEXPECTED": (
                 BufferErrorCode.OUTCOME_UNKNOWN
@@ -432,3 +526,25 @@ def _has_valid_create_post_success(data) -> bool:
         and isinstance(channel_id, str)
         and bool(channel_id.strip())
     )
+
+
+def _has_valid_post_data(data) -> bool:
+    if type(data) is not dict or type(data.get("post")) is not dict:
+        return False
+    post = data["post"]
+    return all(
+        type(post.get(field)) is str and bool(post[field].strip())
+        for field in ("id", "channelId", "channelService", "status")
+    )
+
+
+def _bounded_query_id(value: object) -> str:
+    if type(value) is not str or not (value := value.strip()) or len(value) > 255:
+        raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+    return value
+
+
+def _query_datetime(value: object) -> str:
+    if type(value) is not datetime or value.tzinfo is None:
+        raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

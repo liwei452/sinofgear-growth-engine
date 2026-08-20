@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 
 
@@ -14,6 +15,7 @@ class BufferErrorCode(str, Enum):
     OUTCOME_UNKNOWN = "BUFFER_OUTCOME_UNKNOWN"
     INVALID_INPUT = "BUFFER_INVALID_INPUT"
     CHANNEL_NOT_FOUND = "BUFFER_CHANNEL_NOT_FOUND"
+    POST_NOT_FOUND = "BUFFER_POST_NOT_FOUND"
 
 
 SAFE_BUFFER_MESSAGES: dict[BufferErrorCode, str] = {
@@ -26,6 +28,7 @@ SAFE_BUFFER_MESSAGES: dict[BufferErrorCode, str] = {
     BufferErrorCode.OUTCOME_UNKNOWN: "Buffer 提交结果无法确定，请先对账后再处理。",
     BufferErrorCode.INVALID_INPUT: "Buffer 发布内容未通过校验。",
     BufferErrorCode.CHANNEL_NOT_FOUND: "Buffer 渠道不存在或已失效。",
+    BufferErrorCode.POST_NOT_FOUND: "Buffer 帖子不存在或不可访问。",
 }
 
 
@@ -134,3 +137,78 @@ class BufferDiscoveryResult:
     channels: tuple[BufferChannel, ...] = ()
     ignored_channels: tuple[BufferIgnoredChannel, ...] = ()
     rate_limit: BufferRateLimitResult | None = None
+
+
+@dataclass(frozen=True)
+class BufferPostQueryRequest:
+    credential_reference: str = field(repr=False)
+    provider_submission_id: str
+
+
+@dataclass(frozen=True)
+class BufferPostObservation:
+    post_id: str
+    channel_id: str
+    channel_service: str
+    status: str
+    due_at: datetime | None = None
+    sent_at: datetime | None = None
+    external_link: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class BufferPostQueryResult:
+    ok: bool
+    observation: BufferPostObservation | None = None
+    error_code: str = ""
+    retry_after_seconds: int | None = None
+
+
+@dataclass(frozen=True)
+class BufferAssetIdentity:
+    asset_type: str
+    mime_type: str
+    source: str
+
+
+@dataclass(frozen=True)
+class BufferPostCandidate:
+    post_id: str
+    channel_id: str
+    channel_service: str
+    status: str
+    text: str
+    created_at: datetime
+    due_at: datetime | None
+    sent_at: datetime | None
+    scheduling_type: str
+    share_mode: str
+    assets: tuple[BufferAssetIdentity, ...] = ()
+
+
+@dataclass(frozen=True, repr=False)
+class BufferUnknownMatchRequest:
+    credential_reference: str = field(repr=False)
+    provider_organization_id: str
+    provider_account_id: str
+    window_start: datetime
+    window_end: datetime
+
+    def __repr__(self) -> str:
+        return (
+            "BufferUnknownMatchRequest("
+            f"provider_organization_id={self.provider_organization_id!r}, "
+            f"provider_account_id={self.provider_account_id!r}, "
+            f"window_start={self.window_start!r}, window_end={self.window_end!r})"
+        )
+
+
+@dataclass(frozen=True)
+class BufferCandidateSearchResult:
+    ok: bool
+    candidates: tuple[BufferPostCandidate, ...] = ()
+    truncated: bool = False
+    error_code: str = ""
+    retry_after_seconds: int | None = None

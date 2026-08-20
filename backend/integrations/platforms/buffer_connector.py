@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
+import hmac
+import json
+from urllib.parse import urlparse
+
+from django.conf import settings
+
 from .buffer_client import BufferGraphQLClient
 from .buffer_types import (
     BufferAccount,
@@ -11,6 +19,13 @@ from .buffer_types import (
     BufferIgnoredChannel,
     BufferOrganization,
     BufferProbeResult,
+    BufferPostObservation,
+    BufferAssetIdentity,
+    BufferCandidateSearchResult,
+    BufferPostCandidate,
+    BufferPostQueryRequest,
+    BufferPostQueryResult,
+    BufferUnknownMatchRequest,
 )
 from .base import OfficialPublishRequest, OfficialPublishResult
 
@@ -92,6 +107,81 @@ class BufferConnector:
         except BufferApiError as error:
             return _publish_failure(error)
         return _parse_publish_result(response.data, request.provider_account_id)
+
+    def provider_request_fingerprint(self, request: OfficialPublishRequest) -> str:
+        return provider_request_fingerprint(request)
+
+    def fetch_post(self, request: BufferPostQueryRequest) -> BufferPostQueryResult:
+        try:
+            token = self._resolve_query_token(request)
+            response = self._client.fetch_post(token, request.provider_submission_id)
+            observation = _parse_post_observation(response.data)
+        except BufferApiError as error:
+            return BufferPostQueryResult(
+                ok=False,
+                error_code=error.code.value,
+                retry_after_seconds=error.retry_after_seconds,
+            )
+        return BufferPostQueryResult(ok=True, observation=observation)
+
+    def search_post_candidates(
+        self, request: BufferUnknownMatchRequest
+    ) -> BufferCandidateSearchResult:
+        try:
+            token = self._resolve_unknown_match_token(request)
+            candidates = []
+            after = None
+            truncated = False
+            for _page_number in range(3):
+                response = self._client.fetch_posts(
+                    token,
+                    organization_id=request.provider_organization_id,
+                    channel_id=request.provider_account_id,
+                    window_start=request.window_start,
+                    window_end=request.window_end,
+                    after=after,
+                    first=50,
+                )
+                page_candidates, has_next, end_cursor = _parse_candidate_page(response.data)
+                candidates.extend(page_candidates)
+                if not has_next:
+                    break
+                after = end_cursor
+            else:
+                truncated = True
+        except BufferApiError as error:
+            return BufferCandidateSearchResult(
+                ok=False,
+                error_code=error.code.value,
+                retry_after_seconds=error.retry_after_seconds,
+            )
+        return BufferCandidateSearchResult(
+            ok=True, candidates=tuple(candidates), truncated=truncated
+        )
+
+    def _resolve_unknown_match_token(self, request: BufferUnknownMatchRequest) -> str:
+        reference = request.credential_reference
+        if type(reference) is not str or not reference.strip():
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        try:
+            token = self._token_store.resolve(reference).access_token
+        except Exception:
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED) from None
+        if type(token) is not str or not token.strip():
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        return token
+
+    def _resolve_query_token(self, request: BufferPostQueryRequest) -> str:
+        reference = request.credential_reference
+        if type(reference) is not str or not reference.strip():
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        try:
+            token = self._token_store.resolve(reference).access_token
+        except Exception:
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED) from None
+        if type(token) is not str or not token.strip():
+            raise BufferApiError(BufferErrorCode.CONFIGURATION_REQUIRED)
+        return token
 
     def _resolve_publish_token(self, request: OfficialPublishRequest) -> str:
         reference = request.credential_reference
@@ -208,6 +298,8 @@ def _build_post_input(request: OfficialPublishRequest) -> dict:
         "text": _require_publish_text(request.payload.get(text_field)),
         "schedulingType": "automatic",
         "mode": "shareNow",
+        "assets": [],
+        "needsApproval": False,
     }
     image_url = _optional_public_https_url(request.payload.get("image_url"))
     video_url = _optional_public_https_url(request.payload.get("video_url"))
@@ -222,6 +314,62 @@ def _build_post_input(request: OfficialPublishRequest) -> dict:
     elif video_url:
         result["assets"] = [{"video": {"url": video_url}}]
     return result
+
+
+def _provider_request_identity(post_input: dict) -> dict:
+    assets = []
+    for asset in post_input.get("assets", []):
+        if type(asset) is not dict or len(asset) != 1:
+            raise BufferApiError(BufferErrorCode.INVALID_INPUT)
+        asset_type, value = next(iter(asset.items()))
+        if asset_type not in {"image", "video"} or type(value) is not dict:
+            raise BufferApiError(BufferErrorCode.INVALID_INPUT)
+        assets.append(
+            {"type": asset_type, "source": _optional_public_https_url(value.get("url"))}
+        )
+    return {
+        "channelId": post_input["channelId"],
+        "mode": post_input["mode"],
+        "schedulingType": post_input["schedulingType"],
+        "needsApproval": post_input["needsApproval"],
+        "text": post_input["text"],
+        "assets": assets,
+    }
+
+
+def provider_request_fingerprint(request: OfficialPublishRequest) -> str:
+    identity = _provider_request_identity(_build_post_input(request))
+    return _provider_identity_fingerprint(identity)
+
+
+def provider_candidate_fingerprint(candidate: BufferPostCandidate) -> str:
+    if type(candidate) is not BufferPostCandidate:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    assets = []
+    for asset in candidate.assets:
+        if type(asset) is not BufferAssetIdentity or asset.asset_type not in {"image", "video"}:
+            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+        source = _optional_public_https_url(asset.source)
+        if source is None:
+            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+        assets.append({"type": asset.asset_type, "source": source})
+    identity = {
+        "channelId": candidate.channel_id,
+        "mode": candidate.share_mode,
+        "schedulingType": candidate.scheduling_type,
+        "needsApproval": candidate.status == "needs_approval",
+        "text": _require_publish_text(candidate.text),
+        "assets": assets,
+    }
+    return _provider_identity_fingerprint(identity)
+
+
+def _provider_identity_fingerprint(identity: dict) -> str:
+    encoded = json.dumps(
+        identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    key = settings.SECRET_KEY.encode("utf-8")
+    return hmac.new(key, b"buffer-provider-request-v1\x00" + encoded, hashlib.sha256).hexdigest()
 
 
 def _parse_publish_result(data: dict, expected_channel_id: str) -> OfficialPublishResult:
@@ -263,6 +411,148 @@ def _unknown_publish_result() -> OfficialPublishResult:
         status="FAILED",
         error_code="OUTCOME_UNKNOWN",
         error_message=_SAFE_PUBLISH_MESSAGES["OUTCOME_UNKNOWN"],
+    )
+
+
+_POST_STATUSES = {"draft", "error", "needs_approval", "scheduled", "sending", "sent"}
+_POST_SERVICES = {key for key in SUPPORTED_BUFFER_SERVICES}
+
+
+def _bounded_native_string(value, *, allow_blank=False, maximum=255) -> str:
+    if type(value) is not str:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    value = value.strip()
+    if (not allow_blank and not value) or len(value) > maximum:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    return value
+
+
+def _optional_timestamp(value):
+    if value is None:
+        return None
+    value = _bounded_native_string(value, maximum=64)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR) from None
+    if parsed.tzinfo is None:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    parsed = parsed.astimezone(timezone.utc)
+    if not (datetime(2000, 1, 1, tzinfo=timezone.utc) <= parsed <= datetime(2100, 1, 1, tzinfo=timezone.utc)):
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    return parsed
+
+
+def _optional_public_url(value) -> str:
+    if value is None or value == "":
+        return ""
+    value = _bounded_native_string(value, maximum=2048)
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    return value
+
+
+def _parse_post_observation(data) -> BufferPostObservation:
+    post = data.get("post") if type(data) is dict else None
+    if type(post) is not dict:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    post_id = _bounded_native_string(post.get("id"))
+    channel_id = _bounded_native_string(post.get("channelId"))
+    service = _bounded_native_string(post.get("channelService"), maximum=32).lower()
+    status = _bounded_native_string(post.get("status"), maximum=32).lower()
+    if service not in _POST_SERVICES or status not in _POST_STATUSES:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    return BufferPostObservation(
+        post_id=post_id,
+        channel_id=channel_id,
+        channel_service=service,
+        status=status,
+        due_at=_optional_timestamp(post.get("dueAt")),
+        sent_at=_optional_timestamp(post.get("sentAt")),
+        external_link=_optional_public_url(post.get("externalLink")),
+        created_at=_optional_timestamp(post.get("createdAt")),
+        updated_at=_optional_timestamp(post.get("updatedAt")),
+    )
+
+
+_ASSET_TYPES = {"image", "gif", "video", "link", "document", "unsupported"}
+_SCHEDULING_TYPES = {"automatic", "notification"}
+_SHARE_MODES = {"addToQueue", "shareNext", "shareNow", "customScheduled"}
+
+
+def _parse_candidate_page(data):
+    posts = data.get("posts") if type(data) is dict else None
+    if type(posts) is not dict:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    edges = posts.get("edges")
+    page_info = posts.get("pageInfo")
+    if type(edges) is not list or len(edges) > 50 or type(page_info) is not dict:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    candidates = []
+    for edge in edges:
+        if type(edge) is not dict or type(edge.get("cursor")) is not str:
+            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+        candidates.append(_parse_post_candidate(edge.get("node")))
+    has_next = page_info.get("hasNextPage")
+    end_cursor = page_info.get("endCursor")
+    if type(has_next) is not bool:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    if has_next and (
+        type(end_cursor) is not str or not end_cursor or len(end_cursor) > 512
+    ):
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    if not has_next and end_cursor is not None and type(end_cursor) is not str:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    return tuple(candidates), has_next, end_cursor
+
+
+def _parse_post_candidate(post) -> BufferPostCandidate:
+    if type(post) is not dict:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    service = _bounded_native_string(post.get("channelService"), maximum=32).lower()
+    status = _bounded_native_string(post.get("status"), maximum=32).lower()
+    scheduling_type = _bounded_native_string(post.get("schedulingType"), maximum=32)
+    share_mode = _bounded_native_string(post.get("shareMode"), maximum=32)
+    text = _bounded_native_string(post.get("text"), allow_blank=True, maximum=50_000)
+    created_at = _optional_timestamp(post.get("createdAt"))
+    if (
+        service not in _POST_SERVICES
+        or status not in _POST_STATUSES
+        or scheduling_type not in _SCHEDULING_TYPES
+        or share_mode not in _SHARE_MODES
+        or created_at is None
+    ):
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    assets_raw = post.get("assets")
+    if type(assets_raw) is not list or len(assets_raw) > 20:
+        raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+    assets = []
+    for asset in assets_raw:
+        if type(asset) is not dict:
+            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+        asset_type = _bounded_native_string(asset.get("type"), maximum=32).lower()
+        mime_type = _bounded_native_string(asset.get("mimeType"), maximum=255)
+        source = _optional_public_url(asset.get("source"))
+        if asset_type not in _ASSET_TYPES or not source:
+            raise BufferApiError(BufferErrorCode.CONTRACT_ERROR)
+        assets.append(
+            BufferAssetIdentity(
+                asset_type=asset_type, mime_type=mime_type, source=source
+            )
+        )
+    return BufferPostCandidate(
+        post_id=_bounded_native_string(post.get("id")),
+        channel_id=_bounded_native_string(post.get("channelId")),
+        channel_service=service,
+        status=status,
+        text=text,
+        created_at=created_at,
+        due_at=_optional_timestamp(post.get("dueAt")),
+        sent_at=_optional_timestamp(post.get("sentAt")),
+        scheduling_type=scheduling_type,
+        share_mode=share_mode,
+        assets=tuple(assets),
     )
 
 

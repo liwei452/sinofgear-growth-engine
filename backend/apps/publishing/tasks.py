@@ -6,6 +6,10 @@ from .services import (
     reap_stale_publish_tasks,
 )
 from .metrics import sync_post_metrics
+from .reconciliation import (
+    reconcile_publish_task,
+    select_due_buffer_reconciliation_ids,
+)
 
 
 @shared_task
@@ -41,3 +45,17 @@ def sync_post_metrics_hourly():
 @shared_task
 def reap_stale_publish_tasks_task():
     return {"reaped": reap_stale_publish_tasks()}
+
+
+@shared_task
+def reconcile_buffer_publish_task_job(task_id):
+    task = reconcile_publish_task(task_id)
+    return {"task_id": str(task.id), "status": task.status}
+
+
+@shared_task
+def reconcile_buffer_publish_tasks(limit=50):
+    task_ids = select_due_buffer_reconciliation_ids(limit=limit)
+    for task_id in task_ids:
+        reconcile_buffer_publish_task_job.delay(str(task_id))
+    return {"queued": len(task_ids)}

@@ -7553,6 +7553,7 @@ paths:
           enum:
           - CANCELED
           - FAILED
+          - NEEDS_ATTENTION
           - QUEUED
           - RUNNING
           - SCHEDULED
@@ -7613,6 +7614,7 @@ paths:
           enum:
           - CANCELED
           - FAILED
+          - NEEDS_ATTENTION
           - QUEUED
           - RUNNING
           - SCHEDULED
@@ -7735,6 +7737,78 @@ paths:
                 $ref: '#/components/schemas/PublishTask'
           description: ''
         '409':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - $ref: '#/components/schemas/PublishingError'
+        '400':
+          description: The request is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: The request is forbidden or failed CSRF validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/publish-tasks/{task_id}/reconcile:
+    post:
+      operationId: api_v1_publish_tasks_reconcile_create
+      parameters:
+      - in: path
+        name: task_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - PublishTasks
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishTask'
+          description: ''
+        '409':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - $ref: '#/components/schemas/PublishingError'
+        '429':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - $ref: '#/components/schemas/PublishingError'
+        '502':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - $ref: '#/components/schemas/PublishingError'
+        '503':
           description: The request could not be completed.
           content:
             application/json:
@@ -9301,7 +9375,7 @@ components:
           readOnly: true
         provider:
           allOf:
-          - $ref: '#/components/schemas/BufferProviderConnectionReadProviderEnum'
+          - $ref: '#/components/schemas/Provider47dEnum'
           readOnly: true
         configured:
           type: boolean
@@ -9359,11 +9433,6 @@ components:
       - lifecycle_error_code
       - provider
       - reauthorization_required_at
-    BufferProviderConnectionReadProviderEnum:
-      enum:
-      - BUFFER
-      type: string
-      description: '* `BUFFER` - Buffer'
     BufferProviderConnectionSync:
       type: object
       properties:
@@ -11922,16 +11991,6 @@ components:
           maxLength: 500
       required:
       - status
-    ModeEnum:
-      enum:
-      - FAKE_OFFLINE
-      - CONFIGURATION_REQUIRED
-      - CONFIGURED_AI
-      type: string
-      description: |-
-        * `FAKE_OFFLINE` - FAKE_OFFLINE
-        * `CONFIGURATION_REQUIRED` - CONFIGURATION_REQUIRED
-        * `CONFIGURED_AI` - CONFIGURED_AI
     ModelEnum:
       enum:
       - deepseek-chat
@@ -12597,7 +12656,7 @@ components:
       type: object
       properties:
         mode:
-          $ref: '#/components/schemas/ModeEnum'
+          $ref: '#/components/schemas/ProductAIStatusModeEnum'
         provider_label:
           type: string
         model:
@@ -12612,6 +12671,16 @@ components:
       - model
       - provider_label
       - real_requests_enabled
+    ProductAIStatusModeEnum:
+      enum:
+      - FAKE_OFFLINE
+      - CONFIGURATION_REQUIRED
+      - CONFIGURED_AI
+      type: string
+      description: |-
+        * `FAKE_OFFLINE` - FAKE_OFFLINE
+        * `CONFIGURATION_REQUIRED` - CONFIGURATION_REQUIRED
+        * `CONFIGURED_AI` - CONFIGURED_AI
     ProductAssetSummary:
       type: object
       properties:
@@ -12957,6 +13026,11 @@ components:
       required:
       - code
       - current_version
+    Provider47dEnum:
+      enum:
+      - BUFFER
+      type: string
+      description: '* `BUFFER` - Buffer'
     Provider914Enum:
       enum:
       - deepseek
@@ -13034,6 +13108,7 @@ components:
       - RUNNING
       - SUBMITTED
       - SUBMISSION_UNKNOWN
+      - NEEDS_ATTENTION
       - SUCCEEDED
       - FAILED
       - CANCELED
@@ -13043,6 +13118,7 @@ components:
         * `RUNNING` - Running
         * `SUBMITTED` - Submitted
         * `SUBMISSION_UNKNOWN` - Submission unknown
+        * `NEEDS_ATTENTION` - Needs attention
         * `SUCCEEDED` - Succeeded
         * `FAILED` - Failed
         * `CANCELED` - Canceled
@@ -13117,6 +13193,75 @@ components:
       required:
       - platform_content_id
       - social_account_id
+    PublishReconciliationAttempt:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        sequence_number:
+          type: integer
+          readOnly: true
+        mode:
+          allOf:
+          - $ref: '#/components/schemas/PublishReconciliationAttemptModeEnum'
+          readOnly: true
+        provider:
+          allOf:
+          - $ref: '#/components/schemas/Provider47dEnum'
+          readOnly: true
+        provider_submission_id:
+          type: string
+          readOnly: true
+        observed_provider_status:
+          type: string
+          readOnly: true
+        result:
+          allOf:
+          - $ref: '#/components/schemas/ResultEnum'
+          readOnly: true
+        safe_error_code:
+          type: string
+          readOnly: true
+        provider_post_id:
+          type: string
+          readOnly: true
+        provider_channel_id:
+          type: string
+          readOnly: true
+        provider_sent_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+          readOnly: true
+        finished_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - finished_at
+      - id
+      - mode
+      - observed_provider_status
+      - provider
+      - provider_channel_id
+      - provider_post_id
+      - provider_sent_at
+      - provider_submission_id
+      - result
+      - safe_error_code
+      - sequence_number
+      - started_at
+    PublishReconciliationAttemptModeEnum:
+      enum:
+      - EXACT_ID
+      type: string
+      description: '* `EXACT_ID` - Exact provider id'
     PublishTask:
       type: object
       properties:
@@ -13203,6 +13348,27 @@ components:
           - $ref: '#/components/schemas/PublishedPost'
           nullable: true
           readOnly: true
+        reconciliation_attempt_number:
+          type: integer
+          readOnly: true
+        last_reconciled_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        next_reconcile_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        reconciliation_error_code:
+          type: string
+          readOnly: true
+        reconciliation_attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublishReconciliationAttempt'
+          readOnly: true
       required:
       - attempt_number
       - attempts
@@ -13213,11 +13379,16 @@ components:
       - finished_at
       - id
       - last_error
+      - last_reconciled_at
+      - next_reconcile_at
       - platform_content_id
       - platform_id
       - provider_call_started_at
       - provider_submission_id
       - published_post
+      - reconciliation_attempt_number
+      - reconciliation_attempts
+      - reconciliation_error_code
       - requested_timezone
       - retry_not_before
       - scheduled_at
@@ -13250,6 +13421,7 @@ components:
       - RUNNING
       - SUBMITTED
       - SUBMISSION_UNKNOWN
+      - NEEDS_ATTENTION
       - SUCCEEDED
       - FAILED
       - CANCELED
@@ -13260,6 +13432,7 @@ components:
         * `RUNNING` - Running
         * `SUBMITTED` - Submitted
         * `SUBMISSION_UNKNOWN` - Submission unknown
+        * `NEEDS_ATTENTION` - Needs attention
         * `SUCCEEDED` - Succeeded
         * `FAILED` - Failed
         * `CANCELED` - Canceled
@@ -13393,6 +13566,20 @@ components:
       required:
       - language
       - text
+    ResultEnum:
+      enum:
+      - DEFERRED
+      - SUCCEEDED
+      - FAILED
+      - NEEDS_ATTENTION
+      - STALE
+      type: string
+      description: |-
+        * `DEFERRED` - Deferred
+        * `SUCCEEDED` - Succeeded
+        * `FAILED` - Failed
+        * `NEEDS_ATTENTION` - Needs attention
+        * `STALE` - Stale snapshot
     Review:
       type: object
       properties:

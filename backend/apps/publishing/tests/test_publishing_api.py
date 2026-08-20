@@ -292,8 +292,68 @@ def test_publishing_openapi_documents_header_actions_and_calendar(publishing_con
     assert any(parameter["name"] == "Idempotency-Key" for parameter in create["parameters"])
     assert "post" in schema["paths"]["/api/v1/publish-tasks/{task_id}/cancel"]
     assert "post" in schema["paths"]["/api/v1/publish-tasks/{task_id}/retry"]
+    assert "post" in schema["paths"]["/api/v1/publish-tasks/{task_id}/reconcile"]
+    resolve = schema["paths"]["/api/v1/publish-tasks/{task_id}/resolve"]["post"]
+    assert resolve["requestBody"]["required"] is True
+    request_schema = resolve["requestBody"]["content"]["application/json"]["schema"]
+    if "$ref" in request_schema:
+        request_schema = schema["components"]["schemas"][
+            request_schema["$ref"].rsplit("/", 1)[-1]
+        ]
+    assert len(request_schema["oneOf"]) == 2
+    variants = [
+        schema["components"]["schemas"][item["$ref"].rsplit("/", 1)[-1]]
+        for item in request_schema["oneOf"]
+    ]
+    assert {frozenset(variant["required"]) for variant in variants} == {
+        frozenset({"provider_post_id", "resolution"}),
+        frozenset({"resolution"}),
+    }
+    assert {frozenset(variant["properties"]) for variant in variants} == {
+        frozenset({"provider_post_id", "resolution"}),
+        frozenset({"resolution"}),
+    }
     assert "get" in schema["paths"]["/api/v1/publish-calendar"]
     assert set(schema["paths"]["/api/v1/publish-tasks/schedule"]) == {"post"}
+
+
+def test_manual_reconciliation_is_manage_only_and_organization_scoped(
+    publishing_context, monkeypatch,
+):
+    from integrations.platforms.base import OfficialPublishResult
+    from apps.publishing.tests.test_buffer_publish_submission import (
+        RecordingConnector, _buffer_account, _runtime,
+    )
+    from apps.publishing import views
+
+    account, _connection = _buffer_account(publishing_context, monkeypatch)
+    _runtime(
+        monkeypatch,
+        RecordingConnector(
+            OfficialPublishResult(status="SUBMITTED", submission_id="buffer-api-post")
+        ),
+    )
+    task = create_publish_task(
+        content=publishing_context["content"], account=account,
+        idempotency_key="reconcile-api", actor=publishing_context["actor"],
+    )
+    execute_publish_task(task.id)
+    task.refresh_from_db()
+    monkeypatch.setattr(views, "reconcile_publish_task", lambda *args, **kwargs: task)
+
+    operator = _client(publishing_context["organization"], Role.Code.OPERATOR, "reconcile")
+    assert operator.post(
+        f"/api/v1/publish-tasks/{task.id}/reconcile", {}, format="json"
+    ).status_code == 200
+    read_only = _client(publishing_context["organization"], Role.Code.READ_ONLY, "reconcile-ro")
+    assert read_only.post(
+        f"/api/v1/publish-tasks/{task.id}/reconcile", {}, format="json"
+    ).status_code == 403
+    other = Organization.objects.create(name="Other Org", slug="other-reconcile-org")
+    other_client = _client(other, Role.Code.OPERATOR, "reconcile-other")
+    assert other_client.post(
+        f"/api/v1/publish-tasks/{task.id}/reconcile", {}, format="json"
+    ).status_code == 404
 
 
 def test_publishing_openapi_matches_runtime_envelopes_and_attempt_bound(

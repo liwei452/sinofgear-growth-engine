@@ -1,4 +1,5 @@
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from django.utils import timezone
@@ -6,6 +7,7 @@ from django.utils import timezone
 from apps.content.models import PlatformContent
 from apps.publishing.models import (
     PublishedPost,
+    PublishAttempt,
     PublishTask,
     publishing_writes,
 )
@@ -14,6 +16,7 @@ from apps.publishing.services import (
     PublishingConflict,
     cancel_publish_task,
     claim_publish_task,
+    complete_publish_failure,
     complete_publish_submitted,
     create_publish_task,
     execute_publish_task,
@@ -200,6 +203,163 @@ def test_safe_error_defaults_for_result_without_error_code():
     from apps.publishing.services import SAFE_PUBLISH_ERRORS, _safe_error
 
     assert _safe_error(object()) == SAFE_PUBLISH_ERRORS["PROVIDER_ERROR"]
+
+
+class _ExplodingErrorCode:
+    @property
+    def error_code(self):
+        raise RuntimeError("provider error detail must not escape")
+
+
+class _ExplodingString(str):
+    def __hash__(self):
+        raise RuntimeError("provider string hash must not escape")
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        pytest.param(_ExplodingErrorCode(), id="property-raises"),
+        pytest.param(
+            SimpleNamespace(error_code=_ExplodingString("RATE_LIMITED")),
+            id="str-subclass",
+        ),
+        pytest.param(SimpleNamespace(error_code=[]), id="list"),
+        pytest.param(SimpleNamespace(error_code={}), id="dict"),
+        pytest.param(SimpleNamespace(error_code=123), id="integer"),
+    ],
+)
+def test_safe_error_defaults_for_malformed_error_code(result):
+    from apps.publishing.services import SAFE_PUBLISH_ERRORS, _safe_error
+
+    assert _safe_error(result) == SAFE_PUBLISH_ERRORS["PROVIDER_ERROR"]
+
+
+def test_safe_error_preserves_exact_rate_limited_mapping():
+    from apps.publishing.services import SAFE_PUBLISH_ERRORS, _safe_error
+
+    result = SimpleNamespace(error_code="RATE_LIMITED", retry_after_seconds=42)
+
+    assert _safe_error(result) == SAFE_PUBLISH_ERRORS["RATE_LIMITED"]
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        pytest.param(_ExplodingErrorCode(), id="property-raises"),
+        pytest.param(
+            SimpleNamespace(error_code=_ExplodingString("RATE_LIMITED")),
+            id="str-subclass",
+        ),
+    ],
+)
+def test_complete_publish_failure_safely_handles_malformed_error_code(
+    publishing_context, result,
+):
+    context = publishing_context
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="async-malformed-failure-finalizer",
+        actor=context["actor"],
+    )
+    running_task, attempt = claim_publish_task(task.id)
+
+    completed = complete_publish_failure(
+        running_task.id,
+        attempt.claim_token,
+        result,
+    )
+
+    completed.refresh_from_db()
+    attempt = PublishAttempt.objects.get(pk=attempt.pk)
+    assert completed.status == PublishTask.Status.FAILED
+    assert completed.last_error == {
+        "code": "PROVIDER_ERROR",
+        "message": "Provider rejected the publish request.",
+    }
+    assert completed.retry_not_before is None
+    assert attempt.status == PublishAttempt.Status.FAILED
+    assert attempt.outcome == "PROVIDER_ERROR"
+    assert attempt.error == completed.last_error
+
+
+_SENSITIVE_PROVIDER_MARKER = "SENSITIVE_PROVIDER_DETAIL_C2_2"
+
+
+class _ExplodingProviderResult:
+    def __init__(self, exploding_field):
+        self.exploding_field = exploding_field
+
+    def _value(self, field, value):
+        if self.exploding_field == field:
+            raise RuntimeError(f"{_SENSITIVE_PROVIDER_MARKER}:{field}")
+        return value
+
+    @property
+    def succeeded(self):
+        return self._value(
+            "succeeded",
+            self.exploding_field == "external_id",
+        )
+
+    @property
+    def submitted(self):
+        return self._value(
+            "submitted",
+            self.exploding_field == "submission_id",
+        )
+
+    @property
+    def submission_id(self):
+        return self._value("submission_id", "buffer-sensitive-submission")
+
+    @property
+    def external_id(self):
+        return self._value("external_id", "buffer-sensitive-post")
+
+    @property
+    def error_code(self):
+        code = "RATE_LIMITED" if self.exploding_field == "retry_after_seconds" else ""
+        return self._value("error_code", code)
+
+    @property
+    def retry_after_seconds(self):
+        return self._value("retry_after_seconds", 42)
+
+
+@pytest.mark.parametrize(
+    "exploding_field",
+    [
+        "succeeded",
+        "submitted",
+        "submission_id",
+        "external_id",
+        "error_code",
+        "retry_after_seconds",
+    ],
+)
+def test_malformed_provider_result_is_unknown_without_sensitive_logging(
+    publishing_context, monkeypatch, caplog, exploding_field,
+):
+    context = publishing_context
+    _patch_connector(monkeypatch, _ExplodingProviderResult(exploding_field))
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key=f"async-sensitive-result-{exploding_field}",
+        actor=context["actor"],
+    )
+
+    assert execute_publish_task(task.id) is None
+
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
+    assert task.last_error["code"] == "OUTCOME_UNKNOWN"
+    assert not PublishedPost.objects.filter(task=task).exists()
+    with pytest.raises(PublishingConflict, match="reconciliation, not retry"):
+        retry_publish_task(task)
+    assert _SENSITIVE_PROVIDER_MARKER not in caplog.text
 
 
 def test_provider_acceptance_stays_submitted(publishing_context, monkeypatch):

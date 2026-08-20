@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -34,6 +35,7 @@ from integrations.platforms.registry import CONNECTOR_FACTORIES
 from .models import (
     LIVE_PUBLISH_TASK_STATUSES,
     PublishAttempt,
+    PublishReconciliationAttempt,
     PublishedPost,
     PublishTask,
     publishing_writes,
@@ -47,6 +49,7 @@ logger = logging.getLogger(__name__)
 MAX_SCHEDULE_AHEAD = timedelta(days=366)
 MAX_PUBLISH_ATTEMPTS = 10
 PUBLISH_LEASE_SECONDS = 300
+BUFFER_INITIAL_RECONCILIATION_DELAY = timedelta(seconds=60)
 SAFE_PUBLISH_ERRORS = {
     "PUBLISH_NOT_ELIGIBLE": {
         "code": "PUBLISH_NOT_ELIGIBLE",
@@ -84,6 +87,37 @@ SAFE_PUBLISH_ERRORS = {
     "OUTCOME_UNKNOWN": {
         "code": "OUTCOME_UNKNOWN",
         "message": "Provider outcome could not be determined.",
+    },
+    "BUFFER_PUBLISH_FAILED": {
+        "code": "BUFFER_PUBLISH_FAILED", "message": "Buffer confirmed that publishing failed.",
+    },
+    "BUFFER_POST_NOT_FOUND": {
+        "code": "BUFFER_POST_NOT_FOUND", "message": "The submitted Buffer post could not be found.",
+    },
+    "BUFFER_POST_MISMATCH": {
+        "code": "BUFFER_POST_MISMATCH", "message": "The Buffer post did not match the submitted task.",
+    },
+    "BUFFER_CONTRACT_ERROR": {
+        "code": "BUFFER_CONTRACT_ERROR", "message": "Buffer returned an invalid post status response.",
+    },
+    "BUFFER_RECONCILIATION_EXPIRED": {
+        "code": "BUFFER_RECONCILIATION_EXPIRED", "message": "The Buffer post remained non-final for too long.",
+    },
+    "BUFFER_RECONCILIATION_EVIDENCE_MISSING": {
+        "code": "BUFFER_RECONCILIATION_EVIDENCE_MISSING",
+        "message": "The original Buffer request evidence is unavailable.",
+    },
+    "BUFFER_RECONCILIATION_NO_MATCH": {
+        "code": "BUFFER_RECONCILIATION_NO_MATCH",
+        "message": "No exact Buffer post match was found.",
+    },
+    "BUFFER_RECONCILIATION_AMBIGUOUS": {
+        "code": "BUFFER_RECONCILIATION_AMBIGUOUS",
+        "message": "More than one exact Buffer post match was found.",
+    },
+    "MANUALLY_CLOSED_NO_POST": {
+        "code": "MANUALLY_CLOSED_NO_POST",
+        "message": "An authorized operator confirmed that no provider post exists.",
     },
 }
 
@@ -197,6 +231,14 @@ def _attempt_history_is_consistent(task, post):
             and attempt.finished_at is not None
         ):
             return False
+        if attempt.status == PublishAttempt.Status.NEEDS_ATTENTION and not (
+            attempt.outcome == "NEEDS_ATTENTION"
+            and _safe_error_is_exact(attempt.error)
+            and attempt.retry_at is None
+            and not attempt.external_id
+            and attempt.finished_at is not None
+        ):
+            return False
         if attempt.retry_at is not None and attempt.retry_at < attempt.finished_at:
             return False
         previous = attempt
@@ -206,6 +248,7 @@ def _attempt_history_is_consistent(task, post):
             PublishAttempt.Status.RUNNING,
             PublishAttempt.Status.SUBMITTED,
             PublishAttempt.Status.SUBMISSION_UNKNOWN,
+            PublishAttempt.Status.NEEDS_ATTENTION,
             PublishAttempt.Status.SUCCEEDED,
             PublishAttempt.Status.CANCELED,
         }
@@ -303,7 +346,8 @@ def publish_task_is_consistent(task):
                 and post is not None and latest is not None
                 and latest.status == PublishAttempt.Status.SUCCEEDED
                 and latest.started_at == task.started_at
-                and latest.finished_at == task.finished_at == post.published_at
+                and latest.finished_at == task.finished_at
+                and post.published_at <= task.finished_at
                 and post.organization_id == task.organization_id
                 and post.platform_content_id == task.platform_content_id
                 and post.social_account_id == task.social_account_id
@@ -343,6 +387,30 @@ def publish_task_is_consistent(task):
                 and latest.error == task.last_error
                 and task.provider_call_started_at is not None
                 and task.provider_call_started_at == latest.provider_call_started_at
+            )
+        if task.status == PublishTask.Status.NEEDS_ATTENTION:
+            unknown_match_error = (
+                task.last_error.get("code") in {
+                    "BUFFER_RECONCILIATION_EVIDENCE_MISSING",
+                    "BUFFER_RECONCILIATION_NO_MATCH",
+                    "BUFFER_RECONCILIATION_AMBIGUOUS",
+                    "BUFFER_RECONCILIATION_EXPIRED",
+                }
+                if isinstance(task.last_error, dict) else False
+            )
+            return (
+                content.status == PlatformContent.Status.APPROVED
+                and task.claim_token is None and task.started_at is not None
+                and task.finished_at is not None and task.canceled_at is None
+                and _safe_error_is_exact(task.last_error)
+                and task.retry_not_before is None
+                and (task.provider_submission_id or unknown_match_error)
+                and post is None and latest is not None
+                and latest.status == PublishAttempt.Status.NEEDS_ATTENTION
+                and latest.started_at == task.started_at
+                and latest.finished_at == task.finished_at
+                and latest.error == task.last_error
+                and latest.provider_submission_id == task.provider_submission_id
             )
         if task.status == PublishTask.Status.FAILED:
             return (
@@ -419,7 +487,12 @@ def publish_task_consistency_queryset(organization):
                     :MAX_PUBLISH_ATTEMPTS + 1
                 ],
                 to_attr="_safe_attempts",
-            )
+            ),
+            Prefetch(
+                "reconciliation_attempts",
+                queryset=PublishReconciliationAttempt.objects.order_by("-sequence_number")[:20],
+                to_attr="_safe_reconciliation_attempts",
+            ),
         )
         .annotate(
             _selected_platform=Exists(
@@ -566,6 +639,7 @@ def create_publish_task(
                 PublishTask.Status.RUNNING,
                 PublishTask.Status.SUBMITTED,
                 PublishTask.Status.SUBMISSION_UNKNOWN,
+                PublishTask.Status.NEEDS_ATTENTION,
             ],
         ).count()
         if published_today + pending >= limit:
@@ -745,14 +819,101 @@ def claim_publish_task(task_id=None):
     return task, attempt
 
 
+@dataclass(frozen=True)
+class _NormalizedProviderResult:
+    succeeded: bool
+    submitted: bool
+    submission_id: str
+    external_id: str
+    error_code: str
+    retry_after_seconds: int | None
+    malformed: bool
+
+
+_MISSING_RESULT_FIELD = object()
+
+
+def _read_provider_result_field(result, field, default):
+    try:
+        value = getattr(result, field, _MISSING_RESULT_FIELD)
+    except Exception:
+        return default, True, True
+    if value is _MISSING_RESULT_FIELD:
+        return default, False, False
+    return value, False, True
+
+
+def _normalize_provider_result(result):
+    if type(result) is _NormalizedProviderResult:
+        return result
+
+    succeeded, succeeded_error, succeeded_present = _read_provider_result_field(
+        result, "succeeded", False
+    )
+    submitted, submitted_error, _ = _read_provider_result_field(
+        result, "submitted", False
+    )
+    submission_id, submission_id_error, submission_id_present = (
+        _read_provider_result_field(result, "submission_id", "")
+    )
+    external_id, external_id_error, external_id_present = _read_provider_result_field(
+        result, "external_id", ""
+    )
+    error_code, error_code_error, error_code_present = _read_provider_result_field(
+        result, "error_code", ""
+    )
+    retry_after_seconds, retry_error, retry_present = _read_provider_result_field(
+        result, "retry_after_seconds", None
+    )
+
+    malformed = any(
+        (
+            succeeded_error,
+            submitted_error,
+            submission_id_error,
+            external_id_error,
+            error_code_error,
+            retry_error,
+            not succeeded_present,
+            type(succeeded) is not bool,
+            type(submitted) is not bool,
+            submission_id_present and type(submission_id) is not str,
+            external_id_present and type(external_id) is not str,
+            error_code_present and type(error_code) is not str,
+            retry_present
+            and retry_after_seconds is not None
+            and type(retry_after_seconds) is not int,
+        )
+    )
+    return _NormalizedProviderResult(
+        succeeded=succeeded if type(succeeded) is bool else False,
+        submitted=submitted if type(submitted) is bool else False,
+        submission_id=submission_id if type(submission_id) is str else "",
+        external_id=external_id if type(external_id) is str else "",
+        error_code=error_code if type(error_code) is str else "",
+        retry_after_seconds=(
+            retry_after_seconds if type(retry_after_seconds) is int else None
+        ),
+        malformed=malformed,
+    )
+
+
 def _safe_error(result):
-    code = getattr(result, "error_code", "")
-    code = code if code in SAFE_PUBLISH_ERRORS else "PROVIDER_ERROR"
+    try:
+        code = getattr(result, "error_code", "")
+    except Exception:
+        code = ""
+    code = (
+        code
+        if type(code) is str and code in SAFE_PUBLISH_ERRORS
+        else "PROVIDER_ERROR"
+    )
     return SAFE_PUBLISH_ERRORS[code]
 
 
 @transaction.atomic
 def complete_publish_failure(task_id, claim_token, result):
+    result = _normalize_provider_result(result)
     task = PublishTask.objects.select_for_update().get(pk=task_id)
     attempt = PublishAttempt.objects.select_for_update().get(
         task=task, claim_token=claim_token
@@ -793,6 +954,7 @@ def complete_publish_failure(task_id, claim_token, result):
 
 @transaction.atomic
 def complete_publish_success(task_id, claim_token, result, *, actor=None):
+    result = _normalize_provider_result(result)
     task = PublishTask.objects.select_for_update().select_related(
         "platform_content"
     ).get(pk=task_id)
@@ -847,7 +1009,7 @@ def complete_publish_success(task_id, claim_token, result, *, actor=None):
 
 
 def _normalize_submission_id(value) -> str | None:
-    if not isinstance(value, str):
+    if type(value) is not str:
         return None
     normalized = value.strip()
     if not normalized or len(normalized) > 255:
@@ -856,21 +1018,23 @@ def _normalize_submission_id(value) -> str | None:
 
 
 def _result_kind(result):
-    if getattr(result, "succeeded", False):
+    result = _normalize_provider_result(result)
+    if result.malformed:
+        return "unknown"
+    if result.succeeded:
         return "succeeded"
-    if getattr(result, "submitted", False):
-        submission_id = _normalize_submission_id(
-            getattr(result, "submission_id", "")
-        )
+    if result.submitted:
+        submission_id = _normalize_submission_id(result.submission_id)
         return "submitted" if submission_id else "unknown"
-    if getattr(result, "error_code", "") == "OUTCOME_UNKNOWN":
+    if result.error_code == "OUTCOME_UNKNOWN":
         return "unknown"
     return "failed"
 
 
 @transaction.atomic
 def complete_publish_submitted(task_id, claim_token, result):
-    submission_id = _normalize_submission_id(getattr(result, "submission_id", ""))
+    result = _normalize_provider_result(result)
+    submission_id = _normalize_submission_id(result.submission_id)
     if submission_id is None:
         raise PublishingConflict("Connector submission id is invalid.")
     task = PublishTask.objects.select_for_update().get(pk=task_id)
@@ -891,6 +1055,7 @@ def complete_publish_submitted(task_id, claim_token, result):
     task.retry_not_before = None
     task.provider_submission_id = submission_id
     task.finished_at = now
+    task.next_reconcile_at = now + BUFFER_INITIAL_RECONCILIATION_DELAY
     attempt.status = PublishAttempt.Status.SUBMITTED
     attempt.outcome = "SUBMITTED"
     attempt.error = None
@@ -901,6 +1066,7 @@ def complete_publish_submitted(task_id, claim_token, result):
         task.save(update_fields=[
             "status", "claim_token", "last_error", "retry_not_before",
             "provider_submission_id", "finished_at", "updated_at",
+            "next_reconcile_at",
         ])
         attempt.save(update_fields=[
             "status", "outcome", "error", "retry_at",
@@ -930,6 +1096,7 @@ def complete_publish_unknown(task_id, claim_token, result):
     task.last_error = error
     task.retry_not_before = None
     task.finished_at = now
+    task.next_reconcile_at = now + BUFFER_INITIAL_RECONCILIATION_DELAY
     attempt.status = PublishAttempt.Status.SUBMISSION_UNKNOWN
     attempt.outcome = "OUTCOME_UNKNOWN"
     attempt.error = error
@@ -938,7 +1105,7 @@ def complete_publish_unknown(task_id, claim_token, result):
     with publishing_writes():
         task.save(update_fields=[
             "status", "claim_token", "last_error", "retry_not_before",
-            "finished_at", "updated_at",
+            "finished_at", "next_reconcile_at", "updated_at",
         ])
         attempt.save(update_fields=[
             "status", "outcome", "error", "retry_at", "finished_at", "updated_at",
@@ -1079,13 +1246,19 @@ def _build_official_call(task):
 
 
 @transaction.atomic
-def _mark_provider_call_started(task, attempt):
+def _mark_provider_call_started(task, attempt, *, provider_request_fingerprint=""):
     now = timezone.now()
     task.provider_call_started_at = now
+    task.provider_request_fingerprint = provider_request_fingerprint
     attempt.provider_call_started_at = now
+    attempt.provider_request_fingerprint = provider_request_fingerprint
     with publishing_writes():
-        task.save(update_fields=["provider_call_started_at", "updated_at"])
-        attempt.save(update_fields=["provider_call_started_at", "updated_at"])
+        task.save(update_fields=[
+            "provider_call_started_at", "provider_request_fingerprint", "updated_at",
+        ])
+        attempt.save(update_fields=[
+            "provider_call_started_at", "provider_request_fingerprint", "updated_at",
+        ])
 
 
 def _associate_pre_publish_tracking(task, post) -> None:
@@ -1108,6 +1281,7 @@ def _associate_pre_publish_tracking(task, post) -> None:
 
 def _finalize_provider_result(task, attempt, result):
     try:
+        result = _normalize_provider_result(result)
         kind = _result_kind(result)
         if kind == "succeeded":
             post = complete_publish_success(
@@ -1124,7 +1298,7 @@ def _finalize_provider_result(task, attempt, result):
         complete_publish_failure(task.id, attempt.claim_token, result)
         return None
     except Exception:
-        logger.exception("Provider result finalization failed; outcome is unknown.")
+        logger.error("Provider result finalization failed; outcome is unknown.")
         try:
             complete_publish_unknown(
                 task.id,
@@ -1132,7 +1306,7 @@ def _finalize_provider_result(task, attempt, result):
                 PublishResult(succeeded=False, error_code="OUTCOME_UNKNOWN"),
             )
         except Exception:
-            logger.exception("Unable to persist the unknown provider outcome.")
+            logger.error("Unable to persist the unknown provider outcome.")
         return None
 
 
@@ -1196,7 +1370,19 @@ def execute_publish_task(task_id):
         )
         return None
 
-    _mark_provider_call_started(task, attempt)
+    provider_request_fingerprint = ""
+    if task.social_account.provider == SocialAccount.Provider.BUFFER:
+        try:
+            provider_request_fingerprint = connector.provider_request_fingerprint(request)
+        except Exception:
+            complete_publish_failure(
+                task.id, attempt.claim_token,
+                PublishResult(succeeded=False, error_code="PROVIDER_ERROR"),
+            )
+            return None
+    _mark_provider_call_started(
+        task, attempt, provider_request_fingerprint=provider_request_fingerprint
+    )
 
     try:
         result = connector.publish(request)
@@ -1265,12 +1451,17 @@ def retry_publish_task(task, *, actor=None):
     task = PublishTask.objects.select_for_update().get(pk=task.pk)
     if task.status in {
         PublishTask.Status.SUBMITTED, PublishTask.Status.SUBMISSION_UNKNOWN,
+        PublishTask.Status.NEEDS_ATTENTION,
     }:
         raise PublishingConflict(
             "Submitted or unknown-outcome tasks require reconciliation, not retry."
         )
     if task.status != PublishTask.Status.FAILED:
         raise PublishingConflict("Only failed publish tasks can be retried.")
+    if (task.last_error or {}).get("code") == "MANUALLY_CLOSED_NO_POST":
+        raise PublishingConflict(
+            "This task was manually closed. Create a new publish task to send again."
+        )
     if task.attempt_number >= MAX_PUBLISH_ATTEMPTS:
         raise PublishingConflict("Publish attempt limit has been reached.")
     if (task.last_error or {}).get("code") == "TOKEN_EXPIRED":
@@ -1293,11 +1484,13 @@ def retry_publish_task(task, *, actor=None):
     task.retry_not_before = None
     task.finished_at = None
     task.provider_call_started_at = None
+    task.provider_request_fingerprint = ""
     try:
         with transaction.atomic(), publishing_writes():
             task.save(update_fields=[
                 "status", "last_error", "retry_not_before", "finished_at",
                 "provider_call_started_at", "updated_at",
+                "provider_request_fingerprint",
             ])
     except IntegrityError:
         if _find_blocking_publish_task(

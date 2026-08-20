@@ -3,6 +3,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from django.conf import settings
 from django.http import Http404, HttpResponseRedirect
 from drf_spectacular.utils import extend_schema
+from drf_spectacular.types import OpenApiTypes
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
@@ -589,11 +590,20 @@ def _buffer_error_response(error: BufferConnectionError) -> Response:
     )
 
 
+_BUFFER_ERROR_RESPONSES = {
+    404: OpenApiTypes.OBJECT,
+    409: OpenApiTypes.OBJECT,
+    429: OpenApiTypes.OBJECT,
+    502: OpenApiTypes.OBJECT,
+    503: OpenApiTypes.OBJECT,
+}
+
+
 @extend_schema(tags=["BufferProviderConnection"])
 class BufferProviderConnectionView(APIView):
     permission_classes = [IsAuthenticated, CanManageCredentials]
 
-    @extend_schema(responses={200: BufferProviderConnectionReadSerializer})
+    @extend_schema(responses={200: BufferProviderConnectionReadSerializer, **_BUFFER_ERROR_RESPONSES})
     def get(self, request: Request) -> Response:
         try:
             connection = get_buffer_connection(request.organization)
@@ -603,7 +613,7 @@ class BufferProviderConnectionView(APIView):
 
     @extend_schema(
         request=BufferProviderConnectionCreateSerializer,
-        responses={201: BufferProviderConnectionReadSerializer},
+        responses={201: BufferProviderConnectionReadSerializer, **_BUFFER_ERROR_RESPONSES},
     )
     def post(self, request: Request) -> Response:
         serializer = BufferProviderConnectionCreateSerializer(data=request.data)
@@ -626,7 +636,7 @@ class BufferProviderConnectionView(APIView):
 
     @extend_schema(
         request=BufferProviderConnectionRotateSerializer,
-        responses={200: BufferProviderConnectionReadSerializer},
+        responses={200: BufferProviderConnectionReadSerializer, **_BUFFER_ERROR_RESPONSES},
     )
     def patch(self, request: Request) -> Response:
         serializer = BufferProviderConnectionRotateSerializer(data=request.data)
@@ -648,7 +658,10 @@ class BufferProviderConnectionView(APIView):
 class BufferProviderConnectionProbeView(APIView):
     permission_classes = [IsAuthenticated, CanManageCredentials]
 
-    @extend_schema(request=None, responses={200: BufferProviderConnectionReadSerializer})
+    @extend_schema(
+        request=None,
+        responses={200: BufferProviderConnectionReadSerializer, **_BUFFER_ERROR_RESPONSES},
+    )
     def post(self, request: Request) -> Response:
         try:
             connection = probe_buffer_connection(
@@ -665,7 +678,10 @@ class BufferProviderConnectionProbeView(APIView):
 class BufferProviderConnectionSyncView(APIView):
     permission_classes = [IsAuthenticated, CanManageCredentials]
 
-    @extend_schema(request=None, responses={200: BufferProviderConnectionSyncSerializer})
+    @extend_schema(
+        request=None,
+        responses={200: BufferProviderConnectionSyncSerializer, **_BUFFER_ERROR_RESPONSES},
+    )
     def post(self, request: Request) -> Response:
         try:
             result = sync_buffer_channels(
@@ -698,7 +714,7 @@ class BufferProviderConnectionDisconnectView(APIView):
 
     @extend_schema(
         request=BufferProviderConnectionDisconnectSerializer,
-        responses={200: BufferProviderConnectionReadSerializer},
+        responses={200: BufferProviderConnectionReadSerializer, **_BUFFER_ERROR_RESPONSES},
     )
     def post(self, request: Request) -> Response:
         serializer = BufferProviderConnectionDisconnectSerializer(data=request.data)

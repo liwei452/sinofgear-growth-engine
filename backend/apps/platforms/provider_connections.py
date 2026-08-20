@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from integrations.platforms.base import ConnectorConfigurationRequired
 from integrations.platforms.buffer_client import BufferGraphQLClient, BufferHttpTransport
 from integrations.platforms.buffer_connector import BufferConnector
 from integrations.platforms.buffer_types import BufferDiscoveryRequest, BufferIgnoredChannel
@@ -109,21 +110,40 @@ def _record_event(
     error_code: str = "",
     metadata: dict | None = None,
 ) -> None:
+    with provider_event_writes():
+        ProviderConnectionEvent.objects.create(
+            organization=organization,
+            provider_connection=provider_connection,
+            provider=ProviderConnection.Provider.BUFFER,
+            actor=actor,
+            action=action,
+            outcome=outcome,
+            error_code=error_code,
+            metadata=metadata or {},
+        )
+
+
+def _record_event_quietly(
+    *,
+    organization,
+    provider_connection,
+    actor,
+    action: str,
+    outcome: str,
+    error_code: str = "",
+    metadata: dict | None = None,
+) -> None:
     try:
-        with provider_event_writes():
-            ProviderConnectionEvent.objects.create(
-                organization=organization,
-                provider_connection=provider_connection,
-                provider=ProviderConnection.Provider.BUFFER,
-                actor=actor,
-                action=action,
-                outcome=outcome,
-                error_code=error_code,
-                metadata=metadata or {},
-            )
+        _record_event(
+            organization=organization,
+            provider_connection=provider_connection,
+            actor=actor,
+            action=action,
+            outcome=outcome,
+            error_code=error_code,
+            metadata=metadata,
+        )
     except Exception:
-        # Audit writes are best-effort and must never fail the connection flow
-        # or leak secrets into an exception.
         return
 
 
@@ -142,6 +162,23 @@ def _store_credential(token_store, organization, actor, api_key: str, attempt_id
         raise BufferConnectionError("BUFFER_CONFIGURATION_REQUIRED") from None
 
 
+def _delete_credential(token_store, reference: str) -> None:
+    """Delete a credential, treating "already gone" as success and propagating real failures."""
+    if not reference:
+        return
+    try:
+        token_store.delete(reference)
+    except ConnectorConfigurationRequired:
+        return
+
+
+def _delete_credential_quietly(token_store, reference: str) -> None:
+    try:
+        _delete_credential(token_store, reference)
+    except Exception:
+        return
+
+
 def _matched_organization_name(probe_result, organization_id: str) -> str:
     account = probe_result.account
     if account is None:
@@ -150,6 +187,19 @@ def _matched_organization_name(probe_result, organization_id: str) -> str:
         if organization.provider_organization_id == organization_id:
             return organization.name
     return account.name
+
+
+def _connected_values(*, reference, external_id, display_name, now):
+    return {
+        "credential_reference": reference,
+        "external_id": external_id,
+        "display_name": display_name,
+        "connection_state": ProviderConnection.ConnectionState.CONNECTED,
+        "last_probe_at": now,
+        "disconnected_at": None,
+        "reauthorization_required_at": None,
+        "lifecycle_error_code": "",
+    }
 
 
 def connect_buffer(
@@ -187,11 +237,11 @@ def connect_buffer(
             )
         )
     except Exception:
-        _delete_credential(token_store, temporary_reference)
+        _delete_credential_quietly(token_store, temporary_reference)
         raise BufferConnectionError("BUFFER_PROVIDER_UNAVAILABLE") from None
     if not probe_result.ok:
-        _delete_credential(token_store, temporary_reference)
-        _record_event(
+        _delete_credential_quietly(token_store, temporary_reference)
+        _record_event_quietly(
             organization=organization,
             provider_connection=existing,
             actor=actor,
@@ -203,29 +253,71 @@ def connect_buffer(
 
     display_name = _matched_organization_name(probe_result, organization_id)
     now = clock()
-    with transaction.atomic():
-        connection, _created = ProviderConnection.objects.update_or_create(
-            organization=organization,
-            provider=ProviderConnection.Provider.BUFFER,
-            defaults={
-                "credential_reference": temporary_reference,
-                "external_id": organization_id,
-                "display_name": display_name,
-                "connection_state": ProviderConnection.ConnectionState.CONNECTED,
-                "last_probe_at": now,
-                "disconnected_at": None,
-                "reauthorization_required_at": None,
-                "lifecycle_error_code": "",
-            },
-        )
-    _record_event(
-        organization=organization,
-        provider_connection=connection,
-        actor=actor,
-        action=ProviderConnectionEvent.Action.CONNECT,
-        outcome=ProviderConnectionEvent.Outcome.SUCCESS,
-    )
+    try:
+        with transaction.atomic():
+            locked = ProviderConnection.objects.filter(
+                organization=organization,
+                provider=ProviderConnection.Provider.BUFFER,
+            ).select_for_update().first()
+            if locked is not None and locked.connection_state == ProviderConnection.ConnectionState.CONNECTED:
+                raise BufferConnectionError("BUFFER_ALREADY_CONNECTED")
+            old_reference = locked.credential_reference if locked is not None else ""
+            if locked is None:
+                try:
+                    connection = ProviderConnection.objects.create(
+                        organization=organization,
+                        provider=ProviderConnection.Provider.BUFFER,
+                        **_connected_values(
+                            reference=temporary_reference,
+                            external_id=organization_id,
+                            display_name=display_name,
+                            now=now,
+                        ),
+                    )
+                except IntegrityError:
+                    locked = ProviderConnection.objects.filter(
+                        organization=organization,
+                        provider=ProviderConnection.Provider.BUFFER,
+                    ).select_for_update().get()
+                    if locked.connection_state == ProviderConnection.ConnectionState.CONNECTED:
+                        raise BufferConnectionError("BUFFER_ALREADY_CONNECTED") from None
+                    old_reference = locked.credential_reference
+                    _apply_connected(locked, temporary_reference, organization_id, display_name, now)
+                    connection = locked
+                    if old_reference and old_reference != temporary_reference:
+                        _delete_credential(token_store, old_reference)
+            else:
+                _apply_connected(locked, temporary_reference, organization_id, display_name, now)
+                connection = locked
+                if old_reference and old_reference != temporary_reference:
+                    _delete_credential(token_store, old_reference)
+            _record_event(
+                organization=organization,
+                provider_connection=connection,
+                actor=actor,
+                action=ProviderConnectionEvent.Action.CONNECT,
+                outcome=ProviderConnectionEvent.Outcome.SUCCESS,
+            )
+    except Exception:
+        _delete_credential_quietly(token_store, temporary_reference)
+        raise
     return connection
+
+
+def _apply_connected(connection, reference, external_id, display_name, now) -> None:
+    connection.credential_reference = reference
+    connection.external_id = external_id
+    connection.display_name = display_name
+    connection.connection_state = ProviderConnection.ConnectionState.CONNECTED
+    connection.last_probe_at = now
+    connection.disconnected_at = None
+    connection.reauthorization_required_at = None
+    connection.lifecycle_error_code = ""
+    connection.save(update_fields=[
+        "credential_reference", "external_id", "display_name", "connection_state",
+        "last_probe_at", "disconnected_at", "reauthorization_required_at",
+        "lifecycle_error_code", "updated_at",
+    ])
 
 
 def rotate_buffer_credential(
@@ -254,11 +346,11 @@ def rotate_buffer_credential(
             )
         )
     except Exception:
-        _delete_credential(token_store, new_reference)
+        _delete_credential_quietly(token_store, new_reference)
         raise BufferConnectionError("BUFFER_PROVIDER_UNAVAILABLE") from None
     if not probe_result.ok:
-        _delete_credential(token_store, new_reference)
-        _record_event(
+        _delete_credential_quietly(token_store, new_reference)
+        _record_event_quietly(
             organization=organization,
             provider_connection=connection,
             actor=actor,
@@ -269,30 +361,34 @@ def rotate_buffer_credential(
         raise _map_buffer_error_code(probe_result.error_code)
 
     now = clock()
-    with transaction.atomic():
-        locked = _buffer_connection(organization, for_update=True)
-        if locked.credential_reference != old_reference:
-            _delete_credential(token_store, new_reference)
-            raise BufferConnectionError("BUFFER_CONNECTION_CHANGED")
-        locked.credential_reference = new_reference
-        locked.connection_state = ProviderConnection.ConnectionState.CONNECTED
-        locked.last_probe_at = now
-        locked.disconnected_at = None
-        locked.reauthorization_required_at = None
-        locked.lifecycle_error_code = ""
-        locked.save(update_fields=[
-            "credential_reference", "connection_state", "last_probe_at",
-            "disconnected_at", "reauthorization_required_at",
-            "lifecycle_error_code", "updated_at",
-        ])
-    _delete_credential(token_store, old_reference)
-    _record_event(
-        organization=organization,
-        provider_connection=locked,
-        actor=actor,
-        action=ProviderConnectionEvent.Action.ROTATE,
-        outcome=ProviderConnectionEvent.Outcome.SUCCESS,
-    )
+    try:
+        with transaction.atomic():
+            locked = _buffer_connection(organization, for_update=True)
+            if locked.credential_reference != old_reference:
+                raise BufferConnectionError("BUFFER_CONNECTION_CHANGED")
+            locked.credential_reference = new_reference
+            locked.connection_state = ProviderConnection.ConnectionState.CONNECTED
+            locked.last_probe_at = now
+            locked.disconnected_at = None
+            locked.reauthorization_required_at = None
+            locked.lifecycle_error_code = ""
+            locked.save(update_fields=[
+                "credential_reference", "connection_state", "last_probe_at",
+                "disconnected_at", "reauthorization_required_at",
+                "lifecycle_error_code", "updated_at",
+            ])
+            _record_event(
+                organization=organization,
+                provider_connection=locked,
+                actor=actor,
+                action=ProviderConnectionEvent.Action.ROTATE,
+                outcome=ProviderConnectionEvent.Outcome.SUCCESS,
+            )
+            if old_reference != new_reference:
+                _delete_credential(token_store, old_reference)
+    except Exception:
+        _delete_credential_quietly(token_store, new_reference)
+        raise
     return locked
 
 
@@ -303,22 +399,23 @@ def probe_buffer_connection(
     connector,
     clock=timezone.now,
 ) -> ProviderConnection:
-    connection = _buffer_connection(organization)
-    reference = connection.credential_reference
-    external_id = connection.external_id
-    if not reference or not external_id:
+    snapshot = _buffer_connection(organization)
+    snapshot_reference = snapshot.credential_reference
+    snapshot_external_id = snapshot.external_id
+    if not snapshot_reference or not snapshot_external_id:
         raise BufferConnectionError("BUFFER_CONFIGURATION_REQUIRED")
 
     probe_result = connector.probe_connection(
         BufferDiscoveryRequest(
-            credential_reference=reference,
-            expected_organization_id=external_id,
+            credential_reference=snapshot_reference,
+            expected_organization_id=snapshot_external_id,
         )
     )
     now = clock()
     if probe_result.ok:
         with transaction.atomic():
             locked = _buffer_connection(organization, for_update=True)
+            _assert_probe_snapshot_unchanged(locked, snapshot_reference, snapshot_external_id)
             locked.connection_state = ProviderConnection.ConnectionState.CONNECTED
             locked.last_probe_at = now
             locked.disconnected_at = None
@@ -328,25 +425,28 @@ def probe_buffer_connection(
                 "connection_state", "last_probe_at", "disconnected_at",
                 "reauthorization_required_at", "lifecycle_error_code", "updated_at",
             ])
-        _record_event(
-            organization=organization,
-            provider_connection=locked,
-            actor=actor,
-            action=ProviderConnectionEvent.Action.PROBE,
-            outcome=ProviderConnectionEvent.Outcome.SUCCESS,
-        )
+            _record_event(
+                organization=organization,
+                provider_connection=locked,
+                actor=actor,
+                action=ProviderConnectionEvent.Action.PROBE,
+                outcome=ProviderConnectionEvent.Outcome.SUCCESS,
+            )
         return locked
 
     state, set_reauth = _probe_state(probe_result.error_code)
     with transaction.atomic():
         locked = _buffer_connection(organization, for_update=True)
+        _assert_probe_snapshot_unchanged(locked, snapshot_reference, snapshot_external_id)
         locked.connection_state = state
+        locked.lifecycle_error_code = probe_result.error_code
         if set_reauth:
             locked.reauthorization_required_at = now
         locked.save(update_fields=[
-            "connection_state", "reauthorization_required_at", "updated_at",
+            "connection_state", "lifecycle_error_code", "reauthorization_required_at",
+            "updated_at",
         ])
-    _record_event(
+    _record_event_quietly(
         organization=organization,
         provider_connection=locked,
         actor=actor,
@@ -355,6 +455,15 @@ def probe_buffer_connection(
         error_code=probe_result.error_code,
     )
     raise _map_buffer_error_code(probe_result.error_code)
+
+
+def _assert_probe_snapshot_unchanged(connection, reference, external_id) -> None:
+    if (
+        connection.credential_reference != reference
+        or connection.external_id != external_id
+        or connection.connection_state == ProviderConnection.ConnectionState.DISCONNECTED
+    ):
+        raise BufferConnectionError("BUFFER_CONNECTION_CHANGED")
 
 
 def sync_buffer_channels(
@@ -377,7 +486,7 @@ def sync_buffer_channels(
         )
     )
     if not discover_result.ok:
-        _record_event(
+        _record_event_quietly(
             organization=organization,
             provider_connection=snapshot,
             actor=actor,
@@ -405,20 +514,20 @@ def sync_buffer_channels(
         )
         locked.last_sync_at = now
         locked.save(update_fields=["last_sync_at", "updated_at"])
+        _record_event(
+            organization=organization,
+            provider_connection=locked,
+            actor=actor,
+            action=ProviderConnectionEvent.Action.SYNC,
+            outcome=ProviderConnectionEvent.Outcome.SUCCESS,
+            metadata={
+                "created_count": created,
+                "updated_count": updated,
+                "disconnected_count": disconnected_count,
+                "ignored_count": len(discover_result.ignored_channels),
+            },
+        )
 
-    _record_event(
-        organization=organization,
-        provider_connection=locked,
-        actor=actor,
-        action=ProviderConnectionEvent.Action.SYNC,
-        outcome=ProviderConnectionEvent.Outcome.SUCCESS,
-        metadata={
-            "created_count": created,
-            "updated_count": updated,
-            "disconnected_count": disconnected_count,
-            "ignored_count": len(discover_result.ignored_channels),
-        },
-    )
     return BufferSyncResult(
         created_count=created,
         updated_count=updated,
@@ -465,21 +574,14 @@ def disconnect_buffer(
             connection_state=SocialAccount.ConnectionState.DISCONNECTED,
             disconnected_at=now,
         )
-    _record_event(
-        organization=organization,
-        provider_connection=locked,
-        actor=actor,
-        action=ProviderConnectionEvent.Action.DISCONNECT,
-        outcome=ProviderConnectionEvent.Outcome.SUCCESS,
-    )
+        _record_event(
+            organization=organization,
+            provider_connection=locked,
+            actor=actor,
+            action=ProviderConnectionEvent.Action.DISCONNECT,
+            outcome=ProviderConnectionEvent.Outcome.SUCCESS,
+        )
     return locked
-
-
-def _delete_credential(token_store, reference: str) -> None:
-    try:
-        token_store.delete(reference)
-    except Exception:
-        return
 
 
 def _resolve_platforms(discover_result) -> dict[str, Platform]:

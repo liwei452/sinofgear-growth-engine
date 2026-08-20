@@ -5,7 +5,7 @@ from django.utils import timezone
 
 from apps.identity.models import Organization
 from apps.platforms.connection_status import connection_summary
-from apps.platforms.models import ConnectorCredential, Platform, SocialAccount
+from apps.platforms.models import ConnectorCredential, Platform, ProviderConnection, SocialAccount
 
 
 @pytest.mark.django_db
@@ -88,3 +88,63 @@ def test_official_connection_without_credential_fails_closed() -> None:
 
     assert summary.status == "CONFIGURATION_REQUIRED"
     assert summary.recovery_action == "连接账号"
+
+
+@pytest.mark.django_db
+def test_buffer_parent_state_takes_priority_over_channel_state() -> None:
+    organization = Organization.objects.create(name="Acme", slug="buffer-parent-acme")
+    platform = Platform.objects.create(code="LINKEDIN", name="LinkedIn")
+    connection = ProviderConnection.objects.create(
+        organization=organization,
+        provider=ProviderConnection.Provider.BUFFER,
+        credential_reference="vault://buffer",
+        external_id="org-1",
+        connection_state=ProviderConnection.ConnectionState.REAUTHORIZATION_REQUIRED,
+    )
+    SocialAccount.objects.create(
+        organization=organization,
+        platform=platform,
+        provider=SocialAccount.Provider.BUFFER,
+        provider_connection=connection,
+        provider_account_id="ch-1",
+        external_id="li-page-1",
+        display_name="LinkedIn Channel",
+        publish_mode=SocialAccount.PublishMode.API_AUTO,
+        connection_state=SocialAccount.ConnectionState.CONNECTED,
+    )
+
+    summary = connection_summary(organization=organization, platform_code=platform.code)
+
+    assert summary.status == "REAUTHORIZATION_REQUIRED"
+    assert summary.mode == "BUFFER"
+
+
+@pytest.mark.django_db
+def test_buffer_multiple_healthy_channels_aggregate_to_connected() -> None:
+    organization = Organization.objects.create(name="Acme", slug="buffer-multi-acme")
+    platform = Platform.objects.create(code="LINKEDIN", name="LinkedIn")
+    connection = ProviderConnection.objects.create(
+        organization=organization,
+        provider=ProviderConnection.Provider.BUFFER,
+        credential_reference="vault://buffer",
+        external_id="org-1",
+        connection_state=ProviderConnection.ConnectionState.CONNECTED,
+    )
+    for index in range(2):
+        SocialAccount.objects.create(
+            organization=organization,
+            platform=platform,
+            provider=SocialAccount.Provider.BUFFER,
+            provider_connection=connection,
+            provider_account_id=f"ch-{index}",
+            external_id=f"li-page-{index}",
+            display_name=f"LinkedIn Channel {index}",
+            publish_mode=SocialAccount.PublishMode.API_AUTO,
+            connection_state=SocialAccount.ConnectionState.CONNECTED,
+        )
+
+    summary = connection_summary(organization=organization, platform_code=platform.code)
+
+    assert summary.status == "CONNECTED"
+    assert summary.mode == "BUFFER"
+    assert summary.account_id == ""

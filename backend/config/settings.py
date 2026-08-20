@@ -142,6 +142,7 @@ SPECTACULAR_SETTINGS = {
         "drf_spectacular.hooks.postprocess_schema_enums",
         "apps.common.openapi.enforce_mutation_error_contract",
         "apps.publishing.openapi.enforce_publish_attempt_bound",
+        "apps.platforms.openapi.enforce_buffer_rotate_required",
     ],
     "APPEND_COMPONENTS": {
         "schemas": {

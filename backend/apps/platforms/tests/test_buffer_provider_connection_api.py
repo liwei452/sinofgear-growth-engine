@@ -114,6 +114,29 @@ def test_connect_reuses_primary_key_after_disconnect(admin_client, buffer_api):
 
 
 @pytest.mark.django_db
+def test_reconnect_deletes_old_credential(organization, admin_client, buffer_api):
+    connection = ProviderConnection.objects.create(
+        organization=organization,
+        provider=ProviderConnection.Provider.BUFFER,
+        credential_reference="vault://buffer/old",
+        external_id="org-1",
+        connection_state=ProviderConnection.ConnectionState.CONFIGURATION_REQUIRED,
+    )
+    client, _user = admin_client
+    token_store, connector = buffer_api
+    connector.probe_result = probe_ok()
+
+    response = client.post(
+        API, {"api_key": "sk-new", "organization_id": "org-1"}, format="json",
+    )
+
+    assert response.status_code == 201
+    assert "vault://buffer/old" in token_store.deleted
+    connection.refresh_from_db()
+    assert connection.credential_reference == token_store.stored[-1]
+
+
+@pytest.mark.django_db
 def test_rotate_success_deletes_old_credential(admin_client, buffer_api):
     client, _user = admin_client
     token_store, connector = buffer_api

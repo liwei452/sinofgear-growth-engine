@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from django.utils import timezone
 
-from .models import SocialAccount
+from .models import ProviderConnection, SocialAccount
 
 
 @dataclass(frozen=True)
@@ -38,15 +38,19 @@ def connection_summary(*, organization, platform_code: str) -> ConnectionSummary
         organization=organization,
         platform__code=platform_code,
         status=SocialAccount.Status.ACTIVE,
-    ).select_related("credential", "platform", "provider_connection").order_by("id")[:2])
+    ).select_related("credential", "platform", "provider_connection").order_by("id"))
     if not accounts:
         return _summary("NOT_CONNECTED")
+    buffer_accounts = [
+        account for account in accounts
+        if account.provider == SocialAccount.Provider.BUFFER
+    ]
+    if buffer_accounts and len(buffer_accounts) == len(accounts):
+        return _buffer_platform_summary(buffer_accounts)
     if len(accounts) != 1:
         return _summary("CONFIGURATION_REQUIRED")
 
     account = accounts[0]
-    if account.provider == SocialAccount.Provider.BUFFER:
-        return _buffer_summary(account)
     if account.connection_state in {
         SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED,
         SocialAccount.ConnectionState.PROVIDER_UNAVAILABLE,
@@ -76,13 +80,32 @@ def connection_summary(*, organization, platform_code: str) -> ConnectionSummary
     return _summary("CONNECTED", account, mode="OFFICIAL")
 
 
-def _buffer_summary(account: SocialAccount) -> ConnectionSummary:
-    if account.connection_state in {
-        SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED,
-        SocialAccount.ConnectionState.PROVIDER_UNAVAILABLE,
-        SocialAccount.ConnectionState.INSUFFICIENT_CAPABILITY,
+def _buffer_platform_summary(accounts: list[SocialAccount]) -> ConnectionSummary:
+    connection = accounts[0].provider_connection
+    single = accounts[0] if len(accounts) == 1 else None
+    if connection is None:
+        return _summary("CONFIGURATION_REQUIRED", single, mode="BUFFER")
+    parent_state = connection.connection_state
+    if parent_state in {
+        ProviderConnection.ConnectionState.REAUTHORIZATION_REQUIRED,
+        ProviderConnection.ConnectionState.PROVIDER_UNAVAILABLE,
+        ProviderConnection.ConnectionState.INSUFFICIENT_CAPABILITY,
     }:
-        return _summary(account.connection_state, account, mode="BUFFER")
-    if account.connection_state == SocialAccount.ConnectionState.CONNECTED:
-        return _summary("CONNECTED", account, mode="BUFFER")
-    return _summary("CONFIGURATION_REQUIRED", account, mode="BUFFER")
+        return _summary(parent_state, single, mode="BUFFER")
+    if parent_state == ProviderConnection.ConnectionState.DISCONNECTED:
+        return _summary("NOT_CONNECTED", mode="BUFFER")
+    return _summary(_aggregate_buffer_channels(accounts), single, mode="BUFFER")
+
+
+def _aggregate_buffer_channels(accounts: list[SocialAccount]) -> str:
+    states = {account.connection_state for account in accounts}
+    for state in (
+        SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED,
+        SocialAccount.ConnectionState.INSUFFICIENT_CAPABILITY,
+        SocialAccount.ConnectionState.PROVIDER_UNAVAILABLE,
+    ):
+        if state in states:
+            return state
+    if SocialAccount.ConnectionState.CONNECTED in states:
+        return SocialAccount.ConnectionState.CONNECTED
+    return SocialAccount.ConnectionState.CONFIGURATION_REQUIRED

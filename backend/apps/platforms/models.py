@@ -41,6 +41,13 @@ def _find_sensitive_key(value):
     return None
 
 
+def _validate_event_metadata(metadata) -> None:
+    if not isinstance(metadata, dict):
+        raise ValidationError({"metadata": "metadata must be a dict."})
+    if _find_sensitive_key(metadata) is not None:
+        raise ValidationError({"metadata": "metadata must not contain sensitive keys."})
+
+
 class Platform(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     code = models.CharField(max_length=64, unique=True)
@@ -384,6 +391,8 @@ class ProviderConnectionEventQuerySet(models.QuerySet):
 
     def bulk_create(self, objs, **kwargs):
         self._write_guard()
+        for obj in objs:
+            _validate_event_metadata(obj.metadata)
         return super().bulk_create(objs, **kwargs)
 
     def delete(self):
@@ -446,10 +455,7 @@ class ProviderConnectionEvent(models.Model):
             raise ValidationError(
                 "Provider connection events are append-only and service-created."
             )
-        if not isinstance(self.metadata, dict):
-            raise ValidationError({"metadata": "metadata must be a dict."})
-        if _find_sensitive_key(self.metadata) is not None:
-            raise ValidationError({"metadata": "metadata must not contain sensitive keys."})
+        _validate_event_metadata(self.metadata)
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):

@@ -83,6 +83,10 @@ def test_registry_routes_buffer_by_provider_before_direct_platform_code() -> Non
         display_name="Acme LinkedIn",
         publish_mode=SocialAccount.PublishMode.API_AUTO,
         connection_state=SocialAccount.ConnectionState.CONNECTED,
+        connector_metadata={
+            "fixture": "phase-a-e2e",
+            "connection_kind": "demo_fake",
+        },
     )
     direct = OfficialConnector()
     buffer = OfficialConnector()

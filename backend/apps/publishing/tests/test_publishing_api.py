@@ -10,6 +10,7 @@ from rest_framework.test import APIClient
 
 from apps.content.models import PlatformContent, content_writes
 from apps.identity.models import Membership, Organization, Role
+from apps.platforms.models import SocialAccount
 from apps.publishing.services import (
     cancel_publish_task, claim_publish_task, create_publish_task,
     execute_publish_task, retry_publish_task,
@@ -32,6 +33,17 @@ def _client(organization, role_code, suffix=""):
     client = APIClient()
     assert client.login(username=username, password="password")
     return client
+
+
+def _additional_account(context, suffix):
+    return SocialAccount.objects.create(
+        organization=context["organization"],
+        platform=context["platform"],
+        credential=context["account"].credential,
+        external_id=f"calendar-account-{suffix}",
+        display_name=f"Calendar account {suffix}",
+        publish_mode=SocialAccount.PublishMode.API_AUTO,
+    )
 
 
 @pytest.mark.parametrize(
@@ -173,8 +185,9 @@ def test_calendar_groups_by_iana_local_date_and_applies_every_filter(
         idempotency_key="dst-first", scheduled_at=first_at,
         timezone_name="Europe/Berlin", actor=context["actor"],
     )
+    second_account = _additional_account(context, "dst-second")
     second = create_publish_task(
-        content=context["content"], account=context["account"],
+        content=context["content"], account=second_account,
         idempotency_key="dst-second", scheduled_at=second_at,
         timezone_name="Europe/Berlin", actor=context["actor"],
     )
@@ -182,7 +195,7 @@ def test_calendar_groups_by_iana_local_date_and_applies_every_filter(
     query = (
         "?start=2026-10-24T00:00:00Z&end=2026-10-27T00:00:00Z"
         "&timezone=Europe/Berlin"
-        f"&platform={context['platform'].id}&account={context['account'].id}"
+        f"&platform={context['platform'].id}"
         f"&product={context['product'].id}&campaign={context['campaign'].id}"
         "&country=DE&status=SCHEDULED"
     )
@@ -197,6 +210,15 @@ def test_calendar_groups_by_iana_local_date_and_applies_every_filter(
     ids = [entry["id"] for day in response.json()["days"] for entry in day["entries"]]
     assert ids == [str(first.id), str(second.id)]
     assert response.json()["days"][0]["entries"][0]["scheduled_at"].endswith("Z")
+    account_filtered = client.get(
+        f"/api/v1/publish-calendar{query}&account={context['account'].id}"
+    )
+    filtered_ids = [
+        entry["id"]
+        for day in account_filtered.json()["days"]
+        for entry in day["entries"]
+    ]
+    assert filtered_ids == [str(first.id)]
 
 
 def test_publish_calendar_query_count_does_not_scale_with_rows(publishing_context):
@@ -213,8 +235,9 @@ def test_publish_calendar_query_count_does_not_scale_with_rows(publishing_contex
     with CaptureQueriesContext(connection) as single:
         assert client.get("/api/v1/publish-calendar", params).status_code == 200
     for index in range(5):
+        account = _additional_account(context, f"query-{index}")
         create_publish_task(
-            content=context["content"], account=context["account"],
+            content=context["content"], account=account,
             idempotency_key=f"many-{index}", scheduled_at=base + timedelta(minutes=index + 1),
             actor=context["actor"],
         )
@@ -230,7 +253,8 @@ def test_publish_calendar_has_deterministic_entry_bound_and_metadata(
     base = timezone.now() + timedelta(days=1)
     tasks = [
         create_publish_task(
-            content=context["content"], account=context["account"],
+            content=context["content"],
+            account=_additional_account(context, f"bound-{index}"),
             idempotency_key=f"calendar-bound-{index}",
             scheduled_at=base + timedelta(seconds=index), actor=context["actor"],
         )

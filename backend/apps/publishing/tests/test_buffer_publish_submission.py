@@ -1,13 +1,24 @@
 from types import SimpleNamespace
 
 import pytest
+from django.db import IntegrityError, transaction
 
 from apps.content.models import PlatformContent
 from apps.platforms.capabilities import CONNECTOR_CAPABILITIES
 from apps.platforms.codes import AccountCapability
 from apps.platforms.models import ProviderConnection, SocialAccount
-from apps.publishing.models import PublishedPost, PublishAttempt, PublishTask
-from apps.publishing.services import create_publish_task, execute_publish_task
+from apps.publishing.models import (
+    PublishedPost,
+    PublishAttempt,
+    PublishTask,
+    publishing_writes,
+)
+from apps.publishing.services import (
+    PublishingConflict,
+    create_publish_task,
+    execute_publish_task,
+    retry_publish_task,
+)
 from integrations.platforms.base import OfficialPublishResult
 
 
@@ -98,6 +109,128 @@ def test_buffer_acceptance_becomes_submitted_without_published_post(
 
     execute_publish_task(task.id)
     assert len(connector.requests) == 1
+
+
+def test_unclassified_exception_after_provider_call_is_unknown_and_not_retryable(
+    publishing_context, monkeypatch,
+):
+    account, _connection = _buffer_account(publishing_context, monkeypatch)
+    connector = RecordingConnector(RuntimeError("response parser failed after submit"))
+    _runtime(monkeypatch, connector)
+    task = create_publish_task(
+        content=publishing_context["content"],
+        account=account,
+        idempotency_key="buffer-runtime-after-call",
+        actor=publishing_context["actor"],
+    )
+
+    execute_publish_task(task.id)
+
+    task.refresh_from_db()
+    attempt = PublishAttempt.objects.get(task=task)
+    assert len(connector.requests) == 1
+    assert task.provider_call_started_at is not None
+    assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
+    assert attempt.status == PublishAttempt.Status.SUBMISSION_UNKNOWN
+    assert task.last_error["code"] == "OUTCOME_UNKNOWN"
+    with pytest.raises(PublishingConflict, match="reconciliation, not retry"):
+        retry_publish_task(task, actor=publishing_context["actor"])
+
+
+@pytest.mark.parametrize(
+    "blocking_status",
+    [
+        PublishTask.Status.SCHEDULED,
+        PublishTask.Status.QUEUED,
+        PublishTask.Status.RUNNING,
+        PublishTask.Status.SUBMITTED,
+        PublishTask.Status.SUBMISSION_UNKNOWN,
+        PublishTask.Status.SUCCEEDED,
+    ],
+)
+def test_different_idempotency_key_cannot_duplicate_live_content_account_submission(
+    publishing_context, monkeypatch, blocking_status,
+):
+    account, _connection = _buffer_account(publishing_context, monkeypatch)
+    first = create_publish_task(
+        content=publishing_context["content"],
+        account=account,
+        idempotency_key=f"buffer-first-{blocking_status}",
+        actor=publishing_context["actor"],
+    )
+    with publishing_writes():
+        PublishTask.objects.filter(pk=first.pk).update(status=blocking_status)
+
+    with pytest.raises(PublishingConflict, match="already has a publish task"):
+        create_publish_task(
+            content=publishing_context["content"],
+            account=account,
+            idempotency_key=f"buffer-second-{blocking_status}",
+            actor=publishing_context["actor"],
+        )
+
+    assert PublishTask.objects.filter(
+        platform_content=publishing_context["content"], social_account=account,
+    ).count() == 1
+
+
+def test_database_rejects_raced_live_content_account_submission(
+    publishing_context, monkeypatch,
+):
+    account, _connection = _buffer_account(publishing_context, monkeypatch)
+    first = create_publish_task(
+        content=publishing_context["content"],
+        account=account,
+        idempotency_key="buffer-race-first",
+        actor=publishing_context["actor"],
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic(), publishing_writes():
+        PublishTask.objects.create(
+            organization=first.organization,
+            platform_content=first.platform_content,
+            content_version=first.content_version,
+            social_account=first.social_account,
+            platform=first.platform,
+            connector_code=first.connector_code,
+            idempotency_key="buffer-race-second",
+            request_fingerprint=first.request_fingerprint,
+            status=PublishTask.Status.QUEUED,
+            created_by=publishing_context["actor"],
+        )
+
+
+def test_service_translates_concurrent_live_submission_race_to_conflict(
+    publishing_context, monkeypatch,
+):
+    from apps.publishing import services
+
+    account, _connection = _buffer_account(publishing_context, monkeypatch)
+    first = create_publish_task(
+        content=publishing_context["content"],
+        account=account,
+        idempotency_key="buffer-concurrent-first",
+        actor=publishing_context["actor"],
+    )
+    lookups = iter([None, first])
+    monkeypatch.setattr(
+        services,
+        "_find_blocking_publish_task",
+        lambda **_kwargs: next(lookups),
+        raising=False,
+    )
+
+    with pytest.raises(PublishingConflict, match="already has a publish task"):
+        create_publish_task(
+            content=publishing_context["content"],
+            account=account,
+            idempotency_key="buffer-concurrent-second",
+            actor=publishing_context["actor"],
+        )
+
+    assert PublishTask.objects.filter(
+        platform_content=publishing_context["content"], social_account=account,
+    ).count() == 1
 
 
 @pytest.mark.parametrize(

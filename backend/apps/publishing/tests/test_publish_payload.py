@@ -22,6 +22,12 @@ def test_linkedin_payload_uses_commentary():
         "commentary": "Hello engineering team",
         "image_url": "https://media.example/gear.jpg",
     }
+    assert build_publish_payload(
+        platform_code="LINKEDIN",
+        content_payload={"body": "Direct text survives unsupported media"},
+        media_url="https://media.example/gear.mp4",
+        media_kind="VIDEO",
+    ) == {"commentary": "Direct text survives unsupported media"}
 
 
 def test_facebook_payload_uses_message_and_link():
@@ -39,6 +45,12 @@ def test_facebook_payload_uses_message_and_link():
         "message": "Capability summary",
         "image_url": "https://media.example/gear.jpg",
     }
+    assert build_publish_payload(
+        platform_code="FACEBOOK",
+        content_payload={"body": "Direct text survives unsupported media"},
+        media_url="https://media.example/gear.mp4",
+        media_kind="VIDEO",
+    ) == {"message": "Direct text survives unsupported media"}
 
 
 def test_official_request_repr_hides_credential_reference():
@@ -125,6 +137,16 @@ def test_tracking_url_is_embedded_in_text_payload():
 
 def test_publish_official_uses_converted_payload(monkeypatch):
     captured = {}
+    monkeypatch.setattr(
+        publishing_services,
+        "_resolve_media",
+        lambda _task: SimpleNamespace(
+            url="https://media.example/direct-video.mp4", kind="VIDEO"
+        ),
+    )
+    monkeypatch.setattr(
+        publishing_services, "_prepare_tracking_url", lambda _task: None
+    )
 
     def fake_publish(request):
         captured["payload"] = request.payload

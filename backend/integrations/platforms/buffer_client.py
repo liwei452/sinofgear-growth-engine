@@ -347,6 +347,9 @@ class BufferGraphQLClient:
                 BufferErrorCode.OUTCOME_UNKNOWN
                 if mutation else BufferErrorCode.CONTRACT_ERROR
             )
+        data = body.get("data")
+        if mutation and _has_valid_create_post_success(data):
+            return BufferGraphQLResponse(data=data, rate_limit=rate_limit)
         errors = body.get("errors")
         if errors:
             self._raise_graphql_error(
@@ -354,7 +357,6 @@ class BufferGraphQLClient:
                 mutation=mutation,
                 retry_after_seconds=header_retry_after,
             )
-        data = body.get("data")
         if data is None:
             if mutation:
                 raise BufferApiError(BufferErrorCode.OUTCOME_UNKNOWN)
@@ -408,3 +410,25 @@ class BufferGraphQLClient:
                 if normalized is BufferErrorCode.RATE_LIMITED else None
             ),
         )
+
+
+def _has_valid_create_post_success(data) -> bool:
+    if not isinstance(data, dict):
+        return False
+    create_post = data.get("createPost")
+    if (
+        not isinstance(create_post, dict)
+        or create_post.get("__typename") != "PostActionSuccess"
+    ):
+        return False
+    post = create_post.get("post")
+    if not isinstance(post, dict):
+        return False
+    post_id = post.get("id")
+    channel_id = post.get("channelId")
+    return (
+        isinstance(post_id, str)
+        and bool(post_id.strip())
+        and isinstance(channel_id, str)
+        and bool(channel_id.strip())
+    )

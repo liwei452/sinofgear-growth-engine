@@ -62,6 +62,38 @@ def test_provider_final_success_creates_post_and_publishes_content(publishing_co
     assert PublishedPost.objects.filter(task=task).exists()
 
 
+def test_finalization_exception_after_provider_success_is_unknown(
+    publishing_context, monkeypatch,
+):
+    from apps.publishing import services
+
+    context = publishing_context
+    _patch_connector(
+        monkeypatch,
+        PublishResult(succeeded=True, external_id="provider-created-post"),
+    )
+    monkeypatch.setattr(
+        services,
+        "complete_publish_success",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("db finalize failed")),
+    )
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="async-finalize-unknown",
+        actor=context["actor"],
+    )
+
+    assert execute_publish_task(task.id) is None
+
+    task.refresh_from_db()
+    assert task.provider_call_started_at is not None
+    assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
+    assert task.last_error["code"] == "OUTCOME_UNKNOWN"
+    with pytest.raises(PublishingConflict, match="reconciliation, not retry"):
+        retry_publish_task(task)
+
+
 def test_provider_acceptance_stays_submitted(publishing_context, monkeypatch):
     context = publishing_context
     _patch_connector(

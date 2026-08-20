@@ -14,8 +14,10 @@ def build_publish_payload(
     media_url: str | None = None,
     media_kind: str = "VIDEO",
     tracking_url: str | None = None,
+    provider_code: str = "DIRECT",
 ) -> dict:
     code = (platform_code or "").strip().upper()
+    provider = (provider_code or "DIRECT").strip().upper()
     body = str(content_payload.get("body") or "").strip()
     title = str(content_payload.get("title") or "").strip()
     landing_page_url = str(content_payload.get("landing_page_url") or "").strip()
@@ -29,10 +31,12 @@ def build_publish_payload(
         if not body:
             raise PublishPayloadError("LinkedIn content is missing body text.")
         payload = {"commentary": _with_tracking(body)}
-        if media_url:
-            if media_kind != "IMAGE" or not media_url.startswith("https://"):
+        if media_url and media_kind == "IMAGE":
+            if not media_url.startswith("https://"):
                 raise PublishPayloadError("LinkedIn supports one public HTTPS image.")
             payload["image_url"] = media_url
+        elif media_url and provider == "BUFFER":
+            raise PublishPayloadError("LinkedIn via Buffer supports one public HTTPS image.")
         return payload
 
     if code == "FACEBOOK":
@@ -41,10 +45,12 @@ def build_publish_payload(
         payload = {"message": _with_tracking(body)}
         if landing_page_url:
             payload["link"] = landing_page_url
-        if media_url:
-            if media_kind != "IMAGE" or not media_url.startswith("https://"):
+        if media_url and media_kind == "IMAGE":
+            if not media_url.startswith("https://"):
                 raise PublishPayloadError("Facebook supports one public HTTPS image.")
             payload["image_url"] = media_url
+        elif media_url and provider == "BUFFER":
+            raise PublishPayloadError("Facebook via Buffer supports one public HTTPS image.")
         return payload
 
     if code == "INSTAGRAM":

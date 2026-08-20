@@ -11,6 +11,15 @@ from apps.common.models import OrganizationScopedModel
 
 _publishing_write = ContextVar("publishing_service_write", default=False)
 
+LIVE_PUBLISH_TASK_STATUSES = (
+    "SCHEDULED",
+    "QUEUED",
+    "RUNNING",
+    "SUBMITTED",
+    "SUBMISSION_UNKNOWN",
+    "SUCCEEDED",
+)
+
 
 @contextmanager
 def publishing_writes():
@@ -109,6 +118,16 @@ class PublishTask(ProtectedPublishingModel):
             models.UniqueConstraint(
                 fields=["organization", "idempotency_key"],
                 name="publishing_unique_idempotency_key",
+            ),
+            models.UniqueConstraint(
+                fields=[
+                    "organization",
+                    "platform_content",
+                    "content_version",
+                    "social_account",
+                ],
+                condition=models.Q(status__in=LIVE_PUBLISH_TASK_STATUSES),
+                name="publishing_unique_live_content_account",
             ),
         ]
 

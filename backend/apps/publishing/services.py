@@ -31,7 +31,13 @@ from integrations.platforms.runtime import get_social_provider_runtime
 from integrations.platforms.registry import get_connector
 from integrations.platforms.registry import CONNECTOR_FACTORIES
 
-from .models import PublishAttempt, PublishedPost, PublishTask, publishing_writes
+from .models import (
+    LIVE_PUBLISH_TASK_STATUSES,
+    PublishAttempt,
+    PublishedPost,
+    PublishTask,
+    publishing_writes,
+)
 from .publish_payload import PublishPayloadError, build_publish_payload
 
 
@@ -479,6 +485,16 @@ def validate_idempotency_key(value):
     return value
 
 
+def _find_blocking_publish_task(*, content, account):
+    return PublishTask.objects.filter(
+        organization_id=content.organization_id,
+        platform_content_id=content.id,
+        content_version=content.version,
+        social_account_id=account.id,
+        status__in=LIVE_PUBLISH_TASK_STATUSES,
+    ).first()
+
+
 @transaction.atomic
 def create_publish_task(
     *, content, account, idempotency_key, actor=None, scheduled_at=None,
@@ -549,6 +565,21 @@ def create_publish_task(
         ).count()
         if published_today + pending >= limit:
             raise PublishingConflict("Daily publishing limit reached.")
+    blocking_task = _find_blocking_publish_task(
+        content=locked_content, account=locked_account
+    )
+    if blocking_task is not None:
+        if blocking_task.idempotency_key == key:
+            if not publish_task_is_consistent(blocking_task):
+                raise PublishingConflict("Existing publish task is inconsistent.")
+            if blocking_task.request_fingerprint != fingerprint:
+                raise PublishingConflict(
+                    "Idempotency-Key already has a different request."
+                )
+            return blocking_task
+        raise PublishingConflict(
+            "This content version and account already has a publish task."
+        )
     status = PublishTask.Status.SCHEDULED if scheduled_at else PublishTask.Status.QUEUED
     try:
         with transaction.atomic():
@@ -568,16 +599,22 @@ def create_publish_task(
                     created_by=actor,
                 )
     except IntegrityError:
-        existing = PublishTask.objects.get(
+        existing = PublishTask.objects.filter(
             organization=locked_content.organization, idempotency_key=key
-        )
-        if not publish_task_is_consistent(existing):
-            raise PublishingConflict("Existing publish task is inconsistent.") from None
-        if existing.request_fingerprint != fingerprint:
+        ).first()
+        if existing is not None:
+            if not publish_task_is_consistent(existing):
+                raise PublishingConflict("Existing publish task is inconsistent.") from None
+            if existing.request_fingerprint != fingerprint:
+                raise PublishingConflict(
+                    "Idempotency-Key already has a different request."
+                ) from None
+            return existing
+        if _find_blocking_publish_task(content=locked_content, account=locked_account):
             raise PublishingConflict(
-                "Idempotency-Key already has a different request."
+                "This content version and account already has a publish task."
             ) from None
-        return existing
+        raise
     if status == PublishTask.Status.QUEUED:
         from .tasks import run_publish_task
 
@@ -1004,6 +1041,9 @@ def _build_official_call(task):
         media_url=media.url if media else None,
         media_kind=media.kind if media else "VIDEO",
         tracking_url=_prepare_tracking_url(task),
+        provider_code=getattr(
+            task.social_account, "provider", SocialAccount.Provider.DIRECT
+        ),
     )
     consent = content_payload.get("consent")
     if not isinstance(consent, dict):
@@ -1132,10 +1172,11 @@ def execute_publish_task(task_id):
             error_message="Provider publish outcome is unknown.",
         )
     except Exception:
-        logger.exception("Provider rejected the publish request.")
+        logger.exception("Provider publish outcome is unknown.")
         result = PublishResult(
-            succeeded=False, error_code="PROVIDER_ERROR",
-            error_message="Provider rejected the publish request.",
+            succeeded=False,
+            error_code="OUTCOME_UNKNOWN",
+            error_message="Provider publish outcome is unknown.",
         )
 
     kind = _result_kind(result)
@@ -1146,9 +1187,9 @@ def execute_publish_task(task_id):
             )
         except Exception:
             logger.exception("Publish finalization failed.")
-            complete_publish_failure(
+            complete_publish_unknown(
                 task.id, attempt.claim_token,
-                PublishResult(succeeded=False, error_code="PUBLISH_FINALIZE_ERROR"),
+                PublishResult(succeeded=False, error_code="OUTCOME_UNKNOWN"),
             )
             return None
         _associate_pre_publish_tracking(task, post)

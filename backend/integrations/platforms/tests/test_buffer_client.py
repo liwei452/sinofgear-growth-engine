@@ -440,3 +440,37 @@ def test_create_post_graphql_not_found_is_explicit_channel_failure():
         _client(transport).create_post(TOKEN, {"channelId": "missing-channel"})
 
     assert exc_info.value.code is BufferErrorCode.CHANNEL_NOT_FOUND
+
+
+def test_create_post_preserves_valid_success_data_with_top_level_warning():
+    success = {
+        "__typename": "PostActionSuccess",
+        "post": {
+            "id": "post-with-warning",
+            "channelId": "channel-1",
+            "status": "scheduled",
+            "dueAt": None,
+            "createdAt": "2026-08-20T00:00:00Z",
+        },
+    }
+    transport = RecordingTransport(HttpResponse(
+        200,
+        {
+            "data": {"createPost": success},
+            "errors": [{"message": "non-fatal warning"}],
+        },
+        {},
+    ))
+
+    result = _client(transport).create_post(
+        TOKEN,
+        {
+            "channelId": "channel-1",
+            "text": "Hello",
+            "schedulingType": "automatic",
+            "mode": "shareNow",
+        },
+    )
+
+    assert result.data["createPost"] == success
+    assert len(transport.requests) == 1

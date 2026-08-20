@@ -20,12 +20,6 @@ class ConnectorRegistry:
         self.provider_connectors = dict(provider_connectors or {})
 
     def resolve(self, account):
-        metadata = account.connector_metadata if isinstance(account.connector_metadata, dict) else {}
-        connection_kind = metadata.get("connection_kind")
-        if not connection_kind and metadata.get("fixture") == "phase-a-e2e":
-            connection_kind = "demo_fake"
-        if connection_kind == "demo_fake":
-            return ManualPackageFakeConnector()
         provider = getattr(account, "provider", "DIRECT")
         if provider == "BUFFER":
             try:
@@ -36,6 +30,12 @@ class ConnectorRegistry:
                 ) from exc
         if provider != "DIRECT":
             raise ConnectorConfigurationRequired("Unsupported social account provider.")
+        metadata = account.connector_metadata if isinstance(account.connector_metadata, dict) else {}
+        connection_kind = metadata.get("connection_kind")
+        if not connection_kind and metadata.get("fixture") == "phase-a-e2e":
+            connection_kind = "demo_fake"
+        if connection_kind == "demo_fake":
+            return ManualPackageFakeConnector()
         if connection_kind != "official_oauth":
             raise ConnectorConfigurationRequired("Platform account is not connected through official OAuth.")
         try:

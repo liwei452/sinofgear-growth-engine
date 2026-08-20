@@ -20,10 +20,10 @@ from apps.platforms.models import PlatformCapability, SocialAccount
 from integrations.platforms.base import PublishResult
 
 
-def _task(context, key, *, scheduled=False):
+def _task(context, key, *, scheduled=False, account=None):
     return create_publish_task(
         content=context["content"],
-        account=context["account"],
+        account=account or context["account"],
         idempotency_key=key,
         scheduled_at=timezone.now() + timedelta(hours=1) if scheduled else None,
         actor=context["actor"],
@@ -159,7 +159,15 @@ def test_only_due_scheduled_tasks_are_queued(
 ):
     context = publishing_context
     due = _task(context, "due", scheduled=True)
-    future = _task(context, "future", scheduled=True)
+    future_account = SocialAccount.objects.create(
+        organization=context["organization"],
+        platform=context["platform"],
+        credential=context["account"].credential,
+        external_id="mock-future",
+        display_name="Future schedule account",
+        publish_mode=SocialAccount.PublishMode.API_AUTO,
+    )
+    future = _task(context, "future", scheduled=True, account=future_account)
     from apps.publishing.models import publishing_writes
     with publishing_writes():
         PublishTask.objects.filter(pk=due.pk).update(

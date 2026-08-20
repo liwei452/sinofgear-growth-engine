@@ -90,6 +90,17 @@ function platformName(item: WorkflowItem): string {
 
 function deliveryFact(item: WorkflowItem): string {
   if (!item.task) return item.kind === "platform" && item.item.publish_package_id ? "发布包已准备，尚未提交平台" : "尚未准备发布"
+  switch (item.task.status) {
+    case "SUBMISSION_UNKNOWN": return "平台提交状态待确认；请勿重复发布"
+    case "FAILED": return "平台发布失败；请人工检查后处理"
+    case "CANCELED": return "发布任务已取消；尚未发布"
+    case "SUCCEEDED": return "平台已确认发布"
+    case "SCHEDULED": return "已排期，尚未提交平台"
+    case "QUEUED":
+    case "RUNNING": return "正在等待平台处理；尚未确认发布"
+    case "SUBMITTED": break
+    default: return "发布状态未知；请人工核对"
+  }
   const connector = item.task.connector_code.toUpperCase()
   if (connector.includes("BUFFER")) return "通过 Buffer 提交；请以平台回执为准"
   if (connector.includes("OFFICIAL")) return "通过官方 API 提交；请以平台回执为准"
@@ -132,7 +143,7 @@ async function refreshWorkspace(): Promise<void> {
 
     <section class="workflow-tabs" aria-label="内容发布状态">
       <div role="tablist" aria-label="内容发布阶段">
-        <button v-for="(stage, index) in stages" :id="`publishing-tab-${stage}`" :key="stage" :ref="element => { if (element) tabRefs[index] = element as HTMLButtonElement }" type="button" role="tab" :tabindex="activeStage === stage ? 0 : -1" :aria-selected="activeStage === stage" :aria-controls="`publishing-panel-${stage}`" :class="{ active: activeStage === stage }" @click="activateStage(stage)" @keydown="onTabKeydown($event, index)">
+        <button v-for="(stage, index) in stages" :id="`publishing-tab-${stage}`" :key="stage" :ref="element => { if (element) tabRefs[index] = element as HTMLButtonElement }" type="button" role="tab" :tabindex="activeStage === stage ? 0 : -1" :aria-selected="activeStage === stage" :aria-controls="activeStage === stage ? `publishing-panel-${stage}` : undefined" :class="{ active: activeStage === stage }" @click="activateStage(stage)" @keydown="onTabKeydown($event, index)">
           {{ labels[stage] }} <span>{{ counts[stage] }}</span>
         </button>
       </div>

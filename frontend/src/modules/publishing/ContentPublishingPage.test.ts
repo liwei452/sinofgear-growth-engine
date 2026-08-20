@@ -59,7 +59,7 @@ it("keeps each account task visible when one platform content has conflicting ou
 
   await userEvent.setup().click(await screen.findByRole("tab", { name: /已提交/ }))
   expect(await screen.findByText("账号：account-b")).toBeInTheDocument()
-  expect(screen.getByText("通过 Buffer 提交；请以平台回执为准")).toBeInTheDocument()
+  expect(screen.getByText("平台提交状态待确认；请勿重复发布")).toBeInTheDocument()
   expect(screen.queryByRole("button", { name: /重试/ })).not.toBeInTheDocument()
   await userEvent.setup().click(screen.getByRole("tab", { name: /已发布/ }))
   expect(await screen.findByText("账号：account-a")).toBeInTheDocument()
@@ -111,4 +111,31 @@ it("refreshes the workspace after dialog approval moves content out of review", 
   await user.click(await screen.findByRole("button", { name: /查看内容/ }))
   await user.click(screen.getByRole("button", { name: "通过" }))
   expect(await screen.findByRole("tab", { name: /准备发布 1/ })).toBeInTheDocument()
+})
+
+it("uses outcome-specific copy and keeps every tab panel target in the DOM", async () => {
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    const path = String(input)
+    const body = path.includes("/master-contents") ? { next: null, previous: null, results: [] }
+      : path.includes("/platform-contents") ? { next: null, previous: null, results: [{ ...platformContent, status: "APPROVED" }] }
+        : path.includes("/publish-tasks") ? { next: null, previous: null, results: [
+          { id: "failed", platform_content_id: "content-1", social_account_id: "failed-account", connector_code: "OFFICIAL_API", status: "FAILED", provider_submission_id: null },
+          { id: "canceled", platform_content_id: "content-1", social_account_id: "canceled-account", connector_code: "OFFICIAL_API", status: "CANCELED", provider_submission_id: null },
+          { id: "unknown", platform_content_id: "content-1", social_account_id: "unknown-account", connector_code: "BUFFER", status: "SUBMISSION_UNKNOWN", provider_submission_id: "pending" },
+        ] }
+          : path.includes("/platforms") ? { results: [] }
+            : { user: { id: 1, username: "operator" }, organization: { id: "org", name: "Org", slug: "org" }, membership: { id: "member", role: "OPERATOR", status: "ACTIVE", permissions: ["publishing.read"] } }
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }))
+  }))
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(ContentPublishingPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+
+  const submitted = await screen.findByRole("tab", { name: /已提交/ })
+  expect(submitted).not.toHaveAttribute("aria-controls")
+  await userEvent.setup().click(submitted)
+  expect(document.getElementById(submitted.getAttribute("aria-controls") ?? "")).toBeInTheDocument()
+  expect(await screen.findByText("平台提交状态待确认；请勿重复发布")).toBeInTheDocument()
+  await userEvent.setup().click(screen.getByRole("tab", { name: /需要处理/ }))
+  expect(await screen.findByText("平台发布失败；请人工检查后处理")).toBeInTheDocument()
+  expect(screen.getByText("发布任务已取消；尚未发布")).toBeInTheDocument()
 })

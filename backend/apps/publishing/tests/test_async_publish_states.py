@@ -12,6 +12,7 @@ from apps.publishing.models import (
 from apps.publishing.services import (
     PUBLISH_LEASE_SECONDS,
     PublishingConflict,
+    cancel_publish_task,
     claim_publish_task,
     complete_publish_submitted,
     create_publish_task,
@@ -92,6 +93,113 @@ def test_finalization_exception_after_provider_success_is_unknown(
     assert task.last_error["code"] == "OUTCOME_UNKNOWN"
     with pytest.raises(PublishingConflict, match="reconciliation, not retry"):
         retry_publish_task(task)
+
+
+@pytest.mark.parametrize(
+    ("result", "finalizer_name"),
+    [
+        (
+            OfficialPublishResult(status="SUBMITTED", submission_id="buffer-finalizer"),
+            "complete_publish_submitted",
+        ),
+        (
+            PublishResult(succeeded=False, error_code="PROVIDER_ERROR"),
+            "complete_publish_failure",
+        ),
+    ],
+)
+def test_finalizer_exception_after_provider_call_is_unknown(
+    publishing_context, monkeypatch, result, finalizer_name,
+):
+    from apps.publishing import services
+
+    context = publishing_context
+    _patch_connector(monkeypatch, result)
+    monkeypatch.setattr(
+        services,
+        finalizer_name,
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("database finalizer failed")
+        ),
+    )
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key=f"async-{finalizer_name}-unknown",
+        actor=context["actor"],
+    )
+
+    assert execute_publish_task(task.id) is None
+
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
+    assert task.last_error["code"] == "OUTCOME_UNKNOWN"
+
+
+def test_malformed_result_classification_after_provider_call_is_unknown(
+    publishing_context, monkeypatch,
+):
+    class MalformedResult:
+        succeeded = False
+        submitted = False
+
+        @property
+        def error_code(self):
+            raise RuntimeError("malformed result property")
+
+    context = publishing_context
+    _patch_connector(monkeypatch, MalformedResult())
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="async-malformed-result-unknown",
+        actor=context["actor"],
+    )
+
+    assert execute_publish_task(task.id) is None
+
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
+    assert task.last_error["code"] == "OUTCOME_UNKNOWN"
+
+
+def test_unknown_finalizer_exception_does_not_escape_or_allow_cancel(
+    publishing_context, monkeypatch,
+):
+    from apps.publishing import services
+
+    context = publishing_context
+    _patch_connector(
+        monkeypatch,
+        PublishResult(succeeded=False, error_code="OUTCOME_UNKNOWN"),
+    )
+    monkeypatch.setattr(
+        services,
+        "complete_publish_unknown",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("unknown finalizer unavailable")
+        ),
+    )
+    task = create_publish_task(
+        content=context["content"],
+        account=context["account"],
+        idempotency_key="async-unknown-finalizer-guarded",
+        actor=context["actor"],
+    )
+
+    assert execute_publish_task(task.id) is None
+
+    task.refresh_from_db()
+    assert task.status == PublishTask.Status.RUNNING
+    assert task.provider_call_started_at is not None
+    with pytest.raises(PublishingConflict, match="reconciliation"):
+        cancel_publish_task(task, actor=context["actor"])
+
+
+def test_safe_error_defaults_for_result_without_error_code():
+    from apps.publishing.services import SAFE_PUBLISH_ERRORS, _safe_error
+
+    assert _safe_error(object()) == SAFE_PUBLISH_ERRORS["PROVIDER_ERROR"]
 
 
 def test_provider_acceptance_stays_submitted(publishing_context, monkeypatch):

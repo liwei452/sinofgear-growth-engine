@@ -485,14 +485,19 @@ def validate_idempotency_key(value):
     return value
 
 
-def _find_blocking_publish_task(*, content, account):
-    return PublishTask.objects.filter(
+def _find_blocking_publish_task(
+    *, content, account, content_version=None, lock=False,
+):
+    queryset = PublishTask.objects.filter(
         organization_id=content.organization_id,
         platform_content_id=content.id,
-        content_version=content.version,
+        content_version=(content.version if content_version is None else content_version),
         social_account_id=account.id,
         status__in=LIVE_PUBLISH_TASK_STATUSES,
-    ).first()
+    )
+    if lock:
+        queryset = queryset.select_for_update()
+    return queryset.first()
 
 
 @transaction.atomic
@@ -741,7 +746,8 @@ def claim_publish_task(task_id=None):
 
 
 def _safe_error(result):
-    code = result.error_code if result.error_code in SAFE_PUBLISH_ERRORS else "PROVIDER_ERROR"
+    code = getattr(result, "error_code", "")
+    code = code if code in SAFE_PUBLISH_ERRORS else "PROVIDER_ERROR"
     return SAFE_PUBLISH_ERRORS[code]
 
 
@@ -1100,6 +1106,36 @@ def _associate_pre_publish_tracking(task, post) -> None:
         logger.exception("Pre-publish tracking association failed.")
 
 
+def _finalize_provider_result(task, attempt, result):
+    try:
+        kind = _result_kind(result)
+        if kind == "succeeded":
+            post = complete_publish_success(
+                task.id, attempt.claim_token, result, actor=task.created_by
+            )
+            _associate_pre_publish_tracking(task, post)
+            return post
+        if kind == "submitted":
+            complete_publish_submitted(task.id, attempt.claim_token, result)
+            return None
+        if kind == "unknown":
+            complete_publish_unknown(task.id, attempt.claim_token, result)
+            return None
+        complete_publish_failure(task.id, attempt.claim_token, result)
+        return None
+    except Exception:
+        logger.exception("Provider result finalization failed; outcome is unknown.")
+        try:
+            complete_publish_unknown(
+                task.id,
+                attempt.claim_token,
+                PublishResult(succeeded=False, error_code="OUTCOME_UNKNOWN"),
+            )
+        except Exception:
+            logger.exception("Unable to persist the unknown provider outcome.")
+        return None
+
+
 def execute_publish_task(task_id):
     existing = PublishedPost.objects.filter(task_id=task_id).first()
     if existing:
@@ -1179,29 +1215,7 @@ def execute_publish_task(task_id):
             error_message="Provider publish outcome is unknown.",
         )
 
-    kind = _result_kind(result)
-    if kind == "succeeded":
-        try:
-            post = complete_publish_success(
-                task.id, attempt.claim_token, result, actor=task.created_by
-            )
-        except Exception:
-            logger.exception("Publish finalization failed.")
-            complete_publish_unknown(
-                task.id, attempt.claim_token,
-                PublishResult(succeeded=False, error_code="OUTCOME_UNKNOWN"),
-            )
-            return None
-        _associate_pre_publish_tracking(task, post)
-        return post
-    if kind == "submitted":
-        complete_publish_submitted(task.id, attempt.claim_token, result)
-        return None
-    if kind == "unknown":
-        complete_publish_unknown(task.id, attempt.claim_token, result)
-        return None
-    complete_publish_failure(task.id, attempt.claim_token, result)
-    return None
+    return _finalize_provider_result(task, attempt, result)
 
 
 @transaction.atomic
@@ -1210,6 +1224,13 @@ def cancel_publish_task(task, *, actor=None):
     task = PublishTask.objects.select_for_update().get(pk=task.pk)
     if task.status == PublishTask.Status.CANCELED:
         return task
+    if (
+        task.status == PublishTask.Status.RUNNING
+        and task.provider_call_started_at is not None
+    ):
+        raise PublishingConflict(
+            "Provider call has started; reconciliation is required before cancellation."
+        )
     if task.status not in {
         PublishTask.Status.SCHEDULED, PublishTask.Status.QUEUED,
         PublishTask.Status.RUNNING,
@@ -1256,16 +1277,39 @@ def retry_publish_task(task, *, actor=None):
         raise PublishingConflict("Expired account token requires reauthorization before retry.")
     if task.retry_not_before and task.retry_not_before > timezone.now():
         raise PublishingConflict("Rate-limited task is not ready to retry.")
+    content = PlatformContent.objects.select_for_update().get(pk=task.platform_content_id)
+    account = SocialAccount.objects.select_for_update().get(pk=task.social_account_id)
+    if _find_blocking_publish_task(
+        content=content,
+        account=account,
+        content_version=task.content_version,
+        lock=True,
+    ):
+        raise PublishingConflict(
+            "This content version and account already has a publish task."
+        )
     task.status = PublishTask.Status.QUEUED
     task.last_error = None
     task.retry_not_before = None
     task.finished_at = None
     task.provider_call_started_at = None
-    with publishing_writes():
-        task.save(update_fields=[
-            "status", "last_error", "retry_not_before", "finished_at",
-            "provider_call_started_at", "updated_at",
-        ])
+    try:
+        with transaction.atomic(), publishing_writes():
+            task.save(update_fields=[
+                "status", "last_error", "retry_not_before", "finished_at",
+                "provider_call_started_at", "updated_at",
+            ])
+    except IntegrityError:
+        if _find_blocking_publish_task(
+            content=content,
+            account=account,
+            content_version=task.content_version,
+            lock=True,
+        ):
+            raise PublishingConflict(
+                "This content version and account already has a publish task."
+            ) from None
+        raise
     from .tasks import run_publish_task
 
     transaction.on_commit(lambda: run_publish_task.delay(str(task.id)))

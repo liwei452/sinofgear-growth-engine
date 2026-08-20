@@ -133,13 +133,14 @@ def test_canceled_task_never_calls_connector(publishing_context, monkeypatch):
     assert not PublishAttempt.objects.filter(task=task).exists()
 
 
-def test_cancel_during_connector_discards_late_success(publishing_context, monkeypatch):
+def test_cancel_after_provider_call_started_is_rejected(publishing_context, monkeypatch):
     context = publishing_context
     task = _task(context, "cancel-during")
 
     class CancelingConnector:
         def publish(self, request):
-            cancel_publish_task(task, actor=context["actor"])
+            with pytest.raises(PublishingConflict, match="reconciliation"):
+                cancel_publish_task(task, actor=context["actor"])
             return PublishResult(succeeded=True, external_id=f"late-{request.task_id}")
 
     monkeypatch.setattr(
@@ -147,11 +148,11 @@ def test_cancel_during_connector_discards_late_success(publishing_context, monke
         lambda _code, _account: CancelingConnector(),
     )
 
-    assert execute_publish_task(task.id) is None
+    post = execute_publish_task(task.id)
     task.refresh_from_db()
-    assert task.status == PublishTask.Status.CANCELED
-    assert PublishAttempt.objects.get(task=task).status == PublishAttempt.Status.CANCELED
-    assert not PublishedPost.objects.filter(task=task).exists()
+    assert task.status == PublishTask.Status.SUCCEEDED
+    assert post is not None
+    assert PublishAttempt.objects.get(task=task).status == PublishAttempt.Status.SUCCEEDED
 
 
 def test_only_due_scheduled_tasks_are_queued(

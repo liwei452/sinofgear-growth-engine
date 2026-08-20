@@ -233,6 +233,63 @@ def test_service_translates_concurrent_live_submission_race_to_conflict(
     ).count() == 1
 
 
+def _two_failed_buffer_tasks(publishing_context, monkeypatch):
+    account, _connection = _buffer_account(publishing_context, monkeypatch)
+    connector = RecordingConnector(
+        OfficialPublishResult(status="FAILED", error_code="VALIDATION_REJECTED")
+    )
+    _runtime(monkeypatch, connector)
+    tasks = []
+    for suffix in ("first", "second"):
+        task = create_publish_task(
+            content=publishing_context["content"],
+            account=account,
+            idempotency_key=f"buffer-retry-{suffix}",
+            actor=publishing_context["actor"],
+        )
+        execute_publish_task(task.id)
+        task.refresh_from_db()
+        assert task.status == PublishTask.Status.FAILED
+        tasks.append(task)
+    return tasks
+
+
+def test_second_failed_task_retry_conflicts_with_first_live_retry(
+    publishing_context, monkeypatch,
+):
+    first, second = _two_failed_buffer_tasks(publishing_context, monkeypatch)
+
+    assert retry_publish_task(
+        first, actor=publishing_context["actor"]
+    ).status == PublishTask.Status.QUEUED
+    with pytest.raises(PublishingConflict, match="already has a publish task"):
+        retry_publish_task(second, actor=publishing_context["actor"])
+
+    second.refresh_from_db()
+    assert second.status == PublishTask.Status.FAILED
+
+
+def test_concurrent_retry_constraint_race_becomes_publish_conflict(
+    publishing_context, monkeypatch,
+):
+    from apps.publishing import services
+
+    first, second = _two_failed_buffer_tasks(publishing_context, monkeypatch)
+    retry_publish_task(first, actor=publishing_context["actor"])
+    lookups = iter([None, first])
+    monkeypatch.setattr(
+        services,
+        "_find_blocking_publish_task",
+        lambda **_kwargs: next(lookups),
+    )
+
+    with pytest.raises(PublishingConflict, match="already has a publish task"):
+        retry_publish_task(second, actor=publishing_context["actor"])
+
+    second.refresh_from_db()
+    assert second.status == PublishTask.Status.FAILED
+
+
 @pytest.mark.parametrize(
     ("result", "expected_status", "expected_error"),
     [

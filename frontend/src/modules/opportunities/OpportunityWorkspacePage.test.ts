@@ -122,3 +122,16 @@ it("creates a draft only for the selected candidate's server-associated account 
   expect(await screen.findByText("已生成联系草稿（DRAFT），状态为未发送。", { exact: true })).toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "生成联系草稿" })).not.toBeInTheDocument()
 })
+
+it("renders a persisted sent outcome instead of calling the draft never sent", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    enabled: true, source_label: "Licensed directory", schedule_label: "Manual", product_scope_label: "Gear",
+    next_run_at: null, last_run: null, candidate_count: 0, candidates: [],
+    enrichment_candidates: [{ ...candidate, status: "ACCEPTED", latest_preview: null, evidence_links: [], workflow: { account_id: "account-atlas", follow_up_status: "OPEN", draft: { status: "DRAFT", delivery: "SENT", message_id: "message-1", sent_at: "2026-08-20T08:00:00Z" } } }], available_sources: [],
+  }), { status: 200, headers: { "Content-Type": "application/json" } })))
+  const user = userEvent.setup()
+  await renderPage()
+  await user.click(await screen.findByRole("button", { name: "查看 Atlas Gear Works 的证据" }))
+  expect(screen.getByRole("region", { name: "客户机会详情" })).toHaveTextContent("已有投递结果：SENT")
+  expect(screen.getByRole("region", { name: "客户机会详情" })).not.toHaveTextContent("状态为未发送")
+})

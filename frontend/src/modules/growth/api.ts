@@ -308,7 +308,7 @@ export type EnrichmentCandidate = DiscoveryCandidate & {
   workflow: {
     account_id: string | null
     follow_up_status: string | null
-    draft: { status: string; delivery: "NEVER_SENT" } | null
+    draft: { status: string; delivery: string; message_id: string | null; sent_at: string | null } | null
   }
 }
 

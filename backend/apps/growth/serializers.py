@@ -330,13 +330,28 @@ class EnrichmentCandidateSerializer(DiscoveryCandidateSerializer):
         if snapshot.target_account_id is None:
             return {"account_id": None, "follow_up_status": None, "draft": None}
         account = snapshot.target_account
-        follow_up = account.follow_ups.order_by("-updated_at", "-id").first()
-        draft = account.outreach_drafts.order_by("-updated_at", "-id").first()
+        if account.organization_id != obj.organization_id:
+            return {"account_id": None, "follow_up_status": None, "draft": None}
+        follow_up = account.follow_ups.filter(
+            organization=obj.organization,
+        ).order_by("-updated_at", "-id").first()
+        draft = account.outreach_drafts.filter(
+            organization=obj.organization,
+        ).order_by("-updated_at", "-id").first()
+        message = draft.outreach_messages.filter(
+            organization=obj.organization,
+            account=account,
+        ).order_by("-created_at", "-id").first() if draft else None
         return {
             "account_id": str(account.id),
             "follow_up_status": follow_up.status if follow_up else None,
             "draft": (
-                {"status": draft.status, "delivery": "NEVER_SENT"}
+                {
+                    "status": draft.status,
+                    "delivery": message.status if message else "NEVER_SENT",
+                    "message_id": str(message.id) if message else None,
+                    "sent_at": message.sent_at.isoformat() if message and message.sent_at else None,
+                }
                 if draft else None
             ),
         }

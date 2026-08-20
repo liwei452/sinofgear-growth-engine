@@ -1,5 +1,6 @@
 import pytest
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.growth.models import (
@@ -8,6 +9,7 @@ from apps.growth.models import (
     DiscoveryCandidate,
     FollowUp,
     IntentSignal,
+    OutreachMessage,
     OutreachDraft,
     TargetAccount,
 )
@@ -210,11 +212,35 @@ def test_discovery_profile_persists_candidate_scoped_follow_up_and_draft_state(o
     summary = client.get("/api/v1/growth/discovery/profile")
 
     item = summary.data["enrichment_candidates"][0]
-    assert item["workflow"] == {
-        "account_id": follow_up.data["account_id"],
-        "follow_up_status": "OPEN",
-        "draft": {"status": "DRAFT", "delivery": "NEVER_SENT"},
+    assert item["workflow"]["account_id"] == follow_up.data["account_id"]
+    assert item["workflow"]["follow_up_status"] == "OPEN"
+    assert item["workflow"]["draft"] == {
+        "status": "DRAFT", "delivery": "NEVER_SENT", "message_id": None, "sent_at": None,
     }
+
+
+def test_discovery_profile_reports_an_existing_sent_message_for_its_draft(organization):
+    candidate = _candidate(organization)
+    client = _client(organization, suffix="workspace-sent")
+    client.post(f"/api/v1/growth/enrichment/candidates/{candidate.id}/prepare", {}, format="json")
+    follow_up = client.post(f"/api/v1/growth/enrichment/candidates/{candidate.id}/follow-up", {}, format="json")
+    created = client.post(f"/api/v1/growth/opportunities/{follow_up.data['account_id']}/draft", {}, format="json")
+    sent_at = timezone.now()
+    OutreachMessage.objects.create(
+        organization=organization,
+        account_id=follow_up.data["account_id"],
+        draft_id=created.data["id"],
+        provider="smtp",
+        status=OutreachMessage.Status.SENT,
+        sent_at=sent_at,
+    )
+
+    summary = client.get("/api/v1/growth/discovery/profile")
+
+    draft = summary.data["enrichment_candidates"][0]["workflow"]["draft"]
+    assert draft["delivery"] == "SENT"
+    assert draft["sent_at"] is not None
+    assert draft["message_id"]
 
 
 def test_discovery_profile_exposes_only_authorized_evidence_links(organization):

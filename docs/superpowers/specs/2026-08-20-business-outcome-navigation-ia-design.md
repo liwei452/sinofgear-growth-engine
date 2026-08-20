@@ -177,7 +177,7 @@ Target Account、Contact、Intent Signal 和 Inbound Lead 保持独立对象，�
 
 ## 5. 路由策略
 
-保留现有 URL、权限、API 和数据模型，只调整入口、页面组合和展示层职责。
+保留现有 URL、权限和数据模型，只调整入口、页面组合和展示层职责。为满足已确认的核心闭环，批准两个最小、只读且组织隔离的契约例外：市场推荐读取接口；以及 discovery profile 中仅包含 `account_id`、`follow_up_status`、草稿状态/投递事实的 `workflow` 读模型。不得借此扩展证据链接、联系人、意向或其他推断字段。
 
 | 新入口 | 路由策略 | 现有承载能力 |
 |---|---|---|
@@ -247,7 +247,7 @@ Target Account、Contact、Intent Signal 和 Inbound Lead 保持独立对象，�
 
 本次信息架构不允许修改：
 
-- 后端模型、API、权限和迁移；
+- 后端模型、权限和迁移；除上述两个最小只读契约例外外，不新增或扩展 API；
 - AI 行为和提示词；
 - OAuth、发布、获客、CRM 和归因逻辑；
 - 独立站；

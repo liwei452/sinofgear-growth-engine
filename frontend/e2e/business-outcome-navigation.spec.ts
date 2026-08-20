@@ -100,6 +100,19 @@ test.describe("business outcome navigation", () => {
     }
   })
 
+  test("mobile Help and Settings links meet the 44px minimum target", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await login(page)
+
+    await page.goto("/help")
+    for (const destination of ["/", "/promotion", "/opportunities", "/content-factory", "/analytics"]) {
+      await expectMinimumTarget(page.locator(`main a[href="${destination}"]`))
+    }
+
+    await page.goto("/settings")
+    await expectMinimumTarget(page.locator("main .settings-card nav a").first())
+  })
+
   test("legacy mission deep links remain authenticated and reachable", async ({ page }) => {
     await login(page)
     await page.goto("/missions/00000000-0000-4000-8000-000000000999?view=customer")
@@ -203,13 +216,10 @@ test.describe("business outcome navigation", () => {
     await expect(page.getByRole("heading", { name: company })).toBeVisible()
   })
 
-  test("a market recommendation leads to candidate import, human review, enrichment, follow-up, and an unsent contact draft", async ({ page }) => {
+  test("a manually imported candidate list is held at the licence-confirmation gate", async ({ page }) => {
     await login(page)
-    await page.getByRole("navigation", { name: "主导航" }).locator('a[href="/promotion"]').click()
-    await expect(page.getByRole("heading", { name: "市场推荐" })).toBeVisible()
-    await page.getByRole("link", { name: "查看候选并导入名单" }).first().click()
-    await expect(page).toHaveURL(/\/opportunities\?market=/)
-    await expect(page.getByText(/市场推荐 .* 已带入；请导入有权使用的候选名单并进行人工审核/)).toBeVisible()
+    await page.goto("/opportunities")
+    await page.getByRole("button", { name: "导入候选名单" }).click()
     const company = "Orbit Drive Components"
     const requests: string[] = []
     const blockedSideEffects: string[] = []
@@ -226,13 +236,10 @@ test.describe("business outcome navigation", () => {
     await page.getByRole("button", { name: "导入并进入人工审核" }).click()
     await page.getByRole("button", { name: `查看 ${company} 的证据` }).click()
     await page.getByRole("button", { name: "人工接受候选" }).click()
+    await expect(page.getByText("候选名单的使用许可尚待人工确认，暂不能加入跟进或生成联系草稿。", { exact: true })).toBeVisible()
     await expect(page.getByRole("button", { name: "准备资料补全" })).toBeVisible()
-    await page.getByRole("button", { name: "准备资料补全" }).click()
-    await expect(page.getByRole("button", { name: "加入跟进" })).toBeVisible()
-    await page.getByRole("button", { name: "加入跟进" }).click()
-    await expect(page.getByRole("button", { name: "生成联系草稿" })).toBeVisible()
-    await page.getByRole("button", { name: "生成联系草稿" }).click()
-    await expect(page.getByText("状态为未发送。", { exact: false })).toBeVisible()
+    await expect(page.getByRole("button", { name: "加入跟进" })).toHaveCount(0)
+    await expect(page.getByRole("button", { name: "生成联系草稿" })).toHaveCount(0)
     expect(requests.some(path => /\/publish-tasks\/[^/]+\/run$|\/outreach.*send/.test(path))).toBe(false)
     expect(blockedSideEffects).toEqual([])
   })

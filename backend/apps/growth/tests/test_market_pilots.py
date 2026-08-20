@@ -219,7 +219,10 @@ def test_market_recommendations_are_read_only_and_organization_scoped():
     assert response.status_code == 200
     assert response.data["markets"]
     returned = next(item for item in response.data["markets"] if item["country_code"] == ours.country_code)
-    assert returned["is_watched"] is True
+    assert set(response.data) == {"markets"}
+    assert set(returned) == {
+        "country_code", "country_label", "is_demo", "recommendation_reasons",
+    }
     assert MarketCountryProfile.objects.get(pk=other_profile.pk).is_watched is False
     assert returned["recommendation_reasons"]
     assert MarketCountryProfile.objects.filter(organization=organization).count() == 21
@@ -237,7 +240,7 @@ def test_market_recommendations_do_not_materialize_profiles_for_an_empty_organiz
     response = client.get("/api/v1/growth/market-recommendations")
 
     assert response.status_code == 200
-    assert response.data["markets"]
+    assert response.data == {"markets": []}
     assert MarketCountryProfile.objects.filter(organization=organization).count() == 0
 
 

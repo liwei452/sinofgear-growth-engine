@@ -14,6 +14,8 @@ export type NavigationSection = {
   items: NavigationItem[]
 }
 
+export const ADMINISTRATOR_ROLE = "ADMINISTRATOR" as const
+
 export const navigationSections: NavigationSection[] = [{
   items: [
     { label: "今日", to: "/", icon: "calendar-days" },
@@ -25,7 +27,7 @@ export const navigationSections: NavigationSection[] = [{
 }]
 
 export const utilityNavigation: NavigationItem[] = [
-  { label: "我的公司", to: "/company", icon: "building-2" },
+  { label: "我的公司", to: "/company", icon: "building-2", requiredRole: ADMINISTRATOR_ROLE },
   { label: "帮助", to: "/help", icon: "book-open" },
-  { label: "设置", to: "/settings", icon: "settings" },
+  { label: "设置", to: "/settings", icon: "settings", requiredRole: ADMINISTRATOR_ROLE },
 ]

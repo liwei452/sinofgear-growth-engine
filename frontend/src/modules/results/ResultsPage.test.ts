@@ -73,3 +73,21 @@ it("explains an attribution failure and lets the user retry", async () => {
   await userEvent.setup().click(retry)
   expect(await screen.findByText("从机会到成交")).toBeInTheDocument()
 })
+
+it("does not present sent emails as FollowUp records", async () => {
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    const path = String(input)
+    const body = path.includes("/attribution")
+      ? { outcomes: { emails_sent: 7, confirmed_replies: null, confirmed_rfqs: null, cost_per_result: null }, diagnostics: { impressions: null }, availability: { email: "NOT_CONNECTED" }, traces: [] }
+      : [{ id: "mission-1", title: "South Africa mining pilot" }]
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }))
+  }))
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/analytics", component: ResultsPage }, { path: "/attribution", component: { template: "<div />" } }] })
+  await router.push("/analytics")
+  render(ResultsPage, { global: { plugins: [[VueQueryPlugin, { queryClient: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }], router] } })
+  await router.isReady()
+
+  const followUpStep = (await screen.findByText("创建跟进")).closest("li")
+  expect(followUpStep).toHaveTextContent("尚未记录")
+  expect(followUpStep).not.toHaveTextContent("7")
+})

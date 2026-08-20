@@ -80,6 +80,7 @@ const workflowItems = computed<WorkflowItem[]>(() => {
 })
 const counts = computed(() => Object.fromEntries(stages.map(stage => [stage, workflowItems.value.filter(item => item.stage === stage).length])))
 const permissions = computed(() => currentUserQuery.data.value?.membership.permissions ?? [])
+const workflowReadFailed = computed(() => masterQuery.isError.value || platformQuery.isError.value || tasksQuery.isError.value)
 
 function itemsFor(stage: ContentWorkflowStage): WorkflowItem[] {
   return workflowItems.value.filter(item => item.stage === stage)
@@ -144,43 +145,49 @@ async function refreshWorkspace(): Promise<void> {
       </div>
     </header>
 
-    <section class="workflow-tabs" aria-label="内容发布状态">
-      <div role="tablist" aria-label="内容发布阶段">
-        <button v-for="(stage, index) in stages" :id="`publishing-tab-${stage}`" :key="stage" :ref="element => { if (element) tabRefs[index] = element as HTMLButtonElement }" type="button" role="tab" :tabindex="activeStage === stage ? 0 : -1" :aria-selected="activeStage === stage" :aria-controls="`publishing-panel-${stage}`" :class="{ active: activeStage === stage }" @click="activateStage(stage)" @keydown="onTabKeydown($event, index)">
-          {{ labels[stage] }} <span>{{ counts[stage] }}</span>
-        </button>
-      </div>
+    <section v-if="workflowReadFailed" class="form-error" role="alert">
+      <p>内容或发布状态暂时无法读取；不会将旧缓存或空白当作当前状态。</p>
+      <button type="button" class="button button-secondary" @click="refreshWorkspace">重新读取内容和发布状态</button>
     </section>
 
-    <p v-if="masterQuery.isError.value || platformQuery.isError.value || tasksQuery.isError.value" class="form-error">部分状态暂时无法读取；未读取到的内容不会被当作已发布。</p>
-    <section v-for="stage in stages" :id="`publishing-panel-${stage}`" :key="stage" class="outcome-list" role="tabpanel" :aria-labelledby="`publishing-tab-${stage}`" :aria-label="labels[stage]" :hidden="activeStage !== stage">
-      <template v-if="itemsFor(stage).length">
-        <article v-for="entry in itemsFor(stage)" :key="entry.id" class="outcome-card">
-          <div>
-            <p class="eyebrow">{{ platformName(entry) }} · {{ entry.item.status }}</p>
-            <h2>{{ entry.item.payload.title }}</h2>
-            <p>{{ deliveryFact(entry) }}</p>
-            <p v-if="entry.task" class="account-id">账号：{{ entry.task.social_account_id }}</p>
-            <p v-if="entry.task?.provider_submission_id" class="submission-id">提交编号：{{ entry.task.provider_submission_id }}</p>
-          </div>
-          <button type="button" class="button button-secondary" :aria-label="`查看内容：${entry.item.payload.title}`" @click="reviewing = entry">查看内容</button>
-        </article>
-      </template>
-      <section v-else class="empty-state"><div class="empty-state-icon">○</div><div><h2>{{ labels[stage] }}暂无内容</h2><p>切换状态查看其他内容。系统不会把未知提交或手工导出误报为已发布。</p></div></section>
-    </section>
+    <template v-else>
+      <section class="workflow-tabs" aria-label="内容发布状态">
+        <div role="tablist" aria-label="内容发布阶段">
+          <button v-for="(stage, index) in stages" :id="`publishing-tab-${stage}`" :key="stage" :ref="element => { if (element) tabRefs[index] = element as HTMLButtonElement }" type="button" role="tab" :tabindex="activeStage === stage ? 0 : -1" :aria-selected="activeStage === stage" :aria-controls="`publishing-panel-${stage}`" :class="{ active: activeStage === stage }" @click="activateStage(stage)" @keydown="onTabKeydown($event, index)">
+            {{ labels[stage] }} <span>{{ counts[stage] }}</span>
+          </button>
+        </div>
+      </section>
 
-    <ContentReviewDialog
-      v-if="reviewing"
-      :item="reviewing.item"
-      :kind="reviewing.kind"
-      :permissions="permissions"
-      :current-head="reviewing.item.is_current_head"
-      :platforms="platformDefinitionsQuery.data.value ?? []"
-      @close="reviewing = null"
-      @updated="refreshWorkspace"
-      @platform-generated="refreshWorkspace"
-      @conflict="reviewing = null"
-    />
+      <section v-for="stage in stages" :id="`publishing-panel-${stage}`" :key="stage" class="outcome-list" role="tabpanel" :aria-labelledby="`publishing-tab-${stage}`" :aria-label="labels[stage]" :hidden="activeStage !== stage">
+        <template v-if="itemsFor(stage).length">
+          <article v-for="entry in itemsFor(stage)" :key="entry.id" class="outcome-card">
+            <div>
+              <p class="eyebrow">{{ platformName(entry) }} · {{ entry.item.status }}</p>
+              <h2>{{ entry.item.payload.title }}</h2>
+              <p>{{ deliveryFact(entry) }}</p>
+              <p v-if="entry.task" class="account-id">账号：{{ entry.task.social_account_id }}</p>
+              <p v-if="entry.task?.provider_submission_id" class="submission-id">提交编号：{{ entry.task.provider_submission_id }}</p>
+            </div>
+            <button type="button" class="button button-secondary" :aria-label="`查看内容：${entry.item.payload.title}`" @click="reviewing = entry">查看内容</button>
+          </article>
+        </template>
+        <section v-else class="empty-state"><div class="empty-state-icon">○</div><div><h2>{{ labels[stage] }}暂无内容</h2><p>切换状态查看其他内容。系统不会把未知提交或手工导出误报为已发布。</p></div></section>
+      </section>
+
+      <ContentReviewDialog
+        v-if="reviewing"
+        :item="reviewing.item"
+        :kind="reviewing.kind"
+        :permissions="permissions"
+        :current-head="reviewing.item.is_current_head"
+        :platforms="platformDefinitionsQuery.data.value ?? []"
+        @close="reviewing = null"
+        @updated="refreshWorkspace"
+        @platform-generated="refreshWorkspace"
+        @conflict="reviewing = null"
+      />
+    </template>
   </section>
 </template>
 

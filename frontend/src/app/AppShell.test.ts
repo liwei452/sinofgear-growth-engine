@@ -63,16 +63,23 @@ afterEach(() => {
   document.cookie = "csrftoken=; Max-Age=0; path=/"
 })
 
-it("shows the five business destinations and utility links", async () => {
+it("hides administrator utilities from an operator", async () => {
   await renderShell()
 
   expect(screen.getAllByRole("link").filter((link) =>
     ["\u4eca\u65e5", "\u5f00\u59cb\u63a8\u5e7f", "\u5ba2\u6237\u673a\u4f1a", "\u5185\u5bb9\u4e0e\u53d1\u5e03", "\u6548\u679c"].includes(link.textContent ?? ""),
   )).toHaveLength(5)
-  expect(screen.getByRole("link", { name: "\u6211\u7684\u516c\u53f8" })).toHaveAttribute("href", "/company")
   expect(screen.getByRole("link", { name: "\u5e2e\u52a9" })).toHaveAttribute("href", "/help")
-  expect(screen.getByRole("link", { name: "\u8bbe\u7f6e" })).toHaveAttribute("href", "/settings")
+  expect(screen.queryByRole("link", { name: "\u6211\u7684\u516c\u53f8" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "\u8bbe\u7f6e" })).not.toBeInTheDocument()
   expect(screen.queryByRole("link", { name: "\u589e\u957f\u4efb\u52a1" })).not.toBeInTheDocument()
+})
+
+it("shows company and settings utilities to an administrator", async () => {
+  await renderShell({ role: "ADMINISTRATOR" })
+
+  expect(screen.getByRole("link", { name: "\u6211\u7684\u516c\u53f8" })).toHaveAttribute("href", "/company")
+  expect(screen.getByRole("link", { name: "\u8bbe\u7f6e" })).toHaveAttribute("href", "/settings")
 })
 
 it("opens the user menu and exposes logout", async () => {

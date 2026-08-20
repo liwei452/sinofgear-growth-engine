@@ -47,6 +47,7 @@ function apiFactRow(fact: FieldProvenance): FactRow {
 
 const facts = computed(() => (factsQuery.data.value ?? [])
   .filter(fact => !fact.is_demo).map(apiFactRow))
+const factsReadable = computed(() => !factsQuery.isPending.value && !factsQuery.isError.value)
 
 const verifyMutation = useMutation({
   mutationFn: verifyCompanyFact,
@@ -66,10 +67,12 @@ async function verify(fact: FactRow): Promise<void> {
 
 <template>
   <div class="growth-page">
-    <header class="growth-hero"><div><p class="eyebrow">公司资料</p><h1>我的公司</h1><p>AI 只使用已确认事实生成推广内容；不确定字段会要求人工确认。</p></div><span class="fake-label">{{ facts.length ? "事实库记录" : "尚无事实记录" }}</span></header>
+    <header class="growth-hero"><div><p class="eyebrow">公司资料</p><h1>我的公司</h1><p>AI 只使用已确认事实生成推广内容；不确定字段会要求人工确认。</p></div><span class="fake-label">{{ factsQuery.isError.value ? "事实暂时无法读取" : facts.length ? "事实库记录" : "尚无事实记录" }}</span></header>
     <section class="growth-card" role="region" aria-label="公司事实">
       <div class="growth-heading"><div><h2>AI 已理解的事实</h2><p>每个字段显示来源、更新时间和可能的来源成本。</p></div></div>
-      <div class="fact-table-wrap">
+      <p v-if="factsQuery.isPending.value" class="approval-status">正在读取公司事实。</p>
+      <section v-else-if="factsQuery.isError.value" role="alert" class="approval-status"><p>公司事实暂时无法读取；不会将旧缓存或空白当作当前事实。</p><button class="button button-secondary" type="button" @click="factsQuery.refetch()">重新读取公司事实</button></section>
+      <div v-else-if="factsReadable" class="fact-table-wrap">
         <table>
           <thead><tr><th>公司事实</th><th>字段来源</th><th>确认状态</th><th>更新时间</th><th>来源成本</th><th>操作</th></tr></thead>
           <tbody>

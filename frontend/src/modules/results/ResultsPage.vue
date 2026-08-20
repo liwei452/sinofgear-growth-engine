@@ -32,7 +32,7 @@ const funnelSteps = computed<FunnelStep[]>(() => {
     { label: "发现公司", value: null, detail: "尚无可核验的发现记录" },
     { label: "人工确认", value: null, detail: "尚无可核验的确认记录" },
     { label: "找到联系路径", value: null, detail: "尚无可核验的联系路径记录" },
-    { label: "创建跟进", value: outcomes?.emails_sent, detail: "已保存的跟进发送记录" },
+    { label: "创建跟进", value: null, detail: "当前归因未提供可核验的跟进创建记录" },
     { label: "获得回复", value: outcomes?.confirmed_replies, detail: "已确认的有效回复" },
     { label: "形成询盘", value: outcomes?.confirmed_rfqs, detail: "已确认的 RFQ" },
     { label: "成交", value: outcomes?.won_revenue?.amount, detail: "已确认的成交收入" },

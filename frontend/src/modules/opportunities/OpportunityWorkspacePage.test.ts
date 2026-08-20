@@ -99,39 +99,51 @@ it("keeps an accepted candidate visible in the enrichment stage after refetch", 
   expect(await screen.findByRole("button", { name: "准备资料补全" })).toBeInTheDocument()
 })
 
-it("creates a draft only for the selected candidate's server-associated account and restores it from the URL", async () => {
+it("allows fact preparation but blocks a pending list licence before follow-up or contact drafting", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    enabled: true, source_label: "Manual import", schedule_label: "Manual", product_scope_label: "Gear",
+    next_run_at: null, last_run: null, candidate_count: 0, candidates: [],
+    enrichment_candidates: [{
+      ...candidate,
+      status: "ACCEPTED",
+      status_label: "待确认名单许可",
+      license_contract: "待人工确认使用范围",
+      latest_preview: null,
+      workflow: { account_id: null, follow_up_status: null, draft: null },
+    }],
+    available_sources: [],
+  }), { status: 200, headers: { "Content-Type": "application/json" } })))
+  const user = userEvent.setup()
+  await renderPage()
+
+  await user.click(await screen.findByRole("button", { name: "查看 Atlas Gear Works 的证据" }))
+
+  expect(screen.getByText("候选名单的使用许可尚待人工确认，暂不能加入跟进或生成联系草稿。", { exact: true })).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "准备资料补全" })).toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "加入跟进" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "生成联系草稿" })).not.toBeInTheDocument()
+})
+
+it("continues a confirmed-license candidate through follow-up and an unsent contact draft without expanding the profile API", async () => {
   document.cookie = "csrftoken=opportunity-draft-token; path=/"
+  const requests: string[] = []
+  let followedUp = false
   let drafted = false
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input) === "/api/v1/growth/discovery/profile") return new Response(JSON.stringify({
-      enabled: true, source_label: "Licensed directory", schedule_label: "Manual", product_scope_label: "Gear",
-      next_run_at: null, last_run: null, candidate_count: 0, candidates: [],
-      enrichment_candidates: [{ ...candidate, status: "ACCEPTED", latest_preview: { candidate_id: candidate.id, mode: "IMPORTED_FACTS_REVIEW", data_label: "Imported", facts: [], public_contact_paths: [], uncertainties: [], message: "Prepared", created: false }, evidence_links: [{ label: "公开公司网页证据", url: "https://atlas.example/evidence" }], workflow: { account_id: "account-atlas", follow_up_status: "OPEN", draft: drafted ? { status: "DRAFT", delivery: "NEVER_SENT" } : null } }], available_sources: [],
-    }), { status: 200, headers: { "Content-Type": "application/json" } })
-    if (String(input) === "/api/v1/growth/opportunities/account-atlas/draft" && init?.method === "POST") {
-      drafted = true
-      return new Response(JSON.stringify({ id: "draft-atlas", status: "DRAFT", delivery: "NEVER_SENT", "English draft": "Hello", "Chinese explanation": "草稿" }), { status: 200, headers: { "Content-Type": "application/json" } })
-    }
-    throw new Error(`Unexpected request: ${String(input)}`)
+    const path = String(input)
+    requests.push(`${init?.method ?? "GET"} ${path}`)
+    if (path === "/api/v1/growth/discovery/profile") return new Response(JSON.stringify({ enabled: true, source_label: "Licensed directory", schedule_label: "Manual", product_scope_label: "Gear", next_run_at: null, last_run: null, candidate_count: 0, candidates: [], enrichment_candidates: [{ ...candidate, status: "ACCEPTED", latest_preview: { candidate_id: candidate.id, mode: "IMPORTED_FACTS_REVIEW", data_label: "Imported", facts: [], public_contact_paths: [], uncertainties: [], message: "Prepared", created: false }, workflow: { account_id: followedUp ? "account-atlas" : null, follow_up_status: followedUp ? "OPEN" : null, draft: drafted ? { status: "DRAFT", delivery: "NEVER_SENT", message_id: null, sent_at: null } : null } }], available_sources: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+    if (path.endsWith(`/candidates/${candidate.id}/follow-up`) && init?.method === "POST") { followedUp = true; return new Response(JSON.stringify({ account_id: "account-atlas", follow_up_id: "follow-up-atlas", status: "OPEN", created: true, message: "已加入人工跟进" }), { status: 201, headers: { "Content-Type": "application/json" } }) }
+    if (path === "/api/v1/growth/opportunities/account-atlas/draft" && init?.method === "POST") { drafted = true; return new Response(JSON.stringify({ id: "draft-atlas", status: "DRAFT", delivery: "NEVER_SENT", "English draft": "Hello", "Chinese explanation": "草稿" }), { status: 200, headers: { "Content-Type": "application/json" } }) }
+    throw new Error(`Unexpected request: ${path}`)
   }))
   const user = userEvent.setup()
   await renderPage()
   await user.click(await screen.findByRole("button", { name: "查看 Atlas Gear Works 的证据" }))
-  expect(screen.getByRole("link", { name: "公开公司网页证据" })).toHaveAttribute("href", "https://atlas.example/evidence")
+  await user.click(screen.getByRole("button", { name: "加入跟进" }))
+  expect(await screen.findByText("已加入跟进（OPEN），尚未外发联系。", { exact: true })).toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "生成联系草稿" }))
   expect(await screen.findByText("已生成联系草稿（DRAFT），状态为未发送。", { exact: true })).toBeInTheDocument()
-  expect(screen.queryByRole("button", { name: "生成联系草稿" })).not.toBeInTheDocument()
-})
-
-it("renders a persisted sent outcome instead of calling the draft never sent", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-    enabled: true, source_label: "Licensed directory", schedule_label: "Manual", product_scope_label: "Gear",
-    next_run_at: null, last_run: null, candidate_count: 0, candidates: [],
-    enrichment_candidates: [{ ...candidate, status: "ACCEPTED", latest_preview: null, evidence_links: [], workflow: { account_id: "account-atlas", follow_up_status: "OPEN", draft: { status: "DRAFT", delivery: "SENT", message_id: "message-1", sent_at: "2026-08-20T08:00:00Z" } } }], available_sources: [],
-  }), { status: 200, headers: { "Content-Type": "application/json" } })))
-  const user = userEvent.setup()
-  await renderPage()
-  await user.click(await screen.findByRole("button", { name: "查看 Atlas Gear Works 的证据" }))
-  expect(screen.getByRole("region", { name: "客户机会详情" })).toHaveTextContent("已有投递结果：SENT")
-  expect(screen.getByRole("region", { name: "客户机会详情" })).not.toHaveTextContent("状态为未发送")
+  expect(requests).toContain(`POST /api/v1/growth/enrichment/candidates/${candidate.id}/follow-up`)
+  expect(requests).toContain("POST /api/v1/growth/opportunities/account-atlas/draft")
 })

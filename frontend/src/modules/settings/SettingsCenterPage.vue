@@ -212,6 +212,6 @@ const visibleAdvancedGroups = computed(() => visibleGroups(advancedGroups))
 .settings-card p { margin: 0; color: var(--sg-muted); font-size: .82rem; line-height: 1.55; }
 .settings-status { color: #53697d; font-size: .76rem; font-weight: 800; }
 .settings-card nav { display: flex; flex-wrap: wrap; gap: 8px 16px; }
-.settings-card nav a { color: var(--sg-brand); font-size: .8rem; font-weight: 850; text-decoration: none; }
+.settings-card nav a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; color: var(--sg-brand); font-size: .8rem; font-weight: 850; text-decoration: none; }
 @media (max-width: 760px) { .settings-heading { display: grid; }.settings-grid { grid-template-columns: 1fr; } }
 </style>

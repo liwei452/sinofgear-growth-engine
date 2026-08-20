@@ -23,14 +23,9 @@ import {
 
 type CandidateWithPreview = DiscoveryCandidate & {
   latest_preview: CandidateEnrichmentPreview | null
-  evidence_links: Array<{ label: string; url: string }>
-  workflow: CandidateWorkflow
 }
-type CandidateWorkflow = {
-  account_id: string | null
-  follow_up_status: string | null
-  draft: { status: string; delivery: string; message_id: string | null; sent_at: string | null } | null
-}
+type CandidateWorkflow = { account_id: string | null; follow_up_status: string | null; draft: { status: string; delivery: string; message_id: string | null; sent_at: string | null } | null }
+type CandidateWithWorkflow = CandidateWithPreview & { workflow: CandidateWorkflow }
 
 const route = useRoute()
 const router = useRouter()
@@ -44,24 +39,24 @@ const importContent = ref("")
 const importMessage = ref("")
 
 const filters = computed(() => parseOpportunityFilters(new URLSearchParams(route.fullPath.split("?")[1] ?? "")))
-const candidates = computed<CandidateWithPreview[]>(() => {
+const candidates = computed<CandidateWithWorkflow[]>(() => {
   const summary = opportunitiesQuery.data.value
   if (!summary) return []
-  const all = new Map<string, CandidateWithPreview>()
+  const all = new Map<string, CandidateWithWorkflow>()
   for (const candidate of summary.candidates ?? []) {
-    all.set(candidate.id, { ...candidate, latest_preview: null, evidence_links: [], workflow: emptyWorkflow() })
+    all.set(candidate.id, { ...candidate, latest_preview: null, workflow: emptyWorkflow() })
   }
   for (const candidate of summary.enrichment_candidates ?? []) {
     all.set(candidate.id, {
       ...candidate,
-      evidence_links: candidate.evidence_links ?? [],
+      latest_preview: candidate.latest_preview ?? null,
       workflow: candidate.workflow ?? emptyWorkflow(),
     })
   }
   return [...all.values()]
 })
 
-function stageFor(candidate: CandidateWithPreview): OpportunityStage {
+function stageFor(candidate: CandidateWithWorkflow): OpportunityStage {
   if (candidate.workflow.draft) return "DRAFT"
   if (candidate.workflow.follow_up_status) return "FOLLOW_UP"
   if (candidate.latest_preview || candidate.status === "ACCEPTED") return "ENRICHMENT"
@@ -79,6 +74,10 @@ const visibleCandidates = computed(() => {
 })
 const selected = computed(() => candidates.value.find(candidate => candidate.id === filters.value.selected) ?? null)
 const selectedMissing = computed(() => Boolean(filters.value.selected && !selected.value))
+
+function licenseAwaitingConfirmation(candidate: CandidateWithPreview): boolean {
+  return candidate.license_contract.includes("待人工确认")
+}
 
 function emptyWorkflow(): CandidateWorkflow {
   return { account_id: null, follow_up_status: null, draft: null }
@@ -164,7 +163,7 @@ async function importCandidates(): Promise<void> {
 
     <section class="filters" aria-label="客户机会筛选">
       <label>搜索客户机会<input :value="filters.q" type="search" role="searchbox" aria-label="搜索客户机会" @input="updateFilter('q', ($event.target as HTMLInputElement).value)" /></label>
-      <label>阶段<select :value="filters.stage" @change="updateFilter('stage', ($event.target as HTMLSelectElement).value as OpportunityStage)"><option value="ALL">全部</option><option value="CANDIDATE">候选</option><option value="ENRICHMENT">资料补全</option><option value="FOLLOW_UP">跟进</option><option value="DRAFT">联系草稿</option></select></label>
+      <label>阶段<select :value="filters.stage" @change="updateFilter('stage', ($event.target as HTMLSelectElement).value as OpportunityStage)"><option value="ALL">全部</option><option value="CANDIDATE">候选</option><option value="ENRICHMENT">资料补全</option></select></label>
       <label>排序<select :value="filters.sort" @change="updateFilter('sort', ($event.target as HTMLSelectElement).value as OpportunityFilters['sort'])"><option value="score">评分</option><option value="newest">最新</option></select></label>
     </section>
 
@@ -190,14 +189,14 @@ async function importCandidates(): Promise<void> {
         <button class="back" type="button" aria-label="返回客户机会列表" @click="backToList">返回列表</button>
         <header><p class="eyebrow">{{ selected.grade }} · {{ stageFor(selected) }}</p><h2>{{ selected.company_name }}</h2><p>{{ selected.country }} · {{ selected.industry }} · {{ selected.website || '未提供公开网站' }}</p></header>
         <section><h3>推荐原因</h3><p>意向评分 {{ selected.intent_score }}，综合评分 {{ selected.score }}。评分构成：{{ Object.entries(selected.intent_breakdown).map(([name, score]) => `${name} ${score}`).join('；') || '尚未提供评分构成' }}。</p></section>
-        <section><h3>证据与来源</h3><p>{{ selected.source_owner }} · 使用约束：{{ selected.license_contract }}。</p><template v-if="selected.evidence_links.length"><a v-for="link in selected.evidence_links" :key="link.url" :href="link.url" target="_blank" rel="noreferrer">{{ link.label }}</a></template><p v-else>当前没有可公开展示的证据链接。</p></section>
+        <section><h3>证据与来源</h3><p>{{ selected.source_owner }} · 使用约束：{{ selected.license_contract }}。</p><p>当前没有可公开展示的证据链接。</p></section>
         <section><h3>公司资料</h3><p>国家：{{ selected.country }}；行业：{{ selected.industry }}；网站：{{ selected.website || '未提供' }}。</p></section>
         <section><h3>公开联系路径</h3><template v-if="preview(selected)?.public_contact_paths.length"><a v-for="(path, index) in preview(selected)?.public_contact_paths" :key="index" :href="path.url" target="_blank" rel="noreferrer">{{ path.label || path.url }}</a></template><p v-else>尚未补全公开联系路径</p></section>
-        <section><h3>资料补全与活动</h3><p v-if="preview(selected)">{{ preview(selected)?.message }} · {{ preview(selected)?.data_label }}</p><p v-else>尚未准备资料补全；不会假定存在联系人、抓取结果或联系方式。</p><p v-if="selected.workflow.follow_up_status">已加入跟进（{{ selected.workflow.follow_up_status }}），尚未外发联系。</p><p v-if="selected.workflow.draft">已生成联系草稿（{{ selected.workflow.draft.status }}），<template v-if="selected.workflow.draft.delivery === 'NEVER_SENT'">状态为未发送。</template><template v-else>已有投递结果：{{ selected.workflow.draft.delivery }}<template v-if="selected.workflow.draft.sent_at">（{{ new Date(selected.workflow.draft.sent_at).toLocaleString('zh-CN') }}）</template>。</template></p></section>
+        <section><h3>资料补全与活动</h3><p v-if="preview(selected)">{{ preview(selected)?.message }} · {{ preview(selected)?.data_label }}</p><p v-else>尚未准备资料补全；不会假定存在联系人、抓取结果或联系方式。</p><p v-if="licenseAwaitingConfirmation(selected)" class="license-block">候选名单的使用许可尚待人工确认，暂不能加入跟进或生成联系草稿。</p><p v-if="selected.workflow.follow_up_status">已加入跟进（{{ selected.workflow.follow_up_status }}），尚未外发联系。</p><p v-if="selected.workflow.draft">已生成联系草稿（{{ selected.workflow.draft.status }}），<template v-if="selected.workflow.draft.delivery === 'NEVER_SENT'">状态为未发送。</template><template v-else>已有投递结果：{{ selected.workflow.draft.delivery }}。</template></p></section>
         <div class="actions">
           <template v-if="selected.status === 'PENDING_REVIEW'"><button type="button" :disabled="reviewMutation.isPending.value" @click="perform(() => reviewMutation.mutateAsync({ id: selected!.id, decision: 'ACCEPT' }))">人工接受候选</button><button type="button" :disabled="reviewMutation.isPending.value" @click="perform(() => reviewMutation.mutateAsync({ id: selected!.id, decision: 'DISMISS' }))">人工驳回候选</button></template>
           <button v-if="selected.status === 'ACCEPTED' && !preview(selected)" type="button" :disabled="enrichmentMutation.isPending.value" @click="perform(() => enrichmentMutation.mutateAsync(selected!.id))">准备资料补全</button>
-          <button v-if="preview(selected) && !selected.workflow.follow_up_status" type="button" :disabled="followUpMutation.isPending.value" @click="perform(() => followUpMutation.mutateAsync(selected!.id))">加入跟进</button>
+          <button v-if="preview(selected) && !licenseAwaitingConfirmation(selected) && !selected.workflow.follow_up_status" type="button" :disabled="followUpMutation.isPending.value" @click="perform(() => followUpMutation.mutateAsync(selected!.id))">加入跟进</button>
           <button v-if="selected.workflow.follow_up_status && selected.workflow.account_id && !selected.workflow.draft" type="button" :disabled="draftMutation.isPending.value" @click="perform(() => draftMutation.mutateAsync({ candidateId: selected!.id, accountId: selected!.workflow.account_id! }))">生成联系草稿</button>
         </div>
         <p v-if="actionMessage" role="status">{{ actionMessage }}</p>

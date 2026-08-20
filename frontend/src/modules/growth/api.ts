@@ -304,7 +304,6 @@ export type CandidateEnrichmentPreview = {
 
 export type EnrichmentCandidate = DiscoveryCandidate & {
   latest_preview: CandidateEnrichmentPreview | null
-  evidence_links: Array<{ label: string; url: string }>
   workflow: {
     account_id: string | null
     follow_up_status: string | null
@@ -359,61 +358,9 @@ export type MarketPilotSummary = {
   markets: Array<{
     country_code: string
     country_label: string
-    region?: string
-    path_family?: "CUSTOMS_STRONG" | "MIXED_ACQUISITION"
-    suitable_industries?: string[]
-    data_availability_label?: string
-    evidence_note?: string
-    recommended_action?: string
-    is_demo?: boolean
-    is_watched?: boolean
-    status: "OBSERVATION_POOL" | "DATA_VALIDATION" | "SMALL_PILOT" | "ACTIVE_MARKET" | "PAUSED"
-    route: string
-    route_label: string
-    recommended_wave: string
-    source_types: string[]
-    last_updated_at: string
-    scores: Record<string, number | null>
-    sample_quality: {
-      raw_sample_count: number
-      named_buyer_rate: number | null
-      active_entity_match_rate: number | null
-      duplicate_rate: number | null
-      evidence_company_count: number
-      evidence_company_threshold: number
-    }
+    is_demo: boolean
     recommendation_reasons: string[]
-    hold_reasons: string[]
-    metrics: {
-      effective_customer_rate: number | null
-      positive_reply_rate: number | null
-      source_cost_micros: number
-      raw_sample_count: number
-    }
   }>
-  score_weights: {
-    data_availability: number
-    demand_strength: number
-    purchase_intent: number
-    company_reachability: number
-    commercial_execution: number
-  }
-  quality_gate: {
-    minimum_raw_samples: number
-    minimum_named_buyer_rate: number
-    minimum_active_entity_match_rate: number
-    maximum_median_record_age_days: number
-    maximum_duplicate_rate: number
-    license_required: boolean
-  }
-  search_policy: { hs_codes: string[]; include_terms: string[]; exclude_terms: string[] }
-  validation_goals: {
-    reviewed_valid_companies: number
-    sales_conversations: number
-    positive_intent_signals: number
-    progressed_opportunities: number
-    weeks: number
-  }
 }
 
 export const marketRecommendationQueryKeys = {

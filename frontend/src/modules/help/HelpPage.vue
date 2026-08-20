@@ -16,7 +16,7 @@ const workspaces = [
     <h1 id="help-title">从业务目标开始</h1>
     <p>从下列工作区选择当前要推进的业务目标。系统可以协助准备内容和外联工作，但发布与外联都需要人工批准后才能执行。</p>
     <nav aria-label="业务工作区">
-      <RouterLink v-for="workspace in workspaces" :key="workspace.to" :to="workspace.to">
+      <RouterLink v-for="workspace in workspaces" :key="workspace.to" :to="workspace.to" class="workspace-link">
         {{ workspace.label }}
       </RouterLink>
     </nav>
@@ -26,5 +26,5 @@ const workspaces = [
 <style scoped>
 .help-page { max-width: 48rem; }
 .help-page nav { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.5rem; }
-.help-page a { color: var(--color-primary, #1d4ed8); font-weight: 600; }
+.help-page a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; color: var(--color-primary, #1d4ed8); font-weight: 600; }
 </style>

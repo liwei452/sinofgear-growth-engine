@@ -204,6 +204,7 @@ const statusMessage = computed(() => {
       <article v-for="market in marketRecommendations" :key="market.country_code">
         <h3>{{ market.country_label }}</h3>
         <p>{{ market.recommendation_reasons[0] }}</p>
+        <p v-if="market.is_demo" class="safety-note">推荐样例数据，不能视为当前组织的真实市场事实。</p>
         <RouterLink class="button button-secondary" :to="`/opportunities?market=${encodeURIComponent(market.country_code)}`">
           查看候选并导入名单
         </RouterLink>

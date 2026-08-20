@@ -146,3 +146,42 @@ it("uses outcome-specific copy and keeps every tab panel target in the DOM", asy
   expect(await screen.findByText("平台发布失败；请人工检查后处理")).toBeInTheDocument()
   expect(screen.getByText("发布任务已取消；尚未发布")).toBeInTheDocument()
 })
+
+it("does not present an initial task-read failure as a published outcome", async () => {
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path.includes("/master-contents")) return Promise.resolve(new Response(JSON.stringify({ next: null, previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    if (path.includes("/platform-contents")) return Promise.resolve(new Response(JSON.stringify({ next: null, previous: null, results: [{ ...platformContent, status: "APPROVED" }] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    if (path.includes("/publish-tasks")) return Promise.resolve(new Response("unavailable", { status: 503 }))
+    if (path.includes("/platforms")) return Promise.resolve(new Response(JSON.stringify({ results: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    return Promise.resolve(new Response(JSON.stringify({ user: { id: 1, username: "operator" }, organization: { id: "org", name: "Org", slug: "org" }, membership: { id: "member", role: "OPERATOR", status: "ACTIVE", permissions: ["publishing.read"] } }), { status: 200, headers: { "Content-Type": "application/json" } }))
+  }))
+  render(ContentPublishingPage, { global: { plugins: [[VueQueryPlugin, { queryClient: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }]] } })
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("内容或发布状态暂时无法读取")
+  expect(screen.queryByText("平台已确认发布")).not.toBeInTheDocument()
+})
+
+it("suppresses retained published tasks when their refresh fails", async () => {
+  let taskRequests = 0
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path.includes("/master-contents")) return Promise.resolve(new Response(JSON.stringify({ next: null, previous: null, results: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    if (path.includes("/platform-contents")) return Promise.resolve(new Response(JSON.stringify({ next: null, previous: null, results: [{ ...platformContent, status: "APPROVED" }] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    if (path.includes("/publish-tasks")) {
+      taskRequests += 1
+      const body = taskRequests === 1 ? { next: null, previous: null, results: [{ id: "published", platform_content_id: "content-1", social_account_id: "account-a", connector_code: "OFFICIAL_API", status: "SUCCEEDED", provider_submission_id: "published-a" }] } : null
+      return Promise.resolve(body ? new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }) : new Response("unavailable", { status: 503 }))
+    }
+    if (path.includes("/platforms")) return Promise.resolve(new Response(JSON.stringify({ results: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    return Promise.resolve(new Response(JSON.stringify({ user: { id: 1, username: "operator" }, organization: { id: "org", name: "Org", slug: "org" }, membership: { id: "member", role: "OPERATOR", status: "ACTIVE", permissions: ["publishing.read"] } }), { status: 200, headers: { "Content-Type": "application/json" } }))
+  }))
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(ContentPublishingPage, { global: { plugins: [[VueQueryPlugin, { queryClient }]] } })
+  expect(await screen.findByText("平台已确认发布")).toBeInTheDocument()
+
+  await queryClient.invalidateQueries({ queryKey: ["publishing-workspace", "tasks"] })
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("内容或发布状态暂时无法读取")
+  expect(screen.queryByText("平台已确认发布")).not.toBeInTheDocument()
+})

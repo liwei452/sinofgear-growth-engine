@@ -1,7 +1,6 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import serializers
-from urllib.parse import urlparse
 
 from .models import (
     CRMHandoff,
@@ -162,6 +161,17 @@ class MarketWatchCreateSerializer(serializers.Serializer):
         return value.upper()
 
 
+class MarketRecommendationSerializer(serializers.Serializer):
+    country_code = serializers.CharField()
+    country_label = serializers.CharField()
+    is_demo = serializers.BooleanField()
+    recommendation_reasons = serializers.ListField(child=serializers.CharField())
+
+
+class MarketRecommendationListSerializer(serializers.Serializer):
+    markets = MarketRecommendationSerializer(many=True)
+
+
 class StrictFieldsSerializer(serializers.Serializer):
     def to_internal_value(self, data):
         unknown = sorted(set(data) - set(self.fields))
@@ -310,10 +320,9 @@ class CandidateEnrichmentResultSerializer(serializers.Serializer):
 class EnrichmentCandidateSerializer(DiscoveryCandidateSerializer):
     latest_preview = serializers.SerializerMethodField()
     workflow = serializers.SerializerMethodField()
-    evidence_links = serializers.SerializerMethodField()
 
     class Meta(DiscoveryCandidateSerializer.Meta):
-        fields = [*DiscoveryCandidateSerializer.Meta.fields, "latest_preview", "workflow", "evidence_links"]
+        fields = [*DiscoveryCandidateSerializer.Meta.fields, "latest_preview", "workflow"]
 
     def get_latest_preview(self, obj):
         try:
@@ -332,12 +341,8 @@ class EnrichmentCandidateSerializer(DiscoveryCandidateSerializer):
         account = snapshot.target_account
         if account.organization_id != obj.organization_id:
             return {"account_id": None, "follow_up_status": None, "draft": None}
-        follow_up = account.follow_ups.filter(
-            organization=obj.organization,
-        ).order_by("-updated_at", "-id").first()
-        draft = account.outreach_drafts.filter(
-            organization=obj.organization,
-        ).order_by("-updated_at", "-id").first()
+        follow_up = account.follow_ups.filter(organization=obj.organization).order_by("-updated_at", "-id").first()
+        draft = account.outreach_drafts.filter(organization=obj.organization).order_by("-updated_at", "-id").first()
         message = draft.outreach_messages.filter(
             organization=obj.organization,
             account=account,
@@ -345,28 +350,13 @@ class EnrichmentCandidateSerializer(DiscoveryCandidateSerializer):
         return {
             "account_id": str(account.id),
             "follow_up_status": follow_up.status if follow_up else None,
-            "draft": (
-                {
-                    "status": draft.status,
-                    "delivery": message.status if message else "NEVER_SENT",
-                    "message_id": str(message.id) if message else None,
-                    "sent_at": message.sent_at.isoformat() if message and message.sent_at else None,
-                }
-                if draft else None
-            ),
+            "draft": ({
+                "status": draft.status,
+                "delivery": message.status if message else "NEVER_SENT",
+                "message_id": str(message.id) if message else None,
+                "sent_at": message.sent_at.isoformat() if message and message.sent_at else None,
+            } if draft else None),
         }
-
-    def get_evidence_links(self, obj):
-        try:
-            snapshot = obj.enrichment_snapshot
-        except CandidateEnrichmentSnapshot.DoesNotExist:
-            return []
-        source_url = snapshot.evidence_envelope.get("source_url")
-        parsed = urlparse(source_url) if isinstance(source_url, str) else None
-        if snapshot.mode != "WEBSITE_PUBLIC" or not parsed or parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            return []
-        return [{"label": "公开公司网页证据", "url": source_url}]
-
 
 class DiscoverySummarySerializer(serializers.Serializer):
     enabled = serializers.BooleanField()

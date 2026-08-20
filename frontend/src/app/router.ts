@@ -6,6 +6,7 @@ import {
 
 import { ApiError } from "../api/client"
 import { currentUserQueryOptions } from "../modules/auth/auth"
+import { ADMINISTRATOR_ROLE } from "./navigation"
 
 export type AppRouteComponents = {
   Login: Component
@@ -70,8 +71,8 @@ export function createAppRouter(queryClient: QueryClient, options: RouterOptions
     { path: "agent-approvals", name: "agent-approvals", redirect: { name: "home", query: { view: "approvals" } } },
     { path: "missions", name: "missions", component: options.components.Missions, meta: { title: "增长任务", requiredPermission: "missions.read" } },
     { path: "missions/:missionId", name: "mission-detail", component: options.components.MissionDetail, meta: { title: "增长任务详情", requiredPermission: "missions.read" } },
-    { path: "company", name: "company", component: options.components.Company, meta: { title: "我的公司", requiredRole: "ADMINISTRATOR" } },
-    { path: "settings", name: "settings", component: options.components.Settings, meta: { title: "设置中心", requiredRole: "ADMINISTRATOR" } },
+    { path: "company", name: "company", component: options.components.Company, meta: { title: "我的公司", requiredRole: ADMINISTRATOR_ROLE } },
+    { path: "settings", name: "settings", component: options.components.Settings, meta: { title: "设置中心", requiredRole: ADMINISTRATOR_ROLE } },
     { path: "settings/ai-model", name: "ai-model-settings", component: options.components.AIModelSettings, meta: { title: "AI 模型", requiredRole: "ADMINISTRATOR", requiredPermission: "credentials.manage" } },
     { path: "maps-discovery", name: "maps-discovery", component: options.components.MapsDiscovery, meta: { title: "谷歌地图获客", requiredRole: "ADMINISTRATOR", requiredPermission: "leads.manage" } },
     {

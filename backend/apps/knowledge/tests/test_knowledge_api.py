@@ -339,7 +339,8 @@ def test_knowledge_lists_prefetch_evidence_with_bounded_queries(
         organization=own, role=roles[Role.Code.ADMINISTRATOR], username=f"query-{resource}"
     )
 
-    with django_assert_num_queries(5):
+    # ATOMIC_REQUESTS contributes one savepoint and one release around the view.
+    with django_assert_num_queries(7):
         response = client.get(f"/api/v1/knowledge/{resource}")
 
     assert response.status_code == 200

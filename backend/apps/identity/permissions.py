@@ -3,6 +3,9 @@ from enum import StrEnum
 from django.core.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
 
+from apps.common.tenancy import set_local_tenant
+
+
 class PermissionCode(StrEnum):
     MEMBERSHIPS_READ = "memberships.read"
     MEMBERSHIPS_MANAGE = "memberships.manage"
@@ -54,6 +57,7 @@ class HasOrganizationPermission(BasePermission):
             return False
         request.membership = membership
         request.organization = membership.organization
+        set_local_tenant(membership.organization_id)
         return True
 
 

@@ -2,6 +2,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from functools import wraps
 from uuid import UUID
 
 from django.core.exceptions import ValidationError
@@ -10,6 +11,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.catalog.models import Product
+from apps.common.tenancy import tenant_atomic
 from apps.growth.models import GrowthMission, MissionPlan
 
 from .context_models import normalize_https_url, normalize_optional_cta_url
@@ -148,10 +150,20 @@ class _PageBuildResult:
     source_entries: list[dict]
 
 
+def _tenant_builder_atomic(method):
+    @wraps(method)
+    def wrapped(builder, *, organization, **kwargs):
+        with tenant_atomic(organization.id):
+            return method(builder, organization=organization, **kwargs)
+
+    return wrapped
+
+
 class KnowledgeContextBuilder:
     def __init__(self, *, product_adapter: CatalogProductContextAdapter | None = None) -> None:
         self.product_adapter = product_adapter or CatalogProductContextAdapter()
 
+    @_tenant_builder_atomic
     @transaction.atomic
     def build_mission_context(
         self,
@@ -359,7 +371,6 @@ class KnowledgeContextBuilder:
                     status=ICPProfile.Status.APPROVED,
                     product_links__product=product,
                 )
-                .distinct()
                 .order_by("code", "version", "id")
             )
             if not profiles:
@@ -676,11 +687,20 @@ class KnowledgeContextBuilder:
 
     @staticmethod
     def _pages(organization, product: Product, *, truncation: dict) -> _PageBuildResult:
+        matching_page_ids = (
+            WebsitePage.objects.filter(
+                organization=organization,
+                status=WebsitePage.Status.VERIFIED,
+                is_demo=False,
+            )
+            .filter(Q(page_type__in=COMPANY_PAGE_TYPES) | Q(product_links__product=product))
+            .order_by()
+            .values_list("id", flat=True)
+            .distinct()
+        )
         pages = list(
             WebsitePage.objects.select_for_update()
-            .filter(organization=organization, status=WebsitePage.Status.VERIFIED, is_demo=False)
-            .filter(Q(page_type__in=COMPANY_PAGE_TYPES) | Q(product_links__product=product))
-            .distinct()
+            .filter(pk__in=matching_page_ids)
             .order_by("canonical_url", "version", "id")
         )
         page_ids = [page.id for page in pages]

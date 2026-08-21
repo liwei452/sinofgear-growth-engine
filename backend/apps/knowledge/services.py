@@ -1,5 +1,6 @@
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from functools import wraps
 from typing import Iterable, Sequence
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from django.utils import timezone
 
 from apps.audit.models import ReviewAction
 from apps.audit.services import record_review_transition
+from apps.common.tenancy import tenant_atomic
 from apps.identity.models import Organization
 
 from .models import (
@@ -42,6 +44,15 @@ class KnowledgeStateError(ValueError):
 
 class CompanyRevisionStateError(ValueError):
     pass
+
+
+def _tenant_service_atomic(method):
+    @wraps(method)
+    def wrapped(service, *args, **kwargs):
+        with tenant_atomic(service.organization.id):
+            return method(service, *args, **kwargs)
+
+    return wrapped
 
 
 class _CompanyReviewService:
@@ -76,6 +87,7 @@ class _CompanyReviewService:
 
 
 class CompanyProfileReviewService(_CompanyReviewService):
+    @_tenant_service_atomic
     @transaction.atomic
     def submit(
         self,
@@ -93,6 +105,7 @@ class CompanyProfileReviewService(_CompanyReviewService):
             review_note=review_note,
         )
 
+    @_tenant_service_atomic
     @transaction.atomic
     def approve(
         self,
@@ -190,6 +203,7 @@ class CompanyProfileReviewService(_CompanyReviewService):
 
 
 class CompanyFactReviewService(_CompanyReviewService):
+    @_tenant_service_atomic
     @transaction.atomic
     def submit(
         self,
@@ -207,6 +221,7 @@ class CompanyFactReviewService(_CompanyReviewService):
             review_note=review_note,
         )
 
+    @_tenant_service_atomic
     @transaction.atomic
     def verify(
         self,
@@ -252,6 +267,7 @@ class CompanyFactReviewService(_CompanyReviewService):
             review_note=review_note,
         )
 
+    @_tenant_service_atomic
     @transaction.atomic
     def reject(
         self,
@@ -271,6 +287,7 @@ class CompanyFactReviewService(_CompanyReviewService):
             review_note=review_note,
         )
 
+    @_tenant_service_atomic
     @transaction.atomic
     def create_revision(
         self,
@@ -478,6 +495,7 @@ class ICPProfileReviewService(_ContextRevisionReviewService):
         ICPProductLink._validate_targets(links, parents={profile.pk: profile})
         return links
 
+    @_tenant_service_atomic
     @transaction.atomic
     def submit(
         self,
@@ -501,6 +519,7 @@ class ICPProfileReviewService(_ContextRevisionReviewService):
             review_note=review_note,
         )
 
+    @_tenant_service_atomic
     @transaction.atomic
     def approve(
         self,
@@ -527,6 +546,7 @@ class ICPProfileReviewService(_ContextRevisionReviewService):
             review_note=review_note,
         )
 
+    @_tenant_service_atomic
     @transaction.atomic
     def reject(
         self,
@@ -546,6 +566,7 @@ class ICPProfileReviewService(_ContextRevisionReviewService):
             review_note=review_note,
         )
 
+    @_tenant_service_atomic
     @transaction.atomic
     def create_revision(
         self,
@@ -632,6 +653,7 @@ class WebsitePageReviewService(_ContextRevisionReviewService):
         )
         return product_links, concept_links
 
+    @_tenant_service_atomic
     @transaction.atomic
     def submit(
         self,
@@ -655,6 +677,7 @@ class WebsitePageReviewService(_ContextRevisionReviewService):
             review_note=review_note,
         )
 
+    @_tenant_service_atomic
     @transaction.atomic
     def verify(
         self,
@@ -684,6 +707,7 @@ class WebsitePageReviewService(_ContextRevisionReviewService):
             review_note=review_note,
         )
 
+    @_tenant_service_atomic
     @transaction.atomic
     def reject(
         self,
@@ -703,6 +727,7 @@ class WebsitePageReviewService(_ContextRevisionReviewService):
             review_note=review_note,
         )
 
+    @_tenant_service_atomic
     @transaction.atomic
     def create_revision(
         self,
@@ -839,6 +864,7 @@ class KnowledgeReviewService:
     def __init__(self, organization: Organization) -> None:
         self.organization = organization
 
+    @_tenant_service_atomic
     @transaction.atomic
     def transition(
         self,
@@ -911,6 +937,7 @@ class KnowledgeRelationService:
     def __init__(self, organization: Organization) -> None:
         self.organization = organization
 
+    @_tenant_service_atomic
     @transaction.atomic
     def create(
         self,

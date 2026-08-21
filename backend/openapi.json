@@ -13514,6 +13514,7 @@ components:
         truncated:
           type: boolean
           readOnly: true
+          nullable: true
         snapshot_valid:
           type: boolean
           readOnly: true

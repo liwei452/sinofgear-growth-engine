@@ -100,7 +100,7 @@ class PublishResolutionEvidenceSerializer(serializers.Serializer):
     query_window_end = serializers.DateTimeField(read_only=True, allow_null=True)
     query_window_ended = serializers.BooleanField(read_only=True)
     ambiguous = serializers.BooleanField(read_only=True)
-    truncated = serializers.BooleanField(read_only=True)
+    truncated = serializers.BooleanField(read_only=True, allow_null=True)
     snapshot_valid = serializers.BooleanField(read_only=True)
     observed_at = serializers.DateTimeField(read_only=True, allow_null=True)
 

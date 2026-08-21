@@ -1,6 +1,7 @@
 import pytest
 
 from apps.publishing.models import PublishedPost, PublishTask
+from apps.publishing.reconciliation import reconcile_unknown_buffer_publish_task
 from apps.publishing.serializers import PublishTaskSerializer
 from apps.publishing.services import (
     create_publish_task,
@@ -8,10 +9,17 @@ from apps.publishing.services import (
     publish_task_consistency_queryset,
 )
 from integrations.platforms.base import PublishResult
+from integrations.platforms.buffer_types import BufferCandidateSearchResult
 
 from .test_async_publish_states import _patch_connector
 from .test_buffer_manual_resolution import _needs_attention, _no_match_attention
-from .test_buffer_reconciliation import _submitted, _unknown
+from .test_buffer_reconciliation import (
+    CandidateConnector,
+    _candidate,
+    _query_runtime,
+    _submitted,
+    _unknown,
+)
 
 
 def _serialized(context, task):
@@ -166,11 +174,63 @@ def test_no_evidence_is_safe_and_does_not_offer_manual_close(
         "query_window_end": None,
         "query_window_ended": False,
         "ambiguous": False,
-        "truncated": False,
+        "truncated": None,
         "snapshot_valid": False,
         "observed_at": None,
     }
     assert payload["allowed_actions"]["confirm_not_published"]["allowed"] is False
+
+
+@pytest.mark.parametrize("truncated", [True, False])
+def test_candidate_search_truncation_is_reported_independently_from_ambiguity(
+    publishing_context, monkeypatch, truncated,
+):
+    task, _account, _connection = _unknown(publishing_context, monkeypatch)
+    connector = CandidateConnector(BufferCandidateSearchResult(
+        ok=True,
+        candidates=(
+            _candidate(task, post_id="candidate-one"),
+            _candidate(task, post_id="candidate-two"),
+        ),
+        truncated=truncated,
+    ))
+    _query_runtime(monkeypatch, connector)
+
+    reconcile_unknown_buffer_publish_task(task.id)
+    task.refresh_from_db()
+    payload = _serialized(publishing_context, task)
+
+    assert payload["resolution_evidence"]["truncated"] is truncated
+    assert payload["resolution_evidence"]["ambiguous"] is True
+
+
+def test_exact_id_evidence_reports_truncation_as_not_applicable(
+    publishing_context, monkeypatch,
+):
+    task, _account = _needs_attention(publishing_context, monkeypatch)
+
+    payload = _serialized(publishing_context, task)
+
+    assert payload["resolution_evidence"]["truncated"] is None
+
+
+@pytest.mark.parametrize("truncated", [True, None])
+def test_zero_match_cannot_be_closed_without_explicit_untruncated_evidence(
+    publishing_context, monkeypatch, truncated,
+):
+    task, _account = _no_match_attention(publishing_context, monkeypatch)
+    loaded = publish_task_consistency_queryset(publishing_context["organization"]).get(
+        pk=task.pk
+    )
+    loaded._safe_reconciliation_attempts[-1].candidate_search_truncated = truncated
+
+    payload = PublishTaskSerializer(loaded).data
+
+    assert payload["resolution_evidence"]["truncated"] is truncated
+    assert payload["allowed_actions"]["confirm_not_published"] == {
+        "allowed": False,
+        "reason_code": "STRICT_NO_MATCH_REQUIRED",
+    }
 
 
 def test_publish_task_list_contract_query_count_is_constant(

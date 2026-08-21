@@ -608,7 +608,8 @@ def _candidate_set_fingerprint(candidates) -> str:
 
 
 def _record_unknown(
-    task, *, result, snapshot, finished_at, error_code="", candidates=(), matched=None
+    task, *, result, snapshot, finished_at, error_code="", candidates=(), matched=None,
+    candidate_search_truncated=None,
 ):
     task.reconciliation_attempt_number += 1
     with publishing_writes():
@@ -621,6 +622,7 @@ def _record_unknown(
             provider_submission_id=matched.post_id if matched else "",
             safe_error_code=error_code,
             candidate_count=len(candidates),
+            candidate_search_truncated=candidate_search_truncated,
             matched_provider_post_id=matched.post_id if matched else "",
             candidate_set_fingerprint=_candidate_set_fingerprint(candidates) if candidates else "",
             query_window_start=snapshot.window_start,
@@ -642,7 +644,10 @@ def _save_unknown_task(task, finished_at, *, error_code="", next_at=None):
         ])
 
 
-def _unknown_needs_attention(task, attempt, snapshot, finished_at, code, candidates=()):
+def _unknown_needs_attention(
+    task, attempt, snapshot, finished_at, code, candidates=(),
+    candidate_search_truncated=None,
+):
     error = {"code": code, "message": SAFE_RECONCILIATION_ERRORS[code]}
     task.status = PublishTask.Status.NEEDS_ATTENTION
     task.last_error = error
@@ -658,6 +663,7 @@ def _unknown_needs_attention(task, attempt, snapshot, finished_at, code, candida
         finished_at=finished_at,
         error_code=code,
         candidates=candidates,
+        candidate_search_truncated=candidate_search_truncated,
     )
     with publishing_writes():
         attempt.save(update_fields=["status", "outcome", "error", "finished_at", "updated_at"])
@@ -701,7 +707,9 @@ def _unknown_query_error(task, account, connection, snapshot, result, finished_a
     return task
 
 
-def _unknown_defer_no_match(task, snapshot, finished_at, candidates=()):
+def _unknown_defer_no_match(
+    task, snapshot, finished_at, candidates=(), *, candidate_search_truncated=None,
+):
     code = "BUFFER_RECONCILIATION_NO_MATCH"
     _record_unknown(
         task,
@@ -710,6 +718,7 @@ def _unknown_defer_no_match(task, snapshot, finished_at, candidates=()):
         finished_at=finished_at,
         error_code=code,
         candidates=candidates,
+        candidate_search_truncated=candidate_search_truncated,
     )
     _save_unknown_task(
         task,
@@ -791,15 +800,18 @@ def finalize_unknown_buffer_reconciliation(snapshot, result, *, actor=None):
         return _unknown_needs_attention(
             task, attempt, snapshot, finished_at,
             "BUFFER_RECONCILIATION_AMBIGUOUS", candidates,
+            candidate_search_truncated=result.truncated,
         )
     if not candidates:
         if snapshot.window_end is not None and finished_at < snapshot.window_end:
             return _unknown_defer_no_match(
                 task, snapshot, finished_at, candidates,
+                candidate_search_truncated=result.truncated,
             )
         return _unknown_needs_attention(
             task, attempt, snapshot, finished_at,
             "BUFFER_RECONCILIATION_NO_MATCH", candidates,
+            candidate_search_truncated=result.truncated,
         )
     candidate = candidates[0]
     task.status = PublishTask.Status.SUBMITTED
@@ -818,6 +830,7 @@ def finalize_unknown_buffer_reconciliation(snapshot, result, *, actor=None):
         finished_at=finished_at,
         candidates=candidates,
         matched=candidate,
+        candidate_search_truncated=result.truncated,
     )
     with publishing_writes():
         attempt.save(update_fields=[

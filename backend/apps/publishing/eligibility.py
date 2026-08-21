@@ -74,6 +74,7 @@ def strict_no_post_evidence(
     if audit.safe_error_code == "BUFFER_RECONCILIATION_NO_MATCH":
         return (
             audit.mode == PublishReconciliationAttempt.Mode.UNKNOWN_MATCH
+            and audit.candidate_search_truncated is False
             and not task.provider_submission_id
             and not audit.provider_submission_id
         )
@@ -187,14 +188,22 @@ def publish_task_ui_contract(task, *, now=None):
         and attempt.status == PublishAttempt.Status.NEEDS_ATTENTION
     )
     safe_code = audit.safe_error_code if audit and audit.safe_error_code in SAFE_EVIDENCE_CODES else ""
-    ambiguous = safe_code == "BUFFER_RECONCILIATION_AMBIGUOUS"
+    truncated = audit.candidate_search_truncated if audit is not None else None
+    ambiguous = bool(
+        audit
+        and (
+            safe_code == "BUFFER_RECONCILIATION_AMBIGUOUS"
+            or audit.candidate_count > 1
+            or truncated is True
+        )
+    )
     evidence = {
         "latest_outcome": audit.result if audit and audit.result in SAFE_EVIDENCE_RESULTS else None,
         "candidate_count": audit.candidate_count if audit is not None else None,
         "query_window_end": audit.query_window_end if audit is not None else None,
         "query_window_ended": bool(audit and audit.query_window_end and audit.query_window_end <= now),
         "ambiguous": ambiguous,
-        "truncated": bool(ambiguous and audit.candidate_count <= 1),
+        "truncated": truncated,
         "snapshot_valid": snapshot_valid,
         "observed_at": audit.finished_at if audit is not None else None,
     }

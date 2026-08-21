@@ -259,11 +259,11 @@ No email-provider or social-provider webhook endpoint was found at this baseline
 | `seed_initial_organization` | Creates auth/control-plane Organization, Role, Membership | Bootstrap owner/admin workflow; it runs before a tenant exists. |
 | `seed_phase_a` | Crosses control plane, global dictionaries/SYSTEM Knowledge, and one E2E tenant | E2E-only owner workflow; never a normal runtime command. |
 | `seed_gear_ontology` | Writes SYSTEM Knowledge and already checks owner/bypass | Owner-only SYSTEM seed; remains outside tenant runtime. |
-| `seed_platforms` | Writes global Platform/Capability dictionary | Owner/release seed; runtime must receive read-only context-gated access later. |
+| `seed_platforms` | Writes global Platform/Capability dictionary | Owner/release seed; PostgreSQL now rejects a non-owner/non-bypass connection before mutation. |
 | `audit_duplicate_publish_tasks` | Cross-tenant PublishTask audit with no organization argument | Currently requires owner visibility; replace with control-plane organization enumeration and per-tenant read-only audit before RLS-2B. |
 | `reclaim_orphan_buffer_credentials` | Optional control-plane organization resolution, otherwise stable Organization enumeration | Each organization is processed in an independent tenant transaction with organization-filtered candidate and reference rechecks. |
 | `rotate_social_oauth_keys` | Optional control-plane organization resolution, otherwise stable Organization enumeration | Dry-run counts and bounded rotation batches execute independently per tenant; output contains counts only. |
-| `audit_rls_coverage` | Apps-registry metadata only | Safe under runtime or CI; no database row access and no owner requirement. |
+| `audit_rls_coverage` | Apps-registry metadata by default; `--database [alias]` inspects PostgreSQL catalogs | Default mode is safe anywhere. Database mode verifies forced RLS, Policy shapes, helper execution, and owner/runtime separation without reading business rows. |
 
 ## Blocking findings and next phases
 
@@ -283,6 +283,31 @@ Old queued messages do not contain the new required `organization_id` argument a
 3. Deploy the code with the new explicit task signatures.
 4. Restart workers, then restart Beat.
 5. Confirm newly enqueued object-task payloads contain the server-derived UUID-string `organization_id` as their first argument.
-6. Only after that verification, deploy the separate RLS-2A Policy migration in the next batch.
+6. Only after that verification, deploy the RLS-2A Policy migrations below.
 
-This inventory update and runtime preparation add no migration, Policy, privilege grant, or external API call.
+## RLS-2A Policy deployment
+
+The owner applies these migrations after `knowledge/0008_harden_knowledge_rls_context` and after the Asset Prompt Catalog seed:
+
+1. `ai/0007_asset_understanding_prompt_catalog`
+2. `ai/0008_enable_ai_tenant_rls`
+3. `assets/0004_enable_assets_tenant_rls`
+4. `audit/0004_enable_audit_tenant_rls`
+5. `catalog/0004_enable_catalog_tenant_rls`
+6. `jobs/0006_enable_jobs_tenant_rls`
+7. `platforms/0012_enable_platforms_tenant_rls`
+
+The 17 direct tables use one `FOR ALL` Policy with identical `USING` and `WITH CHECK` expressions: `organization_id = app_current_organization_id()`. `jobs_jobattempt` has separate SELECT, INSERT, UPDATE, and DELETE Policies, each derived through an `EXISTS` check on `jobs_job.organization_id`. The three global-context tables have only a SELECT Policy with `app_current_organization_id() IS NOT NULL`; runtime INSERT, UPDATE, and DELETE therefore remain denied.
+
+Production rollout requires a maintenance window because `ALTER TABLE` takes database locks:
+
+1. Stop Beat and new task dispatch, then drain or safely clear old-signature messages.
+2. Stop Web and workers.
+3. As the DBA/owner, run `infrastructure/postgres/bootstrap_rls_roles.sql`.
+4. Run migrations with the owner connection.
+5. Run the bootstrap script again so the runtime role receives grants on new objects.
+6. Configure Web and Celery with the `sinofgear_app` runtime connection, never the owner URL.
+7. Start workers, then Beat, then Web.
+8. Run `python manage.py audit_rls_coverage --database` and the cross-tenant smoke checks for AI Job, Asset/Catalog, Platform/Buffer administration, and Job/JobAttempt.
+
+Rollback also requires stopping Web, workers, and Beat. The owner reverses the six RLS migrations to their immediately preceding leaves. Reverse operations drop only the Policies owned by these migrations, then set `NO FORCE ROW LEVEL SECURITY` and `DISABLE ROW LEVEL SECURITY` on the 21 Phase 2A tables. They do not delete tenant data, the seeded Prompt, or Knowledge's `app_current_organization_id()` helper. Recheck roles and connection URLs before restoring services.

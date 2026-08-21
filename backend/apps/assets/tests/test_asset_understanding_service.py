@@ -1,6 +1,7 @@
 from io import BytesIO
 
 import pytest
+from django.db import connection
 from django.test import override_settings
 from django.contrib.auth import get_user_model
 from pypdf import PdfWriter
@@ -101,6 +102,7 @@ class DeepSeekFactProvider:
         self.calls = 0
 
     def generate(self, *, prompt: str, schema: dict) -> dict:
+        assert connection.in_atomic_block is False
         self.calls += 1
         assert "UNTRUSTED DOCUMENT EVIDENCE" in prompt
         assert schema["required"] == ["facts"]
@@ -129,7 +131,7 @@ def _deepseek_runtime(provider) -> ProductAIRuntime:
     )
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @override_settings(PRODUCT_AI_PROVIDER="deepseek", PRODUCT_AI_MODEL="deepseek-chat")
 def test_deepseek_pdf_understanding_persists_real_evidence_without_secret(
     organizations, monkeypatch,

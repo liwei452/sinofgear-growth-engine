@@ -4,7 +4,12 @@ from django.contrib.auth import get_user_model
 
 from apps.ai.orchestration import execute_generation_job
 from apps.ai.models import AIRun
-from apps.common.tenant_tasks import require_tenant_object, tenant_task_context
+from apps.common.tenant_tasks import (
+    parse_tenant_organization_id,
+    require_tenant_object,
+    tenant_task_context,
+)
+from apps.common.tenancy import tenant_atomic
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
 
@@ -16,21 +21,16 @@ from .services import finalize_master_result, finalize_platform_variants
 @shared_task
 def generate_master_content_job(organization_id, job_id, prompt_version_id):
     child_dispatch = None
-    failure = None
-    with tenant_task_context(organization_id) as tenant_id:
-        job = require_tenant_object(Job, tenant_id, pk=job_id)
-        try:
-            run = execute_generation_job(
-                job_id,
-                prompt_version_id=prompt_version_id,
-                result_writer=finalize_master_result,
-            )
-        except Exception as error:
-            failure = error
-            run = None
-        if failure is not None:
-            task_result = None
-        elif run.status != AIRun.Status.SUCCEEDED:
+    tenant_id = parse_tenant_organization_id(organization_id)
+    run = execute_generation_job(
+        job_id,
+        prompt_version_id=prompt_version_id,
+        result_writer=finalize_master_result,
+        organization_id=tenant_id,
+    )
+    with tenant_atomic(tenant_id):
+        job = Job.objects.get(pk=job_id, organization_id=tenant_id)
+        if run.status != AIRun.Status.SUCCEEDED:
             task_result = {"ai_run_id": str(run.id), "status": run.status}
         else:
             job.refresh_from_db()
@@ -51,8 +51,6 @@ def generate_master_content_job(organization_id, job_id, prompt_version_id):
                 )
                 child_dispatch = (str(tenant_id), str(child.id))
             task_result = {"ai_run_id": str(run.id), "status": run.status}
-    if failure is not None:
-        raise failure
     if child_dispatch is not None:
         generate_platform_variants_job.delay(
             child_dispatch[0],
@@ -109,25 +107,21 @@ def generate_platform_variants_job(organization_id, job_id):
 
 @shared_task
 def generate_content_recommendations_job(organization_id, job_id, prompt_version_id):
-    failure = None
-    with tenant_task_context(organization_id) as tenant_id:
-        recommendation = require_tenant_object(
-            ContentRecommendation,
-            tenant_id,
-            job_id=job_id,
+    tenant_id = parse_tenant_organization_id(organization_id)
+    with tenant_atomic(tenant_id):
+        recommendation = ContentRecommendation.objects.get(
+            organization_id=tenant_id, job_id=job_id
         )
         if recommendation.status == ContentRecommendation.Status.QUEUED:
             recommendation.status = ContentRecommendation.Status.RUNNING
             recommendation.save(update_fields=["status", "updated_at"])
-        try:
-            run = execute_generation_job(
-                job_id,
-                prompt_version_id=prompt_version_id,
-                result_writer=finalize_recommendation_result,
-            )
-        except Exception as error:
-            failure = error
-            run = None
+    run = execute_generation_job(
+        job_id,
+        prompt_version_id=prompt_version_id,
+        result_writer=finalize_recommendation_result,
+        organization_id=tenant_id,
+    )
+    with tenant_atomic(tenant_id):
         if run is not None and run.status in {
             AIRun.Status.FAILED,
             AIRun.Status.CANCELED,
@@ -141,6 +135,4 @@ def generate_content_recommendations_job(organization_id, job_id, prompt_version
             if run is not None
             else None
         )
-    if failure is not None:
-        raise failure
     return task_result

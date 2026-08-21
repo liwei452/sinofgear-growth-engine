@@ -1,10 +1,11 @@
 from datetime import timedelta
 
 import pytest
+from django.db import connection
 from django.test import override_settings
 from django.utils import timezone
 
-from apps.growth.discovery import build_discovery_source, run_due_discovery_profiles
+from apps.growth.discovery import build_discovery_source
 from apps.growth.models import DiscoveryProfile
 from apps.identity.models import Organization
 from integrations.sources.base import SourceBatch
@@ -13,6 +14,7 @@ from integrations.sources.composite import CompositeDiscoverySource
 
 class EmptySource:
     def fetch(self, query):
+        assert connection.in_atomic_block is False
         return SourceBatch(
             items=(),
             capability_snapshot={
@@ -22,8 +24,15 @@ class EmptySource:
         )
 
 
-@pytest.mark.django_db
+@override_settings(
+    GROWTH_DISCOVERY_SOURCE_FACTORY=(
+        "apps.growth.tests.test_discovery_tasks.EmptySource"
+    )
+)
+@pytest.mark.django_db(transaction=True)
 def test_due_runner_only_executes_enabled_profiles_that_are_due():
+    from apps.growth.tasks import scan_due_discovery_profiles
+
     due_org = Organization.objects.create(name="Due", slug="due-discovery")
     future_org = Organization.objects.create(name="Future", slug="future-discovery")
     disabled_org = Organization.objects.create(name="Disabled", slug="disabled-discovery")
@@ -39,10 +48,7 @@ def test_due_runner_only_executes_enabled_profiles_that_are_due():
         next_run_at=timezone.now() - timedelta(minutes=1),
     )
 
-    result = run_due_discovery_profiles(
-        organization_id=due_org.id,
-        source_factory=EmptySource,
-    )
+    result = scan_due_discovery_profiles.run(limit=25)
 
     due.refresh_from_db()
     future.refresh_from_db()

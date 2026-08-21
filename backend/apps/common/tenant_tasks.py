@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 from uuid import UUID
 
+from django.db import transaction
 from django.db.models import Model
 
 from apps.common.tenancy import tenant_atomic
@@ -13,6 +14,19 @@ from apps.identity.models import Organization
 
 class TenantTaskError(ValueError):
     """Raised when a background task cannot establish a safe tenant boundary."""
+
+
+def dispatch_task_on_commit(task, /, *args, **kwargs) -> None:
+    """Dispatch once the outermost database transaction durably commits."""
+
+    bound_args = tuple(args)
+    bound_kwargs = dict(kwargs)
+    transaction.on_commit(
+        lambda task=task, args=bound_args, kwargs=bound_kwargs: task.delay(
+            *args,
+            **kwargs,
+        )
+    )
 
 
 def parse_tenant_organization_id(value: object) -> UUID:
@@ -90,7 +104,7 @@ def run_tenant_coordinator(
     *,
     limit: int | None = None,
 ) -> dict[str, int]:
-    """Run bounded tenant work in independent transactions and aggregate safe counts."""
+    """Allocate a global budget; each operation owns its tenant transaction phases."""
 
     if limit is not None and (type(limit) is not int or limit < 0):
         raise TenantTaskError("Coordinator limit must be a non-negative integer.")
@@ -102,8 +116,7 @@ def run_tenant_coordinator(
         remaining = None if limit is None else limit - consumed
         if remaining == 0:
             break
-        with tenant_atomic(organization_id):
-            result = operation(organization_id, remaining)
+        result = operation(organization_id, remaining)
         if not isinstance(result, TenantWorkResult):
             raise TenantTaskError("Tenant operation returned an invalid result.")
         if remaining is not None and result.consumed > remaining:

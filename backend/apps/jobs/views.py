@@ -143,9 +143,11 @@ class JobActionView(APIView):
     @staticmethod
     def _dispatch_retry(job):
         if job.type == Job.Type.CONTENT_PLATFORM_VARIANTS:
+            from apps.common.tenant_tasks import dispatch_task_on_commit
             from apps.content.tasks import generate_platform_variants_job
 
-            generate_platform_variants_job.delay(
+            dispatch_task_on_commit(
+                generate_platform_variants_job,
                 str(job.organization_id),
                 str(job.id),
             )

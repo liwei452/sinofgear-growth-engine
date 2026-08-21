@@ -1,4 +1,5 @@
 import hashlib
+from contextlib import nullcontext
 from datetime import timedelta
 
 from django.conf import settings
@@ -11,6 +12,7 @@ from integrations.sources.base import DiscoveryQuery, SourceAdapterError, govern
 from integrations.sources.composite import CompositeDiscoverySource
 from integrations.sources.contracts_finder import ContractsFinderSource
 from integrations.sources.ted import TedSource
+from apps.common.tenancy import tenant_atomic
 
 from .market_pilots import matched_gear_terms, validate_company_evidence_source
 from .models import DiscoveryProfile, DiscoveryRun, IntentSignal, TargetAccount
@@ -43,31 +45,70 @@ class DiscoveryAlreadyRunning(RuntimeError):
     pass
 
 
-def run_discovery(profile_id, *, trigger, source=None) -> DiscoveryRun:
-    profile, run = _start_run(profile_id=profile_id, trigger=trigger)
-    query = DiscoveryQuery(
-        cpv_codes=tuple(profile.cpv_codes),
-        published_from=(timezone.now() - timedelta(days=30)).date(),
-        limit=profile.result_limit,
+def run_discovery(
+    profile_id,
+    *,
+    trigger,
+    source=None,
+    organization_id=None,
+) -> DiscoveryRun:
+    database_context = (
+        tenant_atomic(organization_id) if organization_id is not None else nullcontext()
     )
-    run.query_snapshot = {
-        "cpv_codes": list(query.cpv_codes),
-        "published_from": query.published_from.isoformat(),
-        "limit": query.limit,
-    }
-    run.save(update_fields=["query_snapshot", "updated_at"])
+    with database_context:
+        profile, run = _start_run(
+            profile_id=profile_id,
+            trigger=trigger,
+            organization_id=organization_id,
+        )
+        query = DiscoveryQuery(
+            cpv_codes=tuple(profile.cpv_codes),
+            published_from=(timezone.now() - timedelta(days=30)).date(),
+            limit=profile.result_limit,
+        )
+        run.query_snapshot = {
+            "cpv_codes": list(query.cpv_codes),
+            "published_from": query.published_from.isoformat(),
+            "limit": query.limit,
+        }
+        run.save(update_fields=["query_snapshot", "updated_at"])
+        profile_id = profile.id
+        run_id = run.id
     try:
         live_source = source or build_discovery_source()
         batch = live_source.fetch(query)
     except SourceAdapterError as error:
-        _record_failure(profile_id=profile.id, run_id=run.id, error_code=error.code)
+        with (
+            tenant_atomic(organization_id)
+            if organization_id is not None
+            else nullcontext()
+        ):
+            _record_failure(
+                profile_id=profile_id,
+                run_id=run_id,
+                error_code=error.code,
+                organization_id=organization_id,
+            )
         raise
-    return _ingest_batch(profile_id=profile.id, run_id=run.id, batch=batch)
+    with (
+        tenant_atomic(organization_id)
+        if organization_id is not None
+        else nullcontext()
+    ):
+        return _ingest_batch(
+            profile_id=profile_id,
+            run_id=run_id,
+            batch=batch,
+            organization_id=organization_id,
+        )
 
 
 @transaction.atomic
-def _start_run(*, profile_id, trigger):
-    profile = DiscoveryProfile.objects.select_for_update().get(pk=profile_id)
+def _start_run(*, profile_id, trigger, organization_id=None):
+    profiles = DiscoveryProfile.objects.select_for_update()
+    if organization_id is not None:
+        profiles = profiles.filter(organization_id=organization_id)
+    profile = profiles.get(pk=profile_id)
     stale_before = timezone.now() - timedelta(minutes=30)
     stale_runs = DiscoveryRun.objects.filter(
         profile=profile,
@@ -94,9 +135,16 @@ def _start_run(*, profile_id, trigger):
 
 
 @transaction.atomic
-def _ingest_batch(*, profile_id, run_id, batch) -> DiscoveryRun:
-    profile = DiscoveryProfile.objects.select_for_update().get(pk=profile_id)
-    run = DiscoveryRun.objects.select_for_update().get(pk=run_id)
+def _ingest_batch(
+    *, profile_id, run_id, batch, organization_id=None
+) -> DiscoveryRun:
+    profiles = DiscoveryProfile.objects.select_for_update()
+    runs = DiscoveryRun.objects.select_for_update()
+    if organization_id is not None:
+        profiles = profiles.filter(organization_id=organization_id)
+        runs = runs.filter(organization_id=organization_id)
+    profile = profiles.get(pk=profile_id)
+    run = runs.get(pk=run_id)
     created_accounts = 0
     created_signals = 0
     duplicates = 0
@@ -207,9 +255,14 @@ def _ingest_batch(*, profile_id, run_id, batch) -> DiscoveryRun:
 
 
 @transaction.atomic
-def _record_failure(*, profile_id, run_id, error_code):
-    profile = DiscoveryProfile.objects.select_for_update().get(pk=profile_id)
-    run = DiscoveryRun.objects.select_for_update().get(pk=run_id)
+def _record_failure(*, profile_id, run_id, error_code, organization_id=None):
+    profiles = DiscoveryProfile.objects.select_for_update()
+    runs = DiscoveryRun.objects.select_for_update()
+    if organization_id is not None:
+        profiles = profiles.filter(organization_id=organization_id)
+        runs = runs.filter(organization_id=organization_id)
+    profile = profiles.get(pk=profile_id)
+    run = runs.get(pk=run_id)
     now = timezone.now()
     failures = min(profile.consecutive_failures + 1, 10)
     backoff_hours = min(2 ** (failures - 1), 24)
@@ -227,20 +280,26 @@ def _record_failure(*, profile_id, run_id, error_code):
 
 def run_due_discovery_profiles(*, organization_id, limit=25, source_factory=None):
     now = timezone.now()
-    profile_ids = list(
-        DiscoveryProfile.objects.filter(
-            organization_id=organization_id,
-            enabled=True,
+    with tenant_atomic(organization_id):
+        profile_ids = list(
+            DiscoveryProfile.objects.filter(
+                organization_id=organization_id,
+                enabled=True,
+            )
+            .filter(Q(next_run_at__isnull=True) | Q(next_run_at__lte=now))
+            .order_by("next_run_at", "id")
+            .values_list("id", flat=True)[:limit]
         )
-        .filter(Q(next_run_at__isnull=True) | Q(next_run_at__lte=now))
-        .order_by("next_run_at", "id")
-        .values_list("id", flat=True)[:limit]
-    )
     result = {"scanned": len(profile_ids), "succeeded": 0, "failed": 0, "overlapping": 0}
     for profile_id in profile_ids:
         try:
             source = source_factory() if source_factory else None
-            run_discovery(profile_id, trigger=DiscoveryRun.Trigger.SCHEDULED, source=source)
+            run_discovery(
+                profile_id,
+                trigger=DiscoveryRun.Trigger.SCHEDULED,
+                source=source,
+                organization_id=organization_id,
+            )
         except DiscoveryAlreadyRunning:
             result["overlapping"] += 1
         except SourceAdapterError:

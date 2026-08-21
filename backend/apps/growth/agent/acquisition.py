@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 from django.utils import timezone
+from apps.common.tenancy import tenant_atomic
 
 from integrations.sources.base import SourceAdapterError
 
@@ -289,7 +290,12 @@ def _send_tool(organization) -> Tool:
         email = args.get("email") or _contact_email_for_candidate(candidate)
         if not email:
             return ToolResult(ok=False, error="no contact email found for candidate.")
-        message = record_sent(account=account, draft=draft, email=email)
+        message = record_sent(
+            account=account,
+            draft=draft,
+            email=email,
+            organization_id=organization.id,
+        )
         return ToolResult(
             ok=True,
             output={
@@ -363,54 +369,60 @@ def run_proactive_acquisition(
     mission_id: str | None = None,
     approvals: set[str] | None = None,
     website_transport=None,
+    organization_id=None,
 ) -> Any:
-    candidate = DiscoveryCandidate.objects.filter(
-        organization=organization,
-        id=candidate_id,
-    ).first()
-    if candidate is None:
-        raise DiscoveryCandidate.DoesNotExist
-    fallback = DeterministicPlanner(
-        proactive_acquisition_website_plan(candidate_id)
-        if candidate.website
-        else proactive_acquisition_plan(candidate_id)
-    )
-    proposed_execution = resolve_agent_execution(
-        organization=organization,
-        fallback=fallback,
-        allow_llm=True,
-    )
-    idempotency_key = (
-        f"proactive:{mission_id}:{candidate_id}"
-        if mission_id
-        else f"proactive:{candidate_id}"
-    )
-    run, _ = AgentRun.objects.get_or_create(
-        organization=organization,
-        idempotency_key=idempotency_key,
-        defaults={
-            "goal": f"proactive acquisition for candidate {candidate_id}",
-            "agent_type": "proactive",
-            "execution_mode": proposed_execution.mode,
-            "planner_provider": proposed_execution.provider,
-            "planner_model": proposed_execution.model,
-            "resume_args": {"candidate_id": candidate_id, "mission_id": mission_id},
-            "max_steps": 20,
-        },
-    )
-    tools = ToolRegistry(
-        build_proactive_acquisition_tools(organization, website_transport=website_transport)
-    )
-    execution = resolve_run_execution(
-        run=run,
-        fallback=fallback,
-        allow_llm=True,
-    )
+    context_id = organization_id or organization.id
+    with tenant_atomic(context_id):
+        candidate = DiscoveryCandidate.objects.filter(
+            organization_id=context_id,
+            id=candidate_id,
+        ).first()
+        if candidate is None:
+            raise DiscoveryCandidate.DoesNotExist
+        fallback = DeterministicPlanner(
+            proactive_acquisition_website_plan(candidate_id)
+            if candidate.website
+            else proactive_acquisition_plan(candidate_id)
+        )
+        proposed_execution = resolve_agent_execution(
+            organization=organization,
+            fallback=fallback,
+            allow_llm=True,
+        )
+        idempotency_key = (
+            f"proactive:{mission_id}:{candidate_id}"
+            if mission_id
+            else f"proactive:{candidate_id}"
+        )
+        run, _ = AgentRun.objects.get_or_create(
+            organization_id=context_id,
+            idempotency_key=idempotency_key,
+            defaults={
+                "goal": f"proactive acquisition for candidate {candidate_id}",
+                "agent_type": "proactive",
+                "execution_mode": proposed_execution.mode,
+                "planner_provider": proposed_execution.provider,
+                "planner_model": proposed_execution.model,
+                "resume_args": {"candidate_id": candidate_id, "mission_id": mission_id},
+                "max_steps": 20,
+            },
+        )
+        tools = ToolRegistry(
+            build_proactive_acquisition_tools(
+                organization, website_transport=website_transport
+            )
+        )
+        execution = resolve_run_execution(
+            run=run,
+            fallback=fallback,
+            allow_llm=True,
+        )
     return continue_agent_run(
         run=run,
         planner=execution.planner,
         tools=tools,
         approvals=approvals,
+        organization_id=context_id,
     )
 
 
@@ -456,15 +468,18 @@ def run_proactive_acquisition_day(
     limit: int = 50,
     approvals: set[str] | None = None,
     website_transport=None,
+    organization_id=None,
 ) -> dict[str, Any]:
-    candidate_ids = list(
-        DiscoveryCandidate.objects.filter(
-            organization=organization,
-            status=DiscoveryCandidate.Status.ACCEPTED,
+    context_id = organization_id or organization.id
+    with tenant_atomic(context_id):
+        candidate_ids = list(
+            DiscoveryCandidate.objects.filter(
+                organization_id=context_id,
+                status=DiscoveryCandidate.Status.ACCEPTED,
+            )
+            .order_by("-score", "-created_at", "-id")
+            .values_list("id", flat=True)[:limit]
         )
-        .order_by("-score", "-created_at", "-id")
-        .values_list("id", flat=True)[:limit]
-    )
     summary: dict[str, Any] = {
         "candidates": len(candidate_ids),
         "waiting_approval": 0,
@@ -478,6 +493,7 @@ def run_proactive_acquisition_day(
             candidate_id=str(candidate_id),
             approvals=approvals,
             website_transport=website_transport,
+            organization_id=context_id,
         )
         if result.status == "waiting_approval":
             summary["waiting_approval"] += 1

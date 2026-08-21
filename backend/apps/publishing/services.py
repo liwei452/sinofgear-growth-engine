@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -19,6 +20,7 @@ from apps.campaigns.models import ContentBriefPlatform
 from apps.platforms.capabilities import resolve_account_capabilities
 from apps.platforms.codes import AccountCapability
 from apps.platforms.models import ConnectorCredential, PlatformCapability, SocialAccount
+from apps.common.tenancy import tenant_atomic
 
 from integrations.platforms.base import (
     ConnectorConfigurationRequired,
@@ -26,7 +28,10 @@ from integrations.platforms.base import (
     PublishRequest,
     PublishResult,
 )
-from integrations.platforms.runtime import get_social_provider_runtime
+from integrations.platforms.runtime import (
+    get_social_provider_runtime,
+    preload_connector_token,
+)
 
 
 from integrations.platforms.registry import get_connector
@@ -44,6 +49,14 @@ from .publish_payload import PublishPayloadError, build_publish_payload
 
 
 logger = logging.getLogger(__name__)
+
+
+def _tenant_context(organization_id):
+    return (
+        tenant_atomic(organization_id)
+        if organization_id is not None
+        else nullcontext()
+    )
 
 
 MAX_SCHEDULE_AHEAD = timedelta(days=366)
@@ -723,12 +736,14 @@ def create_publish_task(
 
 
 @transaction.atomic
-def claim_publish_task(task_id=None):
+def claim_publish_task(task_id=None, *, organization_id=None):
     queryset = PublishTask.objects.select_for_update(skip_locked=True).filter(
         status=PublishTask.Status.QUEUED
     ).filter(Q(retry_not_before__isnull=True) | Q(retry_not_before__lte=timezone.now()))
     if task_id is not None:
         queryset = queryset.filter(pk=task_id)
+    if organization_id is not None:
+        queryset = queryset.filter(organization_id=organization_id)
     task = queryset.order_by("created_at", "id").first()
     if task is None:
         return None
@@ -1243,7 +1258,8 @@ def _build_official_call(task):
     consent = content_payload.get("consent")
     if not isinstance(consent, dict):
         consent = {}
-    connector = get_social_provider_runtime().connector_registry.resolve(task.social_account)
+    runtime = get_social_provider_runtime()
+    connector = runtime.connector_registry.resolve(task.social_account)
     if getattr(
         task.social_account, "provider", SocialAccount.Provider.DIRECT
     ) == SocialAccount.Provider.BUFFER:
@@ -1256,6 +1272,7 @@ def _build_official_call(task):
             if task.social_account.credential else ""
         )
         provider_account_id = ""
+    connector = preload_connector_token(runtime, connector, credential_reference)
     return connector, OfficialPublishRequest(
         channel=task.platform.code,
         account_external_id=task.social_account.external_id,
@@ -1332,18 +1349,35 @@ def _finalize_provider_result(task, attempt, result):
         return None
 
 
-def execute_publish_task(task_id):
-    existing = PublishedPost.objects.filter(task_id=task_id).first()
+@dataclass(frozen=True, repr=False)
+class _PreparedPublishCall:
+    organization_id: object
+    task_id: object
+    attempt_id: object
+    claim_token: object
+    connector: object
+    request: object
+    provider_request_fingerprint: str
+
+
+def _prepare_publish_task(task_id, *, organization_id=None):
+    posts = PublishedPost.objects.filter(task_id=task_id)
+    if organization_id is not None:
+        posts = posts.filter(organization_id=organization_id)
+    existing = posts.first()
     if existing:
-        return existing
-    claimed = claim_publish_task(task_id)
+        return existing, None
+    claimed = claim_publish_task(task_id, organization_id=organization_id)
     if claimed is None:
-        return PublishedPost.objects.filter(task_id=task_id).first()
+        return posts.first(), None
     task, attempt = claimed
-    task = PublishTask.objects.select_related(
+    tasks = PublishTask.objects.select_related(
         "platform", "platform_content", "social_account", "social_account__credential",
         "social_account__provider_connection",
-    ).get(pk=task.pk)
+    )
+    if organization_id is not None:
+        tasks = tasks.filter(organization_id=organization_id)
+    task = tasks.get(pk=task.pk)
 
     metadata = task.social_account.connector_metadata if isinstance(
         task.social_account.connector_metadata, dict
@@ -1368,19 +1402,19 @@ def execute_publish_task(task_id):
                     error_message="Social account is not connected via official OAuth.",
                 ),
             )
-            return None
+            return None, None
     except PublishPayloadError as exc:
         complete_publish_failure(
             task.id, attempt.claim_token,
             PublishResult(succeeded=False, error_code="VALIDATION_REJECTED", error_message=str(exc)),
         )
-        return None
+        return None, None
     except ConnectorConfigurationRequired:
         complete_publish_failure(
             task.id, attempt.claim_token,
             PublishResult(succeeded=False, error_code="PUBLISH_NOT_ELIGIBLE"),
         )
-        return None
+        return None, None
     except Exception:
         logger.exception("Publishing preparation failed.")
         complete_publish_failure(
@@ -1390,7 +1424,7 @@ def execute_publish_task(task_id):
                 error_message="Publishing preparation failed.",
             ),
         )
-        return None
+        return None, None
 
     provider_request_fingerprint = ""
     if task.social_account.provider == SocialAccount.Provider.BUFFER:
@@ -1401,13 +1435,32 @@ def execute_publish_task(task_id):
                 task.id, attempt.claim_token,
                 PublishResult(succeeded=False, error_code="PROVIDER_ERROR"),
             )
-            return None
+            return None, None
     _mark_provider_call_started(
         task, attempt, provider_request_fingerprint=provider_request_fingerprint
     )
+    return None, _PreparedPublishCall(
+        organization_id=task.organization_id,
+        task_id=task.id,
+        attempt_id=attempt.id,
+        claim_token=attempt.claim_token,
+        connector=connector,
+        request=request,
+        provider_request_fingerprint=provider_request_fingerprint,
+    )
+
+
+def execute_publish_task(task_id, *, organization_id=None):
+    with _tenant_context(organization_id):
+        existing, call = _prepare_publish_task(
+            task_id,
+            organization_id=organization_id,
+        )
+    if call is None:
+        return existing
 
     try:
-        result = connector.publish(request)
+        result = call.connector.publish(call.request)
     except (TimeoutError, ConnectionError, OSError):
         logger.exception("Provider publish outcome is unknown.")
         result = PublishResult(
@@ -1423,7 +1476,17 @@ def execute_publish_task(task_id):
             error_message="Provider publish outcome is unknown.",
         )
 
-    return _finalize_provider_result(task, attempt, result)
+    with _tenant_context(organization_id):
+        task = PublishTask.objects.get(
+            pk=call.task_id,
+            organization_id=call.organization_id,
+        )
+        attempt = PublishAttempt.objects.get(
+            pk=call.attempt_id,
+            task=task,
+            claim_token=call.claim_token,
+        )
+        return _finalize_provider_result(task, attempt, result)
 
 
 @transaction.atomic

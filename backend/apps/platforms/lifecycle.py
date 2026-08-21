@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from integrations.platforms.base import ConnectorConfigurationRequired
 from integrations.platforms.runtime import get_social_provider_runtime
+from apps.common.tenancy import tenant_atomic
 
 from .models import SocialAccount
 
@@ -91,30 +92,47 @@ def refresh_due_credentials(
         adapter_registry = adapter_registry or default_registry
         token_store = token_store or default_store
     now = now or timezone.now()
-    queryset = SocialAccount.objects.filter(
-        status=SocialAccount.Status.ACTIVE,
-        connector_metadata__connection_kind="official_oauth",
-        credential__isnull=False,
-        credential__expires_at__lte=now + timedelta(minutes=15),
-        credential__expires_at__gt=now,
-    ).select_related("platform", "credential").order_by("credential__expires_at", "id")
-    if organization is not None:
-        queryset = queryset.filter(organization=organization)
-    if organization_id is not None:
-        queryset = queryset.filter(organization_id=organization_id)
+    context_id = organization_id or (organization.id if organization is not None else None)
+    if context_id is None:
+        raise ValueError("organization_id is required for credential refresh.")
+    with tenant_atomic(context_id):
+        queryset = SocialAccount.objects.filter(
+            status=SocialAccount.Status.ACTIVE,
+            connector_metadata__connection_kind="official_oauth",
+            credential__isnull=False,
+            credential__expires_at__lte=now + timedelta(minutes=15),
+            credential__expires_at__gt=now,
+            organization_id=context_id,
+        ).select_related("platform", "credential").order_by(
+            "credential__expires_at", "id"
+        )
+        candidate_ids = list(
+            queryset.values_list("id", flat=True)[:max(0, min(limit, 100))]
+        )
     counters = {"examined": 0, "refreshed": 0, "reauthorization_required": 0, "failed": 0}
-    for candidate_id in list(queryset.values_list("id", flat=True)[:max(0, min(limit, 100))]):
+    for candidate_id in candidate_ids:
         counters["examined"] += 1
         try:
-            with transaction.atomic():
+            with tenant_atomic(context_id):
                 account = SocialAccount.objects.select_for_update().select_related(
                     "platform", "credential"
-                ).get(pk=candidate_id)
+                ).get(pk=candidate_id, organization_id=context_id)
                 if account.credential.expires_at > now + timedelta(minutes=15):
                     continue
                 adapter = adapter_registry.resolve(account.platform.code)
-                token = token_store.resolve(account.credential.secret_reference)
-                refreshed = adapter.refresh(token)
+                reference = account.credential.secret_reference
+                credential_updated_at = account.credential.updated_at
+                token = token_store.resolve(reference)
+            refreshed = adapter.refresh(token)
+            with tenant_atomic(context_id):
+                account = SocialAccount.objects.select_for_update().select_related(
+                    "credential"
+                ).get(pk=candidate_id, organization_id=context_id)
+                if (
+                    account.credential.secret_reference != reference
+                    or account.credential.updated_at != credential_updated_at
+                ):
+                    raise ProviderLifecycleError("PROVIDER_UNAVAILABLE")
                 new_reference = token_store.replace(account.credential.secret_reference, refreshed)
                 account.credential.secret_reference = new_reference
                 account.credential.expires_at = refreshed.expires_at
@@ -127,23 +145,29 @@ def refresh_due_credentials(
                 ])
                 counters["refreshed"] += 1
         except ProviderLifecycleError as error:
-            account = SocialAccount.objects.get(pk=candidate_id)
-            if error.code == "INVALID_GRANT":
-                account.connection_state = SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED
-                account.reauthorization_required_at = now
-                counters["reauthorization_required"] += 1
-            else:
-                account.connection_state = SocialAccount.ConnectionState.PROVIDER_UNAVAILABLE
-                counters["failed"] += 1
-            account.lifecycle_error_code = error.code
-            account.save(update_fields=[
-                "connection_state", "reauthorization_required_at", "lifecycle_error_code", "updated_at",
-            ])
+            with tenant_atomic(context_id):
+                account = SocialAccount.objects.get(
+                    pk=candidate_id, organization_id=context_id
+                )
+                if error.code == "INVALID_GRANT":
+                    account.connection_state = SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED
+                    account.reauthorization_required_at = now
+                    counters["reauthorization_required"] += 1
+                else:
+                    account.connection_state = SocialAccount.ConnectionState.PROVIDER_UNAVAILABLE
+                    counters["failed"] += 1
+                account.lifecycle_error_code = error.code
+                account.save(update_fields=[
+                    "connection_state", "reauthorization_required_at", "lifecycle_error_code", "updated_at",
+                ])
         except ConnectorConfigurationRequired:
-            account = SocialAccount.objects.get(pk=candidate_id)
-            account.connection_state = SocialAccount.ConnectionState.CONFIGURATION_REQUIRED
-            account.lifecycle_error_code = "CONFIGURATION_REQUIRED"
-            account.save(update_fields=["connection_state", "lifecycle_error_code", "updated_at"])
+            with tenant_atomic(context_id):
+                account = SocialAccount.objects.get(
+                    pk=candidate_id, organization_id=context_id
+                )
+                account.connection_state = SocialAccount.ConnectionState.CONFIGURATION_REQUIRED
+                account.lifecycle_error_code = "CONFIGURATION_REQUIRED"
+                account.save(update_fields=["connection_state", "lifecycle_error_code", "updated_at"])
             counters["failed"] += 1
     return counters
 

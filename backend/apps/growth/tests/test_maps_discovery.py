@@ -1,9 +1,9 @@
 import pytest
+from django.db import connection
 
 from apps.growth.maps_discovery import (
     MapsDiscoveryNotEnabled,
     probe_maps_connection,
-    run_due_maps_configs,
     run_maps_discovery,
 )
 from apps.growth.models import DiscoveryCandidate, GoogleMapsDiscoveryConfig
@@ -90,19 +90,31 @@ def test_run_maps_discovery_deduplicates_and_records_success(organization, confi
     assert config.last_error_code == ""
 
 
-def test_run_due_maps_configs_scans_only_due_and_enabled(organization, config):
+@pytest.mark.django_db(transaction=True)
+def test_run_due_maps_configs_scans_only_due_and_enabled(
+    organization, config, monkeypatch
+):
+    from apps.growth.tasks import scan_due_maps_configs
+
     sources = []
 
     def factory(api_key):
         source = FakeMapsSource(api_key)
+        original_fetch = source.fetch
+
+        def fetch_outside_transaction(query):
+            assert connection.in_atomic_block is False
+            return original_fetch(query)
+
+        source.fetch = fetch_outside_transaction
         sources.append(source)
         return source
 
-    result = run_due_maps_configs(
-        organization_id=organization.id,
-        limit=5,
-        source_factory=factory,
+    monkeypatch.setattr(
+        "apps.growth.maps_discovery.GooglePlacesSource",
+        factory,
     )
+    result = scan_due_maps_configs.run(limit=5)
     assert result["scanned"] == 1
     assert result["succeeded"] == 1
     assert DiscoveryCandidate.objects.filter(organization=organization).count() == 1

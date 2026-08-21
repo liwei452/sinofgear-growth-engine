@@ -5,10 +5,12 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from django.db import transaction
 
 from apps.common.tenant_tasks import (
     TenantTaskError,
     TenantWorkResult,
+    dispatch_task_on_commit,
     parse_tenant_organization_id,
     run_tenant_coordinator,
     tenant_task_context,
@@ -46,6 +48,23 @@ def test_tenant_task_context_clears_after_success_and_exception():
 
     with tenant_task_context(str(second)) as organization_id:
         assert organization_id == second
+
+
+@pytest.mark.django_db(transaction=True)
+def test_dispatch_task_on_commit_skips_rollback_and_binds_arguments_once():
+    calls = []
+    task = SimpleNamespace(delay=lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    with pytest.raises(RuntimeError, match="rollback"):
+        with transaction.atomic():
+            dispatch_task_on_commit(task, "org-a", "object-a", reason="retry")
+            raise RuntimeError("rollback")
+    assert calls == []
+
+    with transaction.atomic():
+        dispatch_task_on_commit(task, "org-b", "object-b", reason="commit")
+        assert calls == []
+    assert calls == [(('org-b', 'object-b'), {'reason': 'commit'})]
 
 
 @pytest.mark.django_db
@@ -159,15 +178,26 @@ def test_object_tasks_and_every_production_dispatch_use_organization_id_first():
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            if not isinstance(node, ast.Call):
                 continue
-            if node.func.attr not in {"delay", "apply_async", "s", "si"}:
+            args = node.args
+            if isinstance(node.func, ast.Attribute):
+                if node.func.attr not in {"delay", "apply_async", "s", "si"}:
+                    continue
+                owner = node.func.value
+            elif (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "dispatch_task_on_commit"
+                and node.args
+            ):
+                owner = node.args[0]
+                args = node.args[1:]
+            else:
                 continue
-            owner = node.func.value
             if not isinstance(owner, ast.Name) or owner.id not in task_arg_counts:
                 continue
             _task, minimum_args, _dispatch_count = task_arg_counts[owner.id]
-            assert len(node.args) >= minimum_args
+            assert len(args) >= minimum_args
             found[owner.id] += 1
     assert found == {
         name: dispatch_count

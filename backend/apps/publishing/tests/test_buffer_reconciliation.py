@@ -3,6 +3,7 @@ from datetime import timedelta
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.utils import timezone
 
 from apps.content.models import PlatformContent
@@ -150,6 +151,67 @@ def _observation(*, status="sent", sent_at=None, post_id="buffer-post-1", channe
         status=status,
         sent_at=sent_at if sent_at is not None else timezone.now(),
     )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("boundary", ["publish", "exact", "unknown"])
+def test_buffer_task_network_boundaries_run_outside_transactions(
+    publishing_context, monkeypatch, boundary
+):
+    from apps.growth.tasks import sync_growth_publish_item_from_task
+    from apps.publishing.tasks import (
+        reconcile_buffer_publish_task_job,
+        run_publish_task,
+    )
+
+    monkeypatch.setattr(sync_growth_publish_item_from_task, "delay", lambda *args: None)
+    account, _connection = _buffer_account(publishing_context, monkeypatch)
+
+    class BoundaryPublishConnector(RecordingConnector):
+        def publish(self, request):
+            assert connection.in_atomic_block is False
+            return super().publish(request)
+
+    initial_result = (
+        OfficialPublishResult(status="FAILED", error_code="OUTCOME_UNKNOWN")
+        if boundary == "unknown"
+        else OfficialPublishResult(status="SUBMITTED", submission_id="buffer-boundary")
+    )
+    publisher = BoundaryPublishConnector(initial_result)
+    _runtime(monkeypatch, publisher)
+    task = create_publish_task(
+        content=publishing_context["content"],
+        account=account,
+        idempotency_key=f"buffer-boundary-{boundary}",
+        actor=publishing_context["actor"],
+    )
+    run_publish_task.run(str(task.organization_id), str(task.id))
+    if boundary == "publish":
+        assert len(publisher.requests) == 1
+        return
+
+    if boundary == "exact":
+        class BoundaryQueryConnector(QueryConnector):
+            def fetch_post(self, request):
+                assert connection.in_atomic_block is False
+                return super().fetch_post(request)
+
+        connector = BoundaryQueryConnector(
+            BufferPostQueryResult(ok=True, observation=_observation())
+        )
+    else:
+        class BoundaryCandidateConnector(CandidateConnector):
+            def search_post_candidates(self, request):
+                assert connection.in_atomic_block is False
+                return super().search_post_candidates(request)
+
+        task.refresh_from_db()
+        connector = BoundaryCandidateConnector(
+            BufferCandidateSearchResult(ok=True, candidates=(_candidate(task),))
+        )
+    _query_runtime(monkeypatch, connector)
+    reconcile_buffer_publish_task_job.run(str(task.organization_id), str(task.id))
+    assert len(connector.requests) == 1
 
 
 @pytest.mark.parametrize("status", ["scheduled", "sending"])

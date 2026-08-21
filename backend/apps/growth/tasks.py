@@ -2,17 +2,19 @@ from celery import shared_task
 
 from apps.common.tenant_tasks import (
     TenantWorkResult,
+    parse_tenant_organization_id,
     require_tenant_object,
     run_tenant_coordinator,
     tenant_task_context,
 )
 from apps.identity.models import Organization
+from apps.common.tenancy import tenant_atomic
 from apps.publishing.models import PublishTask
 
 from .discovery import run_due_discovery_profiles
 from .maps_discovery import run_due_maps_configs
 from .agent.acquisition import run_proactive_acquisition, run_proactive_acquisition_day
-from .models import DiscoveryCandidate, GrowthPublishItem
+from .models import GrowthPublishItem
 
 
 @shared_task
@@ -43,20 +45,20 @@ def scan_due_maps_configs(limit=25):
 
 @shared_task
 def run_proactive_acquisition_task(organization_id, candidate_id, approvals=None):
-    with tenant_task_context(organization_id) as tenant_id:
-        require_tenant_object(DiscoveryCandidate, tenant_id, pk=candidate_id)
-        organization = Organization.objects.get(pk=tenant_id)
-        result = run_proactive_acquisition(
-            organization=organization,
-            candidate_id=candidate_id,
-            approvals=set(approvals or []),
-        )
-        return {
-            "status": result.status,
-            "pending_approval_token": (
-                result.pending_approval.approval_token if result.pending_approval else None
-            ),
-        }
+    tenant_id = parse_tenant_organization_id(organization_id)
+    organization = Organization.objects.get(pk=tenant_id)
+    result = run_proactive_acquisition(
+        organization=organization,
+        candidate_id=candidate_id,
+        approvals=set(approvals or []),
+        organization_id=tenant_id,
+    )
+    return {
+        "status": result.status,
+        "pending_approval_token": (
+            result.pending_approval.approval_token if result.pending_approval else None
+        ),
+    }
 
 
 @shared_task
@@ -66,6 +68,7 @@ def run_due_proactive_acquisition(limit=50):
         result = run_proactive_acquisition_day(
             organization=organization,
             limit=remaining,
+            organization_id=organization_id,
         )
         counters = {
             key: result[key]
@@ -83,11 +86,13 @@ def run_due_proactive_acquisition(limit=50):
 
 @shared_task
 def execute_growth_publish_item(organization_id, item_id):
-    from .publishing import _execute_item
+    from .publishing import execute_growth_publish_item_phased
 
-    with tenant_task_context(organization_id) as tenant_id:
-        require_tenant_object(GrowthPublishItem, tenant_id, pk=item_id)
-        return _execute_item(item_id, organization_id=tenant_id)
+    tenant_id = parse_tenant_organization_id(organization_id)
+    return execute_growth_publish_item_phased(
+        item_id,
+        organization_id=tenant_id,
+    )
 
 
 @shared_task
@@ -108,20 +113,21 @@ def reconcile_delegated_publish_items(limit=200):
     from .publishing import sync_publish_item_from_task
 
     def reconcile_one(organization_id, remaining):
-        task_ids = list(
-            GrowthPublishItem.objects.filter(
-                organization_id=organization_id,
-                status=GrowthPublishItem.Status.DELEGATED,
-                publish_task__status__in=["SUCCEEDED", "FAILED", "CANCELED"],
+        with tenant_atomic(organization_id):
+            task_ids = list(
+                GrowthPublishItem.objects.filter(
+                    organization_id=organization_id,
+                    status=GrowthPublishItem.Status.DELEGATED,
+                    publish_task__status__in=["SUCCEEDED", "FAILED", "CANCELED"],
+                )
+                .order_by("id")
+                .values_list("publish_task_id", flat=True)[:remaining]
             )
-            .order_by("id")
-            .values_list("publish_task_id", flat=True)[:remaining]
-        )
-        for task_id in task_ids:
-            sync_publish_item_from_task(
-                task_id=str(task_id),
-                organization_id=organization_id,
-            )
+            for task_id in task_ids:
+                sync_publish_item_from_task(
+                    task_id=str(task_id),
+                    organization_id=organization_id,
+                )
         count = len(task_ids)
         return TenantWorkResult(consumed=count, counters={"reconciled": count})
 

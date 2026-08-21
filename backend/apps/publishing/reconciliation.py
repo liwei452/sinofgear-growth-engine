@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+from contextlib import nullcontext
 import hashlib
 import hmac
 
@@ -13,6 +14,7 @@ from django.utils import timezone
 from apps.content.models import PlatformContent
 from apps.content.services import transition_content
 from apps.platforms.models import ProviderConnection, SocialAccount
+from apps.common.tenancy import tenant_atomic
 from integrations.platforms.buffer_types import (
     BufferCandidateSearchResult,
     BufferPostCandidate,
@@ -22,7 +24,10 @@ from integrations.platforms.buffer_types import (
     BufferUnknownMatchRequest,
 )
 from integrations.platforms.buffer_connector import provider_candidate_fingerprint
-from integrations.platforms.runtime import get_social_provider_runtime
+from integrations.platforms.runtime import (
+    get_social_provider_runtime,
+    preload_connector_token,
+)
 
 from .models import (
     PublishAttempt,
@@ -40,6 +45,14 @@ BUFFER_RECONCILIATION_MAX_DELAY = timedelta(hours=6)
 BUFFER_RECONCILIATION_DISPATCH_LEASE = timedelta(minutes=5)
 BUFFER_UNKNOWN_WINDOW_BEFORE = timedelta(minutes=2)
 BUFFER_UNKNOWN_WINDOW_AFTER = timedelta(minutes=15)
+
+
+def _tenant_context(organization_id):
+    return (
+        tenant_atomic(organization_id)
+        if organization_id is not None
+        else nullcontext()
+    )
 
 SAFE_RECONCILIATION_ERRORS = {
     "BUFFER_PUBLISH_FAILED": "Buffer confirmed that publishing failed.",
@@ -143,14 +156,25 @@ def load_reconciliation_snapshot(task_id, *, organization=None) -> Reconciliatio
     )
 
 
-def reconcile_buffer_publish_task(task_id, *, organization=None, actor=None):
-    snapshot = load_reconciliation_snapshot(task_id, organization=organization)
-    account = SocialAccount.objects.select_related("platform", "provider_connection").get(
-        pk=snapshot.account_id
-    )
-    try:
-        connector = get_social_provider_runtime().connector_registry.resolve(account)
-    except Exception:
+def reconcile_buffer_publish_task(
+    task_id, *, organization=None, actor=None, organization_id=None
+):
+    with _tenant_context(organization_id):
+        snapshot = load_reconciliation_snapshot(task_id, organization=organization)
+        account = SocialAccount.objects.select_related(
+            "platform", "provider_connection"
+        ).get(pk=snapshot.account_id, organization_id=snapshot.organization_id)
+        try:
+            runtime = get_social_provider_runtime()
+            connector = runtime.connector_registry.resolve(account)
+            connector = preload_connector_token(
+                runtime,
+                connector,
+                snapshot.credential_reference,
+            )
+        except Exception:
+            connector = None
+    if connector is None:
         result = BufferPostQueryResult(
             ok=False, error_code="BUFFER_CONFIGURATION_REQUIRED"
         )
@@ -166,7 +190,8 @@ def reconcile_buffer_publish_task(task_id, *, organization=None, actor=None):
             result = BufferPostQueryResult(
                 ok=False, error_code="BUFFER_PROVIDER_UNAVAILABLE"
             )
-    return finalize_buffer_reconciliation(snapshot, result, actor=actor)
+    with _tenant_context(organization_id):
+        return finalize_buffer_reconciliation(snapshot, result, actor=actor)
 
 
 def load_unknown_reconciliation_snapshot(
@@ -235,32 +260,46 @@ def _has_unknown_evidence(snapshot: UnknownReconciliationSnapshot) -> bool:
     )
 
 
-def reconcile_unknown_buffer_publish_task(task_id, *, organization=None, actor=None):
-    snapshot = load_unknown_reconciliation_snapshot(task_id, organization=organization)
+def reconcile_unknown_buffer_publish_task(
+    task_id, *, organization=None, actor=None, organization_id=None
+):
+    with _tenant_context(organization_id):
+        snapshot = load_unknown_reconciliation_snapshot(
+            task_id, organization=organization
+        )
     if (
         snapshot.provider_call_started_at is not None
         and snapshot.started_at - snapshot.provider_call_started_at > BUFFER_RECONCILIATION_MAX_AGE
     ):
-        return finalize_unknown_buffer_reconciliation(
-            snapshot,
-            BufferCandidateSearchResult(
-                ok=False, error_code="BUFFER_RECONCILIATION_EXPIRED"
-            ),
-            actor=actor,
-        )
+        with _tenant_context(organization_id):
+            return finalize_unknown_buffer_reconciliation(
+                snapshot,
+                BufferCandidateSearchResult(
+                    ok=False, error_code="BUFFER_RECONCILIATION_EXPIRED"
+                ),
+                actor=actor,
+            )
     if not _has_unknown_evidence(snapshot):
-        return finalize_unknown_buffer_reconciliation(
-            snapshot,
-            BufferCandidateSearchResult(
-                ok=False, error_code="BUFFER_RECONCILIATION_EVIDENCE_MISSING"
-            ),
-            actor=actor,
-        )
-    account = SocialAccount.objects.select_related("platform", "provider_connection").get(
-        pk=snapshot.account_id
-    )
+        with _tenant_context(organization_id):
+            return finalize_unknown_buffer_reconciliation(
+                snapshot,
+                BufferCandidateSearchResult(
+                    ok=False, error_code="BUFFER_RECONCILIATION_EVIDENCE_MISSING"
+                ),
+                actor=actor,
+            )
     try:
-        connector = get_social_provider_runtime().connector_registry.resolve(account)
+        with _tenant_context(organization_id):
+            account = SocialAccount.objects.select_related(
+                "platform", "provider_connection"
+            ).get(pk=snapshot.account_id, organization_id=snapshot.organization_id)
+            runtime = get_social_provider_runtime()
+            connector = runtime.connector_registry.resolve(account)
+            connector = preload_connector_token(
+                runtime,
+                connector,
+                snapshot.credential_reference,
+            )
         result = connector.search_post_candidates(
             BufferUnknownMatchRequest(
                 credential_reference=snapshot.credential_reference,
@@ -274,22 +313,38 @@ def reconcile_unknown_buffer_publish_task(task_id, *, organization=None, actor=N
         result = BufferCandidateSearchResult(
             ok=False, error_code="BUFFER_PROVIDER_UNAVAILABLE"
         )
-    return finalize_unknown_buffer_reconciliation(snapshot, result, actor=actor)
+    with _tenant_context(organization_id):
+        return finalize_unknown_buffer_reconciliation(snapshot, result, actor=actor)
 
 
-def reconcile_publish_task(task_id, *, organization=None, actor=None):
-    queryset = PublishTask.objects.only("status")
-    if organization is not None:
-        queryset = queryset.filter(organization=organization)
-    try:
-        status = queryset.get(pk=task_id).status
-    except (PublishTask.DoesNotExist, ValueError) as exc:
-        raise PublishingConflict("Publish task is not available for reconciliation.") from exc
+def reconcile_publish_task(
+    task_id, *, organization=None, actor=None, organization_id=None
+):
+    with _tenant_context(organization_id):
+        queryset = PublishTask.objects.only("status")
+        if organization is not None:
+            queryset = queryset.filter(organization=organization)
+        if organization_id is not None:
+            queryset = queryset.filter(organization_id=organization_id)
+        try:
+            status = queryset.get(pk=task_id).status
+        except (PublishTask.DoesNotExist, ValueError) as exc:
+            raise PublishingConflict(
+                "Publish task is not available for reconciliation."
+            ) from exc
     if status == PublishTask.Status.SUBMISSION_UNKNOWN:
         return reconcile_unknown_buffer_publish_task(
-            task_id, organization=organization, actor=actor
+            task_id,
+            organization=organization,
+            actor=actor,
+            organization_id=organization_id,
         )
-    return reconcile_buffer_publish_task(task_id, organization=organization, actor=actor)
+    return reconcile_buffer_publish_task(
+        task_id,
+        organization=organization,
+        actor=actor,
+        organization_id=organization_id,
+    )
 
 
 def _delay_for(number: int) -> timedelta:

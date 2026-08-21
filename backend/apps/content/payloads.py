@@ -300,6 +300,12 @@ def validate_generated_content_output(payload, snapshot):
         str(row.get("fact_id")) for row in snapshot.get("verified_product_facts", [])
         if row.get("fact_id")
     }
+    seller = snapshot.get("agent_context", {}).get("seller", {})
+    allowed_facts.update(
+        str(row.get("fact_id"))
+        for row in seller.get("public_claims", [])
+        if isinstance(row, dict) and row.get("fact_id")
+    )
     if not cleaned["evidence_fact_ids"]:
         raise ValueError("Generated evidence references must contain at least one fact.")
     if not set(cleaned["evidence_fact_ids"]) <= allowed_facts:

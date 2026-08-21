@@ -7,6 +7,12 @@ from typing import Any
 
 from django.utils import timezone
 from apps.common.tenancy import tenant_atomic
+from apps.knowledge.agent_context import (
+    AgentContextPurpose,
+    KnowledgeContextError,
+    load_agent_context,
+    load_or_build_agent_context,
+)
 
 from integrations.sources.base import SourceAdapterError
 
@@ -27,6 +33,7 @@ from ..models import (
     CandidateEnrichmentSnapshot,
     DiscoveryCandidate,
     GoogleMapsDiscoveryConfig,
+    GrowthMission,
     OutreachMessage,
     TargetAccount,
 )
@@ -210,7 +217,7 @@ def _verify_contacts_tool(organization) -> Tool:
     )
 
 
-def _judge_tool(organization) -> Tool:
+def _judge_tool(organization, agent_context=None) -> Tool:
     organization_id = organization.id
 
     def func(args: dict[str, Any]) -> ToolResult:
@@ -221,6 +228,7 @@ def _judge_tool(organization) -> Tool:
             output = judge_candidate_for_tenant(
                 candidate_id,
                 organization_id=organization_id,
+                agent_context=agent_context,
             )
         except DiscoveryCandidate.DoesNotExist:
             return ToolResult(ok=False, error="candidate_id not found.")
@@ -274,7 +282,7 @@ def _add_to_follow_up_tool(organization) -> Tool:
     )
 
 
-def _draft_tool(organization) -> Tool:
+def _draft_tool(organization, agent_context=None) -> Tool:
     organization_id = organization.id
 
     def func(args: dict[str, Any]) -> ToolResult:
@@ -289,6 +297,7 @@ def _draft_tool(organization) -> Tool:
         draft, created = create_outreach_draft_for_tenant(
             account_id=account_id,
             organization_id=organization_id,
+            agent_context=agent_context,
         )
         return ToolResult(
             ok=True,
@@ -393,15 +402,17 @@ def build_proactive_acquisition_tools(
     *,
     website_transport=None,
     maps_source_factory=None,
+    lead_context=None,
+    outreach_context=None,
 ) -> list[Tool]:
     return [
         _discover_maps_tool(organization, maps_source_factory),
         _enrich_tool(organization),
         _website_enrich_tool(organization, website_transport),
         _verify_contacts_tool(organization),
-        _judge_tool(organization),
+        _judge_tool(organization, lead_context),
         _add_to_follow_up_tool(organization),
-        _draft_tool(organization),
+        _draft_tool(organization, outreach_context),
         _send_tool(organization),
     ]
 
@@ -446,6 +457,42 @@ def run_proactive_acquisition(
         ).first()
         if candidate is None:
             raise DiscoveryCandidate.DoesNotExist
+        idempotency_key = (
+            f"proactive:{mission_id}:{candidate_id}"
+            if mission_id
+            else f"proactive:{candidate_id}"
+        )
+        existing_run = AgentRun.objects.filter(
+            organization_id=context_id,
+            idempotency_key=idempotency_key,
+        ).first()
+        root_context = None
+        lead_context = None
+        outreach_context = None
+        if mission_id:
+            mission = GrowthMission.objects.select_related("primary_product").get(
+                pk=mission_id,
+                organization_id=context_id,
+            )
+            if existing_run is not None and existing_run.knowledge_context_snapshot_id:
+                root_context = load_agent_context(
+                    organization=organization,
+                    mission=mission,
+                    snapshot_id=existing_run.knowledge_context_snapshot_id,
+                )
+            elif existing_run is not None:
+                raise KnowledgeContextError(
+                    "KNOWLEDGE_CONTEXT_REQUIRED",
+                    "Mission AgentRun has no frozen knowledge context.",
+                )
+            else:
+                root_context = load_or_build_agent_context(
+                    organization=organization,
+                    mission=mission,
+                    actor=mission.created_by,
+                )
+            lead_context = root_context.for_purpose(AgentContextPurpose.LEAD_JUDGMENT)
+            outreach_context = root_context.for_purpose(AgentContextPurpose.OUTREACH)
         fallback = DeterministicPlanner(
             proactive_acquisition_website_plan(candidate_id)
             if candidate.website
@@ -455,11 +502,6 @@ def run_proactive_acquisition(
             organization=organization,
             fallback=fallback,
             allow_llm=True,
-        )
-        idempotency_key = (
-            f"proactive:{mission_id}:{candidate_id}"
-            if mission_id
-            else f"proactive:{candidate_id}"
         )
         run, _ = AgentRun.objects.get_or_create(
             organization_id=context_id,
@@ -471,12 +513,23 @@ def run_proactive_acquisition(
                 "planner_provider": proposed_execution.provider,
                 "planner_model": proposed_execution.model,
                 "resume_args": {"candidate_id": candidate_id, "mission_id": mission_id},
+                "knowledge_context_snapshot_id": (
+                    root_context.snapshot_id if root_context is not None else None
+                ),
                 "max_steps": 20,
             },
         )
+        if root_context is not None and run.knowledge_context_snapshot_id != root_context.snapshot_id:
+            raise KnowledgeContextError(
+                "KNOWLEDGE_CONTEXT_MISMATCH",
+                "Agent run is bound to a different knowledge context.",
+            )
         tools = ToolRegistry(
             build_proactive_acquisition_tools(
-                organization, website_transport=website_transport
+                organization,
+                website_transport=website_transport,
+                lead_context=lead_context,
+                outreach_context=outreach_context,
             )
         )
         execution = resolve_run_execution(
@@ -516,10 +569,31 @@ def resume_proactive_acquisition(
             organization_id=organization_id,
             idempotency_key=idempotency_key,
         )
+        lead_context = None
+        outreach_context = None
+        if mission_id:
+            mission = GrowthMission.objects.select_related("primary_product").get(
+                pk=mission_id,
+                organization_id=organization_id,
+            )
+            if run.knowledge_context_snapshot_id is None:
+                raise KnowledgeContextError(
+                    "KNOWLEDGE_CONTEXT_REQUIRED",
+                    "Mission AgentRun has no frozen knowledge context.",
+                )
+            root_context = load_agent_context(
+                organization=organization,
+                mission=mission,
+                snapshot_id=run.knowledge_context_snapshot_id,
+            )
+            lead_context = root_context.for_purpose(AgentContextPurpose.LEAD_JUDGMENT)
+            outreach_context = root_context.for_purpose(AgentContextPurpose.OUTREACH)
         tools = ToolRegistry(
             build_proactive_acquisition_tools(
                 organization,
                 website_transport=website_transport,
+                lead_context=lead_context,
+                outreach_context=outreach_context,
             )
         )
         plan = (

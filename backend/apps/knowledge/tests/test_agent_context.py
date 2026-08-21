@@ -88,6 +88,8 @@ def test_purpose_projection_separates_public_internal_and_preserves_citation(org
     }
     assert lead["seller"]["internal_context"][0]["fact_id"] == str(internal.id)
     assert "internal_context" not in outreach["seller"]
+    assert "internal_summary" not in outreach["seller"]["company_profile"]
+    assert "primary_site_origin" not in outreach["seller"]["company_profile"]
     assert outreach["seller"]["public_claims"][0]["fact_id"] == str(public.id)
     assert outreach["seller"]["public_claims"][0]["evidence"][0] == {
         "evidence_id": str(citation.evidence_id),

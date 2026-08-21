@@ -201,3 +201,28 @@ def test_numeric_grounding_does_not_match_substring_of_larger_number():
 
     with pytest.raises(ValueError, match="numeric claim"):
         payloads.validate_generated_content_output(output, snapshot)
+
+
+@pytest.mark.parametrize(
+    ("fact_id", "accepted"),
+    [("public-company-fact", True), ("internal-company-fact", False)],
+)
+def test_external_evidence_accepts_only_snapshot_public_claim_ids(fact_id, accepted):
+    snapshot = {
+        **_snapshot(),
+        "agent_context": {
+            "seller": {
+                "public_claims": [{"fact_id": "public-company-fact"}],
+            }
+        },
+    }
+    output = _output()
+    output["evidence_fact_ids"] = [fact_id]
+    for variant in output["platform_variants"]:
+        variant["evidence_fact_ids"] = [fact_id]
+
+    if accepted:
+        assert payloads.validate_generated_content_output(output, snapshot)
+    else:
+        with pytest.raises(ValueError, match="unknown fact"):
+            payloads.validate_generated_content_output(output, snapshot)

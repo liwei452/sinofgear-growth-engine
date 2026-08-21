@@ -290,6 +290,10 @@ def run_content_creation_agent(
     asset_ids: list[str] | None = None,
     approvals=None,
 ) -> Any:
+    brief = _brief(organization, brief_id)
+    if brief is None:
+        raise ValidationError("brief_id not found.")
+    snapshot_id = getattr(brief, "knowledge_context_snapshot_id", None)
     if not asset_ids:
         asset_ids = _auto_match_assets(organization, platform_id)
     run, _ = AgentRun.objects.get_or_create(
@@ -308,9 +312,12 @@ def run_content_creation_agent(
                 "asset_ids": asset_ids or [],
             },
             "created_by_id": _user_id(actor_id),
+            "knowledge_context_snapshot_id": snapshot_id,
             "max_steps": 10,
         },
     )
+    if run.knowledge_context_snapshot_id != snapshot_id:
+        raise ValidationError("agent run knowledge context does not match the brief.")
     tools = ToolRegistry(build_content_creation_tools(organization, actor_id))
     planner = DeterministicPlanner(
         [
@@ -335,6 +342,10 @@ def run_content_creation_agent(
 def run_platform_variants_agent(
     *, organization, master_id: str, actor_id: str, approvals=None,
 ) -> Any:
+    master = _get_master(organization, master_id)
+    if master is None:
+        raise ValidationError("master_id not found.")
+    snapshot_id = getattr(master, "knowledge_context_snapshot_id", None)
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
         idempotency_key=f"platform-variants:{master_id}",
@@ -344,9 +355,12 @@ def run_platform_variants_agent(
             "execution_mode": AgentRun.ExecutionMode.AUTOMATION,
             "resume_args": {"master_id": master_id, "actor_id": actor_id},
             "created_by_id": _user_id(actor_id),
+            "knowledge_context_snapshot_id": snapshot_id,
             "max_steps": 5,
         },
     )
+    if run.knowledge_context_snapshot_id != snapshot_id:
+        raise ValidationError("agent run knowledge context does not match the master.")
     tools = ToolRegistry(build_platform_variants_tools(organization, actor_id))
     planner = DeterministicPlanner(
         [

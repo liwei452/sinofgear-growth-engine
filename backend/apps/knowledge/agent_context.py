@@ -14,7 +14,7 @@ from .models import KnowledgeContextSnapshot
 from .snapshot_models import canonical_json, sha256_text
 
 
-MAX_AGENT_CONTEXT_BYTES = 128 * 1024
+MAX_AGENT_CONTEXT_BYTES = 32 * 1024
 _EXTERNAL_PURPOSES = frozenset(
     {
         "OUTREACH",
@@ -121,6 +121,9 @@ def _provenance(snapshot: KnowledgeContextSnapshot) -> dict[str, object]:
 class PurposeAgentContext:
     purpose: AgentContextPurpose
     snapshot_id: object
+    organization_id: object
+    mission_id: object
+    primary_product_id: object
     provenance: Mapping[str, object]
     data: Mapping[str, object]
 
@@ -200,6 +203,11 @@ class AgentContext:
             AgentContextPurpose.CONTENT_STRATEGY,
         }:
             seller["internal_context"] = internal_context
+        else:
+            # These fields are useful for internal reasoning, but are not
+            # publication-safe evidence and must never enter an external prompt.
+            company.pop("internal_summary", None)
+            company.pop("primary_site_origin", None)
 
         projection = {
             "purpose": resolved.value,
@@ -215,13 +223,23 @@ class AgentContext:
         context = PurposeAgentContext(
             purpose=resolved,
             snapshot_id=self.snapshot_id,
+            organization_id=self.organization_id,
+            mission_id=self.mission_id,
+            primary_product_id=self.primary_product_id,
             provenance=self.provenance,
             data=_freeze(projection),
         )
-        if resolved.value in _EXTERNAL_PURPOSES and not context.verified_urls:
+        has_verified_cta = any(
+            isinstance(page, Mapping)
+            and isinstance(page.get("primary_cta"), Mapping)
+            and str(page["primary_cta"].get("label") or "").strip()
+            and str(page["primary_cta"].get("url") or "").strip()
+            for page in context.data.get("website_pages", ())
+        )
+        if resolved.value in _EXTERNAL_PURPOSES and not has_verified_cta:
             raise KnowledgeContextError(
                 "VERIFIED_LANDING_PAGE_REQUIRED",
-                "A verified landing page is required for external content.",
+                "A verified landing page and CTA are required for external content.",
             )
         encoded_size = len(canonical_json(context.to_dict()).encode("utf-8"))
         if encoded_size > MAX_AGENT_CONTEXT_BYTES:

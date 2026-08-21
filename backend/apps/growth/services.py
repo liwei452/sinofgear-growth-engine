@@ -11,6 +11,7 @@ from integrations.platforms.manual_fake import ManualPackageFakeConnector, Manua
 from apps.ai.provider_config import resolve_product_ai
 from apps.ai.services import BudgetedAIProvider
 from apps.common.tenancy import tenant_atomic
+from apps.knowledge.agent_context import validate_external_output
 
 from .ai_disclosure import ai_fallback_metadata, ai_success_metadata
 from .models import (
@@ -195,6 +196,17 @@ OUTREACH_DRAFT_SCHEMA = {
     },
     "required": ["draft", "reasoning"],
 }
+GROUNDED_OUTREACH_DRAFT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "draft": {"type": "string"},
+        "reasoning": {"type": "string"},
+        "cited_fact_ids": {"type": "array", "items": {"type": "string"}},
+        "landing_page_url": {"type": "string"},
+    },
+    "required": ["draft", "reasoning", "cited_fact_ids", "landing_page_url"],
+}
 
 
 def _outreach_draft_text(account: TargetAccount) -> tuple[str, dict]:
@@ -269,23 +281,38 @@ class _OutreachDraftCall:
     account: object = field(repr=False)
     runtime: object = field(repr=False)
     evidence: str = field(repr=False)
+    agent_context: object = field(default=None, repr=False)
 
 
 def create_outreach_draft_for_tenant(
     *,
     account_id,
     organization_id,
+    agent_context=None,
 ) -> tuple[OutreachDraft, bool]:
     """Resolve tenant configuration, call AI outside a transaction, then finalize."""
+
+    if agent_context is not None and str(agent_context.organization_id) != str(
+        organization_id
+    ):
+        from apps.knowledge.agent_context import KnowledgeContextError
+
+        raise KnowledgeContextError(
+            "KNOWLEDGE_CONTEXT_MISMATCH",
+            "Knowledge context does not belong to this organization.",
+        )
 
     with tenant_atomic(organization_id):
         account = TargetAccount.objects.select_related("organization").get(
             pk=account_id,
             organization_id=organization_id,
         )
-        existing = account.outreach_drafts.filter(
-            organization_id=organization_id,
-        ).order_by("-created_at", "-id").first()
+        existing_query = account.outreach_drafts.filter(organization_id=organization_id)
+        if agent_context is not None:
+            existing_query = existing_query.filter(
+                knowledge_context_snapshot_id=agent_context.snapshot_id
+            )
+        existing = existing_query.order_by("-created_at", "-id").first()
         if existing is not None:
             return existing, False
         signal = account.intent_signals.filter(
@@ -304,23 +331,42 @@ def create_outreach_draft_for_tenant(
             account=frozen,
             runtime=runtime,
             evidence=signal.evidence_text if signal else "",
+            agent_context=agent_context,
         )
 
+    cited_fact_ids: list[str] = []
     if not call.runtime.real_requests_enabled:
-        draft_text = _template_outreach_draft(call.account)
+        grounded = (
+            _grounded_outreach_draft(call.account, call.evidence, call.agent_context)
+            if call.agent_context is not None
+            else None
+        )
+        draft_text = (
+            grounded["draft"] if grounded is not None else _template_outreach_draft(call.account)
+        )
+        if grounded is not None:
+            cited_fact_ids = list(grounded["cited_fact_ids"])
         metadata = ai_fallback_metadata(
             call.runtime.provider_code,
             call.runtime.model,
             "real AI disabled",
         )
     else:
-        snapshot = {
+        target_evidence = {
             "company_name": call.account.name,
             "country": call.account.country,
             "industry": call.account.industry,
             "website": call.account.website,
             "evidence": call.evidence,
         }
+        snapshot = (
+            {
+                "seller_context": call.agent_context.to_dict(),
+                "target_company_evidence": target_evidence,
+            }
+            if call.agent_context is not None
+            else target_evidence
+        )
         prompt = (
             "Draft a personalized development email using only the supplied facts.\n"
             "||INPUT:" + json.dumps(snapshot, ensure_ascii=False)
@@ -331,14 +377,35 @@ def create_outreach_draft_for_tenant(
                 model=call.runtime.model,
                 provider=call.runtime.provider,
             )
-            result = provider.generate(prompt=prompt, schema=OUTREACH_DRAFT_SCHEMA)
+            result = provider.generate(
+                prompt=prompt,
+                schema=(
+                    GROUNDED_OUTREACH_DRAFT_SCHEMA
+                    if call.agent_context is not None
+                    else OUTREACH_DRAFT_SCHEMA
+                ),
+            )
+            if call.agent_context is not None:
+                validate_external_output(result, context=call.agent_context)
+                cited_fact_ids = list(result["cited_fact_ids"])
             draft_text = result["draft"]
             metadata = ai_success_metadata(
                 call.runtime.provider_code,
                 call.runtime.model,
             )
         except Exception:
-            draft_text = _template_outreach_draft(call.account)
+            grounded = (
+                _grounded_outreach_draft(call.account, call.evidence, call.agent_context)
+                if call.agent_context is not None
+                else None
+            )
+            draft_text = (
+                grounded["draft"]
+                if grounded is not None
+                else _template_outreach_draft(call.account)
+            )
+            if grounded is not None:
+                cited_fact_ids = list(grounded["cited_fact_ids"])
             metadata = ai_fallback_metadata(
                 call.runtime.provider_code,
                 call.runtime.model,
@@ -352,20 +419,64 @@ def create_outreach_draft_for_tenant(
         )
         if locked.updated_at != call.account_updated_at:
             raise RuntimeError("Account changed during outreach draft generation.")
-        existing = locked.outreach_drafts.filter(
-            organization_id=organization_id,
-        ).order_by("-created_at", "-id").first()
+        existing_query = locked.outreach_drafts.filter(organization_id=organization_id)
+        if call.agent_context is not None:
+            existing_query = existing_query.filter(
+                knowledge_context_snapshot_id=call.agent_context.snapshot_id
+            )
+        existing = existing_query.order_by("-created_at", "-id").first()
         if existing is not None:
             return existing, False
         explanation = "Human review is required before this draft can be sent."
+        if call.agent_context is not None:
+            explanation += " Public fact IDs: " + ", ".join(
+                sorted(cited_fact_ids)
+            )
         if metadata["fallback_used"]:
             explanation += " AI generation was unavailable; a safe template was used."
         return OutreachDraft.objects.create(
             organization_id=organization_id,
             account=locked,
+            knowledge_context_snapshot_id=(
+                call.agent_context.snapshot_id if call.agent_context is not None else None
+            ),
             english_draft=draft_text,
             chinese_explanation=explanation,
         ), True
+
+
+def _grounded_outreach_draft(account, evidence, agent_context) -> dict:
+    context = agent_context.to_dict()
+    seller = context["seller"]
+    company = seller["company_profile"]
+    claims = seller["public_claims"]
+    pages = context["website_pages"]
+    if not claims:
+        from apps.knowledge.agent_context import KnowledgeContextError
+
+        raise KnowledgeContextError(
+            "PUBLIC_CLAIM_BLOCKED",
+            "At least one cited public claim is required for outreach.",
+        )
+    page = pages[0]
+    landing_page_url = page.get("primary_cta", {}).get("url") or page["canonical_url"]
+    claim = claims[0]
+    claim_text = json.dumps(claim["value"], ensure_ascii=False, sort_keys=True)
+    brand = company.get("brand_name") or company.get("legal_name_en") or "our team"
+    draft = (
+        f"Hello {account.name} team, {brand} supports relevant manufacturing work with "
+        f"this documented public capability: {claim_text}. Based on your public profile"
+        f"{f' ({evidence})' if evidence else ''}, would a short review be useful? "
+        f"{landing_page_url}"
+    )
+    output = {
+        "draft": draft,
+        "reasoning": "Uses one public seller claim and separately supplied target evidence.",
+        "cited_fact_ids": [claim["fact_id"]],
+        "landing_page_url": landing_page_url,
+    }
+    validate_external_output(output, context=agent_context)
+    return output
 
 
 @transaction.atomic

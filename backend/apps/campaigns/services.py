@@ -11,6 +11,7 @@ from apps.assets.models import AssetProductLink, MaterialAsset, ProductEvidenceF
 from apps.catalog.models import Product, ProductConceptLink
 from apps.catalog.services import ProductSnapshot, _snapshot_from_locked_product
 from apps.knowledge.graph import acquire_knowledge_graph_lock
+from apps.knowledge.agent_context import AgentContextPurpose, load_agent_context
 from apps.knowledge.models import (
     KnowledgeConcept,
     KnowledgeEvidence,
@@ -65,11 +66,21 @@ def create_content_brief(
     asset_ids,
     platform_ids,
     concept_links,
+    knowledge_context_snapshot=None,
 ) -> ContentBrief:
     campaign = Campaign.objects.select_for_update().get(
         pk=campaign.pk, organization=organization
     )
     product_ids = _unique_ids(product_ids, "product_ids")
+    if knowledge_context_snapshot is not None:
+        if knowledge_context_snapshot.organization_id != organization.id:
+            raise ValidationError("Knowledge context is not visible to this organization.")
+        if str(knowledge_context_snapshot.primary_product_id) not in {
+            str(item) for item in product_ids
+        }:
+            raise ValidationError(
+                {"product_ids": ["Brief products must include the snapshot primary product."]}
+            )
     asset_ids = _unique_ids(asset_ids, "asset_ids")
     platform_ids = _unique_ids(platform_ids, "platform_ids")
     specs = tuple(concept_links)
@@ -80,6 +91,7 @@ def create_content_brief(
         organization=organization,
         campaign=campaign,
         created_by=creator,
+        knowledge_context_snapshot=knowledge_context_snapshot,
         **values,
     )
     ContentBriefProduct.objects.bulk_create(
@@ -191,6 +203,14 @@ def update_content_brief(
     desired_products = (
         current_products if product_ids is None else tuple(sorted(_unique_ids(product_ids, "product_ids"), key=str))
     )
+    if (
+        brief.knowledge_context_snapshot_id is not None
+        and str(brief.knowledge_context_snapshot.primary_product_id)
+        not in {str(item) for item in desired_products}
+    ):
+        raise ValidationError(
+            {"product_ids": ["Brief products must include the snapshot primary product."]}
+        )
     desired_assets = (
         current_assets if asset_ids is None else tuple(sorted(_unique_ids(asset_ids, "asset_ids"), key=str))
     )
@@ -362,6 +382,7 @@ def revise_content_brief(brief_id: UUID, *, creator) -> ContentBrief:
         previous_version=source,
         version=source.version + 1,
         created_by=creator,
+        knowledge_context_snapshot=source.knowledge_context_snapshot,
         **values,
     )
     with revision_writes():
@@ -446,6 +467,8 @@ class ContentGenerationInput:
     target_platforms: tuple[PlatformSnapshot, ...]
     ontology_snapshot: OntologySnapshot
     verified_product_facts: tuple[VerifiedProductFactSnapshot, ...]
+    knowledge_provenance: dict[str, object] | None
+    agent_context: dict[str, object] | None
     generated_at: datetime
 
     def to_dict(self) -> dict[str, object]:
@@ -530,6 +553,21 @@ def build_content_generation_input(brief_id: UUID) -> ContentGenerationInput:
     errors = _ready_errors(brief)
     if errors:
         raise ValidationError(errors)
+    knowledge_provenance = None
+    agent_context = None
+    if brief.knowledge_context_snapshot_id is not None:
+        snapshot = brief.knowledge_context_snapshot
+        context = load_agent_context(
+            organization=brief.organization,
+            mission=snapshot.mission,
+            snapshot_id=snapshot.id,
+        )
+        if snapshot.primary_product_id not in set(
+            brief.product_links.values_list("product_id", flat=True)
+        ):
+            raise ValidationError("Brief products do not match the frozen knowledge context.")
+        knowledge_provenance = dict(context.provenance)
+        agent_context = context.for_purpose(AgentContextPurpose.MASTER_CONTENT).to_dict()
 
     campaign = Campaign.objects.select_for_update(of=("self",)).get(pk=brief.campaign_id)
     if campaign.organization_id != brief.organization_id:
@@ -726,5 +764,7 @@ def build_content_generation_input(brief_id: UUID) -> ContentGenerationInput:
         target_platforms=platform_snapshots,
         ontology_snapshot=ontology,
         verified_product_facts=verified_product_facts,
+        knowledge_provenance=knowledge_provenance,
+        agent_context=agent_context,
         generated_at=timezone.now(),
     )

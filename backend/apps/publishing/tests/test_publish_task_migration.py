@@ -11,6 +11,7 @@ from django.utils import timezone
 
 MIGRATE_FROM = [("publishing", "0005_publishattempt_provider_call_started_at_and_more")]
 MIGRATE_TO = [("publishing", "0006_publishtask_unique_live_content_account")]
+LATEST = [("publishing", "0010_publishreconciliationattempt_candidate_search_truncated")]
 
 
 def _migrate(target):
@@ -58,7 +59,7 @@ def _cleanup_and_restore(task_ids):
     PublishTask = old_apps.get_model("publishing", "PublishTask")
     PublishAttempt.objects.filter(task_id__in=task_ids).delete()
     PublishTask.objects.filter(id__in=task_ids).delete()
-    _migrate(MIGRATE_TO)
+    _migrate(LATEST)
 
 
 @pytest.mark.django_db(transaction=True)

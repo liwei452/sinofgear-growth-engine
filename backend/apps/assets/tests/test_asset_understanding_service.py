@@ -76,7 +76,7 @@ def _upload(organization, creator, content: bytes, *, mime: str, kind: str, file
     )
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_pdf_understanding_persists_literal_evidence_and_high_risk_facts(organizations) -> None:
     own, _ = organizations
     actor = get_user_model().objects.create_user(username="understand-pdf")
@@ -103,7 +103,7 @@ def test_pdf_understanding_persists_literal_evidence_and_high_risk_facts(organiz
     assert run.prompt_version.model == "provider-agnostic"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_image_understanding_is_partial_and_does_not_invent_visual_facts(organizations) -> None:
     own, _ = organizations
     actor = get_user_model().objects.create_user(username="understand-image")
@@ -260,7 +260,7 @@ def test_deepseek_mode_requires_explicit_text_consent(organizations, monkeypatch
     assert not Job.objects.filter(type=Job.Type.ASSET_UNDERSTAND).exists()
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_real_provider_job_does_not_reuse_fake_understanding(organizations, monkeypatch) -> None:
     own, _ = organizations
     actor = get_user_model().objects.create_user(username="understand-provider-split")
@@ -315,7 +315,7 @@ def test_repeated_real_understanding_is_idempotent(organizations, monkeypatch) -
     ).count() == 1
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_approved_fact_becomes_verified_without_mutating_product(organizations) -> None:
     own, _ = organizations
     actor = get_user_model().objects.create_user(username="review-fact")

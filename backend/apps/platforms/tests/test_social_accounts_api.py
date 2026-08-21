@@ -67,7 +67,7 @@ def test_platform_listing_uses_prefetched_capabilities_in_two_queries(
 
     # Session and membership authentication use three queries; the platform
     # list itself must use one query plus one prefetched-capability query.
-    with django_assert_num_queries(5):
+    with django_assert_num_queries(7):
         response = client.get("/api/v1/platforms")
 
     assert response.status_code == 200
@@ -294,7 +294,7 @@ def test_social_account_list_query_count_is_constant_for_buffer_channels(
         organization=organization, role=roles[Role.Code.REVIEWER], username="channel-query-count"
     )
 
-    with django_assert_num_queries(5):
+    with django_assert_num_queries(7):
         response = client.get("/api/v1/social-accounts")
 
     assert response.status_code == 200

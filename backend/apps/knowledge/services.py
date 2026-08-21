@@ -991,21 +991,26 @@ class OntologyContextService:
         self.organization = organization
 
     def visible_concepts(self) -> QuerySet[KnowledgeConcept]:
+        """Return a lazy queryset that must be evaluated inside an active tenant context."""
         return KnowledgeConcept.objects.filter(_visible_filter(self.organization)).order_by("code", "id")
 
     def visible_relations(self) -> QuerySet[KnowledgeRelation]:
+        """Return a lazy queryset that must be evaluated inside an active tenant context."""
         return KnowledgeRelation.objects.filter(_visible_filter(self.organization)).order_by(
             "subject_concept__code", "predicate", "object_concept__code", "id"
         )
 
     def visible_aliases(self) -> QuerySet[KnowledgeAlias]:
+        """Return a lazy queryset that must be evaluated inside an active tenant context."""
         return KnowledgeAlias.objects.filter(_visible_filter(self.organization)).order_by(
             "normalized_alias", "concept__code", "id"
         )
 
     def visible_evidence(self) -> QuerySet[KnowledgeEvidence]:
+        """Return a lazy queryset that must be evaluated inside an active tenant context."""
         return KnowledgeEvidence.objects.filter(_visible_filter(self.organization)).order_by("created_at", "id")
 
+    @_tenant_service_atomic
     def resolve_alias(self, *, text: str, language: str) -> AliasResolution:
         normalized = normalize_alias(text, language=language)
         aliases = self.visible_aliases().filter(
@@ -1032,6 +1037,7 @@ class OntologyContextService:
             selected=candidates[0] if len(candidates) == 1 else None,
         )
 
+    @_tenant_service_atomic
     def expand_concepts(
         self,
         *,
@@ -1128,6 +1134,7 @@ class OntologyContextService:
             generated_at=timezone.now(),
         )
 
+    @_tenant_service_atomic
     def build_snapshot(self, *, concept_ids: Sequence[UUID], max_depth: int = 2) -> OntologySnapshot:
         return self.expand_concepts(concept_ids=concept_ids, max_depth=max_depth)
 
@@ -1153,15 +1160,19 @@ class OntologyContextService:
         if not isinstance(max_depth, int) or isinstance(max_depth, bool) or max_depth < 0 or max_depth > 2:
             raise OntologyDepthError("Ontology expansion depth must be between 0 and 2")
 
+    @_tenant_service_atomic
     def submit_review(self, concept_id: UUID, *, actor: AbstractBaseUser, comment: str = "") -> KnowledgeConcept:
         return self._transition(concept_id, actor=actor, action=ReviewAction.SUBMIT, comment=comment)
 
+    @_tenant_service_atomic
     def approve(self, concept_id: UUID, *, actor: AbstractBaseUser, comment: str = "") -> KnowledgeConcept:
         return self._transition(concept_id, actor=actor, action=ReviewAction.APPROVE, comment=comment)
 
+    @_tenant_service_atomic
     def reject(self, concept_id: UUID, *, actor: AbstractBaseUser, comment: str) -> KnowledgeConcept:
         return self._transition(concept_id, actor=actor, action=ReviewAction.REJECT, comment=comment)
 
+    @_tenant_service_atomic
     def deprecate(self, concept_id: UUID, *, actor: AbstractBaseUser, comment: str = "") -> KnowledgeConcept:
         return self._transition(concept_id, actor=actor, action=ReviewAction.DEPRECATE, comment=comment)
 

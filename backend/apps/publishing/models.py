@@ -231,6 +231,7 @@ class PublishReconciliationAttempt(ProtectedPublishingModel):
     provider_channel_id = models.CharField(max_length=255, blank=True, default="")
     provider_sent_at = models.DateTimeField(null=True, blank=True)
     candidate_count = models.PositiveIntegerField(default=0)
+    candidate_search_truncated = models.BooleanField(null=True, default=None)
     matched_provider_post_id = models.CharField(max_length=255, blank=True, default="")
     candidate_set_fingerprint = models.CharField(max_length=64, blank=True, default="")
     query_window_start = models.DateTimeField(null=True, blank=True)

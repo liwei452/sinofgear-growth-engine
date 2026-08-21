@@ -7,6 +7,7 @@ import { apiRequest } from "../../api/client"
 import WorkspaceHeader from "../../shared/components/WorkspaceHeader.vue"
 import { currentUserQueryOptions } from "../auth/auth"
 import ContentReviewDialog from "../content/ContentReviewDialog.vue"
+import PublishMonitoringPanel from "./PublishMonitoringPanel.vue"
 import {
   getCursorPage,
   listMasterContents,
@@ -61,6 +62,7 @@ const groups: Array<{
 ]
 
 const activeGroup = ref<ContentWorkflowGroup>("PENDING")
+const activeWorkspaceView = ref<"WORKFLOW" | "MONITOR">("WORKFLOW")
 const activeDetailStage = ref<ContentWorkflowStage | null>(null)
 const reviewing = ref<WorkflowItem | null>(null)
 const tabRefs = ref<HTMLButtonElement[]>([])
@@ -247,12 +249,32 @@ async function refreshWorkspace(): Promise<void> {
       description="按待处理、计划中和已完成管理内容。具体状态仍保留在二级筛选和内容标签中。"
     />
 
-    <section v-if="workflowReadFailed" class="form-error" role="alert">
-      <p>内容或发布状态暂时无法读取；不会将旧缓存或空白当作当前状态。</p>
-      <button type="button" class="button button-secondary" @click="refreshWorkspace">重新读取内容和发布状态</button>
-    </section>
+    <nav class="workspace-view-switch" aria-label="内容与发布视图">
+      <button
+        type="button"
+        :aria-pressed="activeWorkspaceView === 'WORKFLOW'"
+        :class="{ active: activeWorkspaceView === 'WORKFLOW' }"
+        @click="activeWorkspaceView = 'WORKFLOW'"
+      >
+        内容工作流
+      </button>
+      <button
+        type="button"
+        :aria-pressed="activeWorkspaceView === 'MONITOR'"
+        :class="{ active: activeWorkspaceView === 'MONITOR' }"
+        @click="activeWorkspaceView = 'MONITOR'"
+      >
+        发布监控
+      </button>
+    </nav>
 
-    <template v-else>
+    <template v-if="activeWorkspaceView === 'WORKFLOW'">
+      <section v-if="workflowReadFailed" class="form-error" role="alert">
+        <p>内容或发布状态暂时无法读取；不会将旧缓存或空白当作当前状态。</p>
+        <button type="button" class="button button-secondary" @click="refreshWorkspace">重新读取内容和发布状态</button>
+      </section>
+
+      <template v-else>
       <section class="workflow-tabs" aria-label="内容发布状态">
         <div role="tablist" aria-label="内容发布主阶段">
           <button
@@ -357,13 +379,49 @@ async function refreshWorkspace(): Promise<void> {
         @platform-generated="refreshWorkspace"
         @conflict="reviewing = null"
       />
+      </template>
     </template>
+
+    <PublishMonitoringPanel
+      v-else-if="currentUserQuery.data.value?.organization.id"
+      :organization-id="currentUserQuery.data.value.organization.id"
+    />
+    <section v-else class="empty-state publishing-empty">
+      <div><h2>正在准备发布监控</h2><p>系统正在确认当前组织和权限边界。</p></div>
+    </section>
   </section>
 </template>
 
 <style scoped>
 .publishing-workspace {
   gap: 20px;
+}
+
+.workspace-view-switch {
+  display: inline-flex;
+  width: fit-content;
+  gap: 4px;
+  border: 1px solid var(--sg-line);
+  border-radius: 12px;
+  background: #f5f9fd;
+  padding: 4px;
+}
+
+.workspace-view-switch button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 7px 14px;
+  color: var(--sg-muted);
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.workspace-view-switch button.active {
+  background: var(--sg-surface);
+  box-shadow: 0 2px 9px rgb(34 86 132 / 10%);
+  color: var(--sg-brand-strong);
 }
 
 .workflow-tabs {
@@ -516,6 +574,14 @@ async function refreshWorkspace(): Promise<void> {
 }
 
 @media (max-width: 560px) {
+  .workspace-view-switch {
+    width: 100%;
+  }
+
+  .workspace-view-switch button {
+    flex: 1;
+  }
+
   [role="tablist"] {
     gap: 2px;
   }

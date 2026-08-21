@@ -2,10 +2,13 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.identity.models import Membership, Organization, Role
-from apps.platforms.models import ConnectorCredential, Platform, PlatformCapability, SocialAccount
+from apps.platforms.models import (
+    ConnectorCredential, Platform, PlatformCapability, ProviderConnection, SocialAccount,
+)
 from apps.platforms.capabilities import CONNECTOR_CAPABILITIES
 from apps.platforms.codes import AccountCapability
 
@@ -110,6 +113,9 @@ def test_administrator_can_create_social_account_without_exposing_credential_sec
         "connection_state": "CONFIGURATION_REQUIRED", "last_probe_at": None,
         "last_refresh_at": None, "reauthorization_required_at": None,
         "disconnected_at": None, "lifecycle_error_code": "",
+        "provider": "DIRECT", "provider_channel_display_id": "••••edin",
+        "is_locked": False, "is_queue_paused": False,
+        "provider_last_sync_at": None,
     }
     assert "secret_reference" not in response.json()
     assert "vault://linkedin/acme" not in response.content.decode()
@@ -164,6 +170,9 @@ def test_publishing_reader_gets_safe_account_list_and_detail(
         "connection_state": "CONFIGURATION_REQUIRED", "last_probe_at": None,
         "last_refresh_at": None, "reauthorization_required_at": None,
         "disconnected_at": None, "lifecycle_error_code": "",
+        "provider": "DIRECT", "provider_channel_display_id": "••••edin",
+        "is_locked": False, "is_queue_paused": False,
+        "provider_last_sync_at": None,
     }
     assert listing.status_code == detail.status_code == 200
     assert listing.json() == {"results": [expected]}
@@ -172,6 +181,124 @@ def test_publishing_reader_gets_safe_account_list_and_detail(
     assert str(credential.id) not in serialized
     assert "reader-secret" not in serialized
     assert "Foreign secret" not in serialized
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("metadata", "expected_locked", "expected_paused"),
+    [
+        ({"is_locked": True, "is_queue_paused": False}, True, False),
+        ({"is_locked": False, "is_queue_paused": True}, False, True),
+        ({}, False, False),
+        ({"is_locked": "true", "is_queue_paused": 1}, False, False),
+        (["malformed"], False, False),
+    ],
+)
+def test_buffer_account_returns_only_normalized_safe_channel_summary(
+    platform, organizations, roles, metadata, expected_locked, expected_paused,
+):
+    organization, _other = organizations
+    synced_at = timezone.now().replace(microsecond=0)
+    connection = ProviderConnection.objects.create(
+        organization=organization,
+        provider=ProviderConnection.Provider.BUFFER,
+        credential_reference="vault://buffer/never-return-this",
+        external_id="buffer-organization-private",
+        display_name="Buffer Organization",
+        connection_state=ProviderConnection.ConnectionState.CONNECTED,
+        last_sync_at=synced_at,
+    )
+    account = SocialAccount.objects.create(
+        organization=organization,
+        platform=platform,
+        provider=SocialAccount.Provider.BUFFER,
+        provider_connection=connection,
+        provider_account_id="buffer-channel-secret-1234",
+        external_id="provider-external-private",
+        display_name="Safe Buffer Channel",
+        publish_mode=SocialAccount.PublishMode.API_AUTO,
+        connection_state=SocialAccount.ConnectionState.CONNECTED,
+        connector_metadata=metadata,
+    )
+    client = create_member(
+        organization=organization, role=roles[Role.Code.REVIEWER], username="buffer-summary"
+    )
+
+    response = client.get(f"/api/v1/social-accounts/{account.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["provider"] == "BUFFER"
+    assert data["provider_channel_display_id"] == "••••1234"
+    assert data["is_locked"] is expected_locked
+    assert data["is_queue_paused"] is expected_paused
+    assert data["provider_last_sync_at"] == synced_at.isoformat().replace("+00:00", "Z")
+    serialized = response.content.decode()
+    for forbidden in (
+        "never-return-this", "buffer-channel-secret-1234", "provider-external-private",
+        "connector_metadata", "provider_metadata", "credential_reference",
+    ):
+        assert forbidden not in serialized
+
+
+@pytest.mark.django_db
+def test_direct_account_keeps_safe_provider_summary(
+    platform, organizations, roles,
+):
+    organization, _other = organizations
+    account = SocialAccount.objects.create(
+        organization=organization,
+        platform=platform,
+        external_id="direct-account-9876",
+        display_name="Direct Account",
+    )
+    client = create_member(
+        organization=organization, role=roles[Role.Code.REVIEWER], username="direct-summary"
+    )
+
+    data = client.get(f"/api/v1/social-accounts/{account.id}").json()
+
+    assert data["provider"] == "DIRECT"
+    assert data["provider_channel_display_id"] == "••••9876"
+    assert data["is_locked"] is False
+    assert data["is_queue_paused"] is False
+    assert data["provider_last_sync_at"] is None
+
+
+@pytest.mark.django_db
+def test_social_account_list_query_count_is_constant_for_buffer_channels(
+    django_assert_num_queries, platform, organizations, roles,
+):
+    organization, _other = organizations
+    PlatformCapability.objects.create(platform=platform, code="PUBLISH")
+    connection = ProviderConnection.objects.create(
+        organization=organization,
+        provider=ProviderConnection.Provider.BUFFER,
+        credential_reference="vault://buffer/query-count",
+        external_id="org-query-count",
+        connection_state=ProviderConnection.ConnectionState.CONNECTED,
+    )
+    for index in range(4):
+        SocialAccount.objects.create(
+            organization=organization,
+            platform=platform,
+            provider=SocialAccount.Provider.BUFFER,
+            provider_connection=connection,
+            provider_account_id=f"channel-{index}",
+            external_id=f"external-{index}",
+            display_name=f"Channel {index}",
+            publish_mode=SocialAccount.PublishMode.API_AUTO,
+            connection_state=SocialAccount.ConnectionState.CONNECTED,
+        )
+    client = create_member(
+        organization=organization, role=roles[Role.Code.REVIEWER], username="channel-query-count"
+    )
+
+    with django_assert_num_queries(5):
+        response = client.get("/api/v1/social-accounts")
+
+    assert response.status_code == 200
+    assert len(response.json()["results"]) == 4
 
 
 @pytest.mark.django_db

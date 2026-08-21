@@ -21,6 +21,7 @@ from .models import (
     PublishTask,
     publishing_writes,
 )
+from .eligibility import strict_no_post_evidence
 from .reconciliation import apply_confirmed_publish_success
 from .services import PublishingConflict, SAFE_PUBLISH_ERRORS
 
@@ -291,32 +292,6 @@ def _latest_reconciliation(task):
     )
 
 
-def _has_strict_no_post_evidence(task, audit, account, connection, now):
-    if audit is None or audit.result != PublishReconciliationAttempt.Result.NEEDS_ATTENTION:
-        return False
-    if audit.candidate_count != 0 or audit.query_window_end is None or audit.query_window_end > now:
-        return False
-    if task.last_reconciled_at != audit.finished_at or task.reconciliation_error_code != audit.safe_error_code:
-        return False
-    if account.updated_at > audit.finished_at or connection.updated_at > audit.finished_at:
-        return False
-    if PublishedPost.objects.filter(task=task).exists() or audit.observed_provider_status:
-        return False
-    if audit.safe_error_code == "BUFFER_RECONCILIATION_NO_MATCH":
-        return (
-            audit.mode == PublishReconciliationAttempt.Mode.UNKNOWN_MATCH
-            and not task.provider_submission_id
-            and not audit.provider_submission_id
-        )
-    if audit.safe_error_code == "BUFFER_POST_NOT_FOUND":
-        return (
-            audit.mode == PublishReconciliationAttempt.Mode.EXACT_ID
-            and bool(task.provider_submission_id)
-            and audit.provider_submission_id == task.provider_submission_id
-        )
-    return False
-
-
 @transaction.atomic
 def _confirm_not_published(task_id, organization_id, *, actor):
     task = _locked_task(task_id, organization_id)
@@ -331,7 +306,7 @@ def _confirm_not_published(task_id, organization_id, *, actor):
     _content, account, connection = _lock_buffer_dependencies(task)
     finished_at = timezone.now()
     audit = _latest_reconciliation(task)
-    if not _has_strict_no_post_evidence(task, audit, account, connection, finished_at):
+    if not strict_no_post_evidence(task, audit, account, connection, finished_at):
         raise PublishingConflict("Buffer has not provided strict evidence that no post exists.")
     error_code = "MANUALLY_CLOSED_NO_POST"
     error = SAFE_PUBLISH_ERRORS[error_code]

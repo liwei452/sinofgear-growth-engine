@@ -1,8 +1,9 @@
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 from django.db import IntegrityError, transaction
 from django.core.exceptions import ValidationError as DjangoValidationError
 
-from .capabilities import resolve_account_capabilities
+from .capabilities import resolve_loaded_account_capabilities
 from .codes import AccountCapability
 from .models import ConnectorCredential, Platform, ProviderConnection, SocialAccount
 from .oauth import validate_return_path
@@ -37,19 +38,26 @@ class SocialAccountReadSerializer(serializers.ModelSerializer):
     platform_id = serializers.UUIDField(read_only=True)
     effective_capabilities = serializers.SerializerMethodField()
     credential_configured = serializers.SerializerMethodField()
+    provider_channel_display_id = serializers.SerializerMethodField()
+    is_locked = serializers.SerializerMethodField()
+    is_queue_paused = serializers.SerializerMethodField()
+    provider_last_sync_at = serializers.SerializerMethodField()
 
     class Meta:
         model = SocialAccount
         fields = [
-            "id", "platform_id", "display_name", "publish_mode", "status",
+            "id", "platform_id", "display_name", "publish_mode", "status", "provider",
             "effective_capabilities", "credential_configured", "connection_state",
             "last_probe_at", "last_refresh_at", "reauthorization_required_at",
-            "disconnected_at", "lifecycle_error_code",
+            "disconnected_at", "lifecycle_error_code", "provider_channel_display_id",
+            "is_locked", "is_queue_paused", "provider_last_sync_at",
         ]
         read_only_fields = fields
 
     def get_effective_capabilities(self, account: SocialAccount) -> list[str]:
-        return sorted(capability.value for capability in resolve_account_capabilities(account.id))
+        return sorted(
+            capability.value for capability in resolve_loaded_account_capabilities(account)
+        )
 
     def get_credential_configured(self, account: SocialAccount) -> bool:
         if account.provider == SocialAccount.Provider.BUFFER:
@@ -58,6 +66,38 @@ class SocialAccountReadSerializer(serializers.ModelSerializer):
                 and account.provider_connection.credential_reference
             )
         return account.credential_id is not None
+
+    def get_provider_channel_display_id(self, account: SocialAccount) -> str:
+        value = (
+            account.provider_account_id
+            if account.provider == SocialAccount.Provider.BUFFER
+            else account.external_id
+        )
+        if type(value) is not str or not (value := value.strip()):
+            return ""
+        return f"••••{value[-4:]}"
+
+    def _safe_metadata_flag(self, account: SocialAccount, name: str) -> bool:
+        metadata = account.connector_metadata
+        if type(metadata) is not dict:
+            return False
+        value = metadata.get(name)
+        return value if type(value) is bool else False
+
+    def get_is_locked(self, account: SocialAccount) -> bool:
+        return self._safe_metadata_flag(account, "is_locked")
+
+    def get_is_queue_paused(self, account: SocialAccount) -> bool:
+        return self._safe_metadata_flag(account, "is_queue_paused")
+
+    @extend_schema_field(serializers.DateTimeField(allow_null=True))
+    def get_provider_last_sync_at(self, account: SocialAccount):
+        if (
+            account.provider == SocialAccount.Provider.BUFFER
+            and account.provider_connection_id
+        ):
+            return account.provider_connection.last_sync_at
+        return None
 
 
 class SocialAccountCreateSerializer(StrictMixin, serializers.ModelSerializer):
@@ -342,11 +382,12 @@ class BufferProviderConnectionReadSerializer(serializers.ModelSerializer):
     configured = serializers.SerializerMethodField()
     channel_count = serializers.SerializerMethodField()
     active_channel_count = serializers.SerializerMethodField()
+    provider_organization_display_id = serializers.SerializerMethodField()
 
     class Meta:
         model = ProviderConnection
         fields = [
-            "id", "provider", "configured", "external_id", "display_name",
+            "id", "provider", "configured", "provider_organization_display_id", "display_name",
             "connection_state", "last_probe_at", "last_sync_at",
             "reauthorization_required_at", "disconnected_at",
             "lifecycle_error_code", "channel_count", "active_channel_count",
@@ -355,6 +396,15 @@ class BufferProviderConnectionReadSerializer(serializers.ModelSerializer):
 
     def get_configured(self, connection: ProviderConnection) -> bool:
         return bool(connection.credential_reference)
+
+    def get_provider_organization_display_id(self, connection: ProviderConnection) -> str:
+        value = connection.external_id
+        if type(value) is not str or not (value := value.strip()):
+            return ""
+
+        visible_count = min(4, max(0, len(value) - 1))
+        suffix = value[-visible_count:] if visible_count else ""
+        return f"••••{suffix}"
 
     def get_channel_count(self, connection: ProviderConnection) -> int:
         return connection.social_accounts.count()

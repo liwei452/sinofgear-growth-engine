@@ -10,6 +10,7 @@ from .models import (
     PublishAttempt, PublishedPost, PublishReconciliationAttempt, PublishTask,
 )
 from .services import MAX_PUBLISH_ATTEMPTS
+from .eligibility import publish_task_ui_contract
 
 
 class StrictMixin:
@@ -81,10 +82,35 @@ class PublishReconciliationAttemptSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class PublishActionEligibilitySerializer(serializers.Serializer):
+    allowed = serializers.BooleanField(read_only=True)
+    reason_code = serializers.CharField(read_only=True, allow_null=True)
+
+
+class PublishAllowedActionsSerializer(serializers.Serializer):
+    retry = PublishActionEligibilitySerializer(read_only=True)
+    reconcile = PublishActionEligibilitySerializer(read_only=True)
+    confirm_published = PublishActionEligibilitySerializer(read_only=True)
+    confirm_not_published = PublishActionEligibilitySerializer(read_only=True)
+
+
+class PublishResolutionEvidenceSerializer(serializers.Serializer):
+    latest_outcome = serializers.CharField(read_only=True, allow_null=True)
+    candidate_count = serializers.IntegerField(read_only=True, allow_null=True)
+    query_window_end = serializers.DateTimeField(read_only=True, allow_null=True)
+    query_window_ended = serializers.BooleanField(read_only=True)
+    ambiguous = serializers.BooleanField(read_only=True)
+    truncated = serializers.BooleanField(read_only=True, allow_null=True)
+    snapshot_valid = serializers.BooleanField(read_only=True)
+    observed_at = serializers.DateTimeField(read_only=True, allow_null=True)
+
+
 class PublishTaskSerializer(serializers.ModelSerializer):
     attempts = serializers.SerializerMethodField()
     published_post = serializers.SerializerMethodField()
     reconciliation_attempts = serializers.SerializerMethodField()
+    allowed_actions = serializers.SerializerMethodField()
+    resolution_evidence = serializers.SerializerMethodField()
 
     class Meta:
         model = PublishTask
@@ -96,6 +122,7 @@ class PublishTaskSerializer(serializers.ModelSerializer):
             "finished_at", "canceled_at", "created_at", "attempts", "published_post",
             "reconciliation_attempt_number", "last_reconciled_at", "next_reconcile_at",
             "reconciliation_error_code", "reconciliation_attempts",
+            "allowed_actions", "resolution_evidence",
         ]
         read_only_fields = fields
 
@@ -125,6 +152,19 @@ class PublishTaskSerializer(serializers.ModelSerializer):
         return PublishReconciliationAttemptSerializer(
             reversed(list(attempts)), many=True
         ).data
+
+    def _ui_contract(self, task):
+        if not hasattr(task, "_publish_ui_contract"):
+            task._publish_ui_contract = publish_task_ui_contract(task)
+        return task._publish_ui_contract
+
+    @extend_schema_field(PublishAllowedActionsSerializer)
+    def get_allowed_actions(self, task):
+        return self._ui_contract(task)["allowed_actions"]
+
+    @extend_schema_field(PublishResolutionEvidenceSerializer)
+    def get_resolution_evidence(self, task):
+        return self._ui_contract(task)["resolution_evidence"]
 
 
 class PublishCreateSerializer(StrictMixin, serializers.Serializer):
@@ -179,6 +219,64 @@ class PublishFilterSerializer(StrictMixin, serializers.Serializer):
     content = serializers.UUIDField(required=False)
     cursor = serializers.CharField(required=False)
     page_size = serializers.IntegerField(required=False, min_value=1, max_value=50)
+
+
+class PublishMonitorFilterSerializer(StrictMixin, serializers.Serializer):
+    group = serializers.ChoiceField(
+        choices=["ATTENTION", "PROVIDER", "FAILED", "WAITING", "COMPLETED"],
+        required=False,
+    )
+    cursor = serializers.CharField(required=False)
+    page_size = serializers.IntegerField(required=False, min_value=1, max_value=50)
+
+
+class PublishMonitorSummarySerializer(serializers.Serializer):
+    attention_count = serializers.IntegerField(min_value=0)
+    provider_pending_count = serializers.IntegerField(min_value=0)
+    failed_count = serializers.IntegerField(min_value=0)
+    waiting_count = serializers.IntegerField(min_value=0)
+    today_succeeded_count = serializers.IntegerField(min_value=0)
+
+
+class PublishMonitorTaskSerializer(PublishTaskSerializer):
+    platform_code = serializers.CharField(source="platform.code", read_only=True)
+    platform_name = serializers.CharField(source="platform.name", read_only=True)
+    social_account_display_name = serializers.CharField(
+        source="social_account.display_name", read_only=True
+    )
+    content_title = serializers.SerializerMethodField()
+    content_excerpt = serializers.SerializerMethodField()
+
+    class Meta(PublishTaskSerializer.Meta):
+        fields = PublishTaskSerializer.Meta.fields + [
+            "platform_code", "platform_name", "social_account_display_name",
+            "content_title", "content_excerpt",
+        ]
+        read_only_fields = fields
+
+    @staticmethod
+    def _native_payload_value(task, name):
+        payload = task.platform_content.payload
+        if type(payload) is not dict:
+            return ""
+        value = payload.get(name)
+        return value.strip() if type(value) is str else ""
+
+    @extend_schema_field(serializers.CharField())
+    def get_content_title(self, task):
+        return self._native_payload_value(task, "title")
+
+    @extend_schema_field(serializers.CharField(max_length=180))
+    def get_content_excerpt(self, task):
+        body = " ".join(self._native_payload_value(task, "body").split())
+        return body if len(body) <= 180 else f"{body[:179]}…"
+
+
+class PublishMonitorEnvelopeSerializer(serializers.Serializer):
+    summary = PublishMonitorSummarySerializer()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    results = PublishMonitorTaskSerializer(many=True)
 
 
 class CalendarFilterSerializer(StrictMixin, serializers.Serializer):

@@ -451,6 +451,7 @@ def test_unknown_zero_candidates_before_window_end_are_only_deferred(
     assert audit.result == PublishReconciliationAttempt.Result.DEFERRED
     assert audit.safe_error_code == "BUFFER_RECONCILIATION_NO_MATCH"
     assert audit.candidate_count == 0
+    assert audit.candidate_search_truncated is False
     assert not PublishedPost.objects.filter(task=task).exists()
 
 
@@ -469,6 +470,7 @@ def test_unknown_zero_candidates_after_window_end_need_attention(
     assert task.status == PublishTask.Status.NEEDS_ATTENTION
     assert task.last_error["code"] == "BUFFER_RECONCILIATION_NO_MATCH"
     assert audit.candidate_count == 0
+    assert audit.candidate_search_truncated is False
     assert audit.matched_provider_post_id == ""
     assert not PublishedPost.objects.filter(task=task).exists()
     with pytest.raises(PublishingConflict):
@@ -495,6 +497,7 @@ def test_unknown_multiple_exact_candidates_need_attention(
     assert task.status == PublishTask.Status.NEEDS_ATTENTION
     assert task.last_error["code"] == "BUFFER_RECONCILIATION_AMBIGUOUS"
     assert audit.candidate_count == 2
+    assert audit.candidate_search_truncated is False
     assert not PublishedPost.objects.filter(task=task).exists()
 
 
@@ -510,9 +513,11 @@ def test_unknown_truncated_scan_cannot_claim_unique_match(
     reconcile_unknown_buffer_publish_task(task.id)
 
     task.refresh_from_db()
+    audit = task.reconciliation_attempts.get()
     assert task.status == PublishTask.Status.NEEDS_ATTENTION
     assert task.last_error["code"] == "BUFFER_RECONCILIATION_AMBIGUOUS"
     assert task.provider_submission_id == ""
+    assert audit.candidate_search_truncated is True
 
 
 def test_unknown_missing_persisted_fingerprint_needs_attention_without_query(
@@ -529,9 +534,11 @@ def test_unknown_missing_persisted_fingerprint_needs_attention_without_query(
     reconcile_unknown_buffer_publish_task(task.id)
 
     task.refresh_from_db()
+    audit = task.reconciliation_attempts.get()
     assert task.status == PublishTask.Status.NEEDS_ATTENTION
     assert task.last_error["code"] == "BUFFER_RECONCILIATION_EVIDENCE_MISSING"
     assert connector.requests == []
+    assert audit.candidate_search_truncated is None
 
 
 def test_unknown_expired_window_needs_attention_without_query(

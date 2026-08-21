@@ -21,11 +21,8 @@ def _valid_granted_scopes(value: object) -> set[str]:
     return set(value)
 
 
-def resolve_account_capabilities(account_id: UUID) -> set[AccountCapability]:
-    """Return capabilities available through every layer of an account connection."""
-    account = SocialAccount.objects.select_related(
-        "credential", "provider_connection", "platform",
-    ).get(id=account_id)
+def resolve_loaded_account_capabilities(account: SocialAccount) -> set[AccountCapability]:
+    """Resolve capabilities from an account whose relations may already be prefetched."""
     credential = account.credential
     if account.status != SocialAccount.Status.ACTIVE:
         return set()
@@ -53,9 +50,9 @@ def resolve_account_capabilities(account_id: UUID) -> set[AccountCapability]:
         ):
             return set()
         granted_codes = _valid_granted_scopes(credential.granted_scopes)
-    platform_capabilities = set(
-        account.platform.capability_definitions.values_list("code", flat=True)
-    )
+    platform_capabilities = {
+        capability.code for capability in account.platform.capability_definitions.all()
+    }
     connector_capabilities = CONNECTOR_CAPABILITIES.get(account.platform.code, frozenset())
     effective_codes = (
         platform_capabilities
@@ -65,3 +62,11 @@ def resolve_account_capabilities(account_id: UUID) -> set[AccountCapability]:
     if account.publish_mode != SocialAccount.PublishMode.API_AUTO:
         effective_codes.discard(AccountCapability.PUBLISH.value)
     return {AccountCapability(code) for code in effective_codes if code in AccountCapability._value2member_map_}
+
+
+def resolve_account_capabilities(account_id: UUID) -> set[AccountCapability]:
+    """Return capabilities available through every layer of an account connection."""
+    account = SocialAccount.objects.select_related(
+        "credential", "provider_connection", "platform",
+    ).prefetch_related("platform__capability_definitions").get(id=account_id)
+    return resolve_loaded_account_capabilities(account)

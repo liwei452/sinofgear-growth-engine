@@ -478,6 +478,7 @@ def publish_task_consistency_queryset(organization):
             "platform_content__master_content__previous_version",
             "platform_content__previous_version",
             "social_account__platform", "social_account__credential", "platform",
+            "social_account__provider_connection",
             "published_post__attempt",
         )
         .prefetch_related(
@@ -493,6 +494,7 @@ def publish_task_consistency_queryset(organization):
                 queryset=PublishReconciliationAttempt.objects.order_by("-sequence_number")[:20],
                 to_attr="_safe_reconciliation_attempts",
             ),
+            "social_account__platform__capability_definitions",
         )
         .annotate(
             _selected_platform=Exists(
@@ -500,7 +502,21 @@ def publish_task_consistency_queryset(organization):
                     brief_id=OuterRef("platform_content__master_content__brief_id"),
                     platform_id=OuterRef("platform_id"),
                 )
-            )
+            ),
+            _has_newer_content=Exists(
+                PlatformContent.objects.filter(
+                    previous_version_id=OuterRef("platform_content_id")
+                )
+            ),
+            _has_blocking_publish_task=Exists(
+                PublishTask.objects.filter(
+                    organization_id=OuterRef("organization_id"),
+                    platform_content_id=OuterRef("platform_content_id"),
+                    content_version=OuterRef("content_version"),
+                    social_account_id=OuterRef("social_account_id"),
+                    status__in=LIVE_PUBLISH_TASK_STATUSES,
+                ).exclude(pk=OuterRef("pk"))
+            ),
         )
     )
 

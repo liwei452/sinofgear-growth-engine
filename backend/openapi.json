@@ -2987,6 +2987,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/growth/market-recommendations:
+    get:
+      operationId: api_v1_growth_market_recommendations_retrieve
+      description: Read the existing, organization-scoped market recommendation summary
+        without mutation.
+      tags:
+      - Growth workspace
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketRecommendationList'
+          description: ''
   /api/v1/growth/markets/{country_code}/watch:
     post:
       operationId: api_v1_growth_markets_watch_create_2
@@ -7045,6 +7062,20 @@ paths:
               schema:
                 $ref: '#/components/schemas/BufferProviderConnectionRead'
           description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
         '404':
           content:
             application/json:
@@ -7106,6 +7137,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/BufferProviderConnectionRead'
           description: ''
+        '401':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - type: object
+                  additionalProperties: {}
+        '403':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - type: object
+                  additionalProperties: {}
         '404':
           description: The request could not be completed.
           content:
@@ -7153,18 +7202,6 @@ paths:
                   additionalProperties: {}
         '400':
           description: The request is invalid.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
-        '401':
-          description: Authentication is required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
-        '403':
-          description: The request is forbidden or failed CSRF validation.
           content:
             application/json:
               schema:
@@ -7194,6 +7231,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/BufferProviderConnectionRead'
           description: ''
+        '401':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - type: object
+                  additionalProperties: {}
+        '403':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - type: object
+                  additionalProperties: {}
         '404':
           description: The request could not be completed.
           content:
@@ -7241,18 +7296,6 @@ paths:
                   additionalProperties: {}
         '400':
           description: The request is invalid.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
-        '401':
-          description: Authentication is required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
-        '403':
-          description: The request is forbidden or failed CSRF validation.
           content:
             application/json:
               schema:
@@ -7284,6 +7327,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/BufferProviderConnectionRead'
           description: ''
+        '401':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - type: object
+                  additionalProperties: {}
+        '403':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - type: object
+                  additionalProperties: {}
         '404':
           description: The request could not be completed.
           content:
@@ -7331,18 +7392,6 @@ paths:
                   additionalProperties: {}
         '400':
           description: The request is invalid.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
-        '401':
-          description: Authentication is required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
-        '403':
-          description: The request is forbidden or failed CSRF validation.
           content:
             application/json:
               schema:
@@ -7362,6 +7411,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/BufferProviderConnectionRead'
           description: ''
+        '401':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - type: object
+                  additionalProperties: {}
+        '403':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - type: object
+                  additionalProperties: {}
         '404':
           description: The request could not be completed.
           content:
@@ -7409,18 +7476,6 @@ paths:
                   additionalProperties: {}
         '400':
           description: The request is invalid.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
-        '401':
-          description: Authentication is required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
-        '403':
-          description: The request is forbidden or failed CSRF validation.
           content:
             application/json:
               schema:
@@ -7440,6 +7495,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/BufferProviderConnectionSync'
           description: ''
+        '401':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - type: object
+                  additionalProperties: {}
+        '403':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - type: object
+                  additionalProperties: {}
         '404':
           description: The request could not be completed.
           content:
@@ -7487,18 +7560,6 @@ paths:
                   additionalProperties: {}
         '400':
           description: The request is invalid.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
-        '401':
-          description: Authentication is required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
-        '403':
-          description: The request is forbidden or failed CSRF validation.
           content:
             application/json:
               schema:
@@ -7809,6 +7870,66 @@ paths:
                 - $ref: '#/components/schemas/ApiError'
                 - $ref: '#/components/schemas/PublishingError'
         '503':
+          description: The request could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiError'
+                - $ref: '#/components/schemas/PublishingError'
+        '400':
+          description: The request is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: The request is forbidden or failed CSRF validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/publish-tasks/{task_id}/resolve:
+    post:
+      operationId: api_v1_publish_tasks_resolve_create
+      parameters:
+      - in: path
+        name: task_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - PublishTasks
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishResolutionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PublishResolutionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PublishResolutionRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishTask'
+          description: ''
+        '409':
           description: The request could not be completed.
           content:
             application/json:
@@ -9879,6 +10000,34 @@ components:
         * `INDUSTRY` - Industry
         * `CUSTOMER_TYPE` - Customer type
         * `PURCHASE_INTENT` - Purchase intent
+    ConfirmNotPublishedResolution:
+      type: object
+      properties:
+        resolution:
+          $ref: '#/components/schemas/ConfirmNotPublishedResolutionResolutionEnum'
+      required:
+      - resolution
+    ConfirmNotPublishedResolutionResolutionEnum:
+      enum:
+      - CONFIRM_NOT_PUBLISHED
+      type: string
+      description: '* `CONFIRM_NOT_PUBLISHED` - CONFIRM_NOT_PUBLISHED'
+    ConfirmPublishedResolution:
+      type: object
+      properties:
+        resolution:
+          $ref: '#/components/schemas/ConfirmPublishedResolutionResolutionEnum'
+        provider_post_id:
+          type: string
+          maxLength: 255
+      required:
+      - provider_post_id
+      - resolution
+    ConfirmPublishedResolutionResolutionEnum:
+      enum:
+      - CONFIRM_PUBLISHED
+      type: string
+      description: '* `CONFIRM_PUBLISHED` - CONFIRM_PUBLISHED'
     ConnectionCandidate:
       type: object
       properties:
@@ -10530,6 +10679,9 @@ components:
         latest_preview:
           type: string
           readOnly: true
+        workflow:
+          type: string
+          readOnly: true
       required:
       - company_name
       - country
@@ -10540,6 +10692,7 @@ components:
       - license_contract
       - source_owner
       - status_label
+      - workflow
     Error:
       type: object
       properties:
@@ -11690,6 +11843,33 @@ components:
       - account
       - created
       - signal
+    MarketRecommendation:
+      type: object
+      properties:
+        country_code:
+          type: string
+        country_label:
+          type: string
+        is_demo:
+          type: boolean
+        recommendation_reasons:
+          type: array
+          items:
+            type: string
+      required:
+      - country_code
+      - country_label
+      - is_demo
+      - recommendation_reasons
+    MarketRecommendationList:
+      type: object
+      properties:
+        markets:
+          type: array
+          items:
+            $ref: '#/components/schemas/MarketRecommendation'
+      required:
+      - markets
     MarketWatchCreate:
       type: object
       properties:
@@ -13046,6 +13226,43 @@ components:
         * `NOT_STARTED` - Not started
         * `FAKE_OFFLINE` - Fake offline
         * `CONFIGURED_AI` - Configured AI
+    PublishActionEligibility:
+      type: object
+      properties:
+        allowed:
+          type: boolean
+          readOnly: true
+        reason_code:
+          type: string
+          readOnly: true
+          nullable: true
+      required:
+      - allowed
+      - reason_code
+    PublishAllowedActions:
+      type: object
+      properties:
+        retry:
+          allOf:
+          - $ref: '#/components/schemas/PublishActionEligibility'
+          readOnly: true
+        reconcile:
+          allOf:
+          - $ref: '#/components/schemas/PublishActionEligibility'
+          readOnly: true
+        confirm_published:
+          allOf:
+          - $ref: '#/components/schemas/PublishActionEligibility'
+          readOnly: true
+        confirm_not_published:
+          allOf:
+          - $ref: '#/components/schemas/PublishActionEligibility'
+          readOnly: true
+      required:
+      - confirm_not_published
+      - confirm_published
+      - reconcile
+      - retry
     PublishAttempt:
       type: object
       properties:
@@ -13235,6 +13452,10 @@ components:
           format: date-time
           readOnly: true
           nullable: true
+        resolved_by_id:
+          type: integer
+          nullable: true
+          readOnly: true
         started_at:
           type: string
           format: date-time
@@ -13253,6 +13474,7 @@ components:
       - provider_post_id
       - provider_sent_at
       - provider_submission_id
+      - resolved_by_id
       - result
       - safe_error_code
       - sequence_number
@@ -13260,8 +13482,65 @@ components:
     PublishReconciliationAttemptModeEnum:
       enum:
       - EXACT_ID
+      - UNKNOWN_MATCH
+      - MANUAL
       type: string
-      description: '* `EXACT_ID` - Exact provider id'
+      description: |-
+        * `EXACT_ID` - Exact provider id
+        * `UNKNOWN_MATCH` - Unknown submission match
+        * `MANUAL` - Manual resolution
+    PublishResolutionEvidence:
+      type: object
+      properties:
+        latest_outcome:
+          type: string
+          readOnly: true
+          nullable: true
+        candidate_count:
+          type: integer
+          readOnly: true
+          nullable: true
+        query_window_end:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        query_window_ended:
+          type: boolean
+          readOnly: true
+        ambiguous:
+          type: boolean
+          readOnly: true
+        truncated:
+          type: boolean
+          readOnly: true
+          nullable: true
+        snapshot_valid:
+          type: boolean
+          readOnly: true
+        observed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+      required:
+      - ambiguous
+      - candidate_count
+      - latest_outcome
+      - observed_at
+      - query_window_end
+      - query_window_ended
+      - snapshot_valid
+      - truncated
+    PublishResolutionRequest:
+      oneOf:
+      - $ref: '#/components/schemas/ConfirmPublishedResolution'
+      - $ref: '#/components/schemas/ConfirmNotPublishedResolution'
+      discriminator:
+        propertyName: resolution
+        mapping:
+          CONFIRM_PUBLISHED: '#/components/schemas/ConfirmPublishedResolution'
+          CONFIRM_NOT_PUBLISHED: '#/components/schemas/ConfirmNotPublishedResolution'
     PublishTask:
       type: object
       properties:
@@ -13369,7 +13648,16 @@ components:
           items:
             $ref: '#/components/schemas/PublishReconciliationAttempt'
           readOnly: true
+        allowed_actions:
+          allOf:
+          - $ref: '#/components/schemas/PublishAllowedActions'
+          readOnly: true
+        resolution_evidence:
+          allOf:
+          - $ref: '#/components/schemas/PublishResolutionEvidence'
+          readOnly: true
       required:
+      - allowed_actions
       - attempt_number
       - attempts
       - canceled_at
@@ -13390,6 +13678,7 @@ components:
       - reconciliation_attempts
       - reconciliation_error_code
       - requested_timezone
+      - resolution_evidence
       - retry_not_before
       - scheduled_at
       - social_account_id
@@ -13573,6 +13862,7 @@ components:
       - FAILED
       - NEEDS_ATTENTION
       - STALE
+      - MATCHED
       type: string
       description: |-
         * `DEFERRED` - Deferred
@@ -13580,6 +13870,7 @@ components:
         * `FAILED` - Failed
         * `NEEDS_ATTENTION` - Needs attention
         * `STALE` - Stale snapshot
+        * `MATCHED` - Unique match
     Review:
       type: object
       properties:
@@ -13848,6 +14139,10 @@ components:
           allOf:
           - $ref: '#/components/schemas/ActiveStatusEnum'
           readOnly: true
+        provider:
+          allOf:
+          - $ref: '#/components/schemas/SocialAccountReadProviderEnum'
+          readOnly: true
         effective_capabilities:
           type: array
           items:
@@ -13883,6 +14178,20 @@ components:
         lifecycle_error_code:
           type: string
           readOnly: true
+        provider_channel_display_id:
+          type: string
+          readOnly: true
+        is_locked:
+          type: boolean
+          readOnly: true
+        is_queue_paused:
+          type: boolean
+          readOnly: true
+        provider_last_sync_at:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
       required:
       - connection_state
       - credential_configured
@@ -13890,13 +14199,26 @@ components:
       - display_name
       - effective_capabilities
       - id
+      - is_locked
+      - is_queue_paused
       - last_probe_at
       - last_refresh_at
       - lifecycle_error_code
       - platform_id
+      - provider
+      - provider_channel_display_id
+      - provider_last_sync_at
       - publish_mode
       - reauthorization_required_at
       - status
+    SocialAccountReadProviderEnum:
+      enum:
+      - DIRECT
+      - BUFFER
+      type: string
+      description: |-
+        * `DIRECT` - Direct
+        * `BUFFER` - Buffer
     Status2f0Enum:
       enum:
       - DRAFT

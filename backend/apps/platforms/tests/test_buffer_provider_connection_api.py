@@ -16,6 +16,7 @@ from apps.platforms.models import (
     SocialAccount,
     provider_event_writes,
 )
+from apps.platforms.serializers import BufferProviderConnectionReadSerializer
 
 from .buffer_test_utils import (
     authenticated_member,
@@ -42,11 +43,12 @@ def _connected_connection(organization, *, reference="vault://buffer/existing"):
 def test_connect_success(admin_client, buffer_api):
     client, _user = admin_client
     _token_store, connector = buffer_api
-    connector.probe_result = probe_ok()
+    provider_organization_id = "provider-organization-private-7291"
+    connector.probe_result = probe_ok(org_id=provider_organization_id)
 
     response = client.post(
         API,
-        {"api_key": "sk-buffer-secret", "organization_id": "org-1"},
+        {"api_key": "sk-buffer-secret", "organization_id": provider_organization_id},
         format="json",
     )
 
@@ -55,9 +57,40 @@ def test_connect_success(admin_client, buffer_api):
     assert body["provider"] == "BUFFER"
     assert body["configured"] is True
     assert body["connection_state"] == "CONNECTED"
-    assert body["external_id"] == "org-1"
+    assert "external_id" not in body
+    assert body["provider_organization_display_id"] == "••••7291"
+    assert provider_organization_id not in response.content.decode()
     assert "sk-buffer-secret" not in response.content.decode()
     assert "credential_reference" not in body
+
+
+@pytest.mark.parametrize(
+    ("external_id", "expected"),
+    [
+        ("provider-organization-9876", "••••9876"),
+        ("abc", "••••bc"),
+        ("x", "••••"),
+        ("", ""),
+    ],
+)
+@pytest.mark.django_db
+def test_buffer_connection_display_id_never_exposes_a_short_identifier(
+    organization, external_id, expected,
+):
+    connection = ProviderConnection.objects.create(
+        organization=organization,
+        provider=ProviderConnection.Provider.BUFFER,
+        credential_reference="vault://buffer/test",
+        external_id=external_id,
+        connection_state=ProviderConnection.ConnectionState.CONFIGURATION_REQUIRED,
+    )
+
+    body = BufferProviderConnectionReadSerializer(connection).data
+
+    assert "external_id" not in body
+    assert body["provider_organization_display_id"] == expected
+    if external_id and len(external_id) <= 4:
+        assert body["provider_organization_display_id"] != f"••••{external_id}"
 
 
 @pytest.mark.django_db

@@ -61,7 +61,31 @@ def read_only_client(db, organization):
 
 @pytest.fixture
 def mission(db, organization, product):
+    from apps.knowledge.tests.test_agent_context import _verified_page
+    from apps.knowledge.tests.test_knowledge_context_snapshot import (
+        bind_public_evidence,
+        make_approved_icp,
+        make_approved_profile,
+        make_fact,
+    )
+
     owner = get_user_model().objects.create_user(username="mission-owner", password="x")
+    profile = make_approved_profile(organization, owner)
+    make_approved_icp(
+        organization,
+        owner,
+        product,
+        target_industries=["mining equipment", "machinery"],
+        target_markets=["ZA", "DE"],
+    )
+    public_fact = make_fact(
+        profile,
+        owner,
+        key="mission_api_capability",
+        value={"text": "Documented hobbing capability"},
+    )
+    bind_public_evidence(public_fact, owner)
+    _verified_page(organization, owner, product)
     return GrowthMission.objects.create(
         organization=organization,
         title="South Africa mining pilot",

@@ -209,6 +209,121 @@ def test_stale_refresh_result_never_overwrites_concurrent_credential_rotation(
     assert store.replaced == []
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "outcome",
+    ["success", "invalid_grant", "configuration_required"],
+)
+def test_stale_refresh_result_never_overwrites_disconnected_account(
+    lifecycle_account, outcome
+) -> None:
+    organization, actor, credential, account = lifecycle_account
+    store = TokenStore()
+
+    class DisconnectingAdapter:
+        def refresh(self, token):
+            assert connection.in_atomic_block is False
+            disconnect_social_account(
+                account=account,
+                adapter=Adapter(),
+                token_store=store,
+                actor=actor,
+                confirmed=True,
+            )
+            if outcome == "invalid_grant":
+                raise ProviderLifecycleError("INVALID_GRANT")
+            if outcome == "configuration_required":
+                raise ConnectorConfigurationRequired("configuration unavailable")
+            return OAuthTokenSet(
+                access_token="stale-access",
+                refresh_token="stale-refresh",
+                expires_at=timezone.now() + timedelta(hours=2),
+            )
+
+    result = refresh_due_credentials(
+        adapter_registry=LifecycleAdapterRegistry({"LINKEDIN": DisconnectingAdapter()}),
+        token_store=store,
+        organization=organization,
+        now=timezone.now(),
+    )
+
+    credential.refresh_from_db()
+    account.refresh_from_db()
+    assert result == {
+        "examined": 1,
+        "refreshed": 0,
+        "reauthorization_required": 0,
+        "failed": 0,
+    }
+    assert account.status == SocialAccount.Status.INACTIVE
+    assert account.connection_state == SocialAccount.ConnectionState.DISCONNECTED
+    assert account.lifecycle_error_code == ""
+    assert credential.secret_reference == "vault://fixture/original"
+    assert store.replaced == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_replace_configuration_failure_does_not_stop_later_candidate(
+    lifecycle_account,
+) -> None:
+    organization, _actor, first_credential, first_account = lifecycle_account
+    platform = first_account.platform
+    now = timezone.now()
+    ConnectorCredential.objects.filter(pk=first_credential.id).update(
+        expires_at=now + timedelta(minutes=1)
+    )
+    second_credential = ConnectorCredential.objects.create(
+        organization=organization,
+        platform=platform,
+        secret_reference="vault://fixture/second",
+        granted_scopes=["PUBLISH"],
+        expires_at=now + timedelta(minutes=2),
+    )
+    second_account = SocialAccount.objects.create(
+        organization=organization,
+        platform=platform,
+        credential=second_credential,
+        external_id="company-2",
+        display_name="Second Page",
+        publish_mode=SocialAccount.PublishMode.API_CONFIRM,
+        connector_metadata={"connection_kind": "official_oauth"},
+        connection_state=SocialAccount.ConnectionState.CONNECTED,
+    )
+
+    class FailingFirstReplaceStore(TokenStore):
+        def replace(self, reference, token):
+            if reference == "vault://fixture/original":
+                raise ConnectorConfigurationRequired("secure store unavailable")
+            return super().replace(reference, token)
+
+    store = FailingFirstReplaceStore()
+    result = refresh_due_credentials(
+        adapter_registry=LifecycleAdapterRegistry({"LINKEDIN": Adapter()}),
+        token_store=store,
+        organization=organization,
+        now=now,
+        limit=2,
+    )
+
+    first_account.refresh_from_db()
+    second_account.refresh_from_db()
+    first_credential.refresh_from_db()
+    second_credential.refresh_from_db()
+    assert result == {
+        "examined": 2,
+        "refreshed": 1,
+        "reauthorization_required": 0,
+        "failed": 1,
+    }
+    assert first_account.connection_state == (
+        SocialAccount.ConnectionState.CONFIGURATION_REQUIRED
+    )
+    assert first_account.lifecycle_error_code == "CONFIGURATION_REQUIRED"
+    assert first_credential.secret_reference == "vault://fixture/original"
+    assert second_account.connection_state == SocialAccount.ConnectionState.CONNECTED
+    assert second_credential.secret_reference == "vault://rotated/1"
+
+
 @pytest.mark.django_db
 def test_disconnect_preserves_account_and_history_even_if_revoke_fails(lifecycle_account) -> None:
     _organization, actor, credential, account = lifecycle_account

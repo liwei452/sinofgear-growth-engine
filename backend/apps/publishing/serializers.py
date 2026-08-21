@@ -221,6 +221,64 @@ class PublishFilterSerializer(StrictMixin, serializers.Serializer):
     page_size = serializers.IntegerField(required=False, min_value=1, max_value=50)
 
 
+class PublishMonitorFilterSerializer(StrictMixin, serializers.Serializer):
+    group = serializers.ChoiceField(
+        choices=["ATTENTION", "PROVIDER", "FAILED", "WAITING", "COMPLETED"],
+        required=False,
+    )
+    cursor = serializers.CharField(required=False)
+    page_size = serializers.IntegerField(required=False, min_value=1, max_value=50)
+
+
+class PublishMonitorSummarySerializer(serializers.Serializer):
+    attention_count = serializers.IntegerField(min_value=0)
+    provider_pending_count = serializers.IntegerField(min_value=0)
+    failed_count = serializers.IntegerField(min_value=0)
+    waiting_count = serializers.IntegerField(min_value=0)
+    today_succeeded_count = serializers.IntegerField(min_value=0)
+
+
+class PublishMonitorTaskSerializer(PublishTaskSerializer):
+    platform_code = serializers.CharField(source="platform.code", read_only=True)
+    platform_name = serializers.CharField(source="platform.name", read_only=True)
+    social_account_display_name = serializers.CharField(
+        source="social_account.display_name", read_only=True
+    )
+    content_title = serializers.SerializerMethodField()
+    content_excerpt = serializers.SerializerMethodField()
+
+    class Meta(PublishTaskSerializer.Meta):
+        fields = PublishTaskSerializer.Meta.fields + [
+            "platform_code", "platform_name", "social_account_display_name",
+            "content_title", "content_excerpt",
+        ]
+        read_only_fields = fields
+
+    @staticmethod
+    def _native_payload_value(task, name):
+        payload = task.platform_content.payload
+        if type(payload) is not dict:
+            return ""
+        value = payload.get(name)
+        return value.strip() if type(value) is str else ""
+
+    @extend_schema_field(serializers.CharField())
+    def get_content_title(self, task):
+        return self._native_payload_value(task, "title")
+
+    @extend_schema_field(serializers.CharField(max_length=180))
+    def get_content_excerpt(self, task):
+        body = " ".join(self._native_payload_value(task, "body").split())
+        return body if len(body) <= 180 else f"{body[:179]}…"
+
+
+class PublishMonitorEnvelopeSerializer(serializers.Serializer):
+    summary = PublishMonitorSummarySerializer()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    results = PublishMonitorTaskSerializer(many=True)
+
+
 class CalendarFilterSerializer(StrictMixin, serializers.Serializer):
     start = AwareDateTimeField()
     end = AwareDateTimeField()

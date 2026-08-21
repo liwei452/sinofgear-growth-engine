@@ -5,29 +5,26 @@ import { computed, ref } from "vue"
 import { ApiError } from "../../api/client"
 import AppIcon from "../../shared/components/AppIcon.vue"
 import OperationModal from "../../shared/components/OperationModal.vue"
-import { getCursorPage, listPlatformContents, type PlatformContent } from "../content/api"
-import { listPlatforms, listSocialAccounts, type Platform, type SocialAccount } from "../platformAccounts/api"
 import {
-  listPublishTasks,
+  getPublishMonitor,
   publishingMonitorKeys,
   reconcilePublishTask,
   resolvePublishTask,
   retryPublishTask,
+  type PublishMonitorGroup,
+  type PublishMonitorTask,
   type PublishTask,
 } from "./api"
 import {
   canShowConfirmNotPublished,
-  defaultMonitoringTasks,
-  hasUnsettledTasks,
   isNativeBufferPostId,
   monitoringGroup,
   monitoringStatusLabel,
-  sortMonitoringTasks,
 } from "./publishMonitoring"
 
 const props = defineProps<{ organizationId: string }>()
 
-type Filter = "ALL" | "ATTENTION" | "PROVIDER" | "FAILED" | "COMPLETED"
+type Filter = "ALL" | Exclude<PublishMonitorGroup, "WAITING">
 type Dialog = "RETRY" | "CONFIRM_PUBLISHED" | "CONFIRM_NOT_PUBLISHED" | null
 
 const queryClient = useQueryClient()
@@ -41,92 +38,35 @@ const providerPostId = ref("")
 const noPostConfirmed = ref(false)
 const expandedTasks = ref(new Set<string>())
 
-async function readAllPublishTasks(): Promise<PublishTask[]> {
-  const results: PublishTask[] = []
-  const visited = new Set<string>()
-  let page = await listPublishTasks()
-  while (true) {
-    results.push(...page.results)
-    if (!page.next || visited.has(page.next)) return results
-    visited.add(page.next)
-    page = await getCursorPage<PublishTask>(page.next, "/api/v1/publish-tasks")
-  }
-}
-
-async function readAllPlatformContents(): Promise<PlatformContent[]> {
-  const results: PlatformContent[] = []
-  const visited = new Set<string>()
-  let page = await listPlatformContents({ page_size: 50 })
-  while (true) {
-    results.push(...page.results)
-    if (!page.next || visited.has(page.next)) return results
-    visited.add(page.next)
-    page = await getCursorPage<PlatformContent>(page.next, "/api/v1/platform-contents")
-  }
-}
-
 const tasksQuery = useQuery({
-  queryKey: [...publishingMonitorKeys.tasks, props.organizationId],
-  queryFn: readAllPublishTasks,
+  queryKey: computed(() => [
+    ...publishingMonitorKeys.tasks,
+    props.organizationId,
+    activeFilter.value,
+  ]),
+  queryFn: () => getPublishMonitor(
+    activeFilter.value === "ALL" ? undefined : activeFilter.value,
+  ),
   retry: false,
   refetchInterval: query => (
     document.visibilityState === "visible"
-    && hasUnsettledTasks((query.state.data as PublishTask[] | undefined) ?? [])
+    && (((query.state.data as { summary?: { waiting_count: number; provider_pending_count: number } } | undefined)?.summary?.waiting_count ?? 0) > 0
+      || ((query.state.data as { summary?: { waiting_count: number; provider_pending_count: number } } | undefined)?.summary?.provider_pending_count ?? 0) > 0)
       ? 30_000
       : false
   ),
   refetchIntervalInBackground: false,
 })
-const contentQuery = useQuery({
-  queryKey: ["publishing-monitor", props.organizationId, "platform-contents"],
-  queryFn: readAllPlatformContents,
-  retry: false,
-})
-const accountsQuery = useQuery({
-  queryKey: ["publishing-monitor", props.organizationId, "social-accounts"],
-  queryFn: listSocialAccounts,
-  retry: false,
-})
-const platformsQuery = useQuery({
-  queryKey: ["publishing-monitor", props.organizationId, "platforms"],
-  queryFn: listPlatforms,
-  retry: false,
-})
-
-const tasks = computed(() => sortMonitoringTasks(tasksQuery.data.value ?? []))
-const contentById = computed(() => new Map(
-  (contentQuery.data.value ?? []).map(content => [content.id, content]),
-))
-const accountById = computed(() => new Map(
-  (accountsQuery.data.value ?? []).map(account => [account.id, account]),
-))
-const platformById = computed(() => new Map(
-  (platformsQuery.data.value ?? []).map(platform => [platform.id, platform]),
-))
-
-const readFailed = computed(() => (
-  tasksQuery.isError.value || contentQuery.isError.value
-  || accountsQuery.isError.value || platformsQuery.isError.value
-))
-const isLoading = computed(() => (
-  tasksQuery.isPending.value || contentQuery.isPending.value
-  || accountsQuery.isPending.value || platformsQuery.isPending.value
-))
+const tasks = computed(() => tasksQuery.data.value?.results ?? [])
+const readFailed = computed(() => tasksQuery.isError.value)
+const isLoading = computed(() => tasksQuery.isPending.value)
 const summaryCounts = computed(() => ({
-  ATTENTION: tasks.value.filter(task => monitoringGroup(task.status) === "ATTENTION").length,
-  PROVIDER: tasks.value.filter(task => monitoringGroup(task.status) === "PROVIDER").length,
-  FAILED: tasks.value.filter(task => monitoringGroup(task.status) === "FAILED").length,
-  COMPLETED: tasks.value.filter(task => (
-    monitoringGroup(task.status) === "COMPLETED" && isToday(task.finished_at ?? task.created_at)
-  )).length,
+  ATTENTION: tasksQuery.data.value?.summary?.attention_count ?? 0,
+  PROVIDER: tasksQuery.data.value?.summary?.provider_pending_count ?? 0,
+  FAILED: tasksQuery.data.value?.summary?.failed_count ?? 0,
+  COMPLETED: tasksQuery.data.value?.summary?.today_succeeded_count ?? 0,
 }))
-const visibleTasks = computed(() => {
-  if (activeFilter.value === "ALL") return defaultMonitoringTasks(tasks.value)
-  if (activeFilter.value === "COMPLETED") {
-    return tasks.value.filter(task => monitoringGroup(task.status) === "COMPLETED" && isToday(task.finished_at ?? task.created_at))
-  }
-  return tasks.value.filter(task => monitoringGroup(task.status) === activeFilter.value)
-})
+const visibleTasks = computed(() => tasks.value)
 const nativePostIdValid = computed(() => isNativeBufferPostId(providerPostId.value))
 
 const summaryCards: Array<{ id: Exclude<Filter, "ALL">; label: string; icon: "inbox" | "calendar-clock" | "send" | "circle-check" }> = [
@@ -145,15 +85,6 @@ const reasonLabels: Record<string, string> = {
   PROVIDER_POST_KNOWN: "系统已记录 Provider Post ID，需先完成远端核验。",
 }
 
-function isToday(value: string | null): boolean {
-  if (!value) return false
-  const date = new Date(value)
-  const today = new Date()
-  return date.getFullYear() === today.getFullYear()
-    && date.getMonth() === today.getMonth()
-    && date.getDate() === today.getDate()
-}
-
 function formatDate(value: string | null): string {
   if (!value) return "尚未发生"
   const date = new Date(value)
@@ -163,28 +94,12 @@ function formatDate(value: string | null): string {
   }).format(date)
 }
 
-function accountFor(task: PublishTask): SocialAccount | undefined {
-  return accountById.value.get(task.social_account_id)
+function titleFor(task: PublishMonitorTask): string {
+  return task.content_title || "未命名发布内容"
 }
 
-function platformFor(task: PublishTask): Platform | undefined {
-  return platformById.value.get(task.platform_id) ?? (
-    accountFor(task) ? platformById.value.get(accountFor(task)!.platform_id) : undefined
-  )
-}
-
-function contentFor(task: PublishTask): PlatformContent | undefined {
-  return contentById.value.get(task.platform_content_id)
-}
-
-function titleFor(task: PublishTask): string {
-  const title = contentFor(task)?.payload.title
-  return typeof title === "string" && title.trim() ? title : "未命名发布内容"
-}
-
-function bodyFor(task: PublishTask): string {
-  const body = contentFor(task)?.payload.body
-  return typeof body === "string" ? body : "当前内容摘要不可用。"
+function bodyFor(task: PublishMonitorTask): string {
+  return task.content_excerpt || "当前内容摘要不可用。"
 }
 
 function nextAction(task: PublishTask): string {
@@ -208,13 +123,13 @@ function safeError(task: PublishTask): string {
   if (!code) return "无"
   const labels: Record<string, string> = {
     RATE_LIMITED: "Provider 请求过于频繁，系统将按安全时间重试。",
-    PROVIDER_UNAVAILABLE: "Provider 暂时不可用，请稍后再查询。",
+    BUFFER_PROVIDER_UNAVAILABLE: "Buffer 暂时不可用，请稍后再查询。",
     BUFFER_RECONCILIATION_AMBIGUOUS: "发现多个可能的帖子，无法自动确认。",
     BUFFER_POST_MISMATCH: "查询到的帖子与当前渠道或平台不一致。",
-    POST_NOT_FOUND: "当前查询没有找到对应帖子。",
+    BUFFER_POST_NOT_FOUND: "当前查询没有找到对应帖子。",
     MANUALLY_CLOSED_NO_POST: "已由人工确认没有发布。",
   }
-  return labels[code] ?? `安全错误代码：${code}`
+  return labels[code] ?? "发布服务返回了安全错误，请按可用操作处理。"
 }
 
 function safeErrorCode(value: unknown): string {
@@ -253,12 +168,7 @@ function closeDialog(): void {
 }
 
 async function refreshAll(): Promise<void> {
-  await Promise.all([
-    queryClient.invalidateQueries({ queryKey: [...publishingMonitorKeys.tasks, props.organizationId] }),
-    queryClient.invalidateQueries({ queryKey: ["publishing-monitor", props.organizationId, "platform-contents"] }),
-    queryClient.invalidateQueries({ queryKey: ["publishing-monitor", props.organizationId, "social-accounts"] }),
-    queryClient.invalidateQueries({ queryKey: ["publishing-monitor", props.organizationId, "platforms"] }),
-  ])
+  await queryClient.invalidateQueries({ queryKey: publishingMonitorKeys.tasks })
 }
 
 function safeOperationError(error: unknown): string {
@@ -369,10 +279,10 @@ async function submitDialog(): Promise<void> {
       <article v-for="task in visibleTasks" :key="task.id" class="task-card" :class="`task-${monitoringGroup(task.status).toLowerCase()}`">
         <div class="task-main">
           <div class="task-platform-row">
-            <span class="platform-mark" aria-hidden="true">{{ platformFor(task)?.name?.slice(0, 1) ?? "渠" }}</span>
+            <span class="platform-mark" aria-hidden="true">{{ task.platform_name?.slice(0, 1) ?? "渠" }}</span>
             <div>
-              <strong>{{ platformFor(task)?.name ?? "未知平台" }}</strong>
-              <span>{{ accountFor(task)?.display_name ?? "渠道名称不可用" }}</span>
+              <strong>{{ task.platform_name || "未知平台" }}</strong>
+              <span>{{ task.social_account_display_name || "渠道名称不可用" }}</span>
             </div>
             <span class="task-status">{{ monitoringStatusLabel(task.status) }}</span>
           </div>

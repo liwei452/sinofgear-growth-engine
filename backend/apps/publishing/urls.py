@@ -3,11 +3,13 @@ from django.urls import path
 from .views import (
     PublishCalendarView, PublishCancelView, PublishRetryView, PublishRunView, PublishScheduleView,
     PublishTaskDetailView, PublishTaskListView, PublishReconcileView, PublishResolveView,
+    PublishTaskMonitorView,
 )
 
 
 urlpatterns = [
     path("publish-tasks", PublishTaskListView.as_view()),
+    path("publish-tasks/monitor", PublishTaskMonitorView.as_view()),
     path("publish-tasks/schedule", PublishScheduleView.as_view()),
     path("publish-tasks/<uuid:task_id>", PublishTaskDetailView.as_view()),
     path("publish-tasks/<uuid:task_id>/cancel", PublishCancelView.as_view()),

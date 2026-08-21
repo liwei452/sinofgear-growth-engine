@@ -48,37 +48,48 @@ function task(status: PublishTask["status"], overrides: Partial<PublishTask> = {
   } as PublishTask
 }
 
-const platformContent = {
-  id: "content-linkedin",
-  payload: {
-    schema_version: 2,
-    platform_code: "LINKEDIN",
-    language: "en",
-    title: "Reliable custom gear supply",
-    body: "Evidence-backed manufacturing facts for qualified industrial buyers.",
-    cta: "Contact us",
-    landing_page_url: "https://example.test/gears",
-    hashtags: [],
-    evidence_fact_ids: ["fact-1"],
-  },
-}
-
 function fetchFor(tasks: PublishTask[], operation?: (path: string, init?: RequestInit) => Promise<Response>) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (init?.method === "POST" && operation) return operation(path, init)
-    if (path.includes("/publish-tasks")) return response({ next: null, previous: null, results: tasks })
-    if (path.includes("/platform-contents")) return response({ next: null, previous: null, results: [platformContent] })
-    if (path.includes("/social-accounts")) return response({ results: [{
-      id: "account-linkedin",
-      platform_id: "platform-linkedin",
-      display_name: "Global LinkedIn",
-      provider: "BUFFER",
-      provider_channel_display_id: "••••8042",
-    }] })
-    if (path.includes("/platforms")) return response({ results: [{
-      id: "platform-linkedin", code: "LINKEDIN", name: "LinkedIn", capabilities: ["PUBLISH"],
-    }] })
+    if (path.includes("/publish-tasks/monitor")) {
+      const group = new URL(path, "http://localhost").searchParams.get("group")
+      const grouped = (group ? tasks.filter(item => {
+        if (group === "ATTENTION") return item.status === "NEEDS_ATTENTION"
+        if (group === "PROVIDER") return ["SUBMITTED", "SUBMISSION_UNKNOWN"].includes(item.status)
+        if (group === "FAILED") return item.status === "FAILED"
+        if (group === "COMPLETED") return item.status === "SUCCEEDED"
+        return ["SCHEDULED", "QUEUED", "RUNNING"].includes(item.status)
+      }) : tasks).sort((left, right) => {
+        const priority = (status: PublishTask["status"]) => {
+          if (status === "NEEDS_ATTENTION") return 0
+          if (["SUBMITTED", "SUBMISSION_UNKNOWN"].includes(status)) return 1
+          if (status === "FAILED") return 2
+          if (["SCHEDULED", "QUEUED", "RUNNING"].includes(status)) return 3
+          return 4
+        }
+        return priority(left.status) - priority(right.status)
+      })
+      return response({
+        summary: {
+          attention_count: tasks.filter(item => item.status === "NEEDS_ATTENTION").length,
+          provider_pending_count: tasks.filter(item => ["SUBMITTED", "SUBMISSION_UNKNOWN"].includes(item.status)).length,
+          failed_count: tasks.filter(item => item.status === "FAILED").length,
+          waiting_count: tasks.filter(item => ["SCHEDULED", "QUEUED", "RUNNING"].includes(item.status)).length,
+          today_succeeded_count: tasks.filter(item => item.status === "SUCCEEDED").length,
+        },
+        next: null,
+        previous: null,
+        results: grouped.map(item => ({
+          ...item,
+          platform_code: "LINKEDIN",
+          platform_name: "LinkedIn",
+          social_account_display_name: "Global LinkedIn",
+          content_title: "Reliable custom gear supply",
+          content_excerpt: "Evidence-backed manufacturing facts for qualified industrial buyers.",
+        })),
+      })
+    }
     return response({})
   })
 }
@@ -120,6 +131,22 @@ it("prioritizes actionable tasks and filters them from compact summaries", async
   await userEvent.click(screen.getByRole("button", { name: "明确失败 1" }))
   expect(screen.getAllByRole("article")).toHaveLength(1)
   expect(screen.getByRole("article")).toHaveTextContent("发布失败")
+})
+
+it("uses one bounded monitor request and server-side group filtering", async () => {
+  const fetchMock = fetchFor([task("FAILED")])
+  renderPanel(fetchMock)
+
+  await screen.findByRole("article")
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+  expect(String(fetchMock.mock.calls[0][0])).toContain("/api/v1/publish-tasks/monitor?page_size=50")
+  expect(fetchMock.mock.calls.some(([path]) => String(path).includes("platform-contents"))).toBe(false)
+  expect(fetchMock.mock.calls.some(([path]) => String(path).includes("social-accounts"))).toBe(false)
+
+  await userEvent.click(screen.getByRole("button", { name: "明确失败 1" }))
+  await vi.waitFor(() => {
+    expect(fetchMock.mock.calls.some(([path]) => String(path).includes("group=FAILED"))).toBe(true)
+  })
 })
 
 it("shows operations only from allowed_actions and reconciles without publishing", async () => {

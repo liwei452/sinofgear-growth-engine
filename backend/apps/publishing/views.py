@@ -1,7 +1,10 @@
 from collections import defaultdict
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from django.db.models import Case, Count, IntegerField, Q, Subquery, Value, When
 from django.http import Http404
+from django.utils import timezone
 from drf_spectacular.utils import (
     OpenApiParameter,
     OpenApiTypes,
@@ -25,6 +28,8 @@ from .serializers import (
     CalendarFilterSerializer, EmptyActionSerializer, PublishCreateSerializer,
     ConfirmNotPublishedResolutionSerializer, ConfirmPublishedResolutionSerializer,
     PublishCalendarEnvelopeSerializer, PublishFilterSerializer,
+    PublishMonitorEnvelopeSerializer, PublishMonitorFilterSerializer,
+    PublishMonitorTaskSerializer,
     PublishResolutionSerializer,
     PublishingErrorSerializer, PublishTaskCursorEnvelopeSerializer,
     PublishTaskSerializer,
@@ -54,6 +59,10 @@ class PublishPagination(CursorPagination):
     page_size_query_param = "page_size"
     max_page_size = 50
     ordering = ("-created_at", "-id")
+
+
+class PublishMonitorPagination(PublishPagination):
+    ordering = ("_monitor_priority", "-created_at", "-id")
 
 
 def _safe_queryset(organization):
@@ -176,6 +185,91 @@ class PublishTaskListView(APIView):
         except PublishingConflict as exc:
             return _conflict(exc)
         return Response(PublishTaskSerializer(_task(request.organization, task.id)).data, status=201)
+
+
+MONITOR_GROUP_STATUSES = {
+    "ATTENTION": (PublishTask.Status.NEEDS_ATTENTION,),
+    "PROVIDER": (PublishTask.Status.SUBMITTED, PublishTask.Status.SUBMISSION_UNKNOWN),
+    "FAILED": (PublishTask.Status.FAILED,),
+    "WAITING": (
+        PublishTask.Status.SCHEDULED, PublishTask.Status.QUEUED,
+        PublishTask.Status.RUNNING,
+    ),
+    "COMPLETED": (PublishTask.Status.SUCCEEDED,),
+}
+
+
+@extend_schema(tags=["PublishTasks"])
+class PublishTaskMonitorView(APIView):
+    permission_classes = [CanReadPublishing]
+    serializer_class = PublishMonitorTaskSerializer
+
+    @extend_schema(
+        operation_id="publish_task_monitor",
+        parameters=[
+            OpenApiParameter("group", OpenApiTypes.STR, enum=list(MONITOR_GROUP_STATUSES)),
+            OpenApiParameter("cursor", OpenApiTypes.STR),
+            bounded_integer_query_parameter("page_size", minimum=1, maximum=50),
+        ],
+        responses={200: PublishMonitorEnvelopeSerializer},
+    )
+    def get(self, request):
+        values, error = _validated_query(request, PublishMonitorFilterSerializer)
+        if error:
+            return error
+        base = PublishTask.objects.filter(organization=request.organization)
+        now = timezone.now()
+        local_today = timezone.localdate(now)
+        day_start = timezone.make_aware(datetime.combine(local_today, time.min))
+        day_end = day_start + timedelta(days=1)
+        summary = base.aggregate(
+            attention_count=Count("id", filter=Q(status=PublishTask.Status.NEEDS_ATTENTION)),
+            provider_pending_count=Count("id", filter=Q(status__in=MONITOR_GROUP_STATUSES["PROVIDER"])),
+            failed_count=Count("id", filter=Q(status=PublishTask.Status.FAILED)),
+            waiting_count=Count("id", filter=Q(status__in=MONITOR_GROUP_STATUSES["WAITING"])),
+            today_succeeded_count=Count(
+                "id", filter=Q(
+                    status=PublishTask.Status.SUCCEEDED,
+                    finished_at__gte=day_start, finished_at__lt=day_end,
+                )
+            ),
+        )
+        queryset = _safe_queryset(request.organization)
+        group = values.get("group")
+        if group:
+            queryset = queryset.filter(status__in=MONITOR_GROUP_STATUSES[group])
+            if group == "COMPLETED":
+                queryset = queryset.filter(
+                    finished_at__gte=day_start, finished_at__lt=day_end
+                )
+        else:
+            recent_successes = base.filter(status=PublishTask.Status.SUCCEEDED).order_by(
+                "-created_at", "-id"
+            ).values("id")[:5]
+            queryset = queryset.filter(
+                Q(status__in=sum(MONITOR_GROUP_STATUSES.values(), ()))
+                & (~Q(status=PublishTask.Status.SUCCEEDED) | Q(id__in=Subquery(recent_successes)))
+            )
+        queryset = queryset.annotate(
+            _monitor_priority=Case(
+                When(status=PublishTask.Status.NEEDS_ATTENTION, then=Value(0)),
+                When(status__in=MONITOR_GROUP_STATUSES["PROVIDER"], then=Value(1)),
+                When(status=PublishTask.Status.FAILED, then=Value(2)),
+                When(status__in=MONITOR_GROUP_STATUSES["WAITING"], then=Value(3)),
+                When(status=PublishTask.Status.SUCCEEDED, then=Value(4)),
+                default=Value(5), output_field=IntegerField(),
+            )
+        )
+        paginator = PublishMonitorPagination()
+        try:
+            page = paginator.paginate_queryset(queryset, request, view=self)
+        except NotFound:
+            return _validation({"cursor": ["Invalid or expired cursor."]})
+        safe = [task for task in page if publish_task_is_consistent(task)]
+        page_response = paginator.get_paginated_response(
+            PublishMonitorTaskSerializer(safe, many=True).data
+        ).data
+        return Response({"summary": summary, **page_response})
 
 
 class PublishScheduleView(PublishTaskListView):

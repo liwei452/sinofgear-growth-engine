@@ -17,11 +17,15 @@ from apps.knowledge.policies import evaluate_company_fact_public_eligibility
 
 def make_public_fact(organization):
     actor = get_user_model().objects.create_user(username="policy-reviewer")
-    profile = CompanyKnowledgeProfile.objects.create(
-        organization=organization,
-        brand_name="SINOF",
-        created_by=actor,
-    )
+    with _test_fixture_writes():
+        profile = CompanyKnowledgeProfile.objects.create(
+            organization=organization,
+            brand_name="SINOF",
+            status=CompanyKnowledgeProfile.Status.APPROVED,
+            created_by=actor,
+            reviewed_by=actor,
+            reviewed_at=timezone.now(),
+        )
     with _test_fixture_writes():
         fact = CompanyFact.objects.create(
             organization=organization,
@@ -74,6 +78,29 @@ def test_public_eligibility_accepts_only_fully_qualified_fact(organizations) -> 
 
     assert decision.eligible is True
     assert decision.blocking_reasons == ()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "profile_status",
+    [
+        CompanyKnowledgeProfile.Status.DRAFT,
+        CompanyKnowledgeProfile.Status.IN_REVIEW,
+        CompanyKnowledgeProfile.Status.SUPERSEDED,
+    ],
+)
+def test_public_eligibility_rejects_fact_under_nonapproved_profile(
+    organizations, profile_status
+) -> None:
+    fact, actor = make_public_fact(organizations[0])
+    bind_evidence(fact, actor)
+    with _test_fixture_writes():
+        CompanyKnowledgeProfile.objects.filter(pk=fact.profile_id).update(status=profile_status)
+
+    decision = evaluate_company_fact_public_eligibility(fact)
+
+    assert decision.eligible is False
+    assert "PROFILE_NOT_APPROVED" in {item.code for item in decision.blocking_reasons}
 
 
 @pytest.mark.django_db

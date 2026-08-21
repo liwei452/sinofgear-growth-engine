@@ -347,8 +347,44 @@ class GuardedKnowledgeModel(models.Model):
         return super().delete(*args, **kwargs)
 
 
+_company_revision_bulk_update: ContextVar[bool] = ContextVar(
+    "company_revision_bulk_update",
+    default=False,
+)
+
+
+@contextmanager
+def _validated_company_revision_bulk_update() -> Iterator[None]:
+    token = _company_revision_bulk_update.set(True)
+    try:
+        yield
+    finally:
+        _company_revision_bulk_update.reset(token)
+
+
+_company_fact_evidence_bulk_update: ContextVar[bool] = ContextVar(
+    "company_fact_evidence_bulk_update",
+    default=False,
+)
+
+
+@contextmanager
+def _validated_company_fact_evidence_bulk_update() -> Iterator[None]:
+    token = _company_fact_evidence_bulk_update.set(True)
+    try:
+        yield
+    finally:
+        _company_fact_evidence_bulk_update.reset(token)
+
+
+def company_fact_evidence_bulk_update_active() -> bool:
+    return _company_fact_evidence_bulk_update.get()
+
+
 class CompanyRevisionQuerySet(models.QuerySet):
     def update(self, **kwargs):
+        if _company_revision_bulk_update.get():
+            return super().update(**kwargs)
         if company_write_override_active():
             return super().update(**kwargs)
         objects = list(self)
@@ -370,7 +406,8 @@ class CompanyRevisionQuerySet(models.QuerySet):
         objects = list(objs)
         for instance in objects:
             instance._validate_company_revision_write(creating=False)
-        return super().bulk_update(objects, fields, **kwargs)
+        with _validated_company_revision_bulk_update():
+            return super().bulk_update(objects, fields, **kwargs)
 
     def delete(self):
         for instance in self:
@@ -388,6 +425,7 @@ class CompanyRevisionModel(models.Model):
     frozen_statuses: frozenset[str] = frozenset()
     identity_fields = frozenset({"organization_id", "version", "supersedes_id", "created_by_id"})
     business_fields: frozenset[str] = frozenset()
+    review_metadata_fields = frozenset({"reviewed_by_id", "reviewed_at", "review_note"})
     frozen_label = "revision"
 
     class Meta:
@@ -398,6 +436,10 @@ class CompanyRevisionModel(models.Model):
     def _validate_company_revision_write(self, *, creating: bool) -> None:
         self.clean()
         if creating:
+            if not company_write_override_active() and any(
+                getattr(self, field) not in {None, ""} for field in self.review_metadata_fields
+            ):
+                raise ValidationError("Company revision review metadata may be written only by the review service.")
             if not company_write_override_active() and self.status != self.initial_status:
                 raise ValidationError(
                     f"Company revisions must start in {self.initial_status} status and use the review service."
@@ -406,13 +448,22 @@ class CompanyRevisionModel(models.Model):
         original = type(self).objects.get(pk=self.pk)
         if any(getattr(self, field) != getattr(original, field) for field in self.identity_fields):
             raise ValidationError("Company revision ownership and identity fields are immutable.")
+        changed_review_metadata = {
+            field
+            for field in self.review_metadata_fields
+            if getattr(self, field) != getattr(original, field)
+        }
+        if changed_review_metadata and not company_write_override_active():
+            raise ValidationError("Company revision review metadata may be written only by the review service.")
         changed_business_fields = {
             field
             for field in self.business_fields
             if getattr(self, field) != getattr(original, field)
         }
-        if original.status in self.frozen_statuses and changed_business_fields:
-            raise ValidationError(f"{self.frozen_label} business fields are immutable.")
+        if original.status != self.initial_status and changed_business_fields:
+            raise ValidationError(
+                f"{self.frozen_label} business fields are immutable outside DRAFT status."
+            )
         if self.status != original.status and not company_write_override_active():
             raise ValidationError("Company revision lifecycle changes must use the review service.")
 

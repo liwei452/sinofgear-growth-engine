@@ -10,6 +10,8 @@ from .guards import (
     CompanyRevisionModel,
     GraphAssociationModel,
     GuardedKnowledgeModel,
+    _validated_company_fact_evidence_bulk_update,
+    company_fact_evidence_bulk_update_active,
     company_write_override_active,
 )
 from .normalization import normalize_alias
@@ -260,7 +262,7 @@ class CompanyKnowledgeProfile(CompanyRevisionModel):
     review_note = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    frozen_statuses = frozenset({Status.APPROVED, Status.SUPERSEDED})
+    frozen_statuses = frozenset({Status.IN_REVIEW, Status.APPROVED, Status.SUPERSEDED})
     frozen_label = "approved profile"
     business_fields = frozenset(
         {
@@ -398,7 +400,9 @@ class CompanyFact(CompanyRevisionModel):
         blank=True,
     )
 
-    frozen_statuses = frozenset({Status.VERIFIED, Status.SUPERSEDED})
+    frozen_statuses = frozenset(
+        {Status.IN_REVIEW, Status.VERIFIED, Status.REJECTED, Status.SUPERSEDED}
+    )
     frozen_label = "verified fact"
     identity_fields = CompanyRevisionModel.identity_fields | frozenset({"profile_id", "namespace", "key"})
     business_fields = frozenset(
@@ -455,36 +459,89 @@ class CompanyFact(CompanyRevisionModel):
             raise ValidationError("Company facts require a namespace and key.")
 
 
+def _company_fact_id(value) -> uuid.UUID:
+    return value.pk if isinstance(value, CompanyFact) else value
+
+
+def _lock_company_facts(fact_ids) -> dict[uuid.UUID, CompanyFact]:
+    ordered_ids = sorted({fact_id for fact_id in fact_ids if fact_id is not None}, key=str)
+    locked_facts = list(
+        CompanyFact.objects.select_for_update()
+        .filter(pk__in=ordered_ids)
+        .only("id", "status", "organization_id", "profile_id")
+        .order_by("id")
+    )
+    if len(locked_facts) != len(ordered_ids):
+        raise ValidationError("Every evidence binding requires an existing company fact.")
+    return {fact.pk: fact for fact in locked_facts}
+
+
 class CompanyFactEvidenceQuerySet(models.QuerySet):
+    @transaction.atomic
+    def create(self, **kwargs):
+        return super().create(**kwargs)
+
+    @transaction.atomic
     def bulk_create(self, objs, **kwargs):
         objects = list(objs)
+        locked_facts = _lock_company_facts(instance.company_fact_id for instance in objects)
         for instance in objects:
-            instance._validate_binding_write(creating=True)
+            instance._validate_binding_write(
+                locked_facts=locked_facts,
+                original_fact_id=None,
+            )
         return super().bulk_create(objects, **kwargs)
 
+    @transaction.atomic
     def update(self, **kwargs):
-        if company_write_override_active():
+        if company_fact_evidence_bulk_update_active():
             return super().update(**kwargs)
-        if self.filter(company_fact__status=CompanyFact.Status.VERIFIED).exists():
-            raise ValidationError("Evidence bindings for verified facts are immutable.")
-        for instance in self.select_related("company_fact__profile", "evidence"):
+        for value in kwargs.values():
+            if isinstance(value, BaseExpression):
+                raise ValidationError("Expression updates are not supported for fact evidence bindings.")
+        objects = list(self)
+        original_fact_ids = {instance.pk: instance.company_fact_id for instance in objects}
+        fact_ids = set(original_fact_ids.values())
+        if "company_fact" in kwargs:
+            fact_ids.add(_company_fact_id(kwargs["company_fact"]))
+        if "company_fact_id" in kwargs:
+            fact_ids.add(_company_fact_id(kwargs["company_fact_id"]))
+        locked_facts = _lock_company_facts(fact_ids)
+        for instance in objects:
             for field, value in kwargs.items():
-                if isinstance(value, BaseExpression):
-                    raise ValidationError("Expression updates are not supported for fact evidence bindings.")
                 setattr(instance, field, value)
-            instance._validate_binding_write(creating=False)
+            instance._validate_binding_write(
+                locked_facts=locked_facts,
+                original_fact_id=original_fact_ids[instance.pk],
+            )
         return super().update(**kwargs)
 
+    @transaction.atomic
     def bulk_update(self, objs, fields, **kwargs):
         objects = list(objs)
+        original_fact_ids = dict(
+            self.model.objects.filter(pk__in=[instance.pk for instance in objects]).values_list(
+                "pk", "company_fact_id"
+            )
+        )
+        fact_ids = set(original_fact_ids.values())
+        fact_ids.update(instance.company_fact_id for instance in objects)
+        locked_facts = _lock_company_facts(fact_ids)
         for instance in objects:
-            instance._validate_binding_write(creating=False)
-        return super().bulk_update(objects, fields, **kwargs)
+            instance._validate_binding_write(
+                locked_facts=locked_facts,
+                original_fact_id=original_fact_ids.get(instance.pk),
+            )
+        with _validated_company_fact_evidence_bulk_update():
+            return super().bulk_update(objects, fields, **kwargs)
 
+    @transaction.atomic
     def delete(self):
-        if not company_write_override_active() and self.filter(
-            company_fact__status=CompanyFact.Status.VERIFIED
-        ).exists():
+        fact_ids = set(self.values_list("company_fact_id", flat=True))
+        locked_facts = _lock_company_facts(fact_ids)
+        if not company_write_override_active() and any(
+            fact.status == CompanyFact.Status.VERIFIED for fact in locked_facts.values()
+        ):
             raise ValidationError("Evidence bindings for verified facts are immutable.")
         return super().delete()
 
@@ -538,25 +595,52 @@ class CompanyFactEvidence(models.Model):
         if self.evidence.organization_id != fact.organization_id:
             raise ValidationError("Fact, profile, and evidence must belong to the same organization.")
 
-    def _validate_binding_write(self, *, creating: bool) -> None:
-        self.clean()
+    def _validate_binding_scope(self, *, locked_fact: CompanyFact) -> None:
+        profile_organization_id = CompanyKnowledgeProfile.objects.values_list(
+            "organization_id", flat=True
+        ).get(pk=locked_fact.profile_id)
+        evidence_organization_id = KnowledgeEvidence.objects.values_list(
+            "organization_id", flat=True
+        ).get(pk=self.evidence_id)
+        if profile_organization_id != locked_fact.organization_id:
+            raise ValidationError("Fact and profile must belong to the same organization.")
+        if evidence_organization_id != locked_fact.organization_id:
+            raise ValidationError("Fact, profile, and evidence must belong to the same organization.")
+
+    def _validate_binding_write(
+        self,
+        *,
+        locked_facts: dict[uuid.UUID, CompanyFact],
+        original_fact_id: uuid.UUID | None,
+    ) -> None:
+        locked_fact = locked_facts[self.company_fact_id]
+        self._validate_binding_scope(locked_fact=locked_fact)
         if company_write_override_active():
             return
-        fact_status = self.company_fact.status
-        if not creating:
-            original = type(self).objects.select_related("company_fact").get(pk=self.pk)
-            if original.company_fact.status == CompanyFact.Status.VERIFIED:
-                raise ValidationError("Evidence bindings for verified facts are immutable.")
-        if fact_status == CompanyFact.Status.VERIFIED:
+        involved_fact_ids = {self.company_fact_id, original_fact_id}
+        if any(
+            locked_facts[fact_id].status == CompanyFact.Status.VERIFIED
+            for fact_id in involved_fact_ids
+            if fact_id is not None
+        ):
             raise ValidationError("Evidence bindings for verified facts are immutable.")
 
+    @transaction.atomic
     def save(self, *args, **kwargs):
-        self._validate_binding_write(creating=self._state.adding)
+        original_fact_id = None
+        if not self._state.adding:
+            original_fact_id = type(self).objects.values_list("company_fact_id", flat=True).get(pk=self.pk)
+        locked_facts = _lock_company_facts({self.company_fact_id, original_fact_id})
+        self._validate_binding_write(
+            locked_facts=locked_facts,
+            original_fact_id=original_fact_id,
+        )
         return super().save(*args, **kwargs)
 
+    @transaction.atomic
     def delete(self, *args, **kwargs):
-        fact_status = CompanyFact.objects.only("status").get(pk=self.company_fact_id).status
-        if not company_write_override_active() and fact_status == CompanyFact.Status.VERIFIED:
+        locked_fact = _lock_company_facts({self.company_fact_id})[self.company_fact_id]
+        if not company_write_override_active() and locked_fact.status == CompanyFact.Status.VERIFIED:
             raise ValidationError("Evidence bindings for verified facts are immutable.")
         return super().delete(*args, **kwargs)
 

@@ -2,6 +2,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 from apps.knowledge.models import (
     CompanyFact,
@@ -339,3 +340,170 @@ def test_verifying_new_fact_revision_supersedes_previous_verified_revision(organ
         key="brand_name",
         status=CompanyFact.Status.VERIFIED,
     ).count() == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("model_name", ["profile", "fact"])
+@pytest.mark.parametrize("write_style", ["save", "queryset", "bulk"])
+def test_in_review_business_fields_reject_all_ordinary_write_paths(
+    organizations, model_name, write_style
+) -> None:
+    organization, _ = organizations
+    actor = make_user(f"in-review-{model_name}-{write_style}")
+    profile = make_profile(organization, actor)
+    profile_service = CompanyProfileReviewService(organization)
+    if model_name == "profile":
+        instance = profile_service.submit(profile, actor=actor)
+        model = CompanyKnowledgeProfile
+        field = "brand_name"
+        value = "Changed"
+    else:
+        fact = make_fact(profile, actor)
+        instance = CompanyFactReviewService(organization).submit(fact, actor=actor)
+        model = CompanyFact
+        field = "value_json"
+        value = {"value": "Changed"}
+
+    with pytest.raises(ValidationError, match="outside DRAFT"):
+        if write_style == "save":
+            setattr(instance, field, value)
+            instance.save()
+        elif write_style == "queryset":
+            model.objects.filter(pk=instance.pk).update(**{field: value})
+        else:
+            setattr(instance, field, value)
+            model.objects.bulk_update([instance], [field])
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("model_name", ["profile", "fact"])
+def test_draft_business_fields_allow_bulk_update(organizations, model_name) -> None:
+    organization, _ = organizations
+    actor = make_user(f"draft-bulk-{model_name}")
+    profile = make_profile(organization, actor)
+    if model_name == "profile":
+        instance = profile
+        model = CompanyKnowledgeProfile
+        field = "brand_name"
+        value = "Changed"
+    else:
+        instance = make_fact(profile, actor)
+        model = CompanyFact
+        field = "value_json"
+        value = {"value": "Changed"}
+    setattr(instance, field, value)
+
+    model.objects.bulk_update([instance], [field])
+
+    instance.refresh_from_db()
+    assert getattr(instance, field) == value
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("model_name", ["profile", "fact"])
+@pytest.mark.parametrize("write_style", ["save", "queryset", "bulk"])
+def test_review_metadata_rejects_all_ordinary_write_paths(
+    organizations, model_name, write_style
+) -> None:
+    organization, _ = organizations
+    reviewer = make_user(f"metadata-reviewer-{model_name}-{write_style}")
+    intruder = make_user(f"metadata-intruder-{model_name}-{write_style}")
+    profile = make_profile(organization, reviewer)
+    if model_name == "profile":
+        service = CompanyProfileReviewService(organization)
+        service.submit(profile, actor=reviewer)
+        instance = service.approve(profile, actor=reviewer, review_note="approved")
+        model = CompanyKnowledgeProfile
+    else:
+        fact = make_fact(profile, reviewer)
+        service = CompanyFactReviewService(organization)
+        service.submit(fact, actor=reviewer)
+        instance = service.verify(fact, actor=reviewer, review_note="verified")
+        model = CompanyFact
+
+    changed_at = timezone.now()
+    with pytest.raises(ValidationError, match="review metadata"):
+        if write_style == "save":
+            instance.reviewed_by = intruder
+            instance.reviewed_at = changed_at
+            instance.review_note = "tampered"
+            instance.save()
+        elif write_style == "queryset":
+            model.objects.filter(pk=instance.pk).update(
+                reviewed_by=intruder,
+                reviewed_at=changed_at,
+                review_note="tampered",
+            )
+        else:
+            instance.reviewed_by = intruder
+            instance.reviewed_at = changed_at
+            instance.review_note = "tampered"
+            model.objects.bulk_update(
+                [instance],
+                ["reviewed_by", "reviewed_at", "review_note"],
+            )
+
+
+@pytest.mark.django_db
+def test_rejected_fact_business_fields_are_frozen(organizations) -> None:
+    organization, _ = organizations
+    actor = make_user("rejected-fact-frozen")
+    profile = make_profile(organization, actor)
+    fact = make_fact(profile, actor)
+    service = CompanyFactReviewService(organization)
+    service.submit(fact, actor=actor)
+    fact = service.reject(fact, actor=actor, review_note="rejected")
+    fact.value_json = {"value": "Changed"}
+
+    with pytest.raises(ValidationError, match="outside DRAFT"):
+        fact.save()
+
+
+@pytest.mark.django_db
+def test_stale_in_review_fact_cannot_add_binding_after_verification(organizations) -> None:
+    organization, _ = organizations
+    actor = make_user("stale-binding-save")
+    profile = make_profile(organization, actor)
+    service = CompanyFactReviewService(organization)
+    stale_fact = service.submit(make_fact(profile, actor), actor=actor)
+    evidence = KnowledgeEvidence.objects.create(
+        organization=organization,
+        evidence_type=KnowledgeEvidence.EvidenceType.PUBLIC_SOURCE,
+        excerpt="source",
+    )
+    binding = CompanyFactEvidence(
+        company_fact=stale_fact,
+        evidence=evidence,
+        support_type=CompanyFactEvidence.SupportType.PRIMARY,
+        citation_label="Stale source",
+        bound_by=actor,
+    )
+    service.verify(stale_fact, actor=actor)
+
+    with pytest.raises(ValidationError, match="verified"):
+        binding.save()
+
+
+@pytest.mark.django_db
+def test_stale_in_review_fact_cannot_bulk_create_binding_after_verification(organizations) -> None:
+    organization, _ = organizations
+    actor = make_user("stale-binding-bulk")
+    profile = make_profile(organization, actor)
+    service = CompanyFactReviewService(organization)
+    stale_fact = service.submit(make_fact(profile, actor), actor=actor)
+    evidence = KnowledgeEvidence.objects.create(
+        organization=organization,
+        evidence_type=KnowledgeEvidence.EvidenceType.PUBLIC_SOURCE,
+        excerpt="source",
+    )
+    binding = CompanyFactEvidence(
+        company_fact=stale_fact,
+        evidence=evidence,
+        support_type=CompanyFactEvidence.SupportType.PRIMARY,
+        citation_label="Stale bulk source",
+        bound_by=actor,
+    )
+    service.verify(stale_fact, actor=actor)
+
+    with pytest.raises(ValidationError, match="verified"):
+        CompanyFactEvidence.objects.bulk_create([binding])

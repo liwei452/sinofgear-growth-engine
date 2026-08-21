@@ -3,7 +3,13 @@ from datetime import date, datetime
 
 from django.utils import timezone
 
-from .models import CompanyFact, CompanyFactEvidence, KnowledgeEvidence, KnowledgeStatus
+from .models import (
+    CompanyFact,
+    CompanyFactEvidence,
+    CompanyKnowledgeProfile,
+    KnowledgeEvidence,
+    KnowledgeStatus,
+)
 
 
 @dataclass(frozen=True)
@@ -27,6 +33,19 @@ def evaluate_company_fact_public_eligibility(
     checked_at = at or timezone.now()
     checked_date: date = timezone.localdate(checked_at)
     reasons: list[PublicEligibilityBlockingReason] = []
+
+    profile_is_current_approved = CompanyKnowledgeProfile.objects.filter(
+        pk=fact.profile_id,
+        organization_id=fact.organization_id,
+        status=CompanyKnowledgeProfile.Status.APPROVED,
+    ).exists()
+    if not profile_is_current_approved:
+        reasons.append(
+            PublicEligibilityBlockingReason(
+                code="PROFILE_NOT_APPROVED",
+                message="The fact profile is not the current approved profile for the organization.",
+            )
+        )
 
     checks = (
         (

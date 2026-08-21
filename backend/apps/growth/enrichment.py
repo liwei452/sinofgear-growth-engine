@@ -22,8 +22,11 @@ def has_confirmed_candidate_license(candidate: DiscoveryCandidate) -> bool:
 
 
 @transaction.atomic
-def prepare_candidate_enrichment(*, candidate: DiscoveryCandidate):
-    locked = DiscoveryCandidate.objects.select_for_update().get(pk=candidate.pk)
+def prepare_candidate_enrichment(*, candidate: DiscoveryCandidate, organization_id=None):
+    lookup = {"pk": candidate.pk}
+    if organization_id is not None:
+        lookup["organization_id"] = organization_id
+    locked = DiscoveryCandidate.objects.select_for_update().get(**lookup)
     if locked.status != DiscoveryCandidate.Status.ACCEPTED:
         raise CandidateReviewRequired
 
@@ -96,17 +99,23 @@ def enrichment_payload(snapshot, *, created):
 
 
 @transaction.atomic
-def add_candidate_to_follow_up(*, candidate: DiscoveryCandidate):
-    locked = DiscoveryCandidate.objects.select_for_update().get(pk=candidate.pk)
+def add_candidate_to_follow_up(*, candidate: DiscoveryCandidate, organization_id=None):
+    lookup = {"pk": candidate.pk}
+    if organization_id is not None:
+        lookup["organization_id"] = organization_id
+    locked = DiscoveryCandidate.objects.select_for_update().get(**lookup)
     try:
-        snapshot = CandidateEnrichmentSnapshot.objects.select_for_update().get(candidate=locked)
+        snapshot = CandidateEnrichmentSnapshot.objects.select_for_update().get(
+            candidate=locked,
+            organization_id=locked.organization_id,
+        )
     except CandidateEnrichmentSnapshot.DoesNotExist as error:
         raise CandidateEnrichmentRequired from error
     if not has_confirmed_candidate_license(locked):
         raise CandidateLicenseConfirmationRequired
 
     account, account_created = TargetAccount.objects.get_or_create(
-        organization=locked.organization,
+        organization_id=locked.organization_id,
         source_identity=f"candidate:{locked.id}",
         defaults={
             "name": locked.company_name,
@@ -120,7 +129,7 @@ def add_candidate_to_follow_up(*, candidate: DiscoveryCandidate):
         snapshot.target_account = account
         snapshot.save(update_fields=["target_account", "updated_at"])
     follow_up, follow_up_created = FollowUp.objects.get_or_create(
-        organization=locked.organization,
+        organization_id=locked.organization_id,
         account=account,
     )
     return account, follow_up, account_created or follow_up_created

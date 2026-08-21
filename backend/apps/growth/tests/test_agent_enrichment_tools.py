@@ -280,7 +280,11 @@ def test_send_email_tool_respects_outreach_cooldown(organization, monkeypatch):
     draft = SimpleNamespace(id="draft-1", english_draft="Draft")
     account = SimpleNamespace(
         id="account-cooldown",
-        outreach_drafts=SimpleNamespace(order_by=lambda *a, **k: SimpleNamespace(first=lambda: draft)),
+        outreach_drafts=SimpleNamespace(
+            filter=lambda **k: SimpleNamespace(
+                order_by=lambda *a, **kw: SimpleNamespace(first=lambda: draft)
+            )
+        ),
         outreach_messages=SimpleNamespace(filter=lambda **k: SimpleNamespace(exists=lambda: True)),
     )
     monkeypatch.setattr(acq, "_candidate", lambda org, args: candidate)
@@ -303,12 +307,20 @@ def test_send_email_tool_uses_contact_email_not_placeholder(organization, monkey
     draft = SimpleNamespace(id="draft-1", english_draft="Draft")
     account = SimpleNamespace(
         id="account-email",
-        outreach_drafts=SimpleNamespace(order_by=lambda *a, **k: SimpleNamespace(first=lambda: draft)),
+        outreach_drafts=SimpleNamespace(
+            filter=lambda **k: SimpleNamespace(
+                order_by=lambda *a, **kw: SimpleNamespace(first=lambda: draft)
+            )
+        ),
         outreach_messages=SimpleNamespace(filter=lambda **k: SimpleNamespace(exists=lambda: False)),
     )
     monkeypatch.setattr(acq, "_candidate", lambda org, args: candidate)
     monkeypatch.setattr(acq, "_account_for_candidate", lambda org, candidate: account)
-    monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
+    monkeypatch.setattr(
+        acq,
+        "_contact_email_for_candidate",
+        lambda candidate, organization_id: "buyer@example.com",
+    )
     calls = []
     monkeypatch.setattr(
             acq,
@@ -333,12 +345,20 @@ def test_send_email_tool_fails_without_contact_email(organization, monkeypatch):
     draft = SimpleNamespace(id="draft-1", english_draft="Draft")
     account = SimpleNamespace(
         id="account-no-email",
-        outreach_drafts=SimpleNamespace(order_by=lambda *a, **k: SimpleNamespace(first=lambda: draft)),
+        outreach_drafts=SimpleNamespace(
+            filter=lambda **k: SimpleNamespace(
+                order_by=lambda *a, **kw: SimpleNamespace(first=lambda: draft)
+            )
+        ),
         outreach_messages=SimpleNamespace(filter=lambda **k: SimpleNamespace(exists=lambda: False)),
     )
     monkeypatch.setattr(acq, "_candidate", lambda org, args: candidate)
     monkeypatch.setattr(acq, "_account_for_candidate", lambda org, candidate: account)
-    monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: None)
+    monkeypatch.setattr(
+        acq,
+        "_contact_email_for_candidate",
+        lambda candidate, organization_id: None,
+    )
     calls = []
     monkeypatch.setattr(acq, "record_sent", lambda **kwargs: calls.append(kwargs))
 

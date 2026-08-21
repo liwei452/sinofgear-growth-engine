@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import timedelta
 
 from django.db import transaction
@@ -9,7 +10,7 @@ from integrations.platforms.base import ConnectorConfigurationRequired
 from integrations.platforms.runtime import get_social_provider_runtime
 from apps.common.tenancy import tenant_atomic
 
-from .models import SocialAccount
+from .models import ConnectorCredential, SocialAccount
 
 
 class ProviderLifecycleError(RuntimeError):
@@ -83,6 +84,16 @@ def start_reauthorization(*, account, actor):
     return locked
 
 
+@dataclass(frozen=True, repr=False)
+class _CredentialRefreshCall:
+    account_id: object
+    credential_id: object
+    credential_reference: str = field(repr=False)
+    credential_updated_at: object
+    token: object = field(repr=False)
+    adapter: object = field(repr=False)
+
+
 def refresh_due_credentials(
     *, adapter_registry=None, token_store=None, organization=None, organization_id=None,
     now=None, limit=100,
@@ -112,6 +123,7 @@ def refresh_due_credentials(
     counters = {"examined": 0, "refreshed": 0, "reauthorization_required": 0, "failed": 0}
     for candidate_id in candidate_ids:
         counters["examined"] += 1
+        call = None
         try:
             with tenant_atomic(context_id):
                 account = SocialAccount.objects.select_for_update().select_related(
@@ -119,56 +131,106 @@ def refresh_due_credentials(
                 ).get(pk=candidate_id, organization_id=context_id)
                 if account.credential.expires_at > now + timedelta(minutes=15):
                     continue
+                credential = account.credential
+                call = _CredentialRefreshCall(
+                    account_id=account.id,
+                    credential_id=credential.id,
+                    credential_reference=credential.secret_reference,
+                    credential_updated_at=credential.updated_at,
+                    token=None,
+                    adapter=None,
+                )
                 adapter = adapter_registry.resolve(account.platform.code)
-                reference = account.credential.secret_reference
-                credential_updated_at = account.credential.updated_at
-                token = token_store.resolve(reference)
-            refreshed = adapter.refresh(token)
-            with tenant_atomic(context_id):
-                account = SocialAccount.objects.select_for_update().select_related(
-                    "credential"
-                ).get(pk=candidate_id, organization_id=context_id)
-                if (
-                    account.credential.secret_reference != reference
-                    or account.credential.updated_at != credential_updated_at
-                ):
-                    raise ProviderLifecycleError("PROVIDER_UNAVAILABLE")
-                new_reference = token_store.replace(account.credential.secret_reference, refreshed)
-                account.credential.secret_reference = new_reference
-                account.credential.expires_at = refreshed.expires_at
-                account.credential.save(update_fields=["secret_reference", "expires_at", "updated_at"])
+                token = token_store.resolve(credential.secret_reference)
+                call = _CredentialRefreshCall(
+                    account_id=call.account_id,
+                    credential_id=call.credential_id,
+                    credential_reference=call.credential_reference,
+                    credential_updated_at=call.credential_updated_at,
+                    token=token,
+                    adapter=adapter,
+                )
+            refreshed = call.adapter.refresh(call.token)
+            outcome = ("SUCCESS", refreshed)
+        except ProviderLifecycleError as error:
+            outcome = (error.code, None)
+        except ConnectorConfigurationRequired:
+            outcome = ("CONFIGURATION_REQUIRED", None)
+
+        if call is None:
+            # Preparation could not produce a credential snapshot; no result is safe to apply.
+            continue
+        with tenant_atomic(context_id):
+            account = SocialAccount.objects.select_for_update().get(
+                pk=call.account_id,
+                organization_id=context_id,
+            )
+            if account.credential_id is None:
+                continue
+            credential = ConnectorCredential.objects.select_for_update().get(
+                pk=account.credential_id,
+                organization_id=context_id,
+            )
+            if (
+                account.credential_id != call.credential_id
+                or credential.secret_reference != call.credential_reference
+                or credential.updated_at != call.credential_updated_at
+            ):
+                continue
+
+            code, refreshed = outcome
+            if code == "SUCCESS":
+                credential.secret_reference = token_store.replace(
+                    credential.secret_reference,
+                    refreshed,
+                )
+                credential.expires_at = refreshed.expires_at
+                credential.save(
+                    update_fields=["secret_reference", "expires_at", "updated_at"]
+                )
                 account.connection_state = SocialAccount.ConnectionState.CONNECTED
                 account.last_refresh_at = now
                 account.lifecycle_error_code = ""
                 account.save(update_fields=[
-                    "connection_state", "last_refresh_at", "lifecycle_error_code", "updated_at",
+                    "connection_state",
+                    "last_refresh_at",
+                    "lifecycle_error_code",
+                    "updated_at",
                 ])
                 counters["refreshed"] += 1
-        except ProviderLifecycleError as error:
-            with tenant_atomic(context_id):
-                account = SocialAccount.objects.get(
-                    pk=candidate_id, organization_id=context_id
+            elif code == "INVALID_GRANT":
+                account.connection_state = (
+                    SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED
                 )
-                if error.code == "INVALID_GRANT":
-                    account.connection_state = SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED
-                    account.reauthorization_required_at = now
-                    counters["reauthorization_required"] += 1
-                else:
-                    account.connection_state = SocialAccount.ConnectionState.PROVIDER_UNAVAILABLE
-                    counters["failed"] += 1
-                account.lifecycle_error_code = error.code
+                account.reauthorization_required_at = now
+                account.lifecycle_error_code = code
                 account.save(update_fields=[
-                    "connection_state", "reauthorization_required_at", "lifecycle_error_code", "updated_at",
+                    "connection_state",
+                    "reauthorization_required_at",
+                    "lifecycle_error_code",
+                    "updated_at",
                 ])
-        except ConnectorConfigurationRequired:
-            with tenant_atomic(context_id):
-                account = SocialAccount.objects.get(
-                    pk=candidate_id, organization_id=context_id
+                counters["reauthorization_required"] += 1
+            elif code == "CONFIGURATION_REQUIRED":
+                account.connection_state = (
+                    SocialAccount.ConnectionState.CONFIGURATION_REQUIRED
                 )
-                account.connection_state = SocialAccount.ConnectionState.CONFIGURATION_REQUIRED
-                account.lifecycle_error_code = "CONFIGURATION_REQUIRED"
-                account.save(update_fields=["connection_state", "lifecycle_error_code", "updated_at"])
-            counters["failed"] += 1
+                account.lifecycle_error_code = code
+                account.save(update_fields=[
+                    "connection_state",
+                    "lifecycle_error_code",
+                    "updated_at",
+                ])
+                counters["failed"] += 1
+            else:
+                account.connection_state = SocialAccount.ConnectionState.PROVIDER_UNAVAILABLE
+                account.lifecycle_error_code = code
+                account.save(update_fields=[
+                    "connection_state",
+                    "lifecycle_error_code",
+                    "updated_at",
+                ])
+                counters["failed"] += 1
     return counters
 
 

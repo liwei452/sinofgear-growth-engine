@@ -1,5 +1,7 @@
 import json
 import logging
+from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 from django.db import transaction
 
@@ -8,6 +10,7 @@ from apps.content.services import content_is_consistent
 from integrations.platforms.manual_fake import ManualPackageFakeConnector, ManualPackageReceipt
 from apps.ai.provider_config import resolve_product_ai
 from apps.ai.services import BudgetedAIProvider
+from apps.common.tenancy import tenant_atomic
 
 from .ai_disclosure import ai_fallback_metadata, ai_success_metadata
 from .models import (
@@ -257,6 +260,112 @@ def create_outreach_draft(*, account: TargetAccount) -> tuple[OutreachDraft, boo
         english_draft=draft_text,
         chinese_explanation=chinese_explanation,
     ), True
+
+
+@dataclass(frozen=True, repr=False)
+class _OutreachDraftCall:
+    account_id: object
+    account_updated_at: object
+    account: object = field(repr=False)
+    runtime: object = field(repr=False)
+    evidence: str = field(repr=False)
+
+
+def create_outreach_draft_for_tenant(
+    *,
+    account_id,
+    organization_id,
+) -> tuple[OutreachDraft, bool]:
+    """Resolve tenant configuration, call AI outside a transaction, then finalize."""
+
+    with tenant_atomic(organization_id):
+        account = TargetAccount.objects.select_related("organization").get(
+            pk=account_id,
+            organization_id=organization_id,
+        )
+        existing = account.outreach_drafts.filter(
+            organization_id=organization_id,
+        ).order_by("-created_at", "-id").first()
+        if existing is not None:
+            return existing, False
+        signal = account.intent_signals.filter(
+            organization_id=organization_id,
+        ).order_by("-observed_at", "-id").first()
+        runtime = resolve_product_ai(account.organization)
+        frozen = SimpleNamespace(
+            name=account.name,
+            country=account.country,
+            industry=account.industry,
+            website=account.website,
+        )
+        call = _OutreachDraftCall(
+            account_id=account.id,
+            account_updated_at=account.updated_at,
+            account=frozen,
+            runtime=runtime,
+            evidence=signal.evidence_text if signal else "",
+        )
+
+    if not call.runtime.real_requests_enabled:
+        draft_text = _template_outreach_draft(call.account)
+        metadata = ai_fallback_metadata(
+            call.runtime.provider_code,
+            call.runtime.model,
+            "real AI disabled",
+        )
+    else:
+        snapshot = {
+            "company_name": call.account.name,
+            "country": call.account.country,
+            "industry": call.account.industry,
+            "website": call.account.website,
+            "evidence": call.evidence,
+        }
+        prompt = (
+            "Draft a personalized development email using only the supplied facts.\n"
+            "||INPUT:" + json.dumps(snapshot, ensure_ascii=False)
+        )
+        try:
+            provider = BudgetedAIProvider(
+                organization_id=organization_id,
+                model=call.runtime.model,
+                provider=call.runtime.provider,
+            )
+            result = provider.generate(prompt=prompt, schema=OUTREACH_DRAFT_SCHEMA)
+            draft_text = result["draft"]
+            metadata = ai_success_metadata(
+                call.runtime.provider_code,
+                call.runtime.model,
+            )
+        except Exception:
+            draft_text = _template_outreach_draft(call.account)
+            metadata = ai_fallback_metadata(
+                call.runtime.provider_code,
+                call.runtime.model,
+                "provider generation failed",
+            )
+
+    with tenant_atomic(organization_id):
+        locked = TargetAccount.objects.select_for_update().get(
+            pk=call.account_id,
+            organization_id=organization_id,
+        )
+        if locked.updated_at != call.account_updated_at:
+            raise RuntimeError("Account changed during outreach draft generation.")
+        existing = locked.outreach_drafts.filter(
+            organization_id=organization_id,
+        ).order_by("-created_at", "-id").first()
+        if existing is not None:
+            return existing, False
+        explanation = "Human review is required before this draft can be sent."
+        if metadata["fallback_used"]:
+            explanation += " AI generation was unavailable; a safe template was used."
+        return OutreachDraft.objects.create(
+            organization_id=organization_id,
+            account=locked,
+            english_draft=draft_text,
+            chinese_explanation=explanation,
+        ), True
 
 
 @transaction.atomic

@@ -16,7 +16,7 @@ from .planner import DeterministicPlanner, Plan
 from .tools import Tool, ToolRegistry, ToolResult
 from ..email_verification import verify_email
 from ..enrichment import add_candidate_to_follow_up, prepare_candidate_enrichment
-from ..lead_judgment import judge_candidate
+from ..lead_judgment import judge_candidate_for_tenant
 from ..maps_discovery import (
     MapsDiscoveryMissingKey,
     MapsDiscoveryNotEnabled,
@@ -31,36 +31,43 @@ from ..models import (
     TargetAccount,
 )
 from ..outreach_events import record_sent
-from ..services import create_outreach_draft
-from ..website_enrichment import prepare_website_enrichment
+from ..services import create_outreach_draft_for_tenant
+from ..website_enrichment import prepare_website_enrichment_for_tenant
 
 
 OUTREACH_COOLDOWN_DAYS = 7
 
 
-def _candidate(organization, args: dict[str, Any]) -> DiscoveryCandidate | None:
+def _candidate(organization_id, args: dict[str, Any]) -> DiscoveryCandidate | None:
     candidate_id = args.get("candidate_id")
     if not candidate_id:
         return None
     try:
-        return DiscoveryCandidate.objects.get(organization=organization, id=candidate_id)
+        return DiscoveryCandidate.objects.get(
+            organization_id=organization_id,
+            id=candidate_id,
+        )
     except DiscoveryCandidate.DoesNotExist:
         return None
 
 
 def _discover_maps_tool(organization, source_factory) -> Tool:
+    organization_id = organization.id
+
     def func(args: dict[str, Any]) -> ToolResult:
-        config = GoogleMapsDiscoveryConfig.objects.filter(
-            organization=organization,
-            enabled=True,
-        ).order_by("id").first()
-        if config is None:
+        with tenant_atomic(organization_id):
+            config_id = GoogleMapsDiscoveryConfig.objects.filter(
+                organization_id=organization_id,
+                enabled=True,
+            ).order_by("id").values_list("id", flat=True).first()
+        if config_id is None:
             return ToolResult(ok=False, error="no enabled Google Maps discovery config.")
         try:
             result = run_maps_discovery(
-                config.id,
+                config_id,
                 trigger="MANUAL",
                 source_factory=source_factory,
+                organization_id=organization_id,
             )
         except (MapsDiscoveryMissingKey, MapsDiscoveryNotEnabled, SourceAdapterError) as exc:
             return ToolResult(ok=False, error=str(exc))
@@ -76,22 +83,28 @@ def _discover_maps_tool(organization, source_factory) -> Tool:
     )
 
 
-def _account_for_candidate(organization, candidate: DiscoveryCandidate) -> TargetAccount | None:
+def _account_for_candidate(organization_id, candidate_id) -> TargetAccount | None:
     try:
         return TargetAccount.objects.get(
-            organization=organization,
-            source_identity=f"candidate:{candidate.id}",
+            organization_id=organization_id,
+            source_identity=f"candidate:{candidate_id}",
         )
     except TargetAccount.DoesNotExist:
         return None
 
 
 def _enrich_tool(organization) -> Tool:
+    organization_id = organization.id
+
     def func(args: dict[str, Any]) -> ToolResult:
-        candidate = _candidate(organization, args)
-        if candidate is None:
-            return ToolResult(ok=False, error="candidate_id not found.")
-        snapshot, created = prepare_candidate_enrichment(candidate=candidate)
+        with tenant_atomic(organization_id):
+            candidate = _candidate(organization_id, args)
+            if candidate is None:
+                return ToolResult(ok=False, error="candidate_id not found.")
+            snapshot, created = prepare_candidate_enrichment(
+                candidate=candidate,
+                organization_id=organization_id,
+            )
         return ToolResult(
             ok=True,
             output={"candidate_id": str(candidate.id), "mode": snapshot.mode, "created": created},
@@ -112,17 +125,31 @@ def _enrich_tool(organization) -> Tool:
 
 
 def _website_enrich_tool(organization, transport) -> Tool:
+    organization_id = organization.id
+
     def func(args: dict[str, Any]) -> ToolResult:
-        candidate = _candidate(organization, args)
-        if candidate is None:
+        candidate_id = args.get("candidate_id")
+        with tenant_atomic(organization_id):
+            website = DiscoveryCandidate.objects.filter(
+                pk=candidate_id,
+                organization_id=organization_id,
+            ).values_list("website", flat=True).first()
+        if website is None:
             return ToolResult(ok=False, error="candidate_id not found.")
-        if not candidate.website:
+        if not website:
             return ToolResult(ok=True, output={"skipped": True, "reason": "no_website"})
-        snapshot, created = prepare_website_enrichment(candidate=candidate, transport=transport)
+        try:
+            snapshot, created = prepare_website_enrichment_for_tenant(
+                candidate_id=candidate_id,
+                organization_id=organization_id,
+                transport=transport,
+            )
+        except DiscoveryCandidate.DoesNotExist:
+            return ToolResult(ok=False, error="candidate_id not found.")
         return ToolResult(
             ok=True,
             output={
-                "candidate_id": str(candidate.id),
+                "candidate_id": str(candidate_id),
                 "mode": snapshot.mode,
                 "facts": snapshot.facts,
                 "public_contact_paths": snapshot.public_contact_paths,
@@ -145,19 +172,25 @@ def _website_enrich_tool(organization, transport) -> Tool:
 
 
 def _verify_contacts_tool(organization) -> Tool:
+    organization_id = organization.id
+
     def func(args: dict[str, Any]) -> ToolResult:
-        candidate = _candidate(organization, args)
-        if candidate is None:
-            return ToolResult(ok=False, error="candidate_id not found.")
-        snapshot = CandidateEnrichmentSnapshot.objects.filter(candidate=candidate).first()
-        if snapshot is None:
-            return ToolResult(ok=False, error="no enrichment snapshot.")
-        emails = []
-        for path in snapshot.public_contact_paths or []:
-            if isinstance(path, dict):
-                label = str(path.get("label") or "")
-                if "@" in label:
-                    emails.append(label)
+        with tenant_atomic(organization_id):
+            candidate = _candidate(organization_id, args)
+            if candidate is None:
+                return ToolResult(ok=False, error="candidate_id not found.")
+            snapshot = CandidateEnrichmentSnapshot.objects.filter(
+                candidate_id=candidate.id,
+                organization_id=organization_id,
+            ).first()
+            if snapshot is None:
+                return ToolResult(ok=False, error="no enrichment snapshot.")
+            emails = []
+            for path in snapshot.public_contact_paths or []:
+                if isinstance(path, dict):
+                    label = str(path.get("label") or "")
+                    if "@" in label:
+                        emails.append(label)
         verifications = [verify_email(email) for email in emails]
         return ToolResult(
             ok=True,
@@ -178,11 +211,20 @@ def _verify_contacts_tool(organization) -> Tool:
 
 
 def _judge_tool(organization) -> Tool:
+    organization_id = organization.id
+
     def func(args: dict[str, Any]) -> ToolResult:
-        candidate = _candidate(organization, args)
-        if candidate is None:
+        candidate_id = args.get("candidate_id")
+        if not candidate_id:
             return ToolResult(ok=False, error="candidate_id not found.")
-        return ToolResult(ok=True, output=judge_candidate(candidate))
+        try:
+            output = judge_candidate_for_tenant(
+                candidate_id,
+                organization_id=organization_id,
+            )
+        except DiscoveryCandidate.DoesNotExist:
+            return ToolResult(ok=False, error="candidate_id not found.")
+        return ToolResult(ok=True, output=output)
 
     return Tool(
         name="judge_candidate",
@@ -198,11 +240,17 @@ def _judge_tool(organization) -> Tool:
 
 
 def _add_to_follow_up_tool(organization) -> Tool:
+    organization_id = organization.id
+
     def func(args: dict[str, Any]) -> ToolResult:
-        candidate = _candidate(organization, args)
-        if candidate is None:
-            return ToolResult(ok=False, error="candidate_id not found.")
-        account, follow_up, created = add_candidate_to_follow_up(candidate=candidate)
+        with tenant_atomic(organization_id):
+            candidate = _candidate(organization_id, args)
+            if candidate is None:
+                return ToolResult(ok=False, error="candidate_id not found.")
+            account, follow_up, created = add_candidate_to_follow_up(
+                candidate=candidate,
+                organization_id=organization_id,
+            )
         return ToolResult(
             ok=True,
             output={
@@ -227,18 +275,25 @@ def _add_to_follow_up_tool(organization) -> Tool:
 
 
 def _draft_tool(organization) -> Tool:
+    organization_id = organization.id
+
     def func(args: dict[str, Any]) -> ToolResult:
-        candidate = _candidate(organization, args)
-        if candidate is None:
-            return ToolResult(ok=False, error="candidate_id not found.")
-        account = _account_for_candidate(organization, candidate)
-        if account is None:
+        candidate_id = args.get("candidate_id")
+        with tenant_atomic(organization_id):
+            account_id = TargetAccount.objects.filter(
+                organization_id=organization_id,
+                source_identity=f"candidate:{candidate_id}",
+            ).values_list("id", flat=True).first()
+        if account_id is None:
             return ToolResult(ok=False, error="account not resolved yet.")
-        draft, created = create_outreach_draft(account=account)
+        draft, created = create_outreach_draft_for_tenant(
+            account_id=account_id,
+            organization_id=organization_id,
+        )
         return ToolResult(
             ok=True,
             output={
-                "account_id": str(account.id),
+                "account_id": str(account_id),
                 "draft_id": str(draft.id),
                 "english_draft": draft.english_draft,
                 "created": created,
@@ -259,8 +314,11 @@ def _draft_tool(organization) -> Tool:
     )
 
 
-def _contact_email_for_candidate(candidate) -> str | None:
-    snapshot = CandidateEnrichmentSnapshot.objects.filter(candidate=candidate).first()
+def _contact_email_for_candidate(candidate, organization_id) -> str | None:
+    snapshot = CandidateEnrichmentSnapshot.objects.filter(
+        candidate=candidate,
+        organization_id=organization_id,
+    ).first()
     if snapshot is not None:
         for path in snapshot.public_contact_paths or []:
             if isinstance(path, dict):
@@ -271,30 +329,39 @@ def _contact_email_for_candidate(candidate) -> str | None:
 
 
 def _send_tool(organization) -> Tool:
+    organization_id = organization.id
+
     def func(args: dict[str, Any]) -> ToolResult:
-        candidate = _candidate(organization, args)
-        if candidate is None:
-            return ToolResult(ok=False, error="candidate_id not found.")
-        account = _account_for_candidate(organization, candidate)
-        if account is None:
-            return ToolResult(ok=False, error="account not resolved yet.")
-        draft = account.outreach_drafts.order_by("-created_at", "-id").first()
-        if draft is None:
-            return ToolResult(ok=False, error="no outreach draft to send.")
-        cooldown_cutoff = timezone.now() - timedelta(days=OUTREACH_COOLDOWN_DAYS)
-        if account.outreach_messages.filter(
-            status=OutreachMessage.Status.SENT,
-            sent_at__gte=cooldown_cutoff,
-        ).exists():
-            return ToolResult(ok=False, error="account is within outreach cooldown.")
-        email = args.get("email") or _contact_email_for_candidate(candidate)
-        if not email:
-            return ToolResult(ok=False, error="no contact email found for candidate.")
+        with tenant_atomic(organization_id):
+            candidate = _candidate(organization_id, args)
+            if candidate is None:
+                return ToolResult(ok=False, error="candidate_id not found.")
+            account = _account_for_candidate(organization_id, candidate.id)
+            if account is None:
+                return ToolResult(ok=False, error="account not resolved yet.")
+            draft = account.outreach_drafts.filter(
+                organization_id=organization_id,
+            ).order_by("-created_at", "-id").first()
+            if draft is None:
+                return ToolResult(ok=False, error="no outreach draft to send.")
+            cooldown_cutoff = timezone.now() - timedelta(days=OUTREACH_COOLDOWN_DAYS)
+            if account.outreach_messages.filter(
+                organization_id=organization_id,
+                status=OutreachMessage.Status.SENT,
+                sent_at__gte=cooldown_cutoff,
+            ).exists():
+                return ToolResult(ok=False, error="account is within outreach cooldown.")
+            email = args.get("email") or _contact_email_for_candidate(
+                candidate,
+                organization_id,
+            )
+            if not email:
+                return ToolResult(ok=False, error="no contact email found for candidate.")
         message = record_sent(
             account=account,
             draft=draft,
             email=email,
-            organization_id=organization.id,
+            organization_id=organization_id,
         )
         return ToolResult(
             ok=True,
@@ -434,31 +501,40 @@ def resume_proactive_acquisition(
     approval_token: str,
     website_transport=None,
 ) -> Any:
-    candidate = DiscoveryCandidate.objects.get(organization=organization, id=candidate_id)
-    idempotency_key = (
-        f"proactive:{mission_id}:{candidate_id}"
-        if mission_id
-        else f"proactive:{candidate_id}"
-    )
-    run = AgentRun.objects.get(
-        organization=organization,
-        idempotency_key=idempotency_key,
-    )
-    tools = ToolRegistry(
-        build_proactive_acquisition_tools(organization, website_transport=website_transport)
-    )
-    plan = (
-        proactive_acquisition_website_plan(candidate_id)
-        if candidate.website
-        else proactive_acquisition_plan(candidate_id)
-    )
-    fallback = DeterministicPlanner(plan)
-    execution = resolve_run_execution(run=run, fallback=fallback, allow_llm=True)
+    organization_id = organization.id
+    with tenant_atomic(organization_id):
+        candidate = DiscoveryCandidate.objects.get(
+            organization_id=organization_id,
+            id=candidate_id,
+        )
+        idempotency_key = (
+            f"proactive:{mission_id}:{candidate_id}"
+            if mission_id
+            else f"proactive:{candidate_id}"
+        )
+        run = AgentRun.objects.get(
+            organization_id=organization_id,
+            idempotency_key=idempotency_key,
+        )
+        tools = ToolRegistry(
+            build_proactive_acquisition_tools(
+                organization,
+                website_transport=website_transport,
+            )
+        )
+        plan = (
+            proactive_acquisition_website_plan(candidate_id)
+            if candidate.website
+            else proactive_acquisition_plan(candidate_id)
+        )
+        fallback = DeterministicPlanner(plan)
+        execution = resolve_run_execution(run=run, fallback=fallback, allow_llm=True)
     return continue_agent_run(
         run=run,
         planner=execution.planner,
         tools=tools,
         approvals={approval_token},
+        organization_id=organization_id,
     )
 
 

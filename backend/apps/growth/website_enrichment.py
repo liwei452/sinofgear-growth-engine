@@ -9,11 +9,14 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from urllib.robotparser import RobotFileParser
 
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from django.utils.module_loading import import_string
 
+from apps.common.tenancy import tenant_atomic
+
 from .market_pilots import matched_gear_terms
-from .lead_judgment import judge_candidate
+from .lead_judgment import judge_candidate, judge_candidate_for_tenant
 from .buying_signals import detect_buying_signals
 from .contact_intelligence import extract_team_contacts, infer_name_from_email
 from .taxonomy import (
@@ -224,6 +227,146 @@ def prepare_website_enrichment(candidate, *, transport=None):
     candidate.score_breakdown = breakdown
     candidate.save(update_fields=["score", "grade", "score_breakdown", "updated_at"])
     return snapshot, created
+
+
+def prepare_website_enrichment_for_tenant(
+    *,
+    candidate_id,
+    organization_id,
+    transport=None,
+):
+    """Fetch outside transactions and persist only if the prepared candidate is unchanged."""
+
+    from .enrichment import CandidateReviewRequired
+    from .models import CandidateEnrichmentSnapshot, DiscoveryCandidate
+
+    with tenant_atomic(organization_id):
+        candidate = DiscoveryCandidate.objects.get(
+            pk=candidate_id,
+            organization_id=organization_id,
+        )
+        if candidate.status != DiscoveryCandidate.Status.ACCEPTED:
+            raise CandidateReviewRequired(
+                "Candidate must be accepted before website enrichment."
+            )
+        if not candidate.website:
+            raise ValueError("Candidate has no website to enrich from.")
+        prepared_updated_at = candidate.updated_at
+        website = candidate.website
+        industry = candidate.industry
+        import_format = candidate.import_format
+
+    fetcher = transport or UrllibWebsiteTransport()
+    html = fetcher.fetch_html(
+        website,
+        timeout_seconds=WEBSITE_TIMEOUT_SECONDS,
+        max_bytes=WEBSITE_MAX_BYTES,
+    )
+    facts = extract_website_facts(html, website)
+    judgment = judge_candidate_for_tenant(
+        candidate_id,
+        organization_id=organization_id,
+        website_facts=facts,
+    )
+    buying_signals = detect_buying_signals(facts.text_excerpt)
+    team_contacts = extract_team_contacts(html, website)
+    industry_slug = classify_industry(f"{industry} {facts.text_excerpt}")
+    need_slug = classify_need(facts.text_excerpt)
+    landing_page = landing_page_url(industry_slug, need_slug)
+    tracked_landing_page = tracked_landing_url(
+        landing_page_path(industry_slug, need_slug),
+        candidate_id,
+        source="google_maps" if import_format == "GOOGLE_MAPS" else "manual",
+    )
+    public_contact_paths = (
+        [
+            {
+                "label": email,
+                "url": f"mailto:{email}",
+                "verification_status": "UNVERIFIED",
+                "name_hint": infer_name_from_email(email),
+            }
+            for email in facts.emails
+        ]
+        + [
+            {"label": phone, "verification_status": "PUBLIC_PATH"}
+            for phone in facts.phones
+        ]
+        + [
+            {"label": link, "url": link, "verification_status": "PUBLIC_PATH"}
+            for link in facts.contact_links
+        ]
+    )
+    uncertainties = []
+    if not public_contact_paths:
+        uncertainties.append("No public email or contact path was found on the website.")
+    elif facts.emails:
+        uncertainties.append("Public website email addresses remain unverified.")
+    defaults = {
+        "mode": "WEBSITE_PUBLIC",
+        "facts": [
+            {"field": "title", "value": facts.title, "source": "company website"},
+            {
+                "field": "gear_terms",
+                "value": list(facts.gear_terms),
+                "source": "company website",
+            },
+            {
+                "field": "text_excerpt",
+                "value": facts.text_excerpt,
+                "source": "company website",
+            },
+            {"field": "ai_judgment", "value": judgment["reason"], "source": "AI"},
+            {
+                "field": "buying_signals",
+                "value": [signal["label"] for signal in buying_signals],
+                "source": "website signals",
+            },
+        ],
+        "public_contact_paths": public_contact_paths,
+        "uncertainties": uncertainties,
+        "evidence_envelope": {
+            "source_owner": "public company website",
+            "source_url": website,
+            "license_contract": "PUBLIC_WEB_FAIR_USE_EXCERPT",
+            "access_method": "PUBLIC_WEB_READ",
+            "network_access": True,
+            "source_cost_micros": 0,
+            "review_status": "PENDING_REVIEW",
+            "observed_at": timezone.now().isoformat(),
+            "buying_signals": buying_signals,
+            "team_contacts": team_contacts,
+            "industry_slug": industry_slug,
+            "need_slug": need_slug,
+            "landing_page": landing_page,
+            "tracked_landing_page": tracked_landing_page,
+        },
+    }
+    with tenant_atomic(organization_id):
+        locked = DiscoveryCandidate.objects.select_for_update().get(
+            pk=candidate_id,
+            organization_id=organization_id,
+        )
+        if locked.updated_at != prepared_updated_at:
+            raise transaction.TransactionManagementError(
+                "Candidate changed during website enrichment."
+            )
+        snapshot, created = CandidateEnrichmentSnapshot.objects.get_or_create(
+            organization_id=organization_id,
+            candidate=locked,
+            defaults=defaults,
+        )
+        if not created:
+            for field, value in defaults.items():
+                setattr(snapshot, field, value)
+            snapshot.save(update_fields=[*defaults.keys(), "updated_at"])
+        breakdown = dict(locked.score_breakdown or {})
+        breakdown["ai"] = judgment
+        locked.score = judgment["score"]
+        locked.grade = judgment["grade"]
+        locked.score_breakdown = breakdown
+        locked.save(update_fields=["score", "grade", "score_breakdown", "updated_at"])
+        return snapshot, created
 
 
 def _robots_allow(url: str) -> bool:

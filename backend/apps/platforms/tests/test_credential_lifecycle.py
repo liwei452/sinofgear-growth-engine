@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.utils import timezone
 
 from apps.identity.models import Organization
@@ -15,6 +16,7 @@ from apps.platforms.lifecycle import (
 )
 from apps.platforms.models import ConnectorCredential, Platform, SocialAccount
 from integrations.platforms.token_store import OAuthTokenSet
+from integrations.platforms.base import ConnectorConfigurationRequired
 
 
 class TokenStore:
@@ -150,6 +152,61 @@ def test_invalid_grant_marks_reauthorization_without_overwriting_credential(life
     assert result["reauthorization_required"] == 1
     assert account.connection_state == SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED
     assert credential.secret_reference == "vault://fixture/original"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "outcome",
+    ["success", "invalid_grant", "configuration_required"],
+)
+def test_stale_refresh_result_never_overwrites_concurrent_credential_rotation(
+    lifecycle_account, outcome
+) -> None:
+    organization, _actor, credential, account = lifecycle_account
+
+    class RotatingAdapter:
+        def refresh(self, token):
+            assert connection.in_atomic_block is False
+            ConnectorCredential.objects.filter(pk=credential.id).update(
+                secret_reference="vault://fixture/concurrent",
+                updated_at=timezone.now() + timedelta(seconds=1),
+            )
+            SocialAccount.objects.filter(pk=account.id).update(
+                connection_state=SocialAccount.ConnectionState.DISCONNECTED,
+                lifecycle_error_code="CONCURRENT_STATE",
+                reauthorization_required_at=None,
+            )
+            if outcome == "invalid_grant":
+                raise ProviderLifecycleError("INVALID_GRANT")
+            if outcome == "configuration_required":
+                raise ConnectorConfigurationRequired("configuration unavailable")
+            return OAuthTokenSet(
+                access_token="stale-access",
+                refresh_token="stale-refresh",
+                expires_at=timezone.now() + timedelta(hours=2),
+            )
+
+    store = TokenStore()
+    result = refresh_due_credentials(
+        adapter_registry=LifecycleAdapterRegistry({"LINKEDIN": RotatingAdapter()}),
+        token_store=store,
+        organization=organization,
+        now=timezone.now(),
+    )
+
+    credential.refresh_from_db()
+    account.refresh_from_db()
+    assert result == {
+        "examined": 1,
+        "refreshed": 0,
+        "reauthorization_required": 0,
+        "failed": 0,
+    }
+    assert credential.secret_reference == "vault://fixture/concurrent"
+    assert account.connection_state == SocialAccount.ConnectionState.DISCONNECTED
+    assert account.lifecycle_error_code == "CONCURRENT_STATE"
+    assert account.reauthorization_required_at is None
+    assert store.replaced == []
 
 
 @pytest.mark.django_db

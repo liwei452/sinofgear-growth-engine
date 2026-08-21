@@ -70,6 +70,15 @@ BACKEND_GLOBAL_PATTERNS = (
     "backend/apps/common/openapi.py",
     "backend/apps/common/renderers.py",
 )
+BACKEND_GLOBAL_PREFIXES = ("backend/apps/common/",)
+
+PRODUCTION_PREFIXES = (
+    ".github/",
+    "backend/",
+    "frontend/",
+    "infrastructure/",
+    "scripts/",
+)
 
 FRONTEND_GLOBAL_PATTERNS = (
     "frontend/package.json",

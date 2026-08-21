@@ -20,6 +20,7 @@ from scripts.verification_rules import (
     API_FILE_NAMES,
     API_TEST_PATTERNS,
     BACKEND_CHECKS,
+    BACKEND_GLOBAL_PREFIXES,
     BACKEND_GLOBAL_PATTERNS,
     CHECK_LABELS,
     CHECK_ORDER,
@@ -33,6 +34,7 @@ from scripts.verification_rules import (
     FRONTEND_SOURCE_SUFFIXES,
     FRONTEND_TEST_PATTERNS,
     MODEL_FILE_NAMES,
+    PRODUCTION_PREFIXES,
     ROOT_GLOBAL_FILES,
     ROOT_GLOBAL_PREFIXES,
 )
@@ -111,7 +113,9 @@ def _matches(path: str, patterns: Sequence[str]) -> bool:
 
 
 def _is_document(path: str) -> bool:
-    return path.startswith(DOCUMENT_PREFIXES) or path.lower().endswith(DOCUMENT_SUFFIXES)
+    if path.startswith(DOCUMENT_PREFIXES):
+        return True
+    return not path.startswith(PRODUCTION_PREFIXES) and path.lower().endswith(DOCUMENT_SUFFIXES)
 
 
 def _existing_globs(repo_root: Path, directory: str, patterns: Sequence[str]) -> tuple[str, ...]:
@@ -158,6 +162,9 @@ def _select_backend(path: str, repo_root: Path, builder: _PlanBuilder) -> None:
     if path.startswith("backend/tests/test_"):
         builder.add("pytest", path)
         builder.reason(f"Changed backend test must run directly: {path}")
+        return
+    if path.startswith(BACKEND_GLOBAL_PREFIXES) and "/tests/test_" not in path:
+        _add_backend_full(builder, f"Shared backend infrastructure changed: {path}")
         return
     package = _backend_package(path)
     if package is None:

@@ -74,7 +74,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
         ),
         ("docs/verification.md", {"diff"}, None, None, None),
         (
-            "backend/runtime/production.template",
+            "backend/runtime/production.txt",
             {"diff", "ruff", "pytest", "django-check", "migration-drift", "openapi-validate"},
             None,
             None,

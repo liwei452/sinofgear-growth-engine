@@ -36,6 +36,7 @@ test("uploaded PDF becomes reviewed product facts without real AI or sending",as
   await card.getByLabel("整理到产品").selectOption("10000000-0000-4000-8000-000000000101")
   await card.getByRole("button",{name:"准备产品事实"}).click()
   await expect(card.getByText("Fake Provider · 本地演示")).toBeVisible()
+  await card.getByRole("button",{name:"查看已有事实"}).click()
   await expect(card.getByText("Accuracy: DIN 6")).toBeVisible()
   const accuracy=card.locator("article.fact").filter({hasText:"accuracy：DIN 6"})
   await expect(accuracy.getByText("高风险事实，必须人工确认")).toBeVisible()

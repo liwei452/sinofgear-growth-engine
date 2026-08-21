@@ -5,42 +5,44 @@ on:
     branches: [feature/phase-a, master, main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  VERIFICATION_BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+
 jobs:
   backend:
     name: Backend tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
       - name: Install dependencies
         run: pip install ".[dev]"
-      - name: Lint
-        run: ruff check apps integrations config
-      - name: Run tests
-        run: python -m pytest -q
-      - name: Django system check
-        run: python manage.py check --settings=config.test_settings
-      - name: Check migration drift
-        run: python manage.py makemigrations --check --dry-run --settings=config.test_settings
-      - name: Validate OpenAPI schema
-        run: python manage.py spectacular --settings=config.test_settings --validate
+        working-directory: backend
+      - name: Run complete backend verification
+        run: python scripts/verify.py backend --base "$VERIFICATION_BASE"
 
   frontend:
     name: Frontend checks
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
       - name: Install backend dependencies for API contract
         run: pip install ".[dev]"
         working-directory: backend
@@ -54,13 +56,45 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: API contract check
-        run: pnpm api:check
-      - name: Typecheck
-        run: pnpm typecheck
-      - name: Lint
-        run: pnpm lint
-      - name: Unit tests
-        run: pnpm test -- --run
-      - name: Build
-        run: pnpm build
+        working-directory: frontend
+      - name: Run complete frontend verification
+        run: python scripts/verify.py frontend --base "$VERIFICATION_BASE"
+
+  e2e:
+    name: Browser E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Create isolated backend environment
+        working-directory: backend
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install ".[dev]"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium system dependencies
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run repository E2E verification
+        run: python scripts/verify.py e2e --base "$VERIFICATION_BASE"

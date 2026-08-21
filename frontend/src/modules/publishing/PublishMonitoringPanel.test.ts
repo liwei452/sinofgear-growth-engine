@@ -150,7 +150,7 @@ it("uses one bounded monitor request and server-side group filtering", async () 
 })
 
 it("shows operations only from allowed_actions and reconciles without publishing", async () => {
-  const operation = vi.fn((path: string) => response(task("SUBMISSION_UNKNOWN")))
+  const operation = vi.fn(() => response(task("SUBMISSION_UNKNOWN")))
   const fetchMock = fetchFor([task("SUBMISSION_UNKNOWN", {
     allowed_actions: {
       ...task("SUBMISSION_UNKNOWN").allowed_actions,
@@ -172,7 +172,7 @@ it("shows operations only from allowed_actions and reconciles without publishing
 })
 
 it("requires a second confirmation before retrying an allowed failed task", async () => {
-  const operation = vi.fn((path: string) => response(task("QUEUED")))
+  const operation = vi.fn(() => response(task("QUEUED")))
   renderPanel(fetchFor([task("FAILED", {
     allowed_actions: {
       ...task("FAILED").allowed_actions,
@@ -192,7 +192,7 @@ it("requires a second confirmation before retrying an allowed failed task", asyn
 })
 
 it("validates a native Buffer Post ID before requesting server verification", async () => {
-  const operation = vi.fn((path: string, init?: RequestInit) => response(task("SUCCEEDED", {
+  const operation = vi.fn(() => response(task("SUCCEEDED", {
     provider_submission_id: "buffer-post-8421",
   })))
   renderPanel(fetchFor([task("NEEDS_ATTENTION", {
@@ -221,7 +221,7 @@ it("validates a native Buffer Post ID before requesting server verification", as
 })
 
 it("requires strict displayed no-match evidence and explicit operator confirmation", async () => {
-  const operation = vi.fn((path: string) => response(task("FAILED")))
+  const operation = vi.fn(() => response(task("FAILED")))
   const strictEvidence = {
     ambiguous: false,
     candidate_count: 0,

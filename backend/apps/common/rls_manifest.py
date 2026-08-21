@@ -75,6 +75,32 @@ RLS1_TABLES = frozenset(
     }
 )
 
+RLS2A_TABLES = frozenset(
+    {
+        "ai_airun",
+        "ai_organizationaiproviderconfig",
+        "ai_promptversion",
+        "assets_assetproductlink",
+        "assets_materialasset",
+        "assets_productevidencefact",
+        "audit_approvalrecord",
+        "audit_auditlog",
+        "catalog_product",
+        "catalog_productconceptlink",
+        "jobs_job",
+        "jobs_jobattempt",
+        "platforms_accountconnectionsession",
+        "platforms_connectorcredential",
+        "platforms_encryptedoauthcredential",
+        "platforms_oauthconnectionattempt",
+        "platforms_platform",
+        "platforms_platformcapability",
+        "platforms_providerconnection",
+        "platforms_providerconnectionevent",
+        "platforms_socialaccount",
+    }
+)
+
 
 def _direct(
     model_label: str,

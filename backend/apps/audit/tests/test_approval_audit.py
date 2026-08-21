@@ -5,10 +5,15 @@ from django.db import transaction
 
 from apps.audit.models import ApprovalRecord, AuditLog
 from apps.audit.services import record_review_transition
-from apps.knowledge.models import KnowledgeConcept
+from apps.knowledge.models import KnowledgeConcept, KnowledgeGraphLock
 from apps.knowledge.services import OntologyContextService
 
 from apps.knowledge.tests.conftest import create_member_client, make_concept
+
+
+@pytest.fixture(autouse=True)
+def ensure_graph_lock():
+    KnowledgeGraphLock.objects.get_or_create(id=1, defaults={"name": "is_a_graph"})
 
 
 @pytest.mark.django_db

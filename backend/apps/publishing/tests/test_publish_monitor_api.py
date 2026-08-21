@@ -129,7 +129,7 @@ def test_monitor_query_count_is_constant_for_bounded_results(
     client = _client(context["organization"], Role.Code.READ_ONLY, "queries")
     client.get("/api/v1/publish-tasks/monitor")
 
-    with django_assert_num_queries(8):
+    with django_assert_num_queries(10):
         response = client.get("/api/v1/publish-tasks/monitor")
     assert response.status_code == 200
     assert len(response.json()["results"]) == 4

@@ -42,11 +42,16 @@ def _candidate(organization):
     )
 
 
+@pytest.mark.django_db(transaction=True)
 def test_list_detail_and_approve_agent_run(organization, monkeypatch):
     from apps.growth.agent import acquisition as acq
     from apps.growth import outreach_events
 
-    monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
+    monkeypatch.setattr(
+        acq,
+        "_contact_email_for_candidate",
+        lambda candidate, organization_id: "buyer@example.com",
+    )
 
     class ConnectedProvider:
         def send(self, *, email, subject, body):

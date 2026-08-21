@@ -4,6 +4,9 @@ import pytest
 from rest_framework.test import APIClient
 
 
+pytestmark = pytest.mark.django_db
+
+
 RESOURCE_TAGS = {
     "/api/v1/knowledge/concepts": "KnowledgeConcepts",
     "/api/v1/knowledge/relations": "KnowledgeRelations",

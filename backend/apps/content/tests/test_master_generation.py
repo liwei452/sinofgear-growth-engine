@@ -173,7 +173,7 @@ def test_generate_master_content_job_exposes_platform_failure(
     assert job.status == Job.Status.SUCCEEDED
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_retry_redispatches_platform_variants_job(
     master_with_two_platforms, monkeypatch
 ):

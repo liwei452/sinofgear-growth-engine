@@ -490,9 +490,8 @@ class BufferProviderConnectionMigrationTest(TransactionTestCase):
     migrate_to = [("platforms", "0011_providerconnectionevent")]
 
     def tearDown(self):
-        MigrationExecutor(db_connection).migrate(
-            [("platforms", "0012_enable_platforms_tenant_rls")]
-        )
+        executor = MigrationExecutor(db_connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
         super().tearDown()
 
     def test_migration_applies_forward_and_reverse_without_data_loss(self):

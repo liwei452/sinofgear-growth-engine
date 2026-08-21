@@ -5,13 +5,17 @@ from django.db.migrations.executor import MigrationExecutor
 
 MIGRATE_FROM = [("publishing", "0006_publishtask_unique_live_content_account")]
 MIGRATE_TO = [("publishing", "0007_publishreconciliationattempt_and_more")]
-LATEST = [("publishing", "0010_publishreconciliationattempt_candidate_search_truncated")]
 
 
 def _migrate(target):
     executor = MigrationExecutor(connection)
     executor.migrate(target)
     return executor.loader.project_state(target).apps
+
+
+def _restore_latest():
+    executor = MigrationExecutor(connection)
+    executor.migrate(executor.loader.graph.leaf_nodes())
 
 
 def _task(apps, context, *, status, key):
@@ -42,7 +46,7 @@ def test_reconciliation_migration_preserves_existing_history(publishing_context)
     finally:
         _migrate(MIGRATE_FROM)
         old_apps.get_model("publishing", "PublishTask").objects.filter(pk=task.pk).delete()
-        _migrate(LATEST)
+        _restore_latest()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -64,4 +68,4 @@ def test_reconciliation_migration_blocks_newly_protected_duplicates_without_chan
         assert list(Task.objects.filter(pk__in=[first.pk, second.pk]).values("id", "status")) == before
     finally:
         Task.objects.filter(pk__in=[first.pk, second.pk]).delete()
-        _migrate(LATEST)
+        _restore_latest()

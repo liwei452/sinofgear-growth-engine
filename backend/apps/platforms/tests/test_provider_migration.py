@@ -13,7 +13,8 @@ class ProviderBackfillMigrationTest(TransactionTestCase):
     migrate_to = [("platforms", "0010_remove_socialaccount_platforms_social_account_provider_shape_and_more")]
 
     def tearDown(self):
-        MigrationExecutor(connection).migrate([("platforms", "0012_enable_platforms_tenant_rls")])
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
         super().tearDown()
 
     def setUp(self):

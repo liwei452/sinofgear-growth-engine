@@ -66,6 +66,7 @@ function standardFetch(
   if (path.includes("/master-contents")) return response({ next: null, previous: null, results: options.master ?? [] })
   if (path.includes("/platform-contents")) return response({ next: null, previous: null, results: options.platform ?? [platformContent] })
   if (path.includes("/publish-tasks")) return response({ next: null, previous: null, results: options.tasks ?? [] })
+  if (path.includes("/social-accounts")) return response({ results: [] })
   if (path.includes("/platforms")) return response({ results: [{ id: "linkedin", code: "LINKEDIN", name: "LinkedIn", capabilities: [] }] })
   return response(currentUser(options.permissions, options.role))
 }
@@ -89,6 +90,19 @@ async function renderPage(fetchMock: ReturnType<typeof vi.fn>) {
 }
 
 afterEach(() => vi.unstubAllGlobals())
+
+it("opens publishing monitoring as a secondary view inside content and publishing", async () => {
+  await renderPage(vi.fn((input: RequestInfo | URL) => standardFetch(input, {
+    platform: [],
+    tasks: [],
+  })))
+
+  expect(await screen.findByRole("button", { name: "内容工作流" })).toHaveAttribute("aria-pressed", "true")
+  await userEvent.click(screen.getByRole("button", { name: "发布监控" }))
+  expect(await screen.findByRole("heading", { name: "发布监控" })).toBeVisible()
+  expect(screen.getByRole("button", { name: "发布监控" })).toHaveAttribute("aria-pressed", "true")
+  expect(screen.queryByRole("tab", { name: /待处理/ })).not.toBeInTheDocument()
+})
 
 it("uses three primary stages and keeps the operational status as a secondary filter", async () => {
   await renderPage(vi.fn((input: RequestInfo | URL) => standardFetch(input)))

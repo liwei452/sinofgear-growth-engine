@@ -4,8 +4,14 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
+from django.db.models.expressions import BaseExpression
 
-from .guards import GraphAssociationModel, GuardedKnowledgeModel
+from .guards import (
+    CompanyRevisionModel,
+    GraphAssociationModel,
+    GuardedKnowledgeModel,
+    company_write_override_active,
+)
 from .normalization import normalize_alias
 
 
@@ -130,6 +136,16 @@ class KnowledgeEvidence(GuardedKnowledgeModel):
         HUMAN_ENTRY = "HUMAN_ENTRY", "Human entry"
         STANDARD_REFERENCE = "STANDARD_REFERENCE", "Standard reference"
 
+    class UsageRights(models.TextChoices):
+        UNKNOWN = "UNKNOWN", "Unknown"
+        INTERNAL_ONLY = "INTERNAL_ONLY", "Internal only"
+        PUBLIC = "PUBLIC", "Public use allowed"
+
+    class Sensitivity(models.TextChoices):
+        NORMAL = "NORMAL", "Normal"
+        CONFIDENTIAL = "CONFIDENTIAL", "Confidential"
+        SECRET = "SECRET", "Secret"
+
     Status = KnowledgeStatus
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -142,6 +158,20 @@ class KnowledgeEvidence(GuardedKnowledgeModel):
     source_url = models.URLField(max_length=2048, null=True, blank=True)
     excerpt = models.TextField(blank=True)
     captured_at = models.DateTimeField(null=True, blank=True)
+    content_hash = models.CharField(max_length=64, blank=True, default="")
+    usage_rights = models.CharField(
+        max_length=24,
+        choices=UsageRights.choices,
+        default=UsageRights.UNKNOWN,
+    )
+    sensitivity = models.CharField(
+        max_length=16,
+        choices=Sensitivity.choices,
+        default=Sensitivity.NORMAL,
+    )
+    is_demo = models.BooleanField(default=False)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(blank=True)
     status = models.CharField(max_length=16, choices=KnowledgeStatus.choices, default=KnowledgeStatus.SUGGESTED)
     version = models.PositiveIntegerField(default=1)
     suggested_by_ai_run_id = models.UUIDField(null=True, blank=True)
@@ -169,12 +199,366 @@ class KnowledgeEvidence(GuardedKnowledgeModel):
             "source_url",
             "excerpt",
             "captured_at",
+            "content_hash",
+            "usage_rights",
+            "sensitivity",
+            "is_demo",
+            "expires_at",
             "created_by_id",
         }
     )
 
     def _knowledge_reference_objects(self) -> list[object]:
-        return [*self.concepts.all(), *self.relations.all()]
+        return [*self.concepts.all(), *self.relations.all(), *self.company_fact_bindings.all()]
+
+
+class CompanyKnowledgeProfile(CompanyRevisionModel):
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT", "Draft"
+        IN_REVIEW = "IN_REVIEW", "In review"
+        APPROVED = "APPROVED", "Approved"
+        SUPERSEDED = "SUPERSEDED", "Superseded"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "identity.Organization",
+        on_delete=models.PROTECT,
+        related_name="company_knowledge_profiles",
+    )
+    version = models.PositiveIntegerField(default=1)
+    supersedes = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="successor_profiles",
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    brand_name = models.CharField(max_length=255)
+    legal_name_zh = models.CharField(max_length=255, blank=True)
+    legal_name_en = models.CharField(max_length=255, blank=True)
+    brand_aliases = models.JSONField(default=list, blank=True)
+    internal_summary = models.TextField(blank=True)
+    default_language = models.CharField(max_length=16, default="en")
+    supported_languages = models.JSONField(default=list, blank=True)
+    primary_site_origin = models.URLField(max_length=2048, blank=True)
+    disclosure_rules = models.JSONField(default=dict, blank=True)
+    prohibited_claims = models.JSONField(default=list, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_company_knowledge_profiles",
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reviewed_company_knowledge_profiles",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    frozen_statuses = frozenset({Status.APPROVED, Status.SUPERSEDED})
+    frozen_label = "approved profile"
+    business_fields = frozenset(
+        {
+            "brand_name",
+            "legal_name_zh",
+            "legal_name_en",
+            "brand_aliases",
+            "internal_summary",
+            "default_language",
+            "supported_languages",
+            "primary_site_origin",
+            "disclosure_rules",
+            "prohibited_claims",
+        }
+    )
+
+    class Meta:
+        ordering = ["organization_id", "-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "version"],
+                name="knowledge_unique_company_profile_version",
+            ),
+            models.UniqueConstraint(
+                fields=["organization"],
+                condition=models.Q(status="APPROVED"),
+                name="knowledge_one_approved_company_profile",
+            ),
+        ]
+
+    def clean(self) -> None:
+        super().clean()
+        if self.supersedes_id:
+            if self.supersedes.organization_id != self.organization_id:
+                raise ValidationError({"supersedes": "Superseded profile must belong to the same organization."})
+            if self.version <= self.supersedes.version:
+                raise ValidationError({"version": "A profile revision version must increase."})
+        if not isinstance(self.brand_aliases, list) or not all(
+            isinstance(item, str) for item in self.brand_aliases
+        ):
+            raise ValidationError({"brand_aliases": "Brand aliases must be a list of strings."})
+        if not isinstance(self.supported_languages, list) or not all(
+            isinstance(item, str) for item in self.supported_languages
+        ):
+            raise ValidationError({"supported_languages": "Supported languages must be a list of strings."})
+        if not isinstance(self.disclosure_rules, dict):
+            raise ValidationError({"disclosure_rules": "Disclosure rules must be an object."})
+        if not isinstance(self.prohibited_claims, list) or not all(
+            isinstance(item, str) for item in self.prohibited_claims
+        ):
+            raise ValidationError({"prohibited_claims": "Prohibited claims must be a list of strings."})
+
+
+class CompanyFact(CompanyRevisionModel):
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT", "Draft"
+        IN_REVIEW = "IN_REVIEW", "In review"
+        VERIFIED = "VERIFIED", "Verified"
+        REJECTED = "REJECTED", "Rejected"
+        SUPERSEDED = "SUPERSEDED", "Superseded"
+
+    class Visibility(models.TextChoices):
+        PUBLIC = "PUBLIC", "Public"
+        INTERNAL = "INTERNAL", "Internal"
+        RESTRICTED = "RESTRICTED", "Restricted"
+
+    class Sensitivity(models.TextChoices):
+        NORMAL = "NORMAL", "Normal"
+        CONFIDENTIAL = "CONFIDENTIAL", "Confidential"
+        SECRET = "SECRET", "Secret"
+
+    class ClaimPolicy(models.TextChoices):
+        ALLOW_WITH_EVIDENCE = "ALLOW_WITH_EVIDENCE", "Allow with evidence"
+        INTERNAL_CONTEXT_ONLY = "INTERNAL_CONTEXT_ONLY", "Internal context only"
+        NEVER_SEND_TO_MODEL = "NEVER_SEND_TO_MODEL", "Never send to model"
+
+    class RiskLevel(models.TextChoices):
+        STANDARD = "STANDARD", "Standard"
+        HIGH = "HIGH", "High"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "identity.Organization",
+        on_delete=models.PROTECT,
+        related_name="company_facts",
+    )
+    profile = models.ForeignKey(
+        CompanyKnowledgeProfile,
+        on_delete=models.PROTECT,
+        related_name="facts",
+    )
+    namespace = models.CharField(max_length=96)
+    key = models.CharField(max_length=160)
+    value_json = models.JSONField()
+    fact_type = models.CharField(max_length=64)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    visibility = models.CharField(max_length=16, choices=Visibility.choices, default=Visibility.INTERNAL)
+    sensitivity = models.CharField(max_length=16, choices=Sensitivity.choices, default=Sensitivity.NORMAL)
+    claim_policy = models.CharField(
+        max_length=32,
+        choices=ClaimPolicy.choices,
+        default=ClaimPolicy.INTERNAL_CONTEXT_ONLY,
+    )
+    risk_level = models.CharField(max_length=16, choices=RiskLevel.choices, default=RiskLevel.STANDARD)
+    version = models.PositiveIntegerField(default=1)
+    supersedes = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="successor_facts",
+    )
+    valid_from = models.DateField(null=True, blank=True)
+    valid_until = models.DateField(null=True, blank=True)
+    is_demo = models.BooleanField(default=False)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_company_facts",
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reviewed_company_facts",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    evidence = models.ManyToManyField(
+        KnowledgeEvidence,
+        through="CompanyFactEvidence",
+        related_name="company_facts",
+        blank=True,
+    )
+
+    frozen_statuses = frozenset({Status.VERIFIED, Status.SUPERSEDED})
+    frozen_label = "verified fact"
+    identity_fields = CompanyRevisionModel.identity_fields | frozenset({"profile_id", "namespace", "key"})
+    business_fields = frozenset(
+        {
+            "value_json",
+            "fact_type",
+            "visibility",
+            "sensitivity",
+            "claim_policy",
+            "risk_level",
+            "valid_from",
+            "valid_until",
+            "is_demo",
+        }
+    )
+
+    class Meta:
+        ordering = ["profile_id", "namespace", "key", "-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["profile", "namespace", "key", "version"],
+                name="knowledge_unique_company_fact_version",
+            ),
+            models.UniqueConstraint(
+                fields=["profile", "namespace", "key"],
+                condition=models.Q(status="VERIFIED"),
+                name="knowledge_one_verified_company_fact",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(valid_until__isnull=True)
+                | models.Q(valid_from__isnull=True)
+                | models.Q(valid_until__gte=models.F("valid_from")),
+                name="knowledge_company_fact_valid_dates",
+            ),
+        ]
+
+    def clean(self) -> None:
+        super().clean()
+        if self.profile_id and self.profile.organization_id != self.organization_id:
+            raise ValidationError({"organization": "Fact and profile must belong to the same organization."})
+        if self.supersedes_id:
+            previous = self.supersedes
+            if previous.organization_id != self.organization_id or previous.profile_id != self.profile_id:
+                raise ValidationError({"supersedes": "Superseded fact must belong to the same profile and organization."})
+            if (previous.namespace, previous.key) != (self.namespace, self.key):
+                raise ValidationError({"supersedes": "A fact revision must preserve namespace and key."})
+            if self.version <= previous.version:
+                raise ValidationError({"version": "A fact revision version must increase."})
+        if self.valid_from and self.valid_until and self.valid_until < self.valid_from:
+            raise ValidationError({"valid_until": "valid_until cannot be earlier than valid_from."})
+        self.namespace = self.namespace.strip()
+        self.key = self.key.strip()
+        if not self.namespace or not self.key:
+            raise ValidationError("Company facts require a namespace and key.")
+
+
+class CompanyFactEvidenceQuerySet(models.QuerySet):
+    def bulk_create(self, objs, **kwargs):
+        objects = list(objs)
+        for instance in objects:
+            instance._validate_binding_write(creating=True)
+        return super().bulk_create(objects, **kwargs)
+
+    def update(self, **kwargs):
+        if company_write_override_active():
+            return super().update(**kwargs)
+        if self.filter(company_fact__status=CompanyFact.Status.VERIFIED).exists():
+            raise ValidationError("Evidence bindings for verified facts are immutable.")
+        for instance in self.select_related("company_fact__profile", "evidence"):
+            for field, value in kwargs.items():
+                if isinstance(value, BaseExpression):
+                    raise ValidationError("Expression updates are not supported for fact evidence bindings.")
+                setattr(instance, field, value)
+            instance._validate_binding_write(creating=False)
+        return super().update(**kwargs)
+
+    def bulk_update(self, objs, fields, **kwargs):
+        objects = list(objs)
+        for instance in objects:
+            instance._validate_binding_write(creating=False)
+        return super().bulk_update(objects, fields, **kwargs)
+
+    def delete(self):
+        if not company_write_override_active() and self.filter(
+            company_fact__status=CompanyFact.Status.VERIFIED
+        ).exists():
+            raise ValidationError("Evidence bindings for verified facts are immutable.")
+        return super().delete()
+
+
+class CompanyFactEvidence(models.Model):
+    class SupportType(models.TextChoices):
+        PRIMARY = "PRIMARY", "Primary"
+        SUPPORTING = "SUPPORTING", "Supporting"
+        CONTRADICTING = "CONTRADICTING", "Contradicting"
+
+    objects = models.Manager.from_queryset(CompanyFactEvidenceQuerySet)()
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    company_fact = models.ForeignKey(
+        CompanyFact,
+        on_delete=models.CASCADE,
+        related_name="evidence_bindings",
+    )
+    evidence = models.ForeignKey(
+        KnowledgeEvidence,
+        on_delete=models.PROTECT,
+        related_name="company_fact_bindings",
+    )
+    support_type = models.CharField(max_length=16, choices=SupportType.choices)
+    citation_label = models.CharField(max_length=255, blank=True)
+    bound_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="bound_company_fact_evidence",
+    )
+    bound_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        base_manager_name = "objects"
+        default_manager_name = "objects"
+        ordering = ["company_fact_id", "support_type", "bound_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["company_fact", "evidence", "support_type"],
+                name="knowledge_unique_company_fact_evidence",
+            )
+        ]
+
+    def clean(self) -> None:
+        super().clean()
+        if not self.company_fact_id or not self.evidence_id:
+            return
+        fact = self.company_fact
+        if fact.profile.organization_id != fact.organization_id:
+            raise ValidationError("Fact and profile must belong to the same organization.")
+        if self.evidence.organization_id != fact.organization_id:
+            raise ValidationError("Fact, profile, and evidence must belong to the same organization.")
+
+    def _validate_binding_write(self, *, creating: bool) -> None:
+        self.clean()
+        if company_write_override_active():
+            return
+        fact_status = self.company_fact.status
+        if not creating:
+            original = type(self).objects.select_related("company_fact").get(pk=self.pk)
+            if original.company_fact.status == CompanyFact.Status.VERIFIED:
+                raise ValidationError("Evidence bindings for verified facts are immutable.")
+        if fact_status == CompanyFact.Status.VERIFIED:
+            raise ValidationError("Evidence bindings for verified facts are immutable.")
+
+    def save(self, *args, **kwargs):
+        self._validate_binding_write(creating=self._state.adding)
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        fact_status = CompanyFact.objects.only("status").get(pk=self.company_fact_id).status
+        if not company_write_override_active() and fact_status == CompanyFact.Status.VERIFIED:
+            raise ValidationError("Evidence bindings for verified facts are immutable.")
+        return super().delete(*args, **kwargs)
 
 
 class KnowledgeAlias(GuardedKnowledgeModel):

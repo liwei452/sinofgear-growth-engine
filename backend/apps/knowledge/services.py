@@ -13,8 +13,16 @@ from apps.audit.models import ReviewAction
 from apps.audit.services import record_review_transition
 from apps.identity.models import Organization
 
-from .models import KnowledgeAlias, KnowledgeConcept, KnowledgeEvidence, KnowledgeRelation, KnowledgeStatus
-from .guards import _audited_review_writes
+from .models import (
+    CompanyFact,
+    CompanyKnowledgeProfile,
+    KnowledgeAlias,
+    KnowledgeConcept,
+    KnowledgeEvidence,
+    KnowledgeRelation,
+    KnowledgeStatus,
+)
+from .guards import _audited_review_writes, _company_review_writes
 from .normalization import normalize_alias
 from .relation_rules import validate_predicate_types
 
@@ -25,6 +33,318 @@ class OntologyDepthError(ValueError):
 
 class KnowledgeStateError(ValueError):
     pass
+
+
+class CompanyRevisionStateError(ValueError):
+    pass
+
+
+class _CompanyReviewService:
+    def __init__(self, organization: Organization) -> None:
+        self.organization = organization
+
+    def _ensure_organization(self, instance) -> None:
+        if instance.organization_id != self.organization.id:
+            raise ValidationError("Company revision belongs to another organization.")
+
+    def _record_transition(
+        self,
+        *,
+        instance,
+        action: str,
+        actor: AbstractBaseUser,
+        before_status: str,
+        comment: str,
+    ) -> None:
+        record_review_transition(
+            organization=self.organization,
+            object_type=f"{instance._meta.app_label}.{instance.__class__.__name__}",
+            object_id=instance.pk,
+            action=action,
+            status=instance.status,
+            object_version=instance.version,
+            actor=actor,
+            comment=comment,
+            before_metadata={"status": before_status, "version": instance.version},
+            after_metadata={"status": instance.status, "version": instance.version},
+        )
+
+
+class CompanyProfileReviewService(_CompanyReviewService):
+    @transaction.atomic
+    def submit(
+        self,
+        profile: CompanyKnowledgeProfile,
+        *,
+        actor: AbstractBaseUser,
+        review_note: str = "",
+    ) -> CompanyKnowledgeProfile:
+        return self._transition(
+            profile,
+            expected=CompanyKnowledgeProfile.Status.DRAFT,
+            target=CompanyKnowledgeProfile.Status.IN_REVIEW,
+            action=ReviewAction.SUBMIT,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    @transaction.atomic
+    def approve(
+        self,
+        profile: CompanyKnowledgeProfile,
+        *,
+        actor: AbstractBaseUser,
+        review_note: str = "",
+    ) -> CompanyKnowledgeProfile:
+        locked = CompanyKnowledgeProfile.objects.select_for_update().get(pk=profile.pk)
+        self._ensure_organization(locked)
+        if locked.status != CompanyKnowledgeProfile.Status.IN_REVIEW:
+            raise CompanyRevisionStateError(f"Cannot approve profile in status {locked.status}.")
+
+        current = (
+            CompanyKnowledgeProfile.objects.select_for_update()
+            .filter(
+                organization=self.organization,
+                status=CompanyKnowledgeProfile.Status.APPROVED,
+            )
+            .exclude(pk=locked.pk)
+            .first()
+        )
+        if current:
+            if locked.supersedes_id != current.pk:
+                raise CompanyRevisionStateError("A new approved profile must supersede the current approved revision.")
+            before_status = current.status
+            current.status = CompanyKnowledgeProfile.Status.SUPERSEDED
+            with _company_review_writes():
+                current.save(update_fields=["status"])
+            self._record_transition(
+                instance=current,
+                action=ReviewAction.DEPRECATE,
+                actor=actor,
+                before_status=before_status,
+                comment=review_note.strip(),
+            )
+
+        return self._transition_locked(
+            locked,
+            target=CompanyKnowledgeProfile.Status.APPROVED,
+            action=ReviewAction.APPROVE,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    def _transition(
+        self,
+        profile: CompanyKnowledgeProfile,
+        *,
+        expected: str,
+        target: str,
+        action: str,
+        actor: AbstractBaseUser,
+        review_note: str,
+    ) -> CompanyKnowledgeProfile:
+        locked = CompanyKnowledgeProfile.objects.select_for_update().get(pk=profile.pk)
+        self._ensure_organization(locked)
+        if locked.status != expected:
+            raise CompanyRevisionStateError(f"Cannot transition profile from {locked.status} to {target}.")
+        return self._transition_locked(
+            locked,
+            target=target,
+            action=action,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    def _transition_locked(
+        self,
+        profile: CompanyKnowledgeProfile,
+        *,
+        target: str,
+        action: str,
+        actor: AbstractBaseUser,
+        review_note: str,
+    ) -> CompanyKnowledgeProfile:
+        before_status = profile.status
+        profile.status = target
+        profile.review_note = review_note.strip()
+        update_fields = ["status", "review_note"]
+        if target == CompanyKnowledgeProfile.Status.APPROVED:
+            profile.reviewed_by = actor
+            profile.reviewed_at = timezone.now()
+            update_fields.extend(["reviewed_by", "reviewed_at"])
+        with _company_review_writes():
+            profile.save(update_fields=update_fields)
+        self._record_transition(
+            instance=profile,
+            action=action,
+            actor=actor,
+            before_status=before_status,
+            comment=profile.review_note,
+        )
+        return profile
+
+
+class CompanyFactReviewService(_CompanyReviewService):
+    @transaction.atomic
+    def submit(
+        self,
+        fact: CompanyFact,
+        *,
+        actor: AbstractBaseUser,
+        review_note: str = "",
+    ) -> CompanyFact:
+        return self._transition(
+            fact,
+            expected=CompanyFact.Status.DRAFT,
+            target=CompanyFact.Status.IN_REVIEW,
+            action=ReviewAction.SUBMIT,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    @transaction.atomic
+    def verify(
+        self,
+        fact: CompanyFact,
+        *,
+        actor: AbstractBaseUser,
+        review_note: str = "",
+    ) -> CompanyFact:
+        locked = CompanyFact.objects.select_for_update().get(pk=fact.pk)
+        self._ensure_organization(locked)
+        if locked.status != CompanyFact.Status.IN_REVIEW:
+            raise CompanyRevisionStateError(f"Cannot verify fact in status {locked.status}.")
+        current = (
+            CompanyFact.objects.select_for_update()
+            .filter(
+                profile=locked.profile,
+                namespace=locked.namespace,
+                key=locked.key,
+                status=CompanyFact.Status.VERIFIED,
+            )
+            .exclude(pk=locked.pk)
+            .first()
+        )
+        if current:
+            if locked.supersedes_id != current.pk:
+                raise CompanyRevisionStateError("A new verified fact must supersede the current verified revision.")
+            before_status = current.status
+            current.status = CompanyFact.Status.SUPERSEDED
+            with _company_review_writes():
+                current.save(update_fields=["status"])
+            self._record_transition(
+                instance=current,
+                action=ReviewAction.DEPRECATE,
+                actor=actor,
+                before_status=before_status,
+                comment=review_note.strip(),
+            )
+        return self._transition_locked(
+            locked,
+            target=CompanyFact.Status.VERIFIED,
+            action=ReviewAction.APPROVE,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    @transaction.atomic
+    def reject(
+        self,
+        fact: CompanyFact,
+        *,
+        actor: AbstractBaseUser,
+        review_note: str,
+    ) -> CompanyFact:
+        if not review_note.strip():
+            raise ValueError("Reject review note must not be empty.")
+        return self._transition(
+            fact,
+            expected=CompanyFact.Status.IN_REVIEW,
+            target=CompanyFact.Status.REJECTED,
+            action=ReviewAction.REJECT,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    @transaction.atomic
+    def create_revision(
+        self,
+        fact: CompanyFact,
+        *,
+        actor: AbstractBaseUser,
+        **changes,
+    ) -> CompanyFact:
+        locked = CompanyFact.objects.select_for_update().get(pk=fact.pk)
+        self._ensure_organization(locked)
+        if locked.status != CompanyFact.Status.VERIFIED:
+            raise CompanyRevisionStateError("Only a verified fact can be revised.")
+        allowed_changes = set(CompanyFact.business_fields)
+        unknown = set(changes) - allowed_changes
+        if unknown:
+            raise ValueError(f"Unsupported fact revision fields: {', '.join(sorted(unknown))}")
+        values = {field: getattr(locked, field) for field in CompanyFact.business_fields}
+        values.update(changes)
+        return CompanyFact.objects.create(
+            organization=locked.organization,
+            profile=locked.profile,
+            namespace=locked.namespace,
+            key=locked.key,
+            version=locked.version + 1,
+            supersedes=locked,
+            status=CompanyFact.Status.DRAFT,
+            created_by=actor,
+            **values,
+        )
+
+    def _transition(
+        self,
+        fact: CompanyFact,
+        *,
+        expected: str,
+        target: str,
+        action: str,
+        actor: AbstractBaseUser,
+        review_note: str,
+    ) -> CompanyFact:
+        locked = CompanyFact.objects.select_for_update().get(pk=fact.pk)
+        self._ensure_organization(locked)
+        if locked.status != expected:
+            raise CompanyRevisionStateError(f"Cannot transition fact from {locked.status} to {target}.")
+        return self._transition_locked(
+            locked,
+            target=target,
+            action=action,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    def _transition_locked(
+        self,
+        fact: CompanyFact,
+        *,
+        target: str,
+        action: str,
+        actor: AbstractBaseUser,
+        review_note: str,
+    ) -> CompanyFact:
+        before_status = fact.status
+        fact.status = target
+        fact.review_note = review_note.strip()
+        update_fields = ["status", "review_note"]
+        if target in {CompanyFact.Status.VERIFIED, CompanyFact.Status.REJECTED}:
+            fact.reviewed_by = actor
+            fact.reviewed_at = timezone.now()
+            update_fields.extend(["reviewed_by", "reviewed_at"])
+        with _company_review_writes():
+            fact.save(update_fields=update_fields)
+        self._record_transition(
+            instance=fact,
+            action=action,
+            actor=actor,
+            before_status=before_status,
+            comment=fact.review_note,
+        )
+        return fact
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ class _WriteMode(StrEnum):
     SYSTEM_SEED = "SYSTEM_SEED"
     TEST_FIXTURE = "TEST_FIXTURE"
     VALIDATED_BULK = "VALIDATED_BULK"
+    COMPANY_REVIEW = "COMPANY_REVIEW"
 
 
 _write_mode: ContextVar[_WriteMode] = ContextVar("knowledge_write_mode", default=_WriteMode.NORMAL)
@@ -36,6 +37,14 @@ def _audited_review_writes() -> Iterator[None]:
 
 def _system_seed_writes() -> Iterator[None]:
     return _write_mode_context(_WriteMode.SYSTEM_SEED)
+
+
+def _company_review_writes() -> Iterator[None]:
+    return _write_mode_context(_WriteMode.COMPANY_REVIEW)
+
+
+def company_write_override_active() -> bool:
+    return _write_mode.get() in {_WriteMode.COMPANY_REVIEW, _WriteMode.TEST_FIXTURE}
 
 
 @contextmanager
@@ -335,6 +344,88 @@ class GuardedKnowledgeModel(models.Model):
     def delete(self, *args, **kwargs):
         _acquire_snapshot_write_lock(type(self))
         self._ensure_knowledge_not_referenced()
+        return super().delete(*args, **kwargs)
+
+
+class CompanyRevisionQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        if company_write_override_active():
+            return super().update(**kwargs)
+        objects = list(self)
+        for instance in objects:
+            for field, value in kwargs.items():
+                if isinstance(value, BaseExpression):
+                    raise ValidationError("Expression updates are not supported for company revisions.")
+                setattr(instance, field, value)
+            instance._validate_company_revision_write(creating=False)
+        return super().update(**kwargs)
+
+    def bulk_create(self, objs, **kwargs):
+        objects = list(objs)
+        for instance in objects:
+            instance._validate_company_revision_write(creating=True)
+        return super().bulk_create(objects, **kwargs)
+
+    def bulk_update(self, objs, fields, **kwargs):
+        objects = list(objs)
+        for instance in objects:
+            instance._validate_company_revision_write(creating=False)
+        return super().bulk_update(objects, fields, **kwargs)
+
+    def delete(self):
+        for instance in self:
+            instance._validate_company_revision_delete()
+        return super().delete()
+
+
+class CompanyRevisionManager(models.Manager.from_queryset(CompanyRevisionQuerySet)):
+    pass
+
+
+class CompanyRevisionModel(models.Model):
+    objects = CompanyRevisionManager()
+    initial_status = "DRAFT"
+    frozen_statuses: frozenset[str] = frozenset()
+    identity_fields = frozenset({"organization_id", "version", "supersedes_id", "created_by_id"})
+    business_fields: frozenset[str] = frozenset()
+    frozen_label = "revision"
+
+    class Meta:
+        abstract = True
+        base_manager_name = "objects"
+        default_manager_name = "objects"
+
+    def _validate_company_revision_write(self, *, creating: bool) -> None:
+        self.clean()
+        if creating:
+            if not company_write_override_active() and self.status != self.initial_status:
+                raise ValidationError(
+                    f"Company revisions must start in {self.initial_status} status and use the review service."
+                )
+            return
+        original = type(self).objects.get(pk=self.pk)
+        if any(getattr(self, field) != getattr(original, field) for field in self.identity_fields):
+            raise ValidationError("Company revision ownership and identity fields are immutable.")
+        changed_business_fields = {
+            field
+            for field in self.business_fields
+            if getattr(self, field) != getattr(original, field)
+        }
+        if original.status in self.frozen_statuses and changed_business_fields:
+            raise ValidationError(f"{self.frozen_label} business fields are immutable.")
+        if self.status != original.status and not company_write_override_active():
+            raise ValidationError("Company revision lifecycle changes must use the review service.")
+
+    def _validate_company_revision_delete(self) -> None:
+        if self.status in self.frozen_statuses:
+            raise ValidationError(f"{self.frozen_label} revisions are immutable and cannot be deleted.")
+
+    def save(self, *args, **kwargs):
+        self._validate_company_revision_write(creating=self._state.adding)
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        self._validate_company_revision_delete()
         return super().delete(*args, **kwargs)
 
 

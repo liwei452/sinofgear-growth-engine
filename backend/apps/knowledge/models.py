@@ -884,3 +884,4 @@ from .context_models import (  # noqa: E402, F401
     WebsitePageConceptLink,
     WebsitePageProductLink,
 )
+from .snapshot_models import KnowledgeContextSnapshot  # noqa: E402, F401

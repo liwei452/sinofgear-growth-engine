@@ -16,11 +16,16 @@ from apps.identity.models import Organization
 from .models import (
     CompanyFact,
     CompanyKnowledgeProfile,
+    ICPProductLink,
+    ICPProfile,
     KnowledgeAlias,
     KnowledgeConcept,
     KnowledgeEvidence,
     KnowledgeRelation,
     KnowledgeStatus,
+    WebsitePage,
+    WebsitePageConceptLink,
+    WebsitePageProductLink,
 )
 from .guards import _audited_review_writes, _company_review_writes
 from .normalization import normalize_alias
@@ -345,6 +350,349 @@ class CompanyFactReviewService(_CompanyReviewService):
             comment=fact.review_note,
         )
         return fact
+
+
+def _copy_revision_value(value):
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, dict):
+        return dict(value)
+    return value
+
+
+class _ContextRevisionReviewService(_CompanyReviewService):
+    model = None
+    approved_status = ""
+
+    def _locked(self, instance):
+        locked = self.model.objects.select_for_update().get(pk=instance.pk)
+        self._ensure_organization(locked)
+        return locked
+
+    def _transition(
+        self,
+        instance,
+        *,
+        expected: str,
+        target: str,
+        action: str,
+        actor: AbstractBaseUser,
+        review_note: str,
+    ):
+        locked = self._locked(instance)
+        if locked.status != expected:
+            raise CompanyRevisionStateError(
+                f"Cannot transition {locked.__class__.__name__} from {locked.status} to {target}."
+            )
+        return self._transition_locked(
+            locked,
+            target=target,
+            action=action,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    def _transition_locked(
+        self,
+        instance,
+        *,
+        target: str,
+        action: str,
+        actor: AbstractBaseUser,
+        review_note: str,
+    ):
+        before_status = instance.status
+        instance.status = target
+        instance.review_note = review_note.strip()
+        update_fields = ["status", "review_note"]
+        if target in {self.approved_status, self.model.Status.REJECTED}:
+            instance.reviewed_by = actor
+            instance.reviewed_at = timezone.now()
+            update_fields.extend(["reviewed_by", "reviewed_at"])
+        if isinstance(instance, WebsitePage) and target == WebsitePage.Status.VERIFIED:
+            instance.last_verified_at = timezone.now()
+            update_fields.append("last_verified_at")
+        with _company_review_writes():
+            instance.save(update_fields=update_fields)
+        self._record_transition(
+            instance=instance,
+            action=action,
+            actor=actor,
+            before_status=before_status,
+            comment=instance.review_note,
+        )
+        return instance
+
+    def _supersede_current(self, *, locked, current_filter, actor, review_note) -> None:
+        current = (
+            self.model.objects.select_for_update()
+            .filter(**current_filter, status=self.approved_status)
+            .exclude(pk=locked.pk)
+            .order_by("id")
+            .first()
+        )
+        if not current:
+            return
+        if locked.supersedes_id != current.pk:
+            raise CompanyRevisionStateError(
+                "A newly approved revision must supersede the current approved revision."
+            )
+        before_status = current.status
+        current.status = self.model.Status.SUPERSEDED
+        with _company_review_writes():
+            current.save(update_fields=["status"])
+        self._record_transition(
+            instance=current,
+            action=ReviewAction.DEPRECATE,
+            actor=actor,
+            before_status=before_status,
+            comment=review_note.strip(),
+        )
+
+    def _next_version(self, **identity_filter) -> int:
+        versions = list(
+            self.model.objects.select_for_update()
+            .filter(**identity_filter)
+            .order_by("id")
+            .values_list("version", flat=True)
+        )
+        return max(versions, default=0) + 1
+
+
+class ICPProfileReviewService(_ContextRevisionReviewService):
+    model = ICPProfile
+    approved_status = ICPProfile.Status.APPROVED
+
+    @transaction.atomic
+    def submit(
+        self,
+        profile: ICPProfile,
+        *,
+        actor: AbstractBaseUser,
+        review_note: str = "",
+    ) -> ICPProfile:
+        return self._transition(
+            profile,
+            expected=ICPProfile.Status.DRAFT,
+            target=ICPProfile.Status.IN_REVIEW,
+            action=ReviewAction.SUBMIT,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    @transaction.atomic
+    def approve(
+        self,
+        profile: ICPProfile,
+        *,
+        actor: AbstractBaseUser,
+        review_note: str = "",
+    ) -> ICPProfile:
+        locked = self._locked(profile)
+        if locked.status != ICPProfile.Status.IN_REVIEW:
+            raise CompanyRevisionStateError(f"Cannot approve ICP in status {locked.status}.")
+        self._supersede_current(
+            locked=locked,
+            current_filter={"organization": self.organization, "code": locked.code},
+            actor=actor,
+            review_note=review_note,
+        )
+        return self._transition_locked(
+            locked,
+            target=ICPProfile.Status.APPROVED,
+            action=ReviewAction.APPROVE,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    @transaction.atomic
+    def reject(
+        self,
+        profile: ICPProfile,
+        *,
+        actor: AbstractBaseUser,
+        review_note: str,
+    ) -> ICPProfile:
+        if not review_note.strip():
+            raise ValueError("Reject review note must not be empty.")
+        return self._transition(
+            profile,
+            expected=ICPProfile.Status.IN_REVIEW,
+            target=ICPProfile.Status.REJECTED,
+            action=ReviewAction.REJECT,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    @transaction.atomic
+    def create_revision(
+        self,
+        profile: ICPProfile,
+        *,
+        actor: AbstractBaseUser,
+        **changes,
+    ) -> ICPProfile:
+        locked = self._locked(profile)
+        if locked.status != ICPProfile.Status.APPROVED:
+            raise CompanyRevisionStateError("Only an approved ICP can be revised.")
+        unknown = set(changes) - set(ICPProfile.business_fields)
+        if unknown:
+            raise ValueError(f"Unsupported ICP revision fields: {', '.join(sorted(unknown))}")
+        identity_filter = {"organization": self.organization, "code": locked.code}
+        values = {
+            field: _copy_revision_value(getattr(locked, field))
+            for field in ICPProfile.business_fields
+        }
+        values.update(changes)
+        revision = ICPProfile.objects.create(
+            organization=self.organization,
+            code=locked.code,
+            version=self._next_version(**identity_filter),
+            supersedes=locked,
+            status=ICPProfile.Status.DRAFT,
+            created_by=actor,
+            **values,
+        )
+        links = list(locked.product_links.select_for_update().order_by("id"))
+        ICPProductLink.objects.bulk_create(
+            [
+                ICPProductLink(
+                    icp_profile=revision,
+                    product_id=link.product_id,
+                    role=link.role,
+                    priority=link.priority,
+                    use_cases=list(link.use_cases),
+                )
+                for link in links
+            ]
+        )
+        return revision
+
+
+class WebsitePageReviewService(_ContextRevisionReviewService):
+    model = WebsitePage
+    approved_status = WebsitePage.Status.VERIFIED
+
+    @transaction.atomic
+    def submit(
+        self,
+        page: WebsitePage,
+        *,
+        actor: AbstractBaseUser,
+        review_note: str = "",
+    ) -> WebsitePage:
+        return self._transition(
+            page,
+            expected=WebsitePage.Status.DRAFT,
+            target=WebsitePage.Status.IN_REVIEW,
+            action=ReviewAction.SUBMIT,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    @transaction.atomic
+    def verify(
+        self,
+        page: WebsitePage,
+        *,
+        actor: AbstractBaseUser,
+        review_note: str = "",
+    ) -> WebsitePage:
+        locked = self._locked(page)
+        if locked.status != WebsitePage.Status.IN_REVIEW:
+            raise CompanyRevisionStateError(f"Cannot verify page in status {locked.status}.")
+        self._supersede_current(
+            locked=locked,
+            current_filter={
+                "organization": self.organization,
+                "canonical_url": locked.canonical_url,
+            },
+            actor=actor,
+            review_note=review_note,
+        )
+        return self._transition_locked(
+            locked,
+            target=WebsitePage.Status.VERIFIED,
+            action=ReviewAction.APPROVE,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    @transaction.atomic
+    def reject(
+        self,
+        page: WebsitePage,
+        *,
+        actor: AbstractBaseUser,
+        review_note: str,
+    ) -> WebsitePage:
+        if not review_note.strip():
+            raise ValueError("Reject review note must not be empty.")
+        return self._transition(
+            page,
+            expected=WebsitePage.Status.IN_REVIEW,
+            target=WebsitePage.Status.REJECTED,
+            action=ReviewAction.REJECT,
+            actor=actor,
+            review_note=review_note,
+        )
+
+    @transaction.atomic
+    def create_revision(
+        self,
+        page: WebsitePage,
+        *,
+        actor: AbstractBaseUser,
+        **changes,
+    ) -> WebsitePage:
+        locked = self._locked(page)
+        if locked.status != WebsitePage.Status.VERIFIED:
+            raise CompanyRevisionStateError("Only a verified website page can be revised.")
+        unknown = set(changes) - set(WebsitePage.business_fields)
+        if unknown:
+            raise ValueError(f"Unsupported website page revision fields: {', '.join(sorted(unknown))}")
+        identity_filter = {
+            "organization": self.organization,
+            "canonical_url": locked.canonical_url,
+        }
+        values = {
+            field: _copy_revision_value(getattr(locked, field))
+            for field in WebsitePage.business_fields
+        }
+        values.update(changes)
+        revision = WebsitePage.objects.create(
+            organization=self.organization,
+            canonical_url=locked.canonical_url,
+            version=self._next_version(**identity_filter),
+            supersedes=locked,
+            status=WebsitePage.Status.DRAFT,
+            last_verified_at=None,
+            created_by=actor,
+            **values,
+        )
+        product_links = list(locked.product_links.select_for_update().order_by("id"))
+        concept_links = list(locked.concept_links.select_for_update().order_by("id"))
+        WebsitePageProductLink.objects.bulk_create(
+            [
+                WebsitePageProductLink(
+                    website_page=revision,
+                    product_id=link.product_id,
+                    relation_type=link.relation_type,
+                )
+                for link in product_links
+            ]
+        )
+        WebsitePageConceptLink.objects.bulk_create(
+            [
+                WebsitePageConceptLink(
+                    website_page=revision,
+                    concept_id=link.concept_id,
+                    role=link.role,
+                )
+                for link in concept_links
+            ]
+        )
+        return revision
 
 
 @dataclass(frozen=True)

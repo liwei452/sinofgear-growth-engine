@@ -875,3 +875,12 @@ class KnowledgeRelationEvidence(GraphAssociationModel):
         base_manager_name = "objects"
         default_manager_name = "objects"
         unique_together = (("knowledgerelation", "knowledgeevidence"),)
+
+
+from .context_models import (  # noqa: E402, F401
+    ICPProductLink,
+    ICPProfile,
+    WebsitePage,
+    WebsitePageConceptLink,
+    WebsitePageProductLink,
+)

@@ -81,23 +81,15 @@
 - Frontend job calls `python scripts/verify.py frontend` after backend and frontend dependency setup.
 - E2E job calls `python scripts/verify.py e2e` with a repository-owned virtual environment and installed Chromium.
 
-- [ ] **Step 1: Add workflow assertions before editing CI**
-
-  Extend `scripts/tests/test_verify.py` with behavior-level configuration parsing that checks PR concurrency uses `cancel-in-progress: true`, setup-python pip caching is keyed by `backend/pyproject.toml`, setup-node retains pnpm caching, and backend/frontend/E2E invoke the unified modes.
-
-- [ ] **Step 2: Verify workflow assertions fail against current CI**
-
-  Run the focused test file and confirm failures identify missing concurrency, Python caching, runner calls, and E2E.
-
-- [ ] **Step 3: Update CI without conditional test suppression**
+- [ ] **Step 1: Update CI without conditional test suppression**
 
   Add workflow-level concurrency keyed by workflow and PR/branch; preserve pull-request triggering. Keep the existing protected commands through the runner modes, retain pnpm caching, add pip caching, and add the E2E job with isolated local services and fixture mode only.
 
-- [ ] **Step 4: Verify workflow assertions and dry-run modes**
+- [ ] **Step 2: Validate configuration and dry-run modes**
 
-  Run the focused tests plus `python scripts/verify.py backend --dry-run`, `frontend --dry-run`, `api --dry-run`, `e2e --dry-run`, and `full --dry-run`. Confirm full contains every existing gate and E2E exactly once.
+  Parse `.github/workflows/ci.yml`, inspect the resulting diff for concurrency/cache/job preservation, and run the focused tests plus `python scripts/verify.py backend --dry-run`, `frontend --dry-run`, `api --dry-run`, `e2e --dry-run`, and `full --dry-run`. Confirm full contains every existing gate and E2E exactly once. GitHub Actions provides the final behavior-level workflow validation in the Draft PR.
 
-- [ ] **Step 5: Commit CI**
+- [ ] **Step 3: Commit CI**
 
   Stage only `.github/workflows/ci.yml` and any CI-specific test adjustment, then commit as `ci: streamline pull request verification`.
 

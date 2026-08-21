@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import os
 import subprocess
 import sys
@@ -25,7 +24,7 @@ from scripts.verification_rules import (
     CHECK_LABELS,
     CHECK_ORDER,
     DOCUMENT_PREFIXES,
-    DOCUMENT_SUFFIXES,
+    DOCUMENT_ROOT_FILES,
     E2E_BY_FRONTEND_MODULE,
     E2E_MAIN_CHAIN_SUFFIXES,
     FRONTEND_CHECKS,
@@ -34,7 +33,6 @@ from scripts.verification_rules import (
     FRONTEND_SOURCE_SUFFIXES,
     FRONTEND_TEST_PATTERNS,
     MODEL_FILE_NAMES,
-    PRODUCTION_PREFIXES,
     ROOT_GLOBAL_FILES,
     ROOT_GLOBAL_PREFIXES,
 )
@@ -108,14 +106,8 @@ def normalize_path(path: str | Path) -> str:
     return PurePosixPath(value).as_posix()
 
 
-def _matches(path: str, patterns: Sequence[str]) -> bool:
-    return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
-
-
 def _is_document(path: str) -> bool:
-    if path.startswith(DOCUMENT_PREFIXES):
-        return True
-    return not path.startswith(PRODUCTION_PREFIXES) and path.lower().endswith(DOCUMENT_SUFFIXES)
+    return path.startswith(DOCUMENT_PREFIXES) or path in DOCUMENT_ROOT_FILES
 
 
 def _existing_globs(repo_root: Path, directory: str, patterns: Sequence[str]) -> tuple[str, ...]:
@@ -273,6 +265,7 @@ def select_checks(
         else:
             _add_backend_full(builder, f"Unrecognized production path expanded safely: {path}")
             _add_frontend_full(builder, f"Unrecognized production path expanded safely: {path}")
+            builder.add("e2e")
     if not normalized_files:
         builder.reason("No changed files detected")
     return builder.build(base=base)

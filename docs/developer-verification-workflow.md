@@ -40,6 +40,7 @@ Recent PR evidence shows the repetition clearly: PRs #1, #2, and #3 each had two
 | Unrecognized production code | Fail safe by expanding to the relevant complete backend/frontend verification; never report “no tests needed” |
 
 Use `--base <revision>` to include committed work in a batch. Without `--base`, quick mode compares the working tree, index, and untracked files with `HEAD`.
+Documentation-only selection is restricted to `docs/` and known root documentation files such as `README.md`; an unfamiliar root `.txt`, dependency file, or configuration file expands to complete verification instead of being guessed to be documentation.
 
 ## Layered developer use
 

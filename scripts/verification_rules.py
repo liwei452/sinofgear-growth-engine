@@ -44,16 +44,12 @@ FRONTEND_CHECKS = ("api-check", "vitest", "typecheck", "eslint", "build")
 API_CHECKS = ("api-check", "typecheck")
 
 DOCUMENT_PREFIXES = ("docs/",)
-DOCUMENT_SUFFIXES = (
-    ".md",
-    ".rst",
-    ".txt",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".webp",
-    ".svg",
+DOCUMENT_ROOT_FILES = (
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "LICENSE.md",
+    "README.md",
 )
 
 BACKEND_GLOBAL_PATTERNS = (
@@ -71,14 +67,6 @@ BACKEND_GLOBAL_PATTERNS = (
     "backend/apps/common/renderers.py",
 )
 BACKEND_GLOBAL_PREFIXES = ("backend/apps/common/",)
-
-PRODUCTION_PREFIXES = (
-    ".github/",
-    "backend/",
-    "frontend/",
-    "infrastructure/",
-    "scripts/",
-)
 
 FRONTEND_GLOBAL_PATTERNS = (
     "frontend/package.json",
@@ -115,13 +103,48 @@ FRONTEND_SOURCE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".vue")
 FRONTEND_TEST_PATTERNS = ("*.test.ts", "*.test.tsx", "*.test.js", "*.test.jsx")
 
 E2E_BY_FRONTEND_MODULE = {
-    "assets": ("asset-understanding.spec.ts",),
+    "assets": ("asset-understanding.spec.ts", "phase-a-active-growth.spec.ts"),
+    "attribution": (
+        "growth-mission-flow.spec.ts",
+        "phase-a-active-growth.spec.ts",
+        "zz-growth-workspace-persistence.spec.ts",
+    ),
+    "auth": (
+        "agent-workbench.spec.ts",
+        "ai-model-settings.spec.ts",
+        "asset-understanding.spec.ts",
+        "business-outcome-navigation.spec.ts",
+        "growth-mission-flow.spec.ts",
+        "phase-a-active-growth.spec.ts",
+        "social-connection-readiness.spec.ts",
+        "social-operations.spec.ts",
+        "zz-growth-workspace-persistence.spec.ts",
+    ),
+    "content": ("business-outcome-navigation.spec.ts",),
     "dashboard": ("phase-a-active-growth.spec.ts", "business-outcome-navigation.spec.ts"),
-    "growth": ("growth-mission-flow.spec.ts", "phase-a-active-growth.spec.ts"),
-    "opportunities": ("business-outcome-navigation.spec.ts",),
-    "platformAccounts": ("social-connection-readiness.spec.ts", "social-operations.spec.ts"),
-    "publishing": ("social-operations.spec.ts", "business-outcome-navigation.spec.ts"),
-    "settings": ("ai-model-settings.spec.ts",),
+    "growth": ("phase-a-active-growth.spec.ts", "zz-growth-workspace-persistence.spec.ts"),
+    "help": ("business-outcome-navigation.spec.ts",),
+    "knowledge": ("phase-a-active-growth.spec.ts",),
+    "missions": (
+        "agent-workbench.spec.ts",
+        "business-outcome-navigation.spec.ts",
+        "growth-mission-flow.spec.ts",
+        "phase-a-active-growth.spec.ts",
+        "social-operations.spec.ts",
+        "zz-growth-workspace-persistence.spec.ts",
+    ),
+    "opportunities": ("business-outcome-navigation.spec.ts", "phase-a-active-growth.spec.ts"),
+    "platformAccounts": ("phase-a-active-growth.spec.ts", "social-connection-readiness.spec.ts"),
+    "products": ("phase-a-active-growth.spec.ts",),
+    "promotion": ("business-outcome-navigation.spec.ts", "phase-a-active-growth.spec.ts"),
+    "publishing": ("business-outcome-navigation.spec.ts", "social-operations.spec.ts"),
+    "results": ("business-outcome-navigation.spec.ts",),
+    "settings": (
+        "ai-model-settings.spec.ts",
+        "business-outcome-navigation.spec.ts",
+        "phase-a-active-growth.spec.ts",
+        "zz-growth-workspace-persistence.spec.ts",
+    ),
 }
 
 E2E_MAIN_CHAIN_SUFFIXES = ("Page.vue", "Panel.vue", "router.ts", "navigation.ts")

@@ -52,11 +52,14 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
             None,
         ),
         (
-            "frontend/src/modules/products/ProductFormDialog.vue",
-            {"diff", "vitest", "typecheck"},
+            "frontend/src/modules/missions/GrowthMissionsPage.vue",
+            {"diff", "vitest", "typecheck", "e2e"},
             None,
-            "frontend/src/modules/products/ProductFormDialog.test.ts",
-            None,
+            "frontend/src/modules/missions/GrowthMissionsPage.test.ts",
+            (
+                "frontend/e2e/growth-mission-flow.spec.ts",
+                "frontend/e2e/phase-a-active-growth.spec.ts",
+            ),
         ),
         (
             "frontend/src/api/generated/schema.ts",
@@ -74,8 +77,21 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
         ),
         ("docs/verification.md", {"diff"}, None, None, None),
         (
-            "backend/runtime/production.txt",
-            {"diff", "ruff", "pytest", "django-check", "migration-drift", "openapi-validate"},
+            "requirements.txt",
+            {
+                "diff",
+                "ruff",
+                "pytest",
+                "django-check",
+                "migration-drift",
+                "openapi-validate",
+                "api-check",
+                "vitest",
+                "typecheck",
+                "eslint",
+                "build",
+                "e2e",
+            },
             None,
             None,
             None,
@@ -101,7 +117,7 @@ def test_change_mapping_is_minimal_and_fail_closed(
     expected_ids: set[str],
     pytest_target: str | None,
     vitest_target: str | None,
-    e2e_target: str | None,
+    e2e_target: str | tuple[str, ...] | None,
 ) -> None:
     plan = select_checks([changed_file], repo_root=REPOSITORY_ROOT)
 
@@ -111,7 +127,8 @@ def test_change_mapping_is_minimal_and_fail_closed(
     if vitest_target:
         assert vitest_target in plan.targets_for("vitest")
     if e2e_target:
-        assert e2e_target in plan.targets_for("e2e")
+        expected_e2e_targets = (e2e_target,) if isinstance(e2e_target, str) else e2e_target
+        assert set(expected_e2e_targets) <= set(plan.targets_for("e2e"))
 
 def test_full_mode_contains_every_final_gate_once() -> None:
     result = subprocess.run(

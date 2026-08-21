@@ -236,3 +236,102 @@ def test_icp_queryset_update_cannot_bypass_revision_identity_or_frozen_business_
         ICPProfile.objects.filter(pk=icp.pk).update(name="Bypass")
     with pytest.raises(ValidationError):
         ICPProfile.objects.filter(pk=icp.pk).update(code="OTHER")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("invalidation_stage", ["submit", "approve"])
+def test_icp_review_revalidates_archived_product_links(
+    organizations, invalidation_stage
+) -> None:
+    organization, _ = organizations
+    actor = make_user(f"icp-review-product-{invalidation_stage}")
+    product = make_product(organization, name="Product A")
+    profile = make_icp(organization, actor)
+    ICPProductLink.objects.create(
+        icp_profile=profile,
+        product=product,
+        role=ICPProductLink.Role.PRIMARY,
+        priority=1,
+        use_cases=[],
+    )
+    service = ICPProfileReviewService(organization)
+    if invalidation_stage == "approve":
+        service.submit(profile, actor=actor)
+    product.status = Product.Status.ARCHIVED
+    product.save(update_fields=["status"])
+
+    with pytest.raises(ValidationError, match="Archived"):
+        if invalidation_stage == "submit":
+            service.submit(profile, actor=actor)
+        else:
+            service.approve(profile, actor=actor)
+
+    profile.refresh_from_db()
+    expected = (
+        ICPProfile.Status.DRAFT
+        if invalidation_stage == "submit"
+        else ICPProfile.Status.IN_REVIEW
+    )
+    assert profile.status == expected
+
+
+@pytest.mark.django_db
+def test_icp_revision_invalid_default_copy_is_atomic_and_can_be_skipped(organizations) -> None:
+    organization, _ = organizations
+    actor = make_user("icp-invalid-copy")
+    product = make_product(organization, name="Product A")
+    profile = make_icp(organization, actor)
+    ICPProductLink.objects.create(
+        icp_profile=profile,
+        product=product,
+        role=ICPProductLink.Role.PRIMARY,
+        priority=1,
+        use_cases=[],
+    )
+    service = ICPProfileReviewService(organization)
+    service.submit(profile, actor=actor)
+    profile = service.approve(profile, actor=actor)
+    product.status = Product.Status.ARCHIVED
+    product.save(update_fields=["status"])
+
+    before_count = ICPProfile.objects.count()
+    with pytest.raises(ValidationError, match="Archived"):
+        service.create_revision(profile, actor=actor)
+    assert ICPProfile.objects.count() == before_count
+
+    revision = service.create_revision(
+        profile,
+        actor=actor,
+        copy_product_links=False,
+    )
+    assert revision.status == ICPProfile.Status.DRAFT
+    assert not revision.product_links.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("invalid_value", [0, 1, "false"])
+def test_icp_revision_copy_flag_requires_native_bool(organizations, invalid_value) -> None:
+    organization, _ = organizations
+    actor = make_user(f"icp-copy-bool-{invalid_value}")
+    profile = make_icp(organization, actor)
+    service = ICPProfileReviewService(organization)
+    service.submit(profile, actor=actor)
+    profile = service.approve(profile, actor=actor)
+
+    with pytest.raises(ValidationError, match="boolean"):
+        service.create_revision(
+            profile,
+            actor=actor,
+            copy_product_links=invalid_value,
+        )
+
+
+@pytest.mark.django_db
+def test_icp_code_is_normalized_to_uppercase_identity(organizations) -> None:
+    organization, _ = organizations
+    actor = make_user("icp-code-normalization")
+
+    first = make_icp(organization, actor, code=" profile_a ")
+    assert first.code == "PROFILE_A"
+    with pytest.raises(IntegrityError), transaction.atomic():
+        make_icp(organization, actor, code="PROFILE_A")

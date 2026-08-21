@@ -286,3 +286,192 @@ def test_page_concept_bulk_create_cannot_bypass_role_validation(organizations) -
                 )
             ]
         )
+
+
+@pytest.mark.django_db
+def test_page_verify_revalidates_deprecated_concept_link(organizations) -> None:
+    organization, _ = organizations
+    actor = make_user("page-verify-concept")
+    concept = make_concept(
+        code="APPLICATION_VERIFY",
+        concept_type=KnowledgeConcept.ConceptType.APPLICATION,
+        organization=organization,
+    )
+    page = make_page(organization, actor)
+    WebsitePageConceptLink.objects.create(
+        website_page=page,
+        concept=concept,
+        role=WebsitePageConceptLink.Role.APPLICATION,
+    )
+    service = WebsitePageReviewService(organization)
+    service.submit(page, actor=actor)
+    with _test_fixture_writes():
+        KnowledgeConcept.objects.filter(pk=concept.pk).update(
+            status=KnowledgeConcept.Status.DEPRECATED
+        )
+
+    with pytest.raises(ValidationError, match="APPROVED"):
+        service.verify(page, actor=actor)
+
+    page.refresh_from_db()
+    assert page.status == WebsitePage.Status.IN_REVIEW
+
+
+@pytest.mark.django_db
+def test_page_revision_invalid_product_copy_is_atomic_and_can_be_skipped(organizations) -> None:
+    organization, _ = organizations
+    actor = make_user("page-invalid-product-copy")
+    product = make_product(organization, name="Product A")
+    page = make_page(organization, actor)
+    WebsitePageProductLink.objects.create(
+        website_page=page,
+        product=product,
+        relation_type=WebsitePageProductLink.RelationType.PRIMARY,
+    )
+    service = WebsitePageReviewService(organization)
+    service.submit(page, actor=actor)
+    page = service.verify(page, actor=actor)
+    product.status = Product.Status.ARCHIVED
+    product.save(update_fields=["status"])
+
+    before_count = WebsitePage.objects.count()
+    with pytest.raises(ValidationError, match="Archived"):
+        service.create_revision(page, actor=actor)
+    assert WebsitePage.objects.count() == before_count
+
+    revision = service.create_revision(
+        page,
+        actor=actor,
+        copy_product_links=False,
+    )
+    assert revision.status == WebsitePage.Status.DRAFT
+    assert not revision.product_links.exists()
+
+
+@pytest.mark.django_db
+def test_page_revision_can_skip_invalid_concepts_and_keep_valid_products(organizations) -> None:
+    organization, _ = organizations
+    actor = make_user("page-invalid-concept-copy")
+    product = make_product(organization, name="Product A")
+    concept = make_concept(
+        code="APPLICATION_COPY",
+        concept_type=KnowledgeConcept.ConceptType.APPLICATION,
+        organization=organization,
+    )
+    page = make_page(organization, actor)
+    WebsitePageProductLink.objects.create(
+        website_page=page,
+        product=product,
+        relation_type=WebsitePageProductLink.RelationType.PRIMARY,
+    )
+    WebsitePageConceptLink.objects.create(
+        website_page=page,
+        concept=concept,
+        role=WebsitePageConceptLink.Role.APPLICATION,
+    )
+    service = WebsitePageReviewService(organization)
+    service.submit(page, actor=actor)
+    page = service.verify(page, actor=actor)
+    with _test_fixture_writes():
+        KnowledgeConcept.objects.filter(pk=concept.pk).update(
+            status=KnowledgeConcept.Status.DEPRECATED
+        )
+
+    before_count = WebsitePage.objects.count()
+    with pytest.raises(ValidationError, match="APPROVED"):
+        service.create_revision(page, actor=actor)
+    assert WebsitePage.objects.count() == before_count
+
+    revision = service.create_revision(
+        page,
+        actor=actor,
+        copy_concept_links=False,
+    )
+    assert revision.product_links.get().product_id == product.id
+    assert not revision.concept_links.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("flag_name", "invalid_value"),
+    [
+        ("copy_product_links", 0),
+        ("copy_product_links", "true"),
+        ("copy_concept_links", 1),
+        ("copy_concept_links", "false"),
+    ],
+)
+def test_page_revision_copy_flags_require_native_bool(
+    organizations, flag_name, invalid_value
+) -> None:
+    organization, _ = organizations
+    actor = make_user(f"page-copy-bool-{flag_name}-{invalid_value}")
+    page = make_page(organization, actor)
+    service = WebsitePageReviewService(organization)
+    service.submit(page, actor=actor)
+    page = service.verify(page, actor=actor)
+
+    with pytest.raises(ValidationError, match="boolean"):
+        service.create_revision(page, actor=actor, **{flag_name: invalid_value})
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("field", "invalid_value", "message"),
+    [
+        ("page_type", "INVALID", "page type"),
+        ("source_type", "INVALID", "source type"),
+        ("primary_cta_url", "http://example.test/contact", "CTA URL"),
+        ("primary_cta_url", "https://user:pass@example.test/contact", "CTA URL"),
+    ],
+)
+def test_page_rejects_invalid_enums_and_cta_url(
+    organizations, field, invalid_value, message
+) -> None:
+    actor = make_user(f"page-input-{field}-{len(invalid_value)}")
+
+    with pytest.raises(ValidationError, match=message):
+        make_page(organizations[0], actor, **{field: invalid_value})
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("invalid_url", [None, 123, ""])
+def test_page_canonical_url_non_string_or_empty_is_validation_error(
+    organizations, invalid_url
+) -> None:
+    actor = make_user(f"page-canonical-type-{invalid_url}")
+
+    with pytest.raises(ValidationError, match="Canonical URL"):
+        make_page(organizations[0], actor, canonical_url=invalid_url)
+
+
+@pytest.mark.django_db
+def test_page_root_url_spellings_normalize_to_same_identity(organizations) -> None:
+    organization, _ = organizations
+    actor = make_user("page-root-normalization")
+
+    first = make_page(organization, actor, canonical_url="https://Example.TEST")
+    second = make_page(
+        organization,
+        actor,
+        canonical_url="https://example.test/",
+        version=2,
+    )
+
+    assert first.canonical_url == "https://example.test/"
+    assert second.canonical_url == first.canonical_url
+
+
+@pytest.mark.django_db
+def test_page_normalizes_language_and_allows_https_cta_fragment(organizations) -> None:
+    actor = make_user("page-language-cta")
+
+    page = make_page(
+        organizations[0],
+        actor,
+        language=" EN-US ",
+        primary_cta_url="https://Example.TEST/contact#rfq",
+    )
+
+    assert page.language == "en-us"
+    assert page.primary_cta_url == "https://example.test/contact#rfq"

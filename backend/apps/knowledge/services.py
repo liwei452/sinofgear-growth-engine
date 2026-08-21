@@ -360,6 +360,11 @@ def _copy_revision_value(value):
     return value
 
 
+def _require_native_bool(name: str, value: object) -> None:
+    if type(value) is not bool:
+        raise ValidationError({name: "Revision copy options must be boolean values."})
+
+
 class _ContextRevisionReviewService(_CompanyReviewService):
     model = None
     approved_status = ""
@@ -463,6 +468,16 @@ class ICPProfileReviewService(_ContextRevisionReviewService):
     model = ICPProfile
     approved_status = ICPProfile.Status.APPROVED
 
+    @staticmethod
+    def _locked_valid_product_links(profile: ICPProfile) -> list[ICPProductLink]:
+        links = list(
+            ICPProductLink.objects.select_for_update()
+            .filter(icp_profile=profile)
+            .order_by("id")
+        )
+        ICPProductLink._validate_targets(links, parents={profile.pk: profile})
+        return links
+
     @transaction.atomic
     def submit(
         self,
@@ -471,9 +486,15 @@ class ICPProfileReviewService(_ContextRevisionReviewService):
         actor: AbstractBaseUser,
         review_note: str = "",
     ) -> ICPProfile:
-        return self._transition(
-            profile,
-            expected=ICPProfile.Status.DRAFT,
+        locked = self._locked(profile)
+        if locked.status != ICPProfile.Status.DRAFT:
+            raise CompanyRevisionStateError(
+                f"Cannot transition ICPProfile from {locked.status} to "
+                f"{ICPProfile.Status.IN_REVIEW}."
+            )
+        self._locked_valid_product_links(locked)
+        return self._transition_locked(
+            locked,
             target=ICPProfile.Status.IN_REVIEW,
             action=ReviewAction.SUBMIT,
             actor=actor,
@@ -491,6 +512,7 @@ class ICPProfileReviewService(_ContextRevisionReviewService):
         locked = self._locked(profile)
         if locked.status != ICPProfile.Status.IN_REVIEW:
             raise CompanyRevisionStateError(f"Cannot approve ICP in status {locked.status}.")
+        self._locked_valid_product_links(locked)
         self._supersede_current(
             locked=locked,
             current_filter={"organization": self.organization, "code": locked.code},
@@ -530,8 +552,10 @@ class ICPProfileReviewService(_ContextRevisionReviewService):
         profile: ICPProfile,
         *,
         actor: AbstractBaseUser,
+        copy_product_links: bool = True,
         **changes,
     ) -> ICPProfile:
+        _require_native_bool("copy_product_links", copy_product_links)
         locked = self._locked(profile)
         if locked.status != ICPProfile.Status.APPROVED:
             raise CompanyRevisionStateError("Only an approved ICP can be revised.")
@@ -544,6 +568,7 @@ class ICPProfileReviewService(_ContextRevisionReviewService):
             for field in ICPProfile.business_fields
         }
         values.update(changes)
+        links = self._locked_valid_product_links(locked) if copy_product_links else []
         revision = ICPProfile.objects.create(
             organization=self.organization,
             code=locked.code,
@@ -553,7 +578,6 @@ class ICPProfileReviewService(_ContextRevisionReviewService):
             created_by=actor,
             **values,
         )
-        links = list(locked.product_links.select_for_update().order_by("id"))
         ICPProductLink.objects.bulk_create(
             [
                 ICPProductLink(
@@ -573,6 +597,41 @@ class WebsitePageReviewService(_ContextRevisionReviewService):
     model = WebsitePage
     approved_status = WebsitePage.Status.VERIFIED
 
+    @staticmethod
+    def _locked_valid_links(
+        page: WebsitePage,
+        *,
+        include_products: bool = True,
+        include_concepts: bool = True,
+    ) -> tuple[list[WebsitePageProductLink], list[WebsitePageConceptLink]]:
+        product_links = (
+            list(
+                WebsitePageProductLink.objects.select_for_update()
+                .filter(website_page=page)
+                .order_by("id")
+            )
+            if include_products
+            else []
+        )
+        concept_links = (
+            list(
+                WebsitePageConceptLink.objects.select_for_update()
+                .filter(website_page=page)
+                .order_by("id")
+            )
+            if include_concepts
+            else []
+        )
+        WebsitePageProductLink._validate_targets(
+            product_links,
+            parents={page.pk: page},
+        )
+        WebsitePageConceptLink._validate_targets(
+            concept_links,
+            parents={page.pk: page},
+        )
+        return product_links, concept_links
+
     @transaction.atomic
     def submit(
         self,
@@ -581,9 +640,15 @@ class WebsitePageReviewService(_ContextRevisionReviewService):
         actor: AbstractBaseUser,
         review_note: str = "",
     ) -> WebsitePage:
-        return self._transition(
-            page,
-            expected=WebsitePage.Status.DRAFT,
+        locked = self._locked(page)
+        if locked.status != WebsitePage.Status.DRAFT:
+            raise CompanyRevisionStateError(
+                f"Cannot transition WebsitePage from {locked.status} to "
+                f"{WebsitePage.Status.IN_REVIEW}."
+            )
+        self._locked_valid_links(locked)
+        return self._transition_locked(
+            locked,
             target=WebsitePage.Status.IN_REVIEW,
             action=ReviewAction.SUBMIT,
             actor=actor,
@@ -601,6 +666,7 @@ class WebsitePageReviewService(_ContextRevisionReviewService):
         locked = self._locked(page)
         if locked.status != WebsitePage.Status.IN_REVIEW:
             raise CompanyRevisionStateError(f"Cannot verify page in status {locked.status}.")
+        self._locked_valid_links(locked)
         self._supersede_current(
             locked=locked,
             current_filter={
@@ -643,8 +709,12 @@ class WebsitePageReviewService(_ContextRevisionReviewService):
         page: WebsitePage,
         *,
         actor: AbstractBaseUser,
+        copy_product_links: bool = True,
+        copy_concept_links: bool = True,
         **changes,
     ) -> WebsitePage:
+        _require_native_bool("copy_product_links", copy_product_links)
+        _require_native_bool("copy_concept_links", copy_concept_links)
         locked = self._locked(page)
         if locked.status != WebsitePage.Status.VERIFIED:
             raise CompanyRevisionStateError("Only a verified website page can be revised.")
@@ -660,6 +730,11 @@ class WebsitePageReviewService(_ContextRevisionReviewService):
             for field in WebsitePage.business_fields
         }
         values.update(changes)
+        product_links, concept_links = self._locked_valid_links(
+            locked,
+            include_products=copy_product_links,
+            include_concepts=copy_concept_links,
+        )
         revision = WebsitePage.objects.create(
             organization=self.organization,
             canonical_url=locked.canonical_url,
@@ -670,8 +745,6 @@ class WebsitePageReviewService(_ContextRevisionReviewService):
             created_by=actor,
             **values,
         )
-        product_links = list(locked.product_links.select_for_update().order_by("id"))
-        concept_links = list(locked.concept_links.select_for_update().order_by("id"))
         WebsitePageProductLink.objects.bulk_create(
             [
                 WebsitePageProductLink(

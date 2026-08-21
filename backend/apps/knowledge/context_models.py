@@ -34,33 +34,66 @@ def validate_context_string_list(value: object) -> None:
             )
 
 
-def normalize_https_url(value: str) -> str:
+def _normalize_https_url(
+    value: object,
+    *,
+    label: str,
+    preserve_fragment: bool,
+) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValidationError(f"{label} must be a valid HTTPS URL.")
     raw_value = value.strip()
     try:
         parts = urlsplit(raw_value)
         port = parts.port
     except ValueError as exc:
-        raise ValidationError("Canonical URL must be a valid HTTPS URL.") from exc
+        raise ValidationError(f"{label} must be a valid HTTPS URL.") from exc
     if parts.scheme.lower() != "https" or not parts.hostname:
-        raise ValidationError("Canonical URL must be a valid HTTPS URL.")
+        raise ValidationError(f"{label} must be a valid HTTPS URL.")
     if parts.username or parts.password:
-        raise ValidationError("Canonical URL must not contain user information.")
+        raise ValidationError(f"{label} must not contain user information.")
     try:
         hostname = parts.hostname.rstrip(".").encode("idna").decode("ascii").lower()
     except UnicodeError as exc:
-        raise ValidationError("Canonical URL host is invalid.") from exc
+        raise ValidationError(f"{label} host is invalid.") from exc
     if not hostname:
-        raise ValidationError("Canonical URL host is invalid.")
+        raise ValidationError(f"{label} host is invalid.")
     host = f"[{hostname}]" if ":" in hostname else hostname
     netloc = host if port in {None, 443} else f"{host}:{port}"
-    normalized = urlunsplit(("https", netloc, parts.path, parts.query, ""))
+    normalized = urlunsplit(
+        (
+            "https",
+            netloc,
+            parts.path or "/",
+            parts.query,
+            parts.fragment if preserve_fragment else "",
+        )
+    )
     if len(normalized) > 2048:
-        raise ValidationError("Canonical URL must be a valid HTTPS URL.")
+        raise ValidationError(f"{label} must be a valid HTTPS URL.")
     try:
         URLValidator(schemes=["https"])(normalized)
     except ValidationError as exc:
-        raise ValidationError("Canonical URL must be a valid HTTPS URL.") from exc
+        raise ValidationError(f"{label} must be a valid HTTPS URL.") from exc
     return normalized
+
+
+def normalize_https_url(value: object) -> str:
+    return _normalize_https_url(
+        value,
+        label="Canonical URL",
+        preserve_fragment=False,
+    )
+
+
+def normalize_optional_cta_url(value: object) -> str:
+    if value is None or value == "":
+        return ""
+    return _normalize_https_url(
+        value,
+        label="Primary CTA URL",
+        preserve_fragment=True,
+    )
 
 
 class ICPProfile(CompanyRevisionModel):
@@ -166,7 +199,7 @@ class ICPProfile(CompanyRevisionModel):
 
     def clean(self) -> None:
         super().clean()
-        self.code = self.code.strip()
+        self.code = self.code.strip().upper()
         self.name = self.name.strip()
         if not self.code:
             raise ValidationError({"code": "ICP code must not be blank."})
@@ -298,7 +331,12 @@ class WebsitePage(CompanyRevisionModel):
     def clean(self) -> None:
         super().clean()
         self.canonical_url = normalize_https_url(self.canonical_url)
-        self.language = self.language.strip()
+        if self.page_type not in self.PageType.values:
+            raise ValidationError({"page_type": "Unsupported page type."})
+        if self.source_type not in self.SourceType.values:
+            raise ValidationError({"source_type": "Unsupported source type."})
+        self.primary_cta_url = normalize_optional_cta_url(self.primary_cta_url)
+        self.language = self.language.strip().lower()
         self.title = self.title.strip()
         if not self.language:
             raise ValidationError({"language": "Page language must not be blank."})

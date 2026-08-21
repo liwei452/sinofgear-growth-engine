@@ -382,11 +382,12 @@ class BufferProviderConnectionReadSerializer(serializers.ModelSerializer):
     configured = serializers.SerializerMethodField()
     channel_count = serializers.SerializerMethodField()
     active_channel_count = serializers.SerializerMethodField()
+    provider_organization_display_id = serializers.SerializerMethodField()
 
     class Meta:
         model = ProviderConnection
         fields = [
-            "id", "provider", "configured", "external_id", "display_name",
+            "id", "provider", "configured", "provider_organization_display_id", "display_name",
             "connection_state", "last_probe_at", "last_sync_at",
             "reauthorization_required_at", "disconnected_at",
             "lifecycle_error_code", "channel_count", "active_channel_count",
@@ -395,6 +396,15 @@ class BufferProviderConnectionReadSerializer(serializers.ModelSerializer):
 
     def get_configured(self, connection: ProviderConnection) -> bool:
         return bool(connection.credential_reference)
+
+    def get_provider_organization_display_id(self, connection: ProviderConnection) -> str:
+        value = connection.external_id
+        if type(value) is not str or not (value := value.strip()):
+            return ""
+
+        visible_count = min(4, max(0, len(value) - 1))
+        suffix = value[-visible_count:] if visible_count else ""
+        return f"••••{suffix}"
 
     def get_channel_count(self, connection: ProviderConnection) -> int:
         return connection.social_accounts.count()

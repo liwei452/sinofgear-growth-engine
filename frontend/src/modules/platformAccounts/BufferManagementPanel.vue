@@ -194,7 +194,7 @@ onBeforeUnmount(() => { apiKey.value = "" })
         <dl class="connection-facts">
           <div><dt>连接状态</dt><dd>{{ statusPresentation.label }}</dd></div>
           <div><dt>Buffer 组织</dt><dd>{{ connection?.display_name || "尚未连接" }}</dd></div>
-          <div><dt>安全组织标识</dt><dd>{{ connection?.external_id || "尚无记录" }}</dd></div>
+          <div><dt>安全组织标识</dt><dd>{{ connection?.provider_organization_display_id || "尚无记录" }}</dd></div>
           <div><dt>最后探测</dt><dd>{{ formatDate(connection?.last_probe_at) }}</dd></div>
           <div><dt>最后同步</dt><dd>{{ formatDate(connection?.last_sync_at) }}</dd></div>
           <div><dt>重新授权</dt><dd>{{ connection?.reauthorization_required_at ? "需要" : "不需要" }}</dd></div>

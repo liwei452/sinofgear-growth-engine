@@ -60,7 +60,7 @@ const connected = {
   id: "connection-1",
   provider: "BUFFER",
   configured: true,
-  external_id: "••••org9",
+  provider_organization_display_id: "••••7291",
   display_name: "SinofGear Buffer",
   connection_state: "CONNECTED",
   last_probe_at: "2026-08-20T10:00:00Z",
@@ -101,7 +101,8 @@ it("shows only safe Buffer connection and channel fields to administrators", asy
 
   expect(await screen.findByRole("heading", { name: "Buffer 连接概览" })).toBeInTheDocument()
   expect(screen.getByText("SinofGear Buffer")).toBeInTheDocument()
-  expect(screen.getByText("••••org9")).toBeInTheDocument()
+  expect(screen.getByText("••••7291")).toBeInTheDocument()
+  expect(document.body).not.toHaveTextContent("provider-organization-private-7291")
   expect(screen.getByRole("button", { name: "轮换 API Key" })).toBeInTheDocument()
   expect(screen.getByRole("button", { name: "测试连接" })).toBeInTheDocument()
   expect(screen.getByRole("button", { name: "同步渠道" })).toBeInTheDocument()

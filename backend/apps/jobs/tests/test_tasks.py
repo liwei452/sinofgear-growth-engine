@@ -83,7 +83,9 @@ def test_celery_wrapper_delegates_to_real_orchestration():
         },
     )
 
-    result = execute_ai_job.delay(str(job.id), str(prompt.id)).get()
+    result = execute_ai_job.delay(
+        str(organization.id), str(job.id), str(prompt.id)
+    ).get()
 
     assert result["status"] == AIRun.Status.SUCCEEDED
     assert AIRun.objects.filter(job=job).count() == 1

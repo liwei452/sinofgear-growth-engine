@@ -713,7 +713,12 @@ def create_publish_task(
     if status == PublishTask.Status.QUEUED:
         from .tasks import run_publish_task
 
-        transaction.on_commit(lambda: run_publish_task.delay(str(task.id)))
+        transaction.on_commit(
+            lambda: run_publish_task.delay(
+                str(task.organization_id),
+                str(task.id),
+            )
+        )
     return task
 
 
@@ -1143,10 +1148,11 @@ def heartbeat_publish_task(task_id, *, claim_token) -> PublishTask:
 
 
 @transaction.atomic
-def reap_stale_publish_tasks(*, now=None) -> int:
+def reap_stale_publish_tasks(*, organization_id, now=None) -> int:
     now = now or timezone.now()
     stale = list(
         PublishTask.objects.select_for_update(skip_locked=True).filter(
+            organization_id=organization_id,
             status=PublishTask.Status.RUNNING,
             lease_expires_at__lt=now,
         )
@@ -1521,7 +1527,9 @@ def retry_publish_task(task, *, actor=None):
         raise
     from .tasks import run_publish_task
 
-    transaction.on_commit(lambda: run_publish_task.delay(str(task.id)))
+    transaction.on_commit(
+        lambda: run_publish_task.delay(str(task.organization_id), str(task.id))
+    )
     return task
 
 
@@ -1537,17 +1545,23 @@ def run_publish_task_now(task, *, actor=None):
         task.save(update_fields=["status", "updated_at"])
     from .tasks import run_publish_task
 
-    transaction.on_commit(lambda: run_publish_task.delay(str(task.id)))
+    transaction.on_commit(
+        lambda: run_publish_task.delay(str(task.organization_id), str(task.id))
+    )
     return task
 
 
 @transaction.atomic
-def enqueue_due_publish_tasks(*, limit=100):
+def enqueue_due_publish_tasks(*, organization_id, limit=100):
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
         raise ValueError("Queue limit must be an integer from 1 to 500.")
     tasks = list(
         PublishTask.objects.select_for_update(skip_locked=True)
-        .filter(status=PublishTask.Status.SCHEDULED, scheduled_at__lte=timezone.now())
+        .filter(
+            organization_id=organization_id,
+            status=PublishTask.Status.SCHEDULED,
+            scheduled_at__lte=timezone.now(),
+        )
         .order_by("scheduled_at", "id")[:limit]
     )
     if not tasks:
@@ -1559,6 +1573,8 @@ def enqueue_due_publish_tasks(*, limit=100):
             task.status = PublishTask.Status.QUEUED
             task.save(update_fields=["status", "updated_at"])
             transaction.on_commit(
-                lambda task_id=str(task.id): run_publish_task.delay(task_id)
+                lambda organization_id=str(task.organization_id), task_id=str(task.id): (
+                    run_publish_task.delay(organization_id, task_id)
+                )
             )
     return len(tasks)

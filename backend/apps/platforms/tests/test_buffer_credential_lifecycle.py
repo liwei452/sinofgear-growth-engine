@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import timedelta
 from uuid import uuid4
 
@@ -8,6 +9,8 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.utils import timezone
 
+from apps.common.tenant_tasks import tenant_task_context as real_tenant_task_context
+from apps.identity.models import Organization
 from apps.platforms.models import (
     EncryptedOAuthCredential,
     ProviderConnection,
@@ -119,7 +122,9 @@ def test_bulk_create_rejects_sensitive_metadata(organization):
 
 
 @pytest.mark.django_db
-def test_orphan_reclamation_command_reclaims_only_unreferenced_credentials(organization):
+def test_orphan_reclamation_command_reclaims_only_unreferenced_credentials(
+    organization, monkeypatch, capsys
+):
     connection = connected_connection(organization, reference="vault://buffer/kept")
     kept = EncryptedOAuthCredential.objects.create(
         organization=organization,
@@ -151,6 +156,32 @@ def test_orphan_reclamation_command_reclaims_only_unreferenced_credentials(organ
         key_version="v1",
         status=EncryptedOAuthCredential.Status.ACTIVE,
     )
+    other = Organization.objects.create(name="Other", slug=f"other-{uuid4()}")
+    other_orphan = EncryptedOAuthCredential.objects.create(
+        organization=other,
+        reference="vault://buffer/other-orphan",
+        actor_identifier="actor",
+        platform_code="BUFFER",
+        connection_attempt_id=uuid4(),
+        key_version="v1",
+        status=EncryptedOAuthCredential.Status.ACTIVE,
+    )
+    EncryptedOAuthCredential.objects.filter(pk=other_orphan.pk).update(
+        updated_at=timezone.now() - timedelta(hours=2),
+    )
+    seen = []
+
+    @contextmanager
+    def recording_tenant_context(organization_id):
+        seen.append(organization_id)
+        with real_tenant_task_context(organization_id) as parsed:
+            yield parsed
+
+    monkeypatch.setattr(
+        "apps.platforms.management.commands.reclaim_orphan_buffer_credentials."
+        "tenant_task_context",
+        recording_tenant_context,
+    )
     assert connection.credential_reference == kept.reference
 
     call_command("reclaim_orphan_buffer_credentials", verbosity=0)
@@ -158,6 +189,11 @@ def test_orphan_reclamation_command_reclaims_only_unreferenced_credentials(organ
     kept.refresh_from_db()
     old_orphan.refresh_from_db()
     fresh_orphan.refresh_from_db()
+    other_orphan.refresh_from_db()
     assert kept.status == EncryptedOAuthCredential.Status.ACTIVE
     assert old_orphan.status == EncryptedOAuthCredential.Status.DISCONNECTED
     assert fresh_orphan.status == EncryptedOAuthCredential.Status.ACTIVE
+    assert other_orphan.status == EncryptedOAuthCredential.Status.DISCONNECTED
+    assert seen == sorted((str(organization.id), str(other.id)))
+    output = capsys.readouterr().out
+    assert "vault://" not in output

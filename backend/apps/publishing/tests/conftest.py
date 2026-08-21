@@ -24,7 +24,10 @@ from apps.platforms.models import (
 
 @pytest.fixture
 def publishing_context(db, monkeypatch):
-    monkeypatch.setattr("apps.publishing.tasks.run_publish_task.delay", lambda _task_id: None)
+    monkeypatch.setattr(
+        "apps.publishing.tasks.run_publish_task.delay",
+        lambda _organization_id, _task_id: None,
+    )
     organization = Organization.objects.create(name="Publishing Org", slug="publishing-org")
     actor = get_user_model().objects.create_user(username="publisher", password="x")
     campaign = Campaign.objects.create(organization=organization, name="Launch")

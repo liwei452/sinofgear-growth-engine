@@ -98,7 +98,11 @@ def test_run_due_maps_configs_scans_only_due_and_enabled(organization, config):
         sources.append(source)
         return source
 
-    result = run_due_maps_configs(limit=5, source_factory=factory)
+    result = run_due_maps_configs(
+        organization_id=organization.id,
+        limit=5,
+        source_factory=factory,
+    )
     assert result["scanned"] == 1
     assert result["succeeded"] == 1
     assert DiscoveryCandidate.objects.filter(organization=organization).count() == 1

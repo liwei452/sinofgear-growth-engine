@@ -130,7 +130,7 @@ platforms_platform
 platforms_platformcapability
 ```
 
-These are shared prompt/platform dictionaries. Runtime needs them, but a runtime connection with no tenant context must not enumerate them. RLS-2A should allow SELECT only when `app_current_organization_id()` is non-null and should keep runtime writes denied. Owner-managed seed/release workflows remain separate.
+These are shared prompt/platform dictionaries. `ai_promptversion` is restricted to global system prompt templates: tenant-specific company, product, customer, and other business content is forbidden there and the manifest therefore marks `contains_customer_content=False`. Runtime needs these dictionaries, but a runtime connection with no tenant context must not enumerate them. RLS-2A should allow SELECT only when `app_current_organization_id()` is non-null and should keep runtime writes denied. Owner-managed seed/release workflows remain separate.
 
 ### CONTROL_PLANE — 3
 
@@ -189,39 +189,39 @@ Pre-context or exceptional paths:
 | `auth/login` | Django `auth_user` credential lookup | Expected control plane; no business tenant table. |
 | `auth/csrf`, `auth/logout` | Session/auth infrastructure | Expected control plane; no business tenant table. |
 | `auth/me`, Membership detail | `Membership -> Organization, Role` in `HasOrganizationPermission` | Expected control plane, then tenant GUC exists. |
-| Buffer admin views | `platforms.CanAdministerBuffer` reads Membership/Role and sets `request.organization` only | **RLS-2A risk:** it does not call `set_local_tenant`; its first platform ORM query will fail closed after RLS or could run without isolation before RLS. |
+| Buffer admin views | `platforms.CanAdministerBuffer` reads Membership/Role, sets `request.membership` and `request.organization`, then calls `set_local_tenant(membership.organization_id)` | Ready for RLS-2A: the tenant GUC is established before the first Platform/ProviderConnection/SocialAccount view query while the administrator and two-permission checks remain unchanged. |
 | Platform OAuth callback | `CanManageCredentials` first establishes tenant; `_platform_or_404` then reads global Platform | Safe ordering, but Platform becomes context-gated in RLS-2A. |
 | Knowledge APIs | `CanRead/Create/Review/DeprecateKnowledge` | Covered by HTTP tenant transaction and RLS-1.1 lazy-query contract. |
 | Health/OpenAPI schema | No business ORM required for health; schema introspects code | Global infrastructure, not tenant data. |
 
-No other non-test permission class assigns `request.organization`; the Buffer permission is the only authenticated exception found by source search.
+No other non-test permission class assigns `request.organization`; the former Buffer exception is now aligned with the standard transaction-local tenant boundary.
 
 ## Celery task audit
 
-No non-Knowledge task currently calls `tenant_atomic`. Object-ID-only tasks cannot safely query the object first under fail-closed RLS; they need a trusted native `organization_id` task argument (or a separately designed control-plane locator) and must enter `tenant_atomic` before the first tenant ORM query.
+RLS-2A.1 adds `apps.common.tenant_tasks` as the explicit worker boundary. Object tasks accept a UUID-string `organization_id` first, validate it, enter `tenant_atomic`, and re-read the target with both RLS context and an explicit organization predicate. Scanners materialize stable control-plane Organization IDs and process one independent tenant transaction at a time.
 
-| Task | Current arguments | First ORM access | Risk / target |
-|---|---|---|---|
-| `apps.jobs.tasks.execute_ai_job` | `job_id`, `prompt_version_id` | `Job.objects.get(job_id)` | Object-ID-only; RLS-2A blocker. |
-| `apps.jobs.tasks.refresh_social_credentials` | optional `organization_id` | cross-tenant `SocialAccount` queryset | Optional scope is unsafe; RLS-2A must require/enumerate tenant context. |
-| `apps.jobs.tasks.reap_stale_jobs` | none | cross-tenant `Job` stale scan | Beat coordinator risk; RLS-2A. |
-| `apps.assets.tasks.run_asset_understanding` | `job_id` | `Job.objects.get(job_id)` | Object-ID-only; RLS-2A blocker. |
-| `apps.content.tasks.generate_master_content_job` | `job_id`, `prompt_version_id` | `Job.objects.get(job_id)` through AI orchestration | Object-ID-only; RLS-2A/2B bridge. |
-| `apps.content.tasks.generate_platform_variants_job` | `job_id` | `Job.objects.get(job_id)` | Object-ID-only; RLS-2A/2B bridge. |
-| `apps.content.tasks.generate_content_recommendations_job` | `job_id`, `prompt_version_id` | `ContentRecommendation.objects.get(job_id)` | Object-ID-only; RLS-2B blocker. |
-| `apps.growth.tasks.scan_due_discovery_profiles` | `limit` | cross-tenant `DiscoveryProfile` scan | Beat coordinator risk; RLS-2C. |
-| `apps.growth.tasks.scan_due_maps_configs` | `limit` | cross-tenant `GoogleMapsDiscoveryConfig` scan | Beat coordinator risk; RLS-2C. |
-| `apps.growth.tasks.run_proactive_acquisition_task` | `organization_id`, `candidate_id`, approvals | control-plane `Organization.objects.get`, then tenant service without `tenant_atomic` | Has trusted tenant parameter but must enter context before candidate access; RLS-2C. |
-| `apps.growth.tasks.run_due_proactive_acquisition` | `limit` | cross-tenant `DiscoveryCandidate` scan | Beat coordinator risk; RLS-2C. |
-| `apps.growth.tasks.execute_growth_publish_item` | `item_id` | `GrowthPublishItem.objects.get` | Object-ID-only; RLS-2C blocker. |
-| `apps.growth.tasks.sync_growth_publish_item_from_task` | `task_id` | `GrowthPublishItem.objects.filter(publish_task_id)` | Object-ID-only across Growth/Publishing; RLS-2B/2C blocker. |
-| `apps.growth.tasks.reconcile_delegated_publish_items` | `limit` | cross-tenant `GrowthPublishItem` scan | Beat coordinator risk; RLS-2C. |
-| `apps.publishing.tasks.run_publish_task` | `task_id` | `PublishedPost`/`PublishTask` lookup | Object-ID-only; RLS-2B blocker. |
-| `apps.publishing.tasks.queue_due_publish_tasks` | `limit` | cross-tenant `PublishTask` scan | Beat coordinator risk; RLS-2B. |
-| `apps.publishing.tasks.sync_post_metrics_hourly` | none | control-plane Organization enumeration, then tenant `PublishedPost` without context | Enumeration pattern is appropriate, but each iteration needs `tenant_atomic`; RLS-2B. |
-| `apps.publishing.tasks.reap_stale_publish_tasks_task` | none | cross-tenant `PublishTask` stale scan | Beat coordinator risk; RLS-2B. |
-| `apps.publishing.tasks.reconcile_buffer_publish_task_job` | `task_id` | `PublishTask.objects.get` | Object-ID-only; RLS-2B blocker. |
-| `apps.publishing.tasks.reconcile_buffer_publish_tasks` | `limit` | cross-tenant `PublishTask` reconciliation scan | Beat coordinator risk; RLS-2B. |
+| Task | Current arguments | Tenant execution |
+|---|---|---|
+| `apps.jobs.tasks.execute_ai_job` | `organization_id`, `job_id`, `prompt_version_id` | Explicit tenant object re-read before orchestration. |
+| `apps.jobs.tasks.refresh_social_credentials` | none | Coordinator; global total limit 100. |
+| `apps.jobs.tasks.reap_stale_jobs` | none | Coordinator; each stale query is organization-filtered. |
+| `apps.assets.tasks.run_asset_understanding` | `organization_id`, `job_id` | Explicit tenant Job re-read before understanding. |
+| `apps.content.tasks.generate_master_content_job` | `organization_id`, `job_id`, `prompt_version_id` | Explicit tenant Job re-read before orchestration. |
+| `apps.content.tasks.generate_platform_variants_job` | `organization_id`, `job_id` | Explicit tenant Job re-read before claim. |
+| `apps.content.tasks.generate_content_recommendations_job` | `organization_id`, `job_id`, `prompt_version_id` | Explicit tenant recommendation re-read before generation. |
+| `apps.growth.tasks.scan_due_discovery_profiles` | `limit` | Coordinator; supplied limit remains global. |
+| `apps.growth.tasks.scan_due_maps_configs` | `limit` | Coordinator; supplied limit remains global. |
+| `apps.growth.tasks.run_proactive_acquisition_task` | `organization_id`, `candidate_id`, approvals | Explicit tenant Candidate re-read before execution. |
+| `apps.growth.tasks.run_due_proactive_acquisition` | `limit` | Coordinator; supplied limit remains global. |
+| `apps.growth.tasks.execute_growth_publish_item` | `organization_id`, `item_id` | Explicit tenant item re-read before execution. |
+| `apps.growth.tasks.sync_growth_publish_item_from_task` | `organization_id`, `task_id` | Organization-filtered Growth and Publishing lookups. |
+| `apps.growth.tasks.reconcile_delegated_publish_items` | `limit` | Coordinator; supplied limit remains global. |
+| `apps.publishing.tasks.run_publish_task` | `organization_id`, `task_id` | Explicit tenant task re-read before execution. |
+| `apps.publishing.tasks.queue_due_publish_tasks` | `limit` | Coordinator; supplied limit remains global. |
+| `apps.publishing.tasks.sync_post_metrics_hourly` | none | Coordinator; one organization per transaction. |
+| `apps.publishing.tasks.reap_stale_publish_tasks_task` | none | Coordinator; each stale query is organization-filtered. |
+| `apps.publishing.tasks.reconcile_buffer_publish_task_job` | `organization_id`, `task_id` | Explicit tenant task re-read before reconciliation. |
+| `apps.publishing.tasks.reconcile_buffer_publish_tasks` | `limit` | Coordinator; supplied limit remains global and dispatch includes organization. |
 
 KnowledgeContextBuilder and Knowledge review/revision services already self-enter `tenant_atomic` from a trusted Organization. They are not Celery tasks at this baseline.
 
@@ -239,7 +239,7 @@ Nine configured Beat entries scan tenant tables:
 8. `publishing-sync-post-metrics-hourly`
 9. `publishing-reap-stale-minute`
 
-The target design is a small coordinator that reads only the control-plane Organization list, closes that control-plane query, then runs one bounded `tenant_atomic(organization.id)` unit per organization. It must not use an owner/bypass connection, and one tenant failure must not leave or reuse another tenant's GUC. `sync_post_metrics_hourly` already enumerates Organization but is missing the per-tenant transaction; the other eight currently scan tenant tables globally.
+All nine Beat entries now call a small coordinator that fully materializes only control-plane Organization IDs in stable order, then runs one bounded `tenant_atomic(organization.id)` unit per organization. The same pattern also covers manually invoked `refresh_social_credentials`. It does not use an owner/bypass connection, and an exception closes the current transaction before it can reach another tenant. Bounded scanners retain one global total limit rather than multiplying the limit by the organization count.
 
 ## Public and signed entry audit
 
@@ -261,20 +261,28 @@ No email-provider or social-provider webhook endpoint was found at this baseline
 | `seed_gear_ontology` | Writes SYSTEM Knowledge and already checks owner/bypass | Owner-only SYSTEM seed; remains outside tenant runtime. |
 | `seed_platforms` | Writes global Platform/Capability dictionary | Owner/release seed; runtime must receive read-only context-gated access later. |
 | `audit_duplicate_publish_tasks` | Cross-tenant PublishTask audit with no organization argument | Currently requires owner visibility; replace with control-plane organization enumeration and per-tenant read-only audit before RLS-2B. |
-| `reclaim_orphan_buffer_credentials` | Cross-tenant credential scan/write | High-risk; must enumerate organizations then process each under `tenant_atomic` in RLS-2A. |
-| `rotate_social_oauth_keys` | Optional organization filter, otherwise cross-tenant credential rotation; never sets GUC | Require explicit organization or per-tenant coordinator and enter `tenant_atomic` before the first credential query in RLS-2A. |
+| `reclaim_orphan_buffer_credentials` | Optional control-plane organization resolution, otherwise stable Organization enumeration | Each organization is processed in an independent tenant transaction with organization-filtered candidate and reference rechecks. |
+| `rotate_social_oauth_keys` | Optional control-plane organization resolution, otherwise stable Organization enumeration | Dry-run counts and bounded rotation batches execute independently per tenant; output contains counts only. |
 | `audit_rls_coverage` | Apps-registry metadata only | Safe under runtime or CI; no database row access and no owner requirement. |
 
 ## Blocking findings and next phases
 
-All 96 tables have a reliable manifest classification; there is no table-classification blocker and no policy is guessed here. Runtime tenant location is not yet reliable for these entry families:
+All 96 tables have a reliable manifest classification; there is no table-classification blocker and no policy is guessed here. RLS-2A.1 removes object-ID-only Celery payloads, cross-tenant scanner transactions, the Buffer permission gap, and runtime credential-command scans. Runtime tenant location remains unresolved only for these later-phase public entry families:
 
-- `job_id`, `task_id`, `item_id`, and similar Celery payloads that identify only a tenant row;
 - public Tracking short codes;
 - public lead visit candidate IDs and RFQ lead IDs;
-- eight cross-tenant Beat scans;
-- Buffer admin permission, which resolves Membership but omits `set_local_tenant`.
 
-RLS-2A must land Catalog, Assets, Platforms, Audit, AI, Jobs, their global-context dictionaries, Buffer permission, and job/credential task context together. RLS-2B must land Campaigns, Content, Publishing, and Buffer reconciliation/publish workers. RLS-2C must land Growth, Tracking, public redirect/RFQ/visit tenant location, per-organization Beat coordinators, `identity_phaseae2eownership`, and the final assertion that every non-exempt manifest entry has an enabled/forced policy.
+RLS-2A can now land Catalog, Assets, Platforms, Audit, AI, Jobs, and their global-context dictionaries without a worker or credential-command context blocker. RLS-2B must still land Campaigns, Content, and Publishing policies; their task entry points are already context-ready. RLS-2C must land Growth, Tracking, public redirect/RFQ/visit tenant location, `identity_phaseae2eownership`, and the final assertion that every non-exempt manifest entry has an enabled/forced policy.
 
-This inventory does not enable policies, grant privileges, change task parameters, or change runtime behavior.
+## Celery signature deployment gate
+
+Old queued messages do not contain the new required `organization_id` argument and must fail rather than fall back to an unsafe object-ID lookup. Deploy in this order:
+
+1. Stop Celery Beat and stop all new task dispatch.
+2. Wait for old-format work to complete or safely clear it using the operator's queue procedure; this repository does not automate queue deletion.
+3. Deploy the code with the new explicit task signatures.
+4. Restart workers, then restart Beat.
+5. Confirm newly enqueued object-task payloads contain the server-derived UUID-string `organization_id` as their first argument.
+6. Only after that verification, deploy the separate RLS-2A Policy migration in the next batch.
+
+This inventory update and runtime preparation add no migration, Policy, privilege grant, or external API call.

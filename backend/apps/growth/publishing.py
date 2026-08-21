@@ -157,12 +157,12 @@ def _refresh_batch_status(batch: GrowthPublishBatch) -> GrowthPublishBatch:
     return batch
 
 
-def _execute_item(item_id) -> None:
+def _execute_item(item_id, *, organization_id) -> None:
     with transaction.atomic():
         item = GrowthPublishItem.objects.select_for_update().select_related(
             "batch", "channel_package", "social_account__credential",
             "social_account__platform",
-        ).get(pk=item_id)
+        ).get(pk=item_id, organization_id=organization_id)
         if item.status not in {GrowthPublishItem.Status.QUEUED, GrowthPublishItem.Status.FAILED}:
             return
         item.status = GrowthPublishItem.Status.RUNNING
@@ -326,7 +326,7 @@ def create_publish_batch(
     from .tasks import execute_growth_publish_item
 
     for item_id in queued_ids:
-        execute_growth_publish_item.delay(item_id)
+        execute_growth_publish_item.delay(str(batch.organization_id), str(item_id))
     batch.refresh_from_db()
     return _refresh_batch_status(batch)
 
@@ -340,19 +340,23 @@ def retry_failed_items(*, batch: GrowthPublishBatch, actor) -> GrowthPublishBatc
         last_error__retryable=True,
     ).values_list("id", flat=True))
     for item_id in failed_ids:
-        execute_growth_publish_item.delay(item_id)
+        execute_growth_publish_item.delay(str(batch.organization_id), str(item_id))
     batch.refresh_from_db()
     return _refresh_batch_status(batch)
 
 
 @transaction.atomic
-def sync_publish_item_from_task(*, task_id):
+def sync_publish_item_from_task(*, task_id, organization_id):
     item = GrowthPublishItem.objects.select_for_update().filter(
-        publish_task_id=task_id
+        organization_id=organization_id,
+        publish_task_id=task_id,
     ).first()
     if item is None:
         return None
-    task = PublishTask.objects.filter(id=task_id).first()
+    task = PublishTask.objects.filter(
+        id=task_id,
+        organization_id=organization_id,
+    ).first()
     if task is None:
         return item
     if task.status == PublishTask.Status.SUCCEEDED:

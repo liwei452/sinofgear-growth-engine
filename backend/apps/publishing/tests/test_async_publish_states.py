@@ -446,7 +446,10 @@ def test_stale_worker_before_provider_call_is_retryable(publishing_context):
     assert claimed is not None
 
     expired = timezone.now() + timedelta(seconds=PUBLISH_LEASE_SECONDS + 1)
-    assert reap_stale_publish_tasks(now=expired) == 1
+    assert reap_stale_publish_tasks(
+        organization_id=task.organization_id,
+        now=expired,
+    ) == 1
 
     task.refresh_from_db()
     assert task.status == PublishTask.Status.FAILED
@@ -472,7 +475,10 @@ def test_stale_worker_after_provider_call_is_unknown(publishing_context):
     _mark_provider_call_started(claimed_task, attempt)
 
     expired = timezone.now() + timedelta(seconds=PUBLISH_LEASE_SECONDS + 1)
-    assert reap_stale_publish_tasks(now=expired) == 1
+    assert reap_stale_publish_tasks(
+        organization_id=task.organization_id,
+        now=expired,
+    ) == 1
 
     task.refresh_from_db()
     assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
@@ -554,7 +560,10 @@ def test_growth_item_stays_waiting_for_submitted_task(
         status=GrowthPublishItem.Status.DELEGATED,
     )
 
-    sync_publish_item_from_task(task_id=task.id)
+    sync_publish_item_from_task(
+        task_id=task.id,
+        organization_id=task.organization_id,
+    )
 
     item.refresh_from_db()
     assert item.status == GrowthPublishItem.Status.DELEGATED
@@ -686,7 +695,10 @@ def test_retry_clears_provider_call_started_at(publishing_context, monkeypatch):
     claimed = claim_publish_task(task.id)
     assert claimed is not None
     expired = timezone.now() + timedelta(seconds=PUBLISH_LEASE_SECONDS + 1)
-    assert reap_stale_publish_tasks(now=expired) == 1
+    assert reap_stale_publish_tasks(
+        organization_id=task.organization_id,
+        now=expired,
+    ) == 1
     task.refresh_from_db()
     assert task.status == PublishTask.Status.FAILED
     assert task.last_error["code"] == "STALE_WORKER"

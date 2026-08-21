@@ -235,7 +235,9 @@ def test_fake_recommendation_job_persists_three_options(recommendation_context):
         status=PromptVersion.Status.PUBLISHED,
     )
 
-    result = generate_content_recommendations_job(str(job.id), str(prompt.id))
+    result = generate_content_recommendations_job(
+        str(organization.id), str(job.id), str(prompt.id)
+    )
     run = job.ai_runs.get()
 
     recommendation.refresh_from_db()
@@ -386,7 +388,9 @@ def test_create_recommendation_is_idempotent_and_explicitly_fake(
     dispatched = []
     monkeypatch.setattr(
         "apps.content.views.generate_content_recommendations_job.delay",
-        lambda job_id, prompt_id: dispatched.append((job_id, prompt_id)),
+        lambda organization_id, job_id, prompt_id: dispatched.append(
+            (organization_id, job_id, prompt_id)
+        ),
     )
     client, _ = _api_client(organization)
 

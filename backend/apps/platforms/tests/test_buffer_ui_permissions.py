@@ -1,8 +1,12 @@
+from types import SimpleNamespace
+
 import pytest
+from django.db import transaction
 from rest_framework.test import APIClient
 
 from apps.identity.models import Role
 from apps.identity.permissions import PermissionCode
+from apps.platforms.permissions import CanAdministerBuffer
 
 from .buffer_test_utils import authenticated_member
 
@@ -73,3 +77,22 @@ def test_full_buffer_administrator_reaches_each_endpoint(
 ):
     client, _user = admin_client
     assert _call(client, method, path, payload).status_code != 403
+
+
+@pytest.mark.django_db(transaction=True)
+def test_buffer_administrator_permission_sets_tenant_before_view_queries(
+    admin_client, monkeypatch
+):
+    _client, user = admin_client
+    request = SimpleNamespace(user=user)
+    tenant_ids = []
+    monkeypatch.setattr(
+        "apps.platforms.permissions.set_local_tenant",
+        tenant_ids.append,
+    )
+
+    with transaction.atomic():
+        assert CanAdministerBuffer().has_permission(request, object()) is True
+
+    assert tenant_ids == [request.membership.organization_id]
+    assert request.organization == request.membership.organization

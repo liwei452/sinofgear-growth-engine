@@ -350,17 +350,29 @@ def test_stale_credential_snapshot_does_not_overwrite_task(publishing_context, m
 
 def test_worker_selection_waits_for_initial_submitted_delay(publishing_context, monkeypatch):
     task, _account, _connection = _submitted(publishing_context, monkeypatch)
-    assert select_due_buffer_reconciliation_ids() == []
-    assert select_due_buffer_reconciliation_ids(now=task.next_reconcile_at) == [task.id]
-    assert select_due_buffer_reconciliation_ids() == []
+    assert select_due_buffer_reconciliation_ids(
+        organization_id=task.organization_id
+    ) == []
+    assert select_due_buffer_reconciliation_ids(
+        organization_id=task.organization_id,
+        now=task.next_reconcile_at,
+    ) == [task.id]
+    assert select_due_buffer_reconciliation_ids(
+        organization_id=task.organization_id
+    ) == []
 
 
 def test_worker_selection_includes_due_unknown_without_retrying_publish(
     publishing_context, monkeypatch,
 ):
     task, _account, _connection = _unknown(publishing_context, monkeypatch)
-    assert select_due_buffer_reconciliation_ids() == []
-    assert select_due_buffer_reconciliation_ids(now=task.next_reconcile_at) == [task.id]
+    assert select_due_buffer_reconciliation_ids(
+        organization_id=task.organization_id
+    ) == []
+    assert select_due_buffer_reconciliation_ids(
+        organization_id=task.organization_id,
+        now=task.next_reconcile_at,
+    ) == [task.id]
     task.refresh_from_db()
     assert task.status == PublishTask.Status.SUBMISSION_UNKNOWN
 
@@ -710,7 +722,9 @@ def test_unknown_query_failure_stays_unknown_and_never_becomes_no_match(
     from apps.publishing.models import publishing_writes
     with publishing_writes():
         PublishTask.objects.filter(pk=task.pk).update(status=PublishTask.Status.SUBMISSION_UNKNOWN)
-    assert select_due_buffer_reconciliation_ids() == []
+    assert select_due_buffer_reconciliation_ids(
+        organization_id=task.organization_id
+    ) == []
 
 
 def test_unknown_provider_exception_is_sanitized_and_deferred(

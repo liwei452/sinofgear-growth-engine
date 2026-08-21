@@ -178,8 +178,12 @@ RLS_MANIFEST = (
         "ai_promptversion",
         RLSCategory.GLOBAL_CONTEXT_READ,
         RLSPhase.RLS_2A,
-        rationale="Published prompt templates are global runtime inputs, but must not be enumerable without a tenant context.",
-        contains_customer_content=True,
+        rationale=(
+            "Only global system prompt templates are permitted; tenant-specific company, "
+            "product, customer, or business content must never be stored here. Runtime "
+            "reads still require a tenant context."
+        ),
+        contains_customer_content=False,
         background_task_access=True,
     ),
     _direct(

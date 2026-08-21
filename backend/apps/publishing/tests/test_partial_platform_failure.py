@@ -176,17 +176,23 @@ def test_only_due_scheduled_tasks_are_queued(
         )
     dispatched = []
     monkeypatch.setattr(
-        "apps.publishing.tasks.run_publish_task.delay", dispatched.append
+        "apps.publishing.tasks.run_publish_task.delay",
+        lambda organization_id, task_id: dispatched.extend(
+            (organization_id, task_id)
+        ),
     )
 
     with django_capture_on_commit_callbacks(execute=True):
-        assert enqueue_due_publish_tasks(limit=10) == 1
+        assert enqueue_due_publish_tasks(
+            organization_id=context["organization"].id,
+            limit=10,
+        ) == 1
 
     due.refresh_from_db()
     future.refresh_from_db()
     assert due.status == PublishTask.Status.QUEUED
     assert future.status == PublishTask.Status.SCHEDULED
-    assert dispatched == [str(due.id)]
+    assert dispatched == [str(context["organization"].id), str(due.id)]
 
 
 def test_attempt_and_post_history_reject_direct_mutation(publishing_context):

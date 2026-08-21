@@ -332,14 +332,20 @@ def test_heartbeat_extends_lease_and_reaper_fails_stale_running_job(job):
     assert claimed.heartbeat_at is not None
     assert claimed.lease_expires_at is not None
 
-    assert JobService.reap_stale_jobs(now=timezone.now()) == 0
+    assert JobService.reap_stale_jobs(
+        organization_id=claimed.organization_id,
+        now=timezone.now(),
+    ) == 0
 
     JobService.heartbeat(claimed.id, claim_token=claimed.claim_token)
     claimed.refresh_from_db()
     assert claimed.heartbeat_at > timezone.now() - timedelta(seconds=10)
 
     expired = timezone.now() + timedelta(seconds=JOB_LEASE_SECONDS + 1)
-    assert JobService.reap_stale_jobs(now=expired) == 1
+    assert JobService.reap_stale_jobs(
+        organization_id=claimed.organization_id,
+        now=expired,
+    ) == 1
 
     claimed.refresh_from_db()
     assert claimed.status == Job.Status.FAILED

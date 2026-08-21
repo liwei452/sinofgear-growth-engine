@@ -225,10 +225,13 @@ def _record_failure(*, profile_id, run_id, error_code):
     ])
 
 
-def run_due_discovery_profiles(*, limit=25, source_factory=None):
+def run_due_discovery_profiles(*, organization_id, limit=25, source_factory=None):
     now = timezone.now()
     profile_ids = list(
-        DiscoveryProfile.objects.filter(enabled=True)
+        DiscoveryProfile.objects.filter(
+            organization_id=organization_id,
+            enabled=True,
+        )
         .filter(Q(next_run_at__isnull=True) | Q(next_run_at__lte=now))
         .order_by("next_run_at", "id")
         .values_list("id", flat=True)[:limit]

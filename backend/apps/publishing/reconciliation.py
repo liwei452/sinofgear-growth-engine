@@ -866,13 +866,16 @@ def finalize_unknown_buffer_reconciliation(snapshot, result, *, actor=None):
     )
 
 
-def select_due_buffer_reconciliation_ids(*, limit=BUFFER_RECONCILIATION_BATCH_SIZE, now=None):
+def select_due_buffer_reconciliation_ids(
+    *, organization_id, limit=BUFFER_RECONCILIATION_BATCH_SIZE, now=None
+):
     now = now or timezone.now()
     limit = min(max(int(limit), 1), BUFFER_RECONCILIATION_BATCH_SIZE)
     with transaction.atomic():
         tasks = list(
             PublishTask.objects.select_for_update(skip_locked=True)
             .filter(
+                organization_id=organization_id,
                 social_account__provider=SocialAccount.Provider.BUFFER,
             )
             .filter(
@@ -886,6 +889,7 @@ def select_due_buffer_reconciliation_ids(*, limit=BUFFER_RECONCILIATION_BATCH_SI
             tasks += list(
                 PublishTask.objects.select_for_update(skip_locked=True)
                 .filter(
+                    organization_id=organization_id,
                     social_account__provider=SocialAccount.Provider.BUFFER,
                     next_reconcile_at__lte=now,
                 )

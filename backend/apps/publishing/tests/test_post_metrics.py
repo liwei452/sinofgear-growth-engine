@@ -132,7 +132,10 @@ def test_reap_stale_publish_tasks_fails_expired_running_before_provider_call(
     assert claimed_task.lease_expires_at is not None
 
     expired = timezone.now() + timedelta(seconds=PUBLISH_LEASE_SECONDS + 1)
-    assert reap_stale_publish_tasks(now=expired) == 1
+    assert reap_stale_publish_tasks(
+        organization_id=task.organization_id,
+        now=expired,
+    ) == 1
 
     task.refresh_from_db()
     assert task.status == PublishTask.Status.FAILED

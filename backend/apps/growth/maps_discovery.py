@@ -154,10 +154,13 @@ def _record_failure(config_id, error_code):
     ])
 
 
-def run_due_maps_configs(*, limit=25, source_factory=None) -> dict:
+def run_due_maps_configs(*, organization_id, limit=25, source_factory=None) -> dict:
     now = timezone.now()
     config_ids = list(
-        GoogleMapsDiscoveryConfig.objects.filter(enabled=True)
+        GoogleMapsDiscoveryConfig.objects.filter(
+            organization_id=organization_id,
+            enabled=True,
+        )
         .filter(Q(next_run_at__isnull=True) | Q(next_run_at__lte=now))
         .order_by("next_run_at", "id")
         .values_list("id", flat=True)[:limit]

@@ -145,7 +145,10 @@ class JobActionView(APIView):
         if job.type == Job.Type.CONTENT_PLATFORM_VARIANTS:
             from apps.content.tasks import generate_platform_variants_job
 
-            generate_platform_variants_job.delay(str(job.id))
+            generate_platform_variants_job.delay(
+                str(job.organization_id),
+                str(job.id),
+            )
 
 
 class JobRetryView(JobActionView):

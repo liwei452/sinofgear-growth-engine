@@ -348,7 +348,7 @@ def start_understanding(
     if job.status in {Job.Status.QUEUED, Job.Status.RETRY_QUEUED}:
         from .tasks import run_asset_understanding
 
-        run_asset_understanding.delay(str(job.id))
+        run_asset_understanding.delay(str(job.organization_id), str(job.id))
         job.refresh_from_db()
         return load_understanding_result(job)
     return load_understanding_result(job)
@@ -366,7 +366,7 @@ def retry_understanding(
     retried = JobService.retry(job.id, organization=job.organization)
     from .tasks import run_asset_understanding
 
-    run_asset_understanding.delay(str(retried.id))
+    run_asset_understanding.delay(str(retried.organization_id), str(retried.id))
     retried.refresh_from_db()
     return load_understanding_result(retried)
 

@@ -39,7 +39,10 @@ def test_due_runner_only_executes_enabled_profiles_that_are_due():
         next_run_at=timezone.now() - timedelta(minutes=1),
     )
 
-    result = run_due_discovery_profiles(source_factory=EmptySource)
+    result = run_due_discovery_profiles(
+        organization_id=due_org.id,
+        source_factory=EmptySource,
+    )
 
     due.refresh_from_db()
     future.refresh_from_db()

@@ -26,7 +26,10 @@ from .models import (
     WebsitePageConceptLink,
     WebsitePageProductLink,
 )
-from .policies import evaluate_company_fact_public_eligibility
+from .policies import (
+    company_fact_public_support_bindings,
+    evaluate_company_fact_public_eligibility,
+)
 from .product_context import CatalogProductContextAdapter
 from .snapshot_models import canonical_json, sha256_text
 
@@ -448,8 +451,11 @@ class KnowledgeContextBuilder:
         facts = list(
             CompanyFact.objects.select_for_update()
             .filter(profile=profile, status=CompanyFact.Status.VERIFIED)
-            .prefetch_related("evidence_bindings__evidence")
             .order_by("namespace", "key", "version", "id")
+        )
+        bindings_by_fact = KnowledgeContextBuilder._locked_fact_evidence_snapshot(
+            facts,
+            profile=profile,
         )
         public_claims = []
         internal_context = []
@@ -458,10 +464,7 @@ class KnowledgeContextBuilder:
         source_entries = []
         excerpt_truncated_count = 0
         for fact in facts:
-            bindings = sorted(
-                fact.evidence_bindings.all(),
-                key=lambda item: (item.support_type, str(item.evidence_id), str(item.id)),
-            )
+            bindings = bindings_by_fact[fact.id]
             source_entries.append(
                 {
                     "id": str(fact.id),
@@ -550,7 +553,11 @@ class KnowledgeContextBuilder:
                         "reasons": ["INTERNAL_CONTEXT_BLOCKED"],
                     }
                 continue
-            decision = evaluate_company_fact_public_eligibility(fact, at=at)
+            decision = evaluate_company_fact_public_eligibility(
+                fact,
+                at=at,
+                preloaded_bindings=bindings,
+            )
             if not decision.eligible:
                 blocking_codes = {reason.code for reason in decision.blocking_reasons}
                 excluded.update(blocking_codes)
@@ -561,22 +568,13 @@ class KnowledgeContextBuilder:
                 }
                 continue
             citations = []
-            for binding in bindings:
+            support_bindings = company_fact_public_support_bindings(
+                fact,
+                at=at,
+                preloaded_bindings=bindings,
+            )
+            for binding in support_bindings:
                 evidence = binding.evidence
-                if (
-                    binding.support_type
-                    not in {
-                        CompanyFactEvidence.SupportType.PRIMARY,
-                        CompanyFactEvidence.SupportType.SUPPORTING,
-                    }
-                    or evidence.status != KnowledgeStatus.APPROVED
-                    or evidence.organization_id != fact.organization_id
-                    or evidence.usage_rights != KnowledgeEvidence.UsageRights.PUBLIC
-                    or evidence.sensitivity != KnowledgeEvidence.Sensitivity.NORMAL
-                    or evidence.is_demo
-                    or (evidence.expires_at and evidence.expires_at < at)
-                ):
-                    continue
                 excerpt = evidence.excerpt[:MAX_EVIDENCE_EXCERPT_CHARS]
                 if len(evidence.excerpt) > MAX_EVIDENCE_EXCERPT_CHARS:
                     excerpt_truncated_count += 1
@@ -631,6 +629,50 @@ class KnowledgeContextBuilder:
             source_entries=source_entries,
             excerpt_truncated_count=excerpt_truncated_count,
         )
+
+    @staticmethod
+    def _locked_fact_evidence_snapshot(
+        facts: list[CompanyFact],
+        *,
+        profile: CompanyKnowledgeProfile,
+    ) -> dict[UUID, list[CompanyFactEvidence]]:
+        fact_ids = sorted((fact.id for fact in facts), key=str)
+        facts_by_id = {fact.id: fact for fact in facts}
+        bindings = list(
+            CompanyFactEvidence.objects.select_for_update()
+            .filter(company_fact_id__in=fact_ids)
+            .order_by("id")
+        )
+        evidence_ids = sorted({binding.evidence_id for binding in bindings}, key=str)
+        evidence = list(
+            KnowledgeEvidence.objects.select_for_update()
+            .filter(pk__in=evidence_ids)
+            .order_by("id")
+        )
+        evidence_by_id = {item.id: item for item in evidence}
+        if len(evidence_by_id) != len(evidence_ids):
+            raise KnowledgeContextBuildError(
+                "INVALID_EVIDENCE_BINDING",
+                "A company fact evidence binding references missing evidence.",
+            )
+        bindings_by_fact: dict[UUID, list[CompanyFactEvidence]] = {
+            fact_id: [] for fact_id in fact_ids
+        }
+        for binding in bindings:
+            fact = facts_by_id.get(binding.company_fact_id)
+            item = evidence_by_id[binding.evidence_id]
+            if fact is None:
+                raise KnowledgeContextBuildError(
+                    "INVALID_EVIDENCE_BINDING",
+                    "A company fact evidence binding references an unselected fact.",
+                )
+            binding.evidence = item
+            bindings_by_fact[fact.id].append(binding)
+        for fact_bindings in bindings_by_fact.values():
+            fact_bindings.sort(
+                key=lambda item: (item.support_type, str(item.evidence_id), str(item.id))
+            )
+        return bindings_by_fact
 
     @staticmethod
     def _pages(organization, product: Product, *, truncation: dict) -> _PageBuildResult:

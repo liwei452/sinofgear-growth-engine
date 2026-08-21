@@ -5,6 +5,8 @@ from uuid import UUID, uuid4
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.catalog.models import Product
@@ -29,6 +31,7 @@ from apps.knowledge.models import (
     WebsitePageConceptLink,
     WebsitePageProductLink,
 )
+from apps.knowledge.policies import evaluate_company_fact_public_eligibility
 
 from .conftest import make_concept
 from .test_icp_profile_foundation import make_product
@@ -302,6 +305,86 @@ def test_stale_cross_organization_evidence_cannot_support_public_claim(organizat
 
     assert snapshot.payload["company"]["public_claims"] == []
     assert "FOREIGN-EVIDENCE-SENTINEL" not in snapshot.canonical_payload
+    assert snapshot.payload["company"]["excluded_summary"]["by_reason"] == {
+        "MISSING_PUBLIC_EVIDENCE": 1
+    }
+
+
+@pytest.mark.django_db
+def test_builder_eligibility_and_citation_share_locked_evidence_snapshot(
+    organizations, monkeypatch
+) -> None:
+    organization, _, actor, _, mission, profile, _ = make_context_sources(organizations)
+    fact = make_fact(profile, actor, key="consistent", value={"text": "Consistent claim"})
+    binding = bind_public_evidence(fact, actor, excerpt="LOCKED-SAFE-EXCERPT")
+    captured_bindings = []
+
+    def evaluate_then_revoke(fact, *, at=None, preloaded_bindings=None):
+        captured_bindings.extend(preloaded_bindings or [])
+        decision = evaluate_company_fact_public_eligibility(
+            fact,
+            at=at,
+            preloaded_bindings=preloaded_bindings,
+        )
+        with _test_fixture_writes():
+            KnowledgeEvidence.objects.filter(pk=binding.evidence_id).update(
+                status=KnowledgeStatus.DEPRECATED,
+                excerpt="REVOKED-SENSITIVE-EXCERPT",
+            )
+        return decision
+
+    monkeypatch.setattr(
+        "apps.knowledge.context_builder.evaluate_company_fact_public_eligibility",
+        evaluate_then_revoke,
+    )
+
+    snapshot = build_mission_context(organization=organization, mission=mission, actor=actor)
+
+    assert [item.id for item in captured_bindings] == [binding.id]
+    citation = snapshot.payload["company"]["public_claims"][0]["evidence"][0]
+    assert citation["excerpt"] == "LOCKED-SAFE-EXCERPT"
+    assert "REVOKED-SENSITIVE-EXCERPT" not in snapshot.canonical_payload
+
+
+@pytest.mark.django_db
+def test_policy_with_preloaded_bindings_does_not_query_evidence(organizations) -> None:
+    organization, _, actor, _, _, profile, _ = make_context_sources(organizations)
+    fact = make_fact(profile, actor, key="preloaded", value={"text": "Preloaded claim"})
+    binding = bind_public_evidence(fact, actor)
+    bindings = list(
+        CompanyFactEvidence.objects.filter(pk=binding.pk).select_related("evidence")
+    )
+
+    with CaptureQueriesContext(connection) as queries:
+        decision = evaluate_company_fact_public_eligibility(
+            fact,
+            preloaded_bindings=bindings,
+        )
+
+    assert decision.eligible is True
+    evidence_queries = [
+        query["sql"]
+        for query in queries.captured_queries
+        if "knowledge_companyfactevidence" in query["sql"].lower()
+        or "knowledge_knowledgeevidence" in query["sql"].lower()
+    ]
+    assert evidence_queries == []
+
+
+@pytest.mark.django_db
+def test_revoked_evidence_is_excluded_without_excerpt_leak(organizations) -> None:
+    organization, _, actor, _, mission, profile, _ = make_context_sources(organizations)
+    fact = make_fact(profile, actor, key="revoked", value={"text": "Blocked claim"})
+    binding = bind_public_evidence(fact, actor, excerpt="REVOKED-EXCERPT-SENTINEL")
+    with _test_fixture_writes():
+        KnowledgeEvidence.objects.filter(pk=binding.evidence_id).update(
+            status=KnowledgeStatus.DEPRECATED
+        )
+
+    snapshot = build_mission_context(organization=organization, mission=mission, actor=actor)
+
+    assert snapshot.payload["company"]["public_claims"] == []
+    assert "REVOKED-EXCERPT-SENTINEL" not in snapshot.canonical_payload
     assert snapshot.payload["company"]["excluded_summary"]["by_reason"] == {
         "MISSING_PUBLIC_EVIDENCE": 1
     }

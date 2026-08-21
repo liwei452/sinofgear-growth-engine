@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Iterable
 
 from django.utils import timezone
 
@@ -28,6 +29,7 @@ def evaluate_company_fact_public_eligibility(
     fact: CompanyFact,
     *,
     at: datetime | None = None,
+    preloaded_bindings: Iterable[CompanyFactEvidence] | None = None,
 ) -> PublicEligibilityDecision:
     """Return the complete, structured decision for external use of one fact revision."""
     checked_at = at or timezone.now()
@@ -84,12 +86,13 @@ def evaluate_company_fact_public_eligibility(
         if not passed:
             reasons.append(PublicEligibilityBlockingReason(code=code, message=message))
 
-    bindings = fact.evidence_bindings.select_related("evidence").all()
-    has_public_support = any(
-        binding.support_type
-        in {CompanyFactEvidence.SupportType.PRIMARY, CompanyFactEvidence.SupportType.SUPPORTING}
-        and _evidence_allows_public_use(binding.evidence, checked_at=checked_at)
-        for binding in bindings
+    bindings = _fact_bindings(fact, preloaded_bindings=preloaded_bindings)
+    has_public_support = bool(
+        company_fact_public_support_bindings(
+            fact,
+            at=checked_at,
+            preloaded_bindings=bindings,
+        )
     )
     if not has_public_support:
         reasons.append(
@@ -101,6 +104,7 @@ def evaluate_company_fact_public_eligibility(
 
     has_valid_contradiction = any(
         binding.support_type == CompanyFactEvidence.SupportType.CONTRADICTING
+        and _binding_matches_fact_scope(fact, binding)
         and _is_valid_contradiction(binding.evidence, checked_at=checked_at)
         for binding in bindings
     )
@@ -114,6 +118,44 @@ def evaluate_company_fact_public_eligibility(
 
     blocking_reasons = tuple(reasons)
     return PublicEligibilityDecision(eligible=not blocking_reasons, blocking_reasons=blocking_reasons)
+
+
+def company_fact_public_support_bindings(
+    fact: CompanyFact,
+    *,
+    at: datetime | None = None,
+    preloaded_bindings: Iterable[CompanyFactEvidence] | None = None,
+) -> tuple[CompanyFactEvidence, ...]:
+    checked_at = at or timezone.now()
+    bindings = _fact_bindings(fact, preloaded_bindings=preloaded_bindings)
+    return tuple(
+        binding
+        for binding in bindings
+        if binding.support_type
+        in {CompanyFactEvidence.SupportType.PRIMARY, CompanyFactEvidence.SupportType.SUPPORTING}
+        and _binding_matches_fact_scope(fact, binding)
+        and _evidence_allows_public_use(binding.evidence, checked_at=checked_at)
+    )
+
+
+def _fact_bindings(
+    fact: CompanyFact,
+    *,
+    preloaded_bindings: Iterable[CompanyFactEvidence] | None,
+) -> tuple[CompanyFactEvidence, ...]:
+    if preloaded_bindings is None:
+        return tuple(fact.evidence_bindings.select_related("evidence").all())
+    return tuple(preloaded_bindings)
+
+
+def _binding_matches_fact_scope(
+    fact: CompanyFact,
+    binding: CompanyFactEvidence,
+) -> bool:
+    return (
+        binding.company_fact_id == fact.id
+        and binding.evidence.organization_id == fact.organization_id
+    )
 
 
 def _evidence_allows_public_use(evidence: KnowledgeEvidence, *, checked_at: datetime) -> bool:

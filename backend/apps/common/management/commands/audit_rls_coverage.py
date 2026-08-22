@@ -99,7 +99,11 @@ class Command(BaseCommand):
                 "has_table_privilege('sinofgear_app', "
                 "'knowledge_knowledgecontextsnapshot', 'SELECT,INSERT'), "
                 "has_table_privilege('sinofgear_app', "
-                "'knowledge_knowledgecontextsnapshot', 'UPDATE,DELETE')"
+                "'knowledge_knowledgecontextsnapshot', 'UPDATE,DELETE'), "
+                "has_table_privilege('sinofgear_app', "
+                "'growth_emailverificationevidence', 'SELECT,INSERT'), "
+                "has_table_privilege('sinofgear_app', "
+                "'growth_emailverificationevidence', 'UPDATE,DELETE')"
             )
             runtime_privileges = cursor.fetchone()
 
@@ -150,9 +154,9 @@ class Command(BaseCommand):
             errors.append("sinofgear_app can SET ROLE to sinofgear_owner")
         if not helper_executable:
             errors.append("sinofgear_app cannot execute app_current_organization_id()")
-        if runtime_privileges != (True, False, True, False):
+        if runtime_privileges != (True, False, True, False, True, False):
             errors.append(
-                "sinofgear_app migration-recorder or frozen-Snapshot privileges are unsafe"
+                "sinofgear_app migration-recorder or append-only table privileges are unsafe"
             )
         if errors:
             raise CommandError("Database RLS audit failed:\n" + "\n".join(errors))

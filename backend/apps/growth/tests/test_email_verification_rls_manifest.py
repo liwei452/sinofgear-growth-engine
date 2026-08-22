@@ -1,4 +1,5 @@
 from importlib import import_module
+from pathlib import Path
 
 from apps.common.management.commands.audit_rls_coverage import (
     _expected_policy_contracts,
@@ -44,3 +45,15 @@ def test_audit_contract_has_mutable_run_and_append_only_evidence_policies():
     }
     assert run_commands == {"SELECT", "INSERT", "UPDATE"}
     assert evidence_commands == {"SELECT", "INSERT"}
+
+
+def test_runtime_bootstrap_preserves_append_only_evidence_privileges():
+    repository_root = Path(__file__).resolve().parents[4]
+    bootstrap = (
+        repository_root / "infrastructure/postgres/bootstrap_rls_roles.sql"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "REVOKE UPDATE, DELETE ON TABLE public.growth_emailverificationevidence"
+        in bootstrap
+    )

@@ -45,6 +45,12 @@ def grant_runtime_email_verification_access(django_db_setup, django_db_blocker):
                     sql.Identifier(table), role
                 )
             )
+        cursor.execute(
+            sql.SQL(
+                "REVOKE UPDATE, DELETE ON TABLE "
+                "growth_emailverificationevidence FROM {}"
+            ).format(role)
+        )
 
 
 @pytest.fixture

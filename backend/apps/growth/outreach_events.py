@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db import transaction
 from django.utils import timezone
 from apps.common.tenancy import tenant_atomic
 
 from .email_delivery import (
     EmailDeliveryUnavailable,
+    InvalidEmailRecipient,
     email_delivery_readiness,
     get_delivery_provider,
 )
@@ -30,12 +34,42 @@ _UUID_PATTERN = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
     r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b"
 )
+MAX_EMAIL_ADDRESS_OCTETS = 254
+MAX_EMAIL_LOCAL_PART_OCTETS = 64
+
+
+def _normalize_recipient_email(email: object) -> str:
+    if type(email) is not str or any(
+        unicodedata.category(character).startswith("C") for character in email
+    ):
+        raise InvalidEmailRecipient
+    normalized = email.strip().lower()
+    if not normalized or normalized.count("@") != 1:
+        raise InvalidEmailRecipient
+    local_part, domain = normalized.rsplit("@", 1)
+    try:
+        address_octets = len(normalized.encode("utf-8"))
+        local_part_octets = len(local_part.encode("utf-8"))
+        domain_octets = len(domain.encode("idna"))
+    except UnicodeError:
+        raise InvalidEmailRecipient from None
+    if (
+        address_octets > MAX_EMAIL_ADDRESS_OCTETS
+        or local_part_octets > MAX_EMAIL_LOCAL_PART_OCTETS
+        or domain_octets > 253
+    ):
+        raise InvalidEmailRecipient
+    try:
+        validate_email(normalized)
+    except ValidationError:
+        raise InvalidEmailRecipient from None
+    return normalized
 
 
 def record_sent(
     *, account, draft, email: str, organization_id=None
 ) -> OutreachMessage:
-    normalized_email = email.strip().lower()
+    normalized_email = _normalize_recipient_email(email)
     context_id = organization_id
     def context():
         return (

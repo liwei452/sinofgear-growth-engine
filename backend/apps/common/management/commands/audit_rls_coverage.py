@@ -7,6 +7,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from apps.common.rls_manifest import (
     RLS_MANIFEST,
+    EARLY_RLS_TABLES,
     RLS1_TABLES,
     RLS2A_TABLES,
     RLSManifestError,
@@ -51,7 +52,7 @@ class Command(BaseCommand):
         if connection.vendor != "postgresql":
             raise CommandError("Database RLS audit requires PostgreSQL.")
 
-        expected = RLS1_TABLES | RLS2A_TABLES
+        expected = RLS1_TABLES | RLS2A_TABLES | EARLY_RLS_TABLES
         with connection.cursor() as cursor:
             cursor.execute(
                 "SELECT relname, relrowsecurity, relforcerowsecurity "
@@ -98,7 +99,11 @@ class Command(BaseCommand):
                 "has_table_privilege('sinofgear_app', "
                 "'knowledge_knowledgecontextsnapshot', 'SELECT,INSERT'), "
                 "has_table_privilege('sinofgear_app', "
-                "'knowledge_knowledgecontextsnapshot', 'UPDATE,DELETE')"
+                "'knowledge_knowledgecontextsnapshot', 'UPDATE,DELETE'), "
+                "has_table_privilege('sinofgear_app', "
+                "'growth_emailverificationevidence', 'SELECT,INSERT'), "
+                "has_table_privilege('sinofgear_app', "
+                "'growth_emailverificationevidence', 'UPDATE,DELETE')"
             )
             runtime_privileges = cursor.fetchone()
 
@@ -149,9 +154,9 @@ class Command(BaseCommand):
             errors.append("sinofgear_app can SET ROLE to sinofgear_owner")
         if not helper_executable:
             errors.append("sinofgear_app cannot execute app_current_organization_id()")
-        if runtime_privileges != (True, False, True, False):
+        if runtime_privileges != (True, False, True, False, True, False):
             errors.append(
-                "sinofgear_app migration-recorder or frozen-Snapshot privileges are unsafe"
+                "sinofgear_app migration-recorder or append-only table privileges are unsafe"
             )
         if errors:
             raise CommandError("Database RLS audit failed:\n" + "\n".join(errors))
@@ -161,7 +166,7 @@ def _normalize_policy_expression(expression: str | None) -> str | None:
     if expression is None:
         return None
     normalized = expression.lower().replace("::text", "")
-    for table in RLS1_TABLES | RLS2A_TABLES:
+    for table in RLS1_TABLES | RLS2A_TABLES | EARLY_RLS_TABLES:
         normalized = normalized.replace(f"{table}.", "")
     return re.sub(r"[\s()]", "", normalized)
 
@@ -231,4 +236,8 @@ def _expected_policy_contracts():
             "jobs_jobattempt",
             f"rls_jobs_jobattempt_parent_{command.lower()}",
         )] = (command, using, check)
+    growth = import_module(
+        "apps.growth.migrations.0050_email_verification_pipeline"
+    )
+    contracts.update(growth.POLICY_CONTRACTS)
     return contracts

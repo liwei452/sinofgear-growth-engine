@@ -18,6 +18,13 @@ class EmailDeliveryUnavailable(RuntimeError):
     pass
 
 
+class InvalidEmailRecipient(ValueError):
+    code = "INVALID_RECIPIENT"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
 class MockEmailDeliveryProvider:
     def send(self, *, email: str, subject: str, body: str) -> dict:
         return {

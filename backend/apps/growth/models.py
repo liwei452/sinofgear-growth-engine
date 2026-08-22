@@ -296,6 +296,201 @@ class OutreachMessage(OrganizationOwnedModel):
         ordering = ["-created_at", "-id"]
 
 
+class EmailVerificationRun(OrganizationOwnedModel):
+    class State(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        RUNNING = "RUNNING", "Running"
+        PAUSED = "PAUSED", "Paused"
+        SUCCEEDED = "SUCCEEDED", "Succeeded"
+        FAILED = "FAILED", "Failed"
+
+    class ResultStatus(models.TextChoices):
+        VALID = "VALID", "Valid"
+        LIKELY_VALID = "LIKELY_VALID", "Likely valid"
+        RISKY = "RISKY", "Risky"
+        UNKNOWN = "UNKNOWN", "Unknown"
+        INVALID = "INVALID", "Invalid"
+
+    contact = models.ForeignKey(
+        Contact,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="email_verification_runs",
+    )
+    candidate = models.ForeignKey(
+        "DiscoveryCandidate",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="email_verification_runs",
+    )
+    normalized_email = models.CharField(max_length=320, blank=True)
+    email_fingerprint = models.CharField(max_length=64)
+    domain = models.CharField(max_length=253, blank=True)
+    idempotency_key = models.CharField(max_length=128)
+    state = models.CharField(max_length=16, choices=State.choices, default=State.PENDING)
+    result_status = models.CharField(max_length=16, choices=ResultStatus.choices, blank=True)
+    deliverability_score = models.PositiveSmallIntegerField(null=True, blank=True)
+    contact_quality_score = models.PositiveSmallIntegerField(null=True, blank=True)
+    reason_codes = models.JSONField(default=list, blank=True)
+    verifier_version = models.CharField(max_length=64, default="local-email-v1")
+    result_source = models.CharField(max_length=32, default="LOCAL")
+    requires_provider_review = models.BooleanField(default=False)
+    request_snapshot = models.JSONField(default=dict, blank=True)
+    safe_error_code = models.CharField(max_length=64, blank=True)
+    claim_token = models.UUIDField(null=True, blank=True, editable=False)
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "idempotency_key"],
+                name="growth_unique_email_verify_key",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(deliverability_score__isnull=True)
+                    | models.Q(deliverability_score__lte=100)
+                ),
+                name="growth_email_deliver_score_range",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(contact_quality_score__isnull=True)
+                    | models.Q(contact_quality_score__lte=100)
+                ),
+                name="growth_email_quality_score_range",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["organization", "email_fingerprint", "verifier_version"],
+                name="growth_email_verify_lookup_idx",
+            ),
+            models.Index(
+                fields=["organization", "state", "created_at"],
+                name="growth_email_verify_state_idx",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if re.fullmatch(r"[0-9a-f]{64}", self.email_fingerprint or "") is None:
+            errors["email_fingerprint"] = "Email fingerprint must be a lowercase SHA-256 value."
+        if self.normalized_email != (self.normalized_email or "").strip().lower():
+            errors["normalized_email"] = "Email must already be normalized."
+        if self.domain != (self.domain or "").strip().lower().rstrip("."):
+            errors["domain"] = "Domain must already be normalized."
+        if not isinstance(self.reason_codes, list) or any(
+            not isinstance(code, str) or not code.strip() for code in self.reason_codes
+        ):
+            errors["reason_codes"] = "Reason codes must be a list of non-empty strings."
+        for field_name in ("deliverability_score", "contact_quality_score"):
+            value = getattr(self, field_name)
+            if value is not None and (type(value) is not int or not 0 <= value <= 100):
+                errors[field_name] = "Score must be an integer from 0 to 100."
+        if self.state == self.State.SUCCEEDED:
+            if self.result_status not in self.ResultStatus.values:
+                errors["result_status"] = "A successful run requires a valid result."
+            if self.deliverability_score is None or self.contact_quality_score is None:
+                errors["deliverability_score"] = "A successful run requires both scores."
+        if self.contact_id and self.contact.organization_id != self.organization_id:
+            errors["contact"] = "Contact and verification run must belong to the same organization."
+        if self.candidate_id and self.candidate.organization_id != self.organization_id:
+            errors["candidate"] = "Candidate and verification run must belong to the same organization."
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        # Keep business/tenant validation at the ORM boundary while leaving
+        # uniqueness and range races to the database constraints.
+        self.full_clean(validate_unique=False, validate_constraints=False)
+        return super().save(*args, **kwargs)
+
+
+class AppendOnlyEmailVerificationEvidenceQuerySet(models.QuerySet):
+    @staticmethod
+    def _reject_mutation():
+        raise ValidationError("Email verification evidence is append-only.")
+
+    def update(self, **kwargs):
+        del kwargs
+        self._reject_mutation()
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        del objs, fields, batch_size
+        self._reject_mutation()
+
+    def delete(self):
+        self._reject_mutation()
+
+    def bulk_create(self, objs, *args, **kwargs):
+        objects = list(objs)
+        for item in objects:
+            if not item._state.adding:
+                self._reject_mutation()
+            item.full_clean()
+        return super().bulk_create(objects, *args, **kwargs)
+
+
+class EmailVerificationEvidence(OrganizationOwnedModel):
+    objects = AppendOnlyEmailVerificationEvidenceQuerySet.as_manager()
+
+    run = models.ForeignKey(
+        EmailVerificationRun,
+        on_delete=models.PROTECT,
+        related_name="evidence_items",
+    )
+    sequence = models.PositiveSmallIntegerField()
+    check_type = models.CharField(max_length=32)
+    source = models.CharField(max_length=64)
+    source_version = models.CharField(max_length=64)
+    outcome = models.CharField(max_length=32)
+    reason_code = models.CharField(max_length=64)
+    evidence = models.JSONField(default=dict, blank=True)
+    duration_ms = models.PositiveIntegerField(null=True, blank=True)
+    observed_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["sequence", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run", "sequence"],
+                name="growth_unique_email_evidence_seq",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["organization", "run", "sequence"],
+                name="growth_email_evidence_run_idx",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.run_id and self.run.organization_id != self.organization_id:
+            raise ValidationError(
+                {"run": "Evidence and verification run must belong to the same organization."}
+            )
+        if not isinstance(self.evidence, dict):
+            raise ValidationError({"evidence": "Evidence must be a JSON object."})
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("Email verification evidence is immutable.")
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Email verification evidence cannot be deleted.")
+
+
 class ReactivationRecord(OrganizationOwnedModel):
     class RelationshipSource(models.TextChoices):
         EXISTING_CUSTOMER = "EXISTING_CUSTOMER", "Existing customer"

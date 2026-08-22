@@ -59,9 +59,10 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sinofgear_app;
 
 -- Django's migration recorder is readable by runtime diagnostics, but only the
 -- migration owner may record or alter migration history. Frozen Knowledge
--- snapshots are append-only at the database privilege boundary as well as in
--- the ORM. Keep these revokes after the broad table grant so rerunning this
--- idempotent bootstrap cannot restore the unsafe privileges.
+-- snapshots and email verification evidence are append-only at the database
+-- privilege boundary as well as in the ORM. Keep these revokes after the broad
+-- table grant so rerunning this idempotent bootstrap cannot restore the unsafe
+-- privileges.
 DO $$
 BEGIN
     IF to_regclass('public.django_migrations') IS NOT NULL THEN
@@ -70,6 +71,10 @@ BEGIN
     END IF;
     IF to_regclass('public.knowledge_knowledgecontextsnapshot') IS NOT NULL THEN
         REVOKE UPDATE, DELETE ON TABLE public.knowledge_knowledgecontextsnapshot
+            FROM sinofgear_app;
+    END IF;
+    IF to_regclass('public.growth_emailverificationevidence') IS NOT NULL THEN
+        REVOKE UPDATE, DELETE ON TABLE public.growth_emailverificationevidence
             FROM sinofgear_app;
     END IF;
 END

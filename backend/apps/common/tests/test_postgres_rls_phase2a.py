@@ -9,7 +9,6 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection
 from django.db import transaction
-from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
 from apps.ai.models import OrganizationAIProviderConfig, PromptVersion, ai_audit_writes
@@ -48,33 +47,6 @@ def _runtime_parameters():
         pytest.fail("RLS_TEST_RUNTIME_DSN is required for PostgreSQL RLS tests.")
     parameters["dbname"] = connection.settings_dict["NAME"]
     return parameters
-
-
-@pytest.fixture(scope="session", autouse=True)
-def grant_runtime_access(django_db_setup, django_db_blocker):
-    runtime_role = os.environ.get("RLS_TEST_RUNTIME_ROLE", "sinofgear_app")
-    with django_db_blocker.unblock(), connection.cursor() as cursor:
-        role = sql.Identifier(runtime_role)
-        cursor.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(role))
-        cursor.execute(
-            sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {}")
-            .format(role)
-        )
-        cursor.execute(
-            sql.SQL(
-                "REVOKE INSERT, UPDATE, DELETE ON TABLE django_migrations FROM {}"
-            ).format(role)
-        )
-        cursor.execute(
-            sql.SQL(
-                "REVOKE UPDATE, DELETE ON TABLE "
-                "knowledge_knowledgecontextsnapshot FROM {}"
-            ).format(role)
-        )
-        cursor.execute(
-            sql.SQL("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {}")
-            .format(role)
-        )
 
 
 @pytest.fixture

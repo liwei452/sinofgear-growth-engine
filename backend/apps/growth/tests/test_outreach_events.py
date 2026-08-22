@@ -51,8 +51,13 @@ def test_send_reply_bounce_unsubscribe_state_machine(organization, monkeypatch):
     provider = _ConnectedProvider()
     _patch_connected(monkeypatch, provider)
     account, draft = _account_and_draft(organization)
-    message = record_sent(account=account, draft=draft, email="a@example.com")
+    message = record_sent(
+        account=account,
+        draft=draft,
+        email=" A@Example.COM ",
+    )
     assert message.status == OutreachMessage.Status.SENT
+    assert message.payload["email"] == "a@example.com"
     assert provider.calls[0] == {
         "email": "a@example.com",
         "subject": "Technical capability review",
@@ -74,6 +79,39 @@ def test_send_reply_bounce_unsubscribe_state_machine(organization, monkeypatch):
     record_sent(account=account3, draft=draft3, email="c@example.com")
     record_unsubscribe(account=account3)
     assert FollowUp.objects.get(account=account3).stage == "UNSUBSCRIBED"
+
+
+@pytest.mark.parametrize(
+    "email",
+    [
+        None,
+        1,
+        "",
+        "   ",
+        "not-an-email",
+        "a@example.com,b@example.com",
+        "a@example.com\r\nBcc: victim@example.com",
+        "a@example.com\x00",
+        f"{'a' * 65}@example.com",
+        f"{'a' * 64}@{'b' * 63}.{'c' * 63}.{'d' * 61}.com",
+    ],
+)
+def test_invalid_recipient_fails_closed_before_provider_or_message_write(
+    organization,
+    monkeypatch,
+    email,
+):
+    provider = _ConnectedProvider()
+    _patch_connected(monkeypatch, provider)
+    account, draft = _account_and_draft(organization)
+
+    with pytest.raises(ValueError) as exc_info:
+        record_sent(account=account, draft=draft, email=email)
+
+    assert exc_info.value.code == "INVALID_RECIPIENT"
+    assert str(exc_info.value) == "INVALID_RECIPIENT"
+    assert provider.calls == []
+    assert not OutreachMessage.objects.filter(account=account).exists()
 
 
 def test_smtp_provider_sends_through_django_mail(settings):

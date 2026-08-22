@@ -8,7 +8,7 @@ from .tools import Tool, ToolResult
 from ..buying_signals import detect_buying_signals
 from ..company_resolution import normalize_company_name
 from ..contact_intelligence import extract_team_contacts
-from ..email_verification import verify_email
+from ..email_verification_services import verify_email_for_tenant
 from ..grading import grade_candidate
 from ..lead_judgment import judge_candidate
 from ..models import DiscoveryCandidate
@@ -32,8 +32,32 @@ def _normalize_name(args: dict[str, Any]) -> ToolResult:
     return ToolResult(ok=True, output={"normalized": normalize_company_name(args.get("name", ""))})
 
 
-def _verify_email(args: dict[str, Any]) -> ToolResult:
-    return ToolResult(ok=True, output={"verification": verify_email(args.get("email", ""))})
+def _verify_email_tool(organization) -> Tool:
+    organization_id = organization.id
+
+    def func(args: dict[str, Any]) -> ToolResult:
+        return ToolResult(
+            ok=True,
+            output={
+                "verification": verify_email_for_tenant(
+                    organization_id=organization_id,
+                    email=args.get("email", ""),
+                )
+            },
+        )
+
+    return Tool(
+        name="verify_email",
+        description="Run an audited local-first email verification.",
+        parameters={
+            "type": "object",
+            "properties": {"email": {"type": "string"}},
+            "required": ["email"],
+        },
+        risk="write",
+        approval_required=False,
+        func=func,
+    )
 
 
 def _extract_contacts(args: dict[str, Any]) -> ToolResult:
@@ -107,17 +131,6 @@ def build_pipeline_tools(*, organization=None) -> list[Tool]:
             func=_normalize_name,
         ),
         Tool(
-            name="verify_email",
-            description="Verify email syntax and domain resolution.",
-            parameters={
-                "type": "object",
-                "properties": {"email": {"type": "string"}},
-                "required": ["email"],
-            },
-            risk="read",
-            func=_verify_email,
-        ),
-        Tool(
             name="extract_team_contacts",
             description="Extract public contact emails and role hints from HTML.",
             parameters={
@@ -133,5 +146,6 @@ def build_pipeline_tools(*, organization=None) -> list[Tool]:
         ),
     ]
     if organization is not None:
+        tools.append(_verify_email_tool(organization))
         tools.append(_judge_candidate_tool(organization))
     return tools

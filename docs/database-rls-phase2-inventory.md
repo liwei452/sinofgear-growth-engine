@@ -12,9 +12,9 @@ The manifest is review input, not migration input. Future RLS migrations must co
 
 ## Classification inventory
 
-Total business tables: **96**. There are currently no auto-created business M2M tables; the registry audit still includes them so the next one cannot be added silently.
+Total business tables: **98** after Email Verification A1. There are currently no auto-created business M2M tables; the registry audit still includes them so the next one cannot be added silently.
 
-### TENANT_DIRECT — 78
+### TENANT_DIRECT — 80
 
 These tables carry an `organization_id` column directly.
 
@@ -45,6 +45,8 @@ growth_agentrunstep
 growth_candidateenrichmentsnapshot
 growth_channelpackage
 growth_contact
+growth_emailverificationevidence
+growth_emailverificationrun
 growth_crmhandoff
 growth_customerserviceturn
 growth_discoverycandidate
@@ -149,7 +151,7 @@ These tables are intentionally outside tenant RLS. Their application APIs still 
 - **RLS-1 already covered — 15:** `knowledge_companyfact`, `knowledge_companyfactevidence`, `knowledge_companyknowledgeprofile`, `knowledge_icpproductlink`, `knowledge_icpprofile`, `knowledge_knowledgealias`, `knowledge_knowledgeconcept`, `knowledge_knowledgeconcept_evidence`, `knowledge_knowledgecontextsnapshot`, `knowledge_knowledgeevidence`, `knowledge_knowledgerelation`, `knowledge_knowledgerelation_evidence`, `knowledge_websitepage`, `knowledge_websitepageconceptlink`, `knowledge_websitepageproductlink`.
 - **RLS-2A — 21:** `ai_airun`, `ai_organizationaiproviderconfig`, `ai_promptversion`, `assets_assetproductlink`, `assets_materialasset`, `assets_productevidencefact`, `audit_approvalrecord`, `audit_auditlog`, `catalog_product`, `catalog_productconceptlink`, `jobs_job`, `jobs_jobattempt`, `platforms_accountconnectionsession`, `platforms_connectorcredential`, `platforms_encryptedoauthcredential`, `platforms_oauthconnectionattempt`, `platforms_platform`, `platforms_platformcapability`, `platforms_providerconnection`, `platforms_providerconnectionevent`, `platforms_socialaccount`.
 - **RLS-2B — 16:** `campaigns_campaign`, `campaigns_campaignproduct`, `campaigns_contentbrief`, `campaigns_contentbriefasset`, `campaigns_contentbriefconceptlink`, `campaigns_contentbriefplatform`, `campaigns_contentbriefproduct`, `content_contentrecommendation`, `content_contentrecommendationoption`, `content_mastercontent`, `content_platformcontent`, `publishing_postmetric`, `publishing_publishattempt`, `publishing_publishedpost`, `publishing_publishreconciliationattempt`, `publishing_publishtask`.
-- **RLS-2C — 40:** all 36 `growth_*` tables, `identity_phaseae2eownership`, and the three `tracking_*` tables.
+- **RLS-2C — 42:** all 38 `growth_*` tables, `identity_phaseae2eownership`, and the three `tracking_*` tables. Email Verification A1 enables FORCE RLS early for `growth_emailverificationrun` and `growth_emailverificationevidence`; the remaining RLS-2C policies are unchanged.
 - **Explicit exemptions — 4:** the three CONTROL_PLANE tables and `knowledge_knowledgegraphlock`.
 
 The requested A/B/C grouping is runnable only if each phase lands its task/service context changes together with its policies. In particular, RLS-2A must repair job and credential workers in the same commit as their table policies, and RLS-2B must repair publish/content workers. The requested outline placed Tracking in RLS-2B but its only public locator is the tenant `ShortLink` row itself; enabling fail-closed RLS there would break redirects until RLS-2C. The manifest therefore moves all three Tracking tables to RLS-2C so the tables and the safe public locator land atomically.
@@ -267,7 +269,7 @@ No email-provider or social-provider webhook endpoint was found at this baseline
 
 ## Blocking findings and next phases
 
-All 96 tables have a reliable manifest classification; there is no table-classification blocker and no policy is guessed here. RLS-2A.1 removes object-ID-only Celery payloads, cross-tenant scanner transactions, the Buffer permission gap, and runtime credential-command scans. Runtime tenant location remains unresolved only for these later-phase public entry families:
+All 98 tables have a reliable manifest classification; there is no table-classification blocker and no policy is guessed here. RLS-2A.1 removes object-ID-only Celery payloads, cross-tenant scanner transactions, the Buffer permission gap, and runtime credential-command scans. Runtime tenant location remains unresolved only for these later-phase public entry families:
 
 - public Tracking short codes;
 - public lead visit candidate IDs and RFQ lead IDs;

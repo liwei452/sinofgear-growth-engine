@@ -1,8 +1,11 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+import uuid
 
 import pytest
+from django.test import override_settings
 from django.core.exceptions import ValidationError
 from django.db import connection
+from django.utils import timezone
 
 from apps.growth.email_verification import (
     LocalVerificationResult,
@@ -71,15 +74,6 @@ class RecordingVerifier:
         return self.result
 
 
-class RecordingProvider:
-    def __init__(self):
-        self.calls = []
-
-    def verify(self, email):
-        self.calls.append((email, connection.in_atomic_block))
-        return {"status": "LIKELY_VALID", "reason_codes": ["PROVIDER_CORROBORATED"]}
-
-
 def test_prepare_and_finalize_use_tenant_transactions_but_network_does_not():
     organization = Organization.objects.create(name="Phased", slug="email-phased")
     run, created = request_email_verification(
@@ -139,7 +133,56 @@ def test_history_bounce_is_frozen_in_prepare_and_changes_local_result():
     assert verifier.calls[0]["kwargs"]["history"].bounced is True
 
 
-def test_invalid_local_result_never_calls_optional_provider_and_request_is_idempotent():
+def test_history_is_bound_to_the_exact_mailbox_not_every_message_on_account():
+    organization = Organization.objects.create(
+        name="Exact History",
+        slug="email-exact-history",
+    )
+    account = TargetAccount.objects.create(
+        organization=organization,
+        name="Acme",
+        country="US",
+    )
+    target_message = OutreachMessage.objects.create(
+        organization=organization,
+        account=account,
+        provider="smtp",
+        status=OutreachMessage.Status.REPLIED,
+        payload={"email": "buyer@example.com"},
+    )
+    other_message = OutreachMessage.objects.create(
+        organization=organization,
+        account=account,
+        provider="smtp",
+        status=OutreachMessage.Status.BOUNCED,
+        payload={"email": "other@example.com"},
+    )
+    now = timezone.now()
+    OutreachMessage.objects.filter(id=target_message.id).update(
+        created_at=now - timedelta(minutes=1)
+    )
+    OutreachMessage.objects.filter(id=other_message.id).update(created_at=now)
+    run, _ = request_email_verification(
+        organization_id=organization.id,
+        email="buyer@example.com",
+        idempotency_key="history-exact-mailbox",
+        dispatch=False,
+    )
+    verifier = RecordingVerifier()
+
+    execute_email_verification(
+        organization_id=organization.id,
+        run_id=run.id,
+        local_verifier=verifier,
+    )
+
+    history = verifier.calls[0]["kwargs"]["history"]
+    assert history.replied is True
+    assert history.bounced is False
+    assert history.sent_count == 0
+
+
+def test_invalid_local_result_is_idempotent():
     organization = Organization.objects.create(name="Fallback", slug="email-fallback")
     first, first_created = request_email_verification(
         organization_id=organization.id,
@@ -153,23 +196,19 @@ def test_invalid_local_result_never_calls_optional_provider_and_request_is_idemp
         idempotency_key="same-request",
         dispatch=False,
     )
-    provider = RecordingProvider()
-
     result = execute_email_verification(
         organization_id=organization.id,
         run_id=first.id,
         local_verifier=RecordingVerifier(local_result(VerificationStatus.INVALID)),
-        provider=provider,
     )
 
     assert first_created is True
     assert second_created is False
     assert second.id == first.id
     assert result.result_status == EmailVerificationRun.ResultStatus.INVALID
-    assert provider.calls == []
 
 
-def test_risky_result_marks_fallback_and_provider_runs_outside_transaction():
+def test_risky_result_only_marks_future_provider_review_in_a1():
     organization = Organization.objects.create(name="Provider", slug="email-provider")
     run, _ = request_email_verification(
         organization_id=organization.id,
@@ -177,18 +216,42 @@ def test_risky_result_marks_fallback_and_provider_runs_outside_transaction():
         idempotency_key="provider-fallback",
         dispatch=False,
     )
-    provider = RecordingProvider()
-
     result = execute_email_verification(
         organization_id=organization.id,
         run_id=run.id,
         local_verifier=RecordingVerifier(local_result(VerificationStatus.RISKY, catch_all=True)),
-        provider=provider,
     )
 
-    assert provider.calls == [("buyer@example.com", False)]
     assert result.requires_provider_review is True
-    assert result.result_source == "LOCAL_WITH_PROVIDER"
+    assert result.result_source == "LOCAL"
+
+
+def test_pause_during_local_network_prevents_finalize():
+    organization = Organization.objects.create(
+        name="Pause Provider",
+        slug="email-pause-provider",
+    )
+    run, _ = request_email_verification(
+        organization_id=organization.id,
+        email="buyer@example.com",
+        idempotency_key="pause-provider-race",
+        dispatch=False,
+    )
+    verifier = RecordingVerifier(
+        result=local_result(VerificationStatus.RISKY, catch_all=True),
+        callback=lambda: pause_email_verification(
+            organization_id=organization.id,
+            run_id=run.id,
+        ),
+    )
+
+    result = execute_email_verification(
+        organization_id=organization.id,
+        run_id=run.id,
+        local_verifier=verifier,
+    )
+
+    assert result.state == EmailVerificationRun.State.PAUSED
 
 
 def test_pause_during_network_makes_old_finalize_a_noop():
@@ -306,3 +369,36 @@ def test_paused_run_can_be_explicitly_resumed_without_changing_identity():
 
     assert resumed.id == run.id
     assert result.state == EmailVerificationRun.State.SUCCEEDED
+
+
+@override_settings(EMAIL_VERIFICATION_CLAIM_TIMEOUT_SECONDS=60)
+def test_stale_running_claim_is_reclaimed_without_old_result_overwrite():
+    organization = Organization.objects.create(
+        name="Stale Claim",
+        slug="email-stale-claim",
+    )
+    run, _ = request_email_verification(
+        organization_id=organization.id,
+        email="buyer@example.com",
+        idempotency_key="stale-claim",
+        dispatch=False,
+    )
+    old_claim = uuid.uuid4()
+    EmailVerificationRun.objects.filter(id=run.id).update(
+        state=EmailVerificationRun.State.RUNNING,
+        claim_token=old_claim,
+        attempt_count=1,
+        started_at=timezone.now() - timedelta(minutes=5),
+    )
+    verifier = RecordingVerifier()
+
+    result = execute_email_verification(
+        organization_id=organization.id,
+        run_id=run.id,
+        local_verifier=verifier,
+    )
+
+    assert len(verifier.calls) == 1
+    assert result.state == EmailVerificationRun.State.SUCCEEDED
+    assert result.attempt_count == 2
+    assert result.claim_token is None

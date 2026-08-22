@@ -2,7 +2,9 @@
 
 ## Runtime boundary
 
-Every verification uses short tenant transactions around preparation and finalization. DNS, SMTP, shared-cache acquisition, and an optional injected verification Provider execute after preparation commits and before finalization begins. SMTP probing never issues `DATA` and therefore never sends a message.
+Every verification uses short tenant transactions around preparation and finalization. DNS, SMTP, and shared-cache acquisition execute after preparation commits and before finalization begins. SMTP probing never issues `DATA` and therefore never sends a message. A1 does not execute a third-party verification Provider.
+
+MX A/AAAA records are resolved with bounded DNS lifetimes before SMTP. Every returned address must be globally routable, and the probe connects to a validated pinned IP rather than resolving the hostname again. Private, loopback, link-local, special-use, invalid, empty, and mixed public/private answers are fail-closed without opening an SMTP socket.
 
 Celery payloads contain only `organization_id` and `verification_id` UUID strings. Workers must use the `sinofgear_app` runtime database role. They must not infer an organization from a verification ID.
 
@@ -15,19 +17,20 @@ Celery payloads contain only `organization_id` and `verification_id` UUID string
 | `EMAIL_VERIFICATION_SMTP_TIMEOUT_SECONDS` | 5 | SMTP connect/read timeout |
 | `EMAIL_VERIFICATION_SMTP_RETRIES` | 1 | Additional bounded SMTP attempt |
 | `EMAIL_VERIFICATION_DOMAIN_LOCK_SECONDS` | 10 | Shared hashed-domain exclusion interval |
+| `EMAIL_VERIFICATION_CLAIM_TIMEOUT_SECONDS` | 120 | Reclaim abandoned RUNNING work while stale workers remain fenced by claim token |
 | `CACHE_URL` | unset locally | Shared production Redis cache used for domain exclusion |
 
 Production Web and Celery processes must share Redis. The cache key contains only a SHA-256 digest of the domain. A local-memory cache is used by tests only and does not provide cross-worker throttling.
 
 ## Evidence and privacy
 
-Evidence records store check type, safe outcome, reason code, source/version, timing, MX count, and numeric SMTP response code. They do not store SMTP banners, response text, transcripts, credentials, tokens, Provider payloads, or raw exceptions. Logs and task failures use stable safe error codes and must not include the address.
+Evidence records store check type, safe outcome, reason code, source/version, timing, MX count, and numeric SMTP response code. They do not store SMTP banners, response text, transcripts, credentials, tokens, Provider payloads, or raw exceptions. Logs and task failures use stable safe error codes and must not include the address. Instance, QuerySet, RLS Policy, and runtime table privileges independently reject Evidence mutation or deletion.
 
-`VALID` requires strong historical evidence such as a reply. SMTP acceptance alone is `LIKELY_VALID`; catch-all is `RISKY`; role mailboxes affect contact quality but are not invalid. No local-screening percentage is promised before real production data is calibrated.
+`VALID` requires strong historical evidence such as a reply for the exact normalized mailbox. SMTP acceptance alone is `LIKELY_VALID`; catch-all is `RISKY`; role mailboxes affect contact quality but are not invalid. An unclassified historical bounce is a risk signal rather than definitive INVALID because the current feedback model does not distinguish hard and soft bounces. No local-screening percentage is promised before real production data is calibrated.
 
 ## Third-party boundary
 
-`EmailVerificationProvider` is an injected protocol only. No Bouncer client, credential, or live request is included. Local `INVALID` results never invoke it. Risky, unknown, catch-all, and high-value results are marked for review and may use an explicitly configured Provider later.
+`EmailVerificationProvider` is an interface contract only. No factory, Bouncer client, credential, or Provider execution path is included in A1. Risky, unknown, catch-all, and high-value results are only marked with `requires_provider_review`; a later explicitly approved phase must implement any third-party call.
 
 ## Deployment
 

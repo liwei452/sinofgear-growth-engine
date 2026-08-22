@@ -406,8 +406,41 @@ class EmailVerificationRun(OrganizationOwnedModel):
         if errors:
             raise ValidationError(errors)
 
+    def save(self, *args, **kwargs):
+        # Keep business/tenant validation at the ORM boundary while leaving
+        # uniqueness and range races to the database constraints.
+        self.full_clean(validate_unique=False, validate_constraints=False)
+        return super().save(*args, **kwargs)
+
+
+class AppendOnlyEmailVerificationEvidenceQuerySet(models.QuerySet):
+    @staticmethod
+    def _reject_mutation():
+        raise ValidationError("Email verification evidence is append-only.")
+
+    def update(self, **kwargs):
+        del kwargs
+        self._reject_mutation()
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        del objs, fields, batch_size
+        self._reject_mutation()
+
+    def delete(self):
+        self._reject_mutation()
+
+    def bulk_create(self, objs, *args, **kwargs):
+        objects = list(objs)
+        for item in objects:
+            if not item._state.adding:
+                self._reject_mutation()
+            item.full_clean()
+        return super().bulk_create(objects, *args, **kwargs)
+
 
 class EmailVerificationEvidence(OrganizationOwnedModel):
+    objects = AppendOnlyEmailVerificationEvidenceQuerySet.as_manager()
+
     run = models.ForeignKey(
         EmailVerificationRun,
         on_delete=models.PROTECT,

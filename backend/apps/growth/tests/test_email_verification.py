@@ -7,9 +7,9 @@ from apps.growth.email_verification import (
     LocalVerifier,
     SMTPAssessment,
     SMTPDisposition,
+    SystemDnsResolver,
     VerificationHistory,
     VerificationStatus,
-    verify_email,
 )
 
 
@@ -36,6 +36,16 @@ class FakeSMTPProbe:
 class AllowDomain:
     def acquire(self, domain):
         return True
+
+
+class FakeMXAddressResolver:
+    def __init__(self, addresses):
+        self.addresses = addresses
+        self.calls = []
+
+    def resolve(self, mx_host):
+        self.calls.append(mx_host)
+        return self.addresses
 
 
 def verifier(*, dns=None, smtp=None, limiter=None):
@@ -136,6 +146,11 @@ def test_smtp_accepted_is_only_likely_valid_and_catch_all_is_risky():
             VerificationStatus.UNKNOWN,
             "SMTP_AMBIGUOUS",
         ),
+        (
+            SMTPAssessment(disposition=SMTPDisposition.BLOCKED),
+            VerificationStatus.UNKNOWN,
+            "SMTP_TARGET_BLOCKED",
+        ),
     ],
 )
 def test_smtp_outcomes_are_explainable(smtp, status, reason):
@@ -159,7 +174,7 @@ def test_domain_limit_prevents_smtp_and_returns_unknown():
     assert local.smtp_probe.calls == []
 
 
-def test_history_reply_and_bounce_override_weak_smtp_signal():
+def test_history_reply_and_unclassified_bounce_adjust_weak_smtp_signal():
     reply = verifier().verify(
         "buyer@example.com",
         history=VerificationHistory(replied=True, sent_count=2),
@@ -171,8 +186,8 @@ def test_history_reply_and_bounce_override_weak_smtp_signal():
 
     assert reply.status == VerificationStatus.VALID
     assert "HISTORICAL_REPLY" in reply.reason_codes
-    assert bounce.status == VerificationStatus.INVALID
-    assert "HISTORICAL_BOUNCE" in bounce.reason_codes
+    assert bounce.status == VerificationStatus.RISKY
+    assert "HISTORICAL_BOUNCE_UNCLASSIFIED" in bounce.reason_codes
 
 
 def test_catch_all_never_becomes_valid_even_with_positive_history():
@@ -206,18 +221,6 @@ def test_corporate_domain_and_name_pattern_are_scored_separately():
     assert matched.deliverability_score == mismatch.deliverability_score
     assert matched.contact_quality_score > mismatch.contact_quality_score
     assert "CORPORATE_DOMAIN_MISMATCH" in mismatch.reason_codes
-
-
-def test_compatibility_wrapper_returns_serializable_five_state_result(monkeypatch):
-    local = verifier()
-    monkeypatch.setattr("apps.growth.email_verification.get_local_verifier", lambda: local)
-
-    result = verify_email(" Buyer@Example.com ")
-
-    assert result["email"] == "buyer@example.com"
-    assert result["status"] == "LIKELY_VALID"
-    assert isinstance(result["evidence"], list)
-    assert result["verifier_version"]
 
 
 def test_smtp_probe_checks_recipient_and_random_catch_all_without_sending_data(monkeypatch):
@@ -254,13 +257,20 @@ def test_smtp_probe_checks_recipient_and_random_catch_all_without_sending_data(m
         lambda timeout: boundary,
     )
 
-    result = BasicSMTPProbe(timeout=1, retries=0).probe(
+    address_resolver = FakeMXAddressResolver(("1.1.1.1",))
+    result = BasicSMTPProbe(
+        timeout=1,
+        retries=0,
+        address_resolver=address_resolver,
+    ).probe(
         email="buyer@example.com",
         mx_host="mx.example.com",
     )
 
     assert result.disposition == SMTPDisposition.ACCEPTED
     assert result.catch_all is False
+    assert address_resolver.calls == ["mx.example.com"]
+    assert boundary.calls[0] == ("connect", "1.1.1.1", 25)
     assert [call[0] for call in boundary.calls] == [
         "connect",
         "hello",
@@ -272,6 +282,32 @@ def test_smtp_probe_checks_recipient_and_random_catch_all_without_sending_data(m
         "quit",
     ]
     assert not any(call[0] in {"data", "sendmail"} for call in boundary.calls)
+
+
+@pytest.mark.parametrize(
+    "addresses",
+    [
+        ("127.0.0.1",),
+        ("::1",),
+        ("169.254.10.20",),
+        ("1.1.1.1", "10.0.0.1"),
+    ],
+)
+def test_smtp_probe_rejects_non_public_or_mixed_mx_addresses(monkeypatch, addresses):
+    smtp_created = []
+    monkeypatch.setattr(
+        "apps.growth.email_verification.smtplib.SMTP",
+        lambda timeout: smtp_created.append(timeout),
+    )
+
+    result = BasicSMTPProbe(
+        timeout=1,
+        retries=0,
+        address_resolver=FakeMXAddressResolver(addresses),
+    ).probe(email="buyer@example.com", mx_host="mx.example.com")
+
+    assert result.disposition == SMTPDisposition.BLOCKED
+    assert smtp_created == []
 
 
 def test_smtp_probe_retries_only_within_the_bounded_budget(monkeypatch):
@@ -292,10 +328,27 @@ def test_smtp_probe_retries_only_within_the_bounded_budget(monkeypatch):
 
     monkeypatch.setattr("apps.growth.email_verification.smtplib.SMTP", TimeoutSMTP)
 
-    result = BasicSMTPProbe(timeout=1, retries=1).probe(
+    result = BasicSMTPProbe(
+        timeout=1,
+        retries=1,
+        address_resolver=FakeMXAddressResolver(("1.1.1.1",)),
+    ).probe(
         email="buyer@example.com",
         mx_host="mx.example.com",
     )
 
     assert result.disposition == SMTPDisposition.TIMEOUT
     assert calls == [1, 1]
+
+
+@pytest.mark.parametrize(
+    ("factory", "message"),
+    [
+        (lambda: SystemDnsResolver(timeout=60, lifetime=60), "DNS timeout"),
+        (lambda: BasicSMTPProbe(timeout=60, retries=0), "SMTP timeout"),
+        (lambda: BasicSMTPProbe(timeout=1, retries=100), "SMTP retries"),
+    ],
+)
+def test_network_budgets_reject_unbounded_configuration(factory, message):
+    with pytest.raises(ValueError, match=message):
+        factory()

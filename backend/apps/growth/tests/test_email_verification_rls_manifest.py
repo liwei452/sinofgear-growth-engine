@@ -46,6 +46,17 @@ def test_audit_contract_has_mutable_run_and_append_only_evidence_policies():
     assert run_commands == {"SELECT", "INSERT", "UPDATE"}
     assert evidence_commands == {"SELECT", "INSERT"}
 
+    run_checks = {
+        check
+        for (table, _), (command, _, check) in contracts.items()
+        if table == "growth_emailverificationrun"
+        and command in {"INSERT", "UPDATE"}
+    }
+    assert len(run_checks) == 1
+    run_check = run_checks.pop()
+    assert "growth_contact" in run_check
+    assert "growth_discoverycandidate" in run_check
+
 
 def test_runtime_bootstrap_preserves_append_only_evidence_privileges():
     repository_root = Path(__file__).resolve().parents[4]

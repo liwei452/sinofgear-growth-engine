@@ -14,7 +14,7 @@ No migration-graph conflict or security blocker requires stopping A1. Growth cur
 
 - `apps.growth.email_verification.verify_email()` normalizes with `strip().lower()`, applies a regular expression, and calls `socket.gethostbyname()`.
 - The current result values are `INVALID_SYNTAX`, `DOMAIN_RESOLVES`, and `DOMAIN_UNRESOLVABLE`; they are not the requested five-state contract.
-- `EmailVerificationProvider` and `EMAIL_VERIFICATION_PROVIDER_FACTORY` already provide an extension seam. There is no Bouncer implementation.
+- `EmailVerificationProvider` defines the future extension contract only. A1 deliberately has no Provider factory or execution path, and there is no Bouncer implementation.
 - The proactive acquisition Agent invokes verification after leaving its tenant transaction. This already avoids putting the current DNS lookup inside a database transaction.
 - `apps.sources.adapters.dns_lookup.DnsLookupAdapter` can query Google DNS-over-HTTPS for MX and A records, but it is a generic external source adapter, has a 30-second timeout, and does not implement local SMTP, evidence persistence, retry, or tenant-aware throttling.
 

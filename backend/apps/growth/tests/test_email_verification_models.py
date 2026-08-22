@@ -77,6 +77,17 @@ def test_optional_contact_and_candidate_must_share_the_run_organization():
     with pytest.raises(ValidationError, match="same organization"):
         run.full_clean()
 
+    with pytest.raises(ValidationError, match="same organization"):
+        EmailVerificationRun.objects.create(
+            organization=own,
+            contact=contact,
+            candidate=candidate,
+            normalized_email="buyer@example.com",
+            email_fingerprint="c" * 64,
+            domain="example.com",
+            idempotency_key="cross-tenant-create",
+        )
+
 
 def test_evidence_is_append_only_and_carries_source_time_and_version():
     organization = Organization.objects.create(name="Evidence", slug="email-evidence")
@@ -99,6 +110,40 @@ def test_evidence_is_append_only_and_carries_source_time_and_version():
         item.save()
     with pytest.raises(ValidationError, match="cannot be deleted"):
         item.delete()
+
+
+@pytest.mark.parametrize("operation", ["update", "bulk_update", "delete"])
+def test_evidence_queryset_mutations_are_rejected(operation):
+    organization = Organization.objects.create(
+        name=f"Evidence {operation}",
+        slug=f"email-evidence-{operation}",
+    )
+    run = make_run(organization)
+    item = EmailVerificationEvidence.objects.create(
+        organization=organization,
+        run=run,
+        sequence=1,
+        check_type="MX",
+        source="DNS",
+        source_version="local-email-v1",
+        outcome="PASS",
+        reason_code="MX_FOUND",
+        evidence={"mx_count": 1},
+    )
+
+    with pytest.raises(ValidationError, match="append-only"):
+        if operation == "update":
+            EmailVerificationEvidence.objects.filter(id=item.id).update(
+                outcome="FAIL"
+            )
+        elif operation == "bulk_update":
+            item.outcome = "FAIL"
+            EmailVerificationEvidence.objects.bulk_update([item], ["outcome"])
+        else:
+            EmailVerificationEvidence.objects.filter(id=item.id).delete()
+
+    item.refresh_from_db()
+    assert item.outcome == "PASS"
 
 
 def test_completed_run_requires_valid_result_scores_and_reason_codes():

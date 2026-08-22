@@ -9,7 +9,13 @@ from django.db import connection
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
-from apps.growth.models import EmailVerificationEvidence, EmailVerificationRun
+from apps.growth.models import (
+    Contact,
+    DiscoveryCandidate,
+    EmailVerificationEvidence,
+    EmailVerificationRun,
+    TargetAccount,
+)
 from apps.identity.models import Organization
 
 
@@ -90,6 +96,25 @@ def test_runtime_role_enforces_email_verification_tenant_and_append_only_boundar
     other = Organization.objects.create(name="Email RLS B", slug=f"email-rls-b-{uuid.uuid4()}")
     own_run = _run(own, "own")
     other_run = _run(other, "other")
+    other_account = TargetAccount.objects.create(
+        organization=other,
+        name="Other account",
+        country="US",
+    )
+    other_contact = Contact.objects.create(
+        organization=other,
+        account=other_account,
+        full_name="Other buyer",
+    )
+    other_candidate = DiscoveryCandidate.objects.create(
+        organization=other,
+        company_name="Other candidate",
+        country="US",
+        import_format="CSV",
+        source_governance={},
+        raw_record={},
+        record_hash="d" * 64,
+    )
     evidence = EmailVerificationEvidence.objects.create(
         organization=own,
         run=own_run,
@@ -148,6 +173,20 @@ def test_runtime_role_enforces_email_verification_tenant_and_append_only_boundar
             "'PASS', 'MX_FOUND', '{}', now(), %s)",
             (uuid.uuid4(), own.id, other_run.id),
         )
+
+    for field_name, parent_id in (
+        ("contact_id", other_contact.id),
+        ("candidate_id", other_candidate.id),
+    ):
+        with pytest.raises(psycopg.errors.InsufficientPrivilege), _tenant(
+            runtime_connection, own.id
+        ):
+            runtime_connection.execute(
+                sql.SQL(
+                    "UPDATE growth_emailverificationrun SET {} = %s WHERE id = %s"
+                ).format(sql.Identifier(field_name)),
+                (parent_id, own_run.id),
+            )
 
     for statement in (
         "UPDATE growth_emailverificationevidence SET outcome = 'FAIL' WHERE id = %s",

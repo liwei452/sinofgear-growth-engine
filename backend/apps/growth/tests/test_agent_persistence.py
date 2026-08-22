@@ -101,6 +101,38 @@ def test_pipeline_grade_tool_drives_real_scoring():
     assert result.steps[0].output["grade"] in {"A", "B", "C"}
 
 
+def test_pipeline_email_tool_requires_trusted_org_and_uses_tenant_service(
+    organization,
+    monkeypatch,
+):
+    from apps.growth.agent import pipeline_tools
+
+    assert "verify_email" not in {
+        tool.name for tool in build_pipeline_tools()
+    }
+    calls = []
+    monkeypatch.setattr(
+        pipeline_tools,
+        "verify_email_for_tenant",
+        lambda **kwargs: calls.append(kwargs)
+        or {"email": kwargs["email"], "status": "LIKELY_VALID"},
+    )
+    tool = ToolRegistry(build_pipeline_tools(organization=organization)).get(
+        "verify_email"
+    )
+
+    result = tool.func({"email": "buyer@example.com"})
+
+    assert result.ok is True
+    assert result.output["verification"]["status"] == "LIKELY_VALID"
+    assert calls == [
+        {
+            "organization_id": organization.id,
+            "email": "buyer@example.com",
+        }
+    ]
+
+
 def test_pipeline_judge_tool_is_org_scoped(organization):
     candidate = DiscoveryCandidate.objects.create(
         organization=organization,

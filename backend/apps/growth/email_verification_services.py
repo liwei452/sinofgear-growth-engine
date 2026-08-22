@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Protocol
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.utils import timezone
@@ -13,20 +15,16 @@ from apps.common.tenancy import tenant_atomic
 from apps.common.tenant_tasks import dispatch_task_on_commit
 
 from .email_verification import (
-    EmailVerificationProvider,
     LocalVerificationResult,
     VerificationHistory,
     VerificationStatus,
     get_local_verifier,
-    get_verification_provider,
 )
-from .growth_events import EVENT_EMAIL_FAILED, EVENT_EMAIL_SENT
 from .models import (
     Contact,
     DiscoveryCandidate,
     EmailVerificationEvidence,
     EmailVerificationRun,
-    GrowthEvent,
     OutreachMessage,
 )
 
@@ -132,26 +130,23 @@ def request_email_verification(
 
 
 def _verification_history(organization_id: uuid.UUID, email: str) -> VerificationHistory:
-    account_ids = set(
-        GrowthEvent.objects.filter(
-            organization_id=organization_id,
-            event_type__in=[EVENT_EMAIL_SENT, EVENT_EMAIL_FAILED],
-            payload__email=email,
-        ).values_list("entity_id", flat=True)
-    )
-    direct_account_ids = OutreachMessage.objects.filter(
-        organization_id=organization_id,
-        payload__email=email,
-    ).values_list("account_id", flat=True)
-    account_ids.update(str(value) for value in direct_account_ids)
     messages = OutreachMessage.objects.filter(
         organization_id=organization_id,
-        account_id__in=account_ids,
+        payload__email=email,
     ).order_by("-created_at", "-id")
-    latest = messages.first()
+    latest_decisive = messages.filter(
+        status__in=[
+            OutreachMessage.Status.REPLIED,
+            OutreachMessage.Status.BOUNCED,
+        ]
+    ).first()
     return VerificationHistory(
-        replied=bool(latest and latest.status == OutreachMessage.Status.REPLIED),
-        bounced=bool(latest and latest.status == OutreachMessage.Status.BOUNCED),
+        replied=bool(
+            latest_decisive and latest_decisive.status == OutreachMessage.Status.REPLIED
+        ),
+        bounced=bool(
+            latest_decisive and latest_decisive.status == OutreachMessage.Status.BOUNCED
+        ),
         sent_count=messages.filter(status=OutreachMessage.Status.SENT).count(),
     )
 
@@ -166,8 +161,14 @@ def _prepare_email_verification(
         ).first()
         if run is None:
             raise ValidationError("Verification run is unavailable.")
+        if run.state == EmailVerificationRun.State.RUNNING:
+            claim_timeout = int(
+                getattr(settings, "EMAIL_VERIFICATION_CLAIM_TIMEOUT_SECONDS", 120)
+            )
+            claim_fresh_after = timezone.now() - timedelta(seconds=claim_timeout)
+            if run.started_at and run.started_at >= claim_fresh_after:
+                return run, None
         if run.state in {
-            EmailVerificationRun.State.RUNNING,
             EmailVerificationRun.State.PAUSED,
             EmailVerificationRun.State.SUCCEEDED,
         }:
@@ -211,27 +212,11 @@ def _provider_is_needed(result: LocalVerificationResult, *, high_value: bool) ->
     )
 
 
-def _safe_provider_result(provider_result: object) -> tuple[str, ...]:
-    if not isinstance(provider_result, dict):
-        return ("PROVIDER_RESULT_UNUSABLE",)
-    status = provider_result.get("status")
-    if status not in {item.value for item in VerificationStatus}:
-        return ("PROVIDER_RESULT_UNUSABLE",)
-    codes = provider_result.get("reason_codes", [])
-    if not isinstance(codes, list):
-        return ("PROVIDER_RESULT_UNUSABLE",)
-    return tuple(
-        code for code in codes if isinstance(code, str) and code.strip()
-    )[:10]
-
-
 def _finalize_email_verification(
     *,
     organization_id: uuid.UUID,
     prepared: PreparedEmailVerification,
     local_result: LocalVerificationResult,
-    provider_codes: tuple[str, ...],
-    provider_called: bool,
 ) -> EmailVerificationRun:
     with tenant_atomic(organization_id):
         run = EmailVerificationRun.objects.select_for_update().get(
@@ -271,11 +256,11 @@ def _finalize_email_verification(
         run.result_status = local_result.status.value
         run.deliverability_score = local_result.deliverability_score
         run.contact_quality_score = local_result.contact_quality_score
-        run.reason_codes = list(dict.fromkeys((*local_result.reason_codes, *provider_codes)))
+        run.reason_codes = list(local_result.reason_codes)
         run.requires_provider_review = _provider_is_needed(
             local_result, high_value=prepared.high_value
         )
-        run.result_source = "LOCAL_WITH_PROVIDER" if provider_called else "LOCAL"
+        run.result_source = "LOCAL"
         run.completed_at = timezone.now()
         run.claim_token = None
         run.full_clean()
@@ -328,7 +313,6 @@ def execute_email_verification(
     organization_id: uuid.UUID,
     run_id: uuid.UUID,
     local_verifier: LocalVerifierLike | None = None,
-    provider: EmailVerificationProvider | None = None,
 ) -> EmailVerificationRun:
     organization_id = _native_uuid(organization_id, "organization_id")
     run_id = _native_uuid(run_id, "run_id")
@@ -348,16 +332,6 @@ def execute_email_verification(
             corporate_domain=prepared.corporate_domain,
             history=prepared.history,
         )
-        provider = provider if provider is not None else get_verification_provider()
-        provider_called = False
-        provider_codes: tuple[str, ...] = ()
-        if (
-            local_result.status != VerificationStatus.INVALID
-            and _provider_is_needed(local_result, high_value=prepared.high_value)
-            and provider is not None
-        ):
-            provider_called = True
-            provider_codes = _safe_provider_result(provider.verify(prepared.email))
     except Exception:
         _finalize_failure(organization_id=organization_id, prepared=prepared)
         raise EmailVerificationExecutionError("verification_network_failed") from None
@@ -365,8 +339,6 @@ def execute_email_verification(
         organization_id=organization_id,
         prepared=prepared,
         local_result=local_result,
-        provider_codes=provider_codes,
-        provider_called=provider_called,
     )
 
 
@@ -380,7 +352,6 @@ def verify_email_for_tenant(
     corporate_domain: str = "",
     high_value: bool = False,
     local_verifier: LocalVerifierLike | None = None,
-    provider: EmailVerificationProvider | None = None,
 ) -> dict:
     normalized = normalize_email(email)
     fingerprint = hashlib.sha256(normalized.encode()).hexdigest()
@@ -401,7 +372,6 @@ def verify_email_for_tenant(
         organization_id=organization_id,
         run_id=run.id,
         local_verifier=local_verifier,
-        provider=provider,
     )
     return {
         "verification_id": str(run.id),

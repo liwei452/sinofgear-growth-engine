@@ -11,6 +11,17 @@ RLS_TABLES = (
     "growth_emailverificationevidence",
 )
 TENANT = "organization_id = app_current_organization_id()"
+RUN_CHECK = (
+    TENANT
+    + " AND (contact_id IS NULL OR EXISTS ("
+    "SELECT 1 FROM growth_contact parent_contact "
+    "WHERE parent_contact.id = contact_id "
+    "AND parent_contact.organization_id = app_current_organization_id()))"
+    " AND (candidate_id IS NULL OR EXISTS ("
+    "SELECT 1 FROM growth_discoverycandidate parent_candidate "
+    "WHERE parent_candidate.id = candidate_id "
+    "AND parent_candidate.organization_id = app_current_organization_id()))"
+)
 EVIDENCE_PARENT = (
     "organization_id = app_current_organization_id() AND EXISTS ("
     "SELECT 1 FROM growth_emailverificationrun parent "
@@ -22,10 +33,10 @@ POLICY_CONTRACTS = {
         "SELECT", TENANT, None,
     ),
     ("growth_emailverificationrun", "rls_growth_emailverificationrun_tenant_insert"): (
-        "INSERT", None, TENANT,
+        "INSERT", None, RUN_CHECK,
     ),
     ("growth_emailverificationrun", "rls_growth_emailverificationrun_tenant_update"): (
-        "UPDATE", TENANT, TENANT,
+        "UPDATE", TENANT, RUN_CHECK,
     ),
     (
         "growth_emailverificationevidence",

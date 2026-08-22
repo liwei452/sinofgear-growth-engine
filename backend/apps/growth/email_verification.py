@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
+import math
 import re
 import smtplib
 import socket
@@ -12,7 +14,6 @@ from typing import Protocol
 
 from django.conf import settings
 from django.core.cache import cache
-from django.utils.module_loading import import_string
 
 
 EMAIL_RE = re.compile(
@@ -47,6 +48,20 @@ DISPOSABLE_DOMAINS = frozenset(
 )
 
 
+def _bounded_float(value: object, *, name: str, minimum: float, maximum: float) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or not minimum <= parsed <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum} seconds.")
+    return parsed
+
+
+def _bounded_int(value: object, *, name: str, minimum: int, maximum: int) -> int:
+    parsed = int(value)
+    if not minimum <= parsed <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}.")
+    return parsed
+
+
 class VerificationStatus(StrEnum):
     VALID = "VALID"
     LIKELY_VALID = "LIKELY_VALID"
@@ -61,6 +76,7 @@ class SMTPDisposition(StrEnum):
     TEMPORARY = "TEMPORARY"
     AMBIGUOUS = "AMBIGUOUS"
     TIMEOUT = "TIMEOUT"
+    BLOCKED = "BLOCKED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +148,10 @@ class SMTPProbe(Protocol):
     def probe(self, *, email: str, mx_host: str) -> SMTPAssessment: ...
 
 
+class MXAddressResolver(Protocol):
+    def resolve(self, mx_host: str) -> tuple[str, ...]: ...
+
+
 class DomainLimiter(Protocol):
     def acquire(self, domain: str) -> bool: ...
 
@@ -142,11 +162,21 @@ class EmailVerificationProvider(Protocol):
 
 class SystemDnsResolver:
     def __init__(self, *, timeout: float | None = None, lifetime: float | None = None):
-        self.timeout = timeout or float(
-            getattr(settings, "EMAIL_VERIFICATION_DNS_TIMEOUT_SECONDS", 3.0)
+        self.timeout = _bounded_float(
+            timeout
+            if timeout is not None
+            else getattr(settings, "EMAIL_VERIFICATION_DNS_TIMEOUT_SECONDS", 3.0),
+            name="DNS timeout",
+            minimum=0.1,
+            maximum=10.0,
         )
-        self.lifetime = lifetime or float(
-            getattr(settings, "EMAIL_VERIFICATION_DNS_LIFETIME_SECONDS", 5.0)
+        self.lifetime = _bounded_float(
+            lifetime
+            if lifetime is not None
+            else getattr(settings, "EMAIL_VERIFICATION_DNS_LIFETIME_SECONDS", 5.0),
+            name="DNS lifetime",
+            minimum=self.timeout,
+            maximum=30.0,
         )
 
     def resolve(self, domain: str) -> DnsAssessment:
@@ -178,30 +208,96 @@ class SystemDnsResolver:
         )
 
 
-class BasicSMTPProbe:
-    def __init__(self, *, timeout: float | None = None, retries: int | None = None):
-        self.timeout = timeout or float(
-            getattr(settings, "EMAIL_VERIFICATION_SMTP_TIMEOUT_SECONDS", 5.0)
+class SystemMXAddressResolver:
+    def __init__(self, *, timeout: float | None = None, lifetime: float | None = None):
+        self.timeout = _bounded_float(
+            timeout
+            if timeout is not None
+            else getattr(settings, "EMAIL_VERIFICATION_DNS_TIMEOUT_SECONDS", 3.0),
+            name="DNS timeout",
+            minimum=0.1,
+            maximum=10.0,
         )
-        self.retries = (
-            int(getattr(settings, "EMAIL_VERIFICATION_SMTP_RETRIES", 1))
-            if retries is None
-            else retries
+        self.lifetime = _bounded_float(
+            lifetime
+            if lifetime is not None
+            else getattr(settings, "EMAIL_VERIFICATION_DNS_LIFETIME_SECONDS", 5.0),
+            name="DNS lifetime",
+            minimum=self.timeout,
+            maximum=30.0,
         )
 
+    def resolve(self, mx_host: str) -> tuple[str, ...]:
+        import dns.exception
+        import dns.resolver
+
+        resolver = dns.resolver.Resolver(configure=True)
+        resolver.timeout = self.timeout
+        resolver.lifetime = self.lifetime
+        addresses = set()
+        for record_type in ("A", "AAAA"):
+            try:
+                answers = resolver.resolve(mx_host, record_type)
+            except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+                continue
+            except (dns.exception.Timeout, dns.resolver.NoNameservers, OSError):
+                raise TimeoutError("MX address lookup unavailable.") from None
+            addresses.update(str(answer).strip() for answer in answers)
+        return tuple(sorted(addresses))
+
+
+class BasicSMTPProbe:
+    def __init__(
+        self,
+        *,
+        timeout: float | None = None,
+        retries: int | None = None,
+        address_resolver: MXAddressResolver | None = None,
+    ):
+        self.timeout = _bounded_float(
+            timeout
+            if timeout is not None
+            else getattr(settings, "EMAIL_VERIFICATION_SMTP_TIMEOUT_SECONDS", 5.0),
+            name="SMTP timeout",
+            minimum=0.1,
+            maximum=15.0,
+        )
+        self.retries = _bounded_int(
+            getattr(settings, "EMAIL_VERIFICATION_SMTP_RETRIES", 1)
+            if retries is None
+            else retries,
+            name="SMTP retries",
+            minimum=0,
+            maximum=2,
+        )
+        self.address_resolver = address_resolver or SystemMXAddressResolver()
+
     def probe(self, *, email: str, mx_host: str) -> SMTPAssessment:
+        try:
+            addresses = self.address_resolver.resolve(mx_host)
+        except TimeoutError:
+            return SMTPAssessment(disposition=SMTPDisposition.TIMEOUT)
+        if not addresses:
+            return SMTPAssessment(disposition=SMTPDisposition.TIMEOUT)
+        try:
+            parsed_addresses = tuple(ipaddress.ip_address(address) for address in addresses)
+        except ValueError:
+            return SMTPAssessment(disposition=SMTPDisposition.BLOCKED)
+        if any(not address.is_global for address in parsed_addresses):
+            return SMTPAssessment(disposition=SMTPDisposition.BLOCKED)
+        target_ip = str(sorted(parsed_addresses, key=lambda address: (address.version, int(address)))[0])
         for attempt in range(self.retries + 1):
             try:
-                return self._probe_once(email=email, mx_host=mx_host)
+                return self._probe_once(email=email, target_ip=target_ip)
             except (TimeoutError, socket.timeout, OSError, smtplib.SMTPException):
                 if attempt == self.retries:
                     return SMTPAssessment(disposition=SMTPDisposition.TIMEOUT)
         return SMTPAssessment(disposition=SMTPDisposition.TIMEOUT)
 
-    def _probe_once(self, *, email: str, mx_host: str) -> SMTPAssessment:
+    def _probe_once(self, *, email: str, target_ip: str) -> SMTPAssessment:
         smtp = smtplib.SMTP(timeout=self.timeout)
         try:
-            smtp.connect(mx_host, 25)
+            smtp.connect(target_ip, 25)
             smtp.ehlo_or_helo_if_needed()
             smtp.mail("")
             response_code, _ = smtp.rcpt(email)
@@ -238,8 +334,13 @@ class BasicSMTPProbe:
 
 class CacheDomainLimiter:
     def __init__(self, *, ttl_seconds: int | None = None):
-        self.ttl_seconds = ttl_seconds or int(
+        self.ttl_seconds = _bounded_int(
             getattr(settings, "EMAIL_VERIFICATION_DOMAIN_LOCK_SECONDS", 10)
+            if ttl_seconds is None
+            else ttl_seconds,
+            name="Domain lock",
+            minimum=1,
+            maximum=300,
         )
 
     def acquire(self, domain: str) -> bool:
@@ -391,6 +492,10 @@ class LocalVerifier:
             smtp_status = VerificationStatus.UNKNOWN
             deliverability = 45
             smtp_reason = "SMTP_AMBIGUOUS"
+        elif smtp.disposition == SMTPDisposition.BLOCKED:
+            smtp_status = VerificationStatus.UNKNOWN
+            deliverability = 25
+            smtp_reason = "SMTP_TARGET_BLOCKED"
         elif smtp.catch_all:
             smtp_status = VerificationStatus.RISKY
             deliverability = 60
@@ -412,11 +517,17 @@ class LocalVerifier:
 
         status = smtp_status
         if history.bounced:
-            status = VerificationStatus.INVALID
-            deliverability = 0
-            reasons.append("HISTORICAL_BOUNCE")
+            if status != VerificationStatus.INVALID:
+                status = VerificationStatus.RISKY
+            deliverability = min(deliverability, 20)
+            reasons.append("HISTORICAL_BOUNCE_UNCLASSIFIED")
             evidence.append(
-                self._evidence("HISTORY", "OUTREACH_MESSAGE", "FAIL", "HISTORICAL_BOUNCE")
+                self._evidence(
+                    "HISTORY",
+                    "OUTREACH_MESSAGE",
+                    "RISK",
+                    "HISTORICAL_BOUNCE_UNCLASSIFIED",
+                )
             )
         elif history.replied:
             deliverability = max(deliverability, 95)
@@ -487,12 +598,3 @@ def get_local_verifier() -> LocalVerifier:
         smtp_probe=BasicSMTPProbe(),
         domain_limiter=CacheDomainLimiter(),
     )
-
-
-def get_verification_provider() -> EmailVerificationProvider | None:
-    factory_path = getattr(settings, "EMAIL_VERIFICATION_PROVIDER_FACTORY", "")
-    return import_string(factory_path)() if factory_path else None
-
-
-def verify_email(email: str) -> dict:
-    return get_local_verifier().verify(email).as_dict()

@@ -1,5 +1,9 @@
 import pytest
 from django.test import override_settings
+
+from apps.ai.models import PromptVersion
+from apps.ai.services import PromptVersionService
+from apps.assets.ai_extraction import FACT_RESULT_SCHEMA
 from apps.assets.services import upload_asset
 
 from .conftest import create_member_client, make_product, mp4_bytes
@@ -7,7 +11,23 @@ from .test_asset_understanding_service import _upload, labeled_pdf
 from .test_asset_upload import ChunkOnlyUpload
 
 
-@pytest.mark.django_db
+@pytest.fixture(autouse=True)
+def asset_prompt_contract():
+    if not PromptVersion.objects.filter(
+        purpose="ASSET_UNDERSTAND", code="asset-understand-evidence-v1"
+    ).exists():
+        PromptVersionService.create(
+            purpose="ASSET_UNDERSTAND",
+            code="asset-understand-evidence-v1",
+            provider="system",
+            model="provider-agnostic",
+            template="Extract only literal product facts with exact page and excerpt evidence.",
+            output_schema=FACT_RESULT_SCHEMA,
+            status=PromptVersion.Status.PUBLISHED,
+        )
+
+
+@pytest.mark.django_db(transaction=True)
 def test_understanding_api_starts_lists_and_reviews_a_fact(organizations, roles) -> None:
     own, _ = organizations
     membership, client = create_member_client(
@@ -31,8 +51,9 @@ def test_understanding_api_starts_lists_and_reviews_a_fact(organizations, roles)
 
     assert started.status_code == 200
     assert started.json()["provider_label"] == "Fake Provider · 本地演示"
-    assert started.json()["job"]["status"] == "SUCCEEDED"
-    fact = next(item for item in started.json()["facts"] if item["field_name"] == "accuracy")
+    completed = client.get(f"/api/v1/assets/{asset.id}/understanding")
+    assert completed.json()["job"]["status"] == "SUCCEEDED"
+    fact = next(item for item in completed.json()["facts"] if item["field_name"] == "accuracy")
     reviewed = client.post(
         f"/api/v1/assets/facts/{fact['id']}/review",
         {"decision": "APPROVE", "note": "Source checked"},
@@ -47,7 +68,7 @@ def test_understanding_api_starts_lists_and_reviews_a_fact(organizations, roles)
     ] == "VERIFIED"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_understanding_api_hides_cross_org_products_and_facts(organizations, roles) -> None:
     own, other = organizations
     own_membership, own_client = create_member_client(
@@ -77,7 +98,9 @@ def test_understanding_api_hides_cross_org_products_and_facts(organizations, rol
         {"product_id": str(own_product.id)},
         format="json",
     )
-    fact_id = started.json()["facts"][0]["id"]
+    assert started.status_code == 200
+    completed = own_client.get(f"/api/v1/assets/{asset.id}/understanding")
+    fact_id = completed.json()["facts"][0]["id"]
 
     assert foreign_start.status_code == 404
     assert other_client.get(f"/api/v1/assets/{asset.id}/understanding").status_code == 404

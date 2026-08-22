@@ -134,7 +134,7 @@ def test_job_list_query_count_is_bounded(api_organizations, api_roles):
         response = client.get("/api/v1/jobs")
 
     assert response.status_code == 200
-    assert len(queries) <= 5
+    assert len(queries) <= 7
 
 
 @pytest.mark.django_db

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -175,7 +177,8 @@ class OfficialSuccessConnector:
         )
 
 
-def test_official_account_uses_registry_and_never_calls_fake(monkeypatch, db):
+@pytest.mark.django_db(transaction=True)
+def test_official_account_uses_registry_and_never_calls_fake(monkeypatch):
     organization = Organization.objects.create(name="Official", slug="official-publish")
     user = get_user_model().objects.create_user(username="official-owner")
     platform = Platform.objects.create(code="LINKEDIN", name="LinkedIn")
@@ -203,8 +206,12 @@ def test_official_account_uses_registry_and_never_calls_fake(monkeypatch, db):
     )
     connector = OfficialSuccessConnector()
     monkeypatch.setattr(
-        "apps.growth.publishing.get_connector_registry",
-        lambda: ConnectorRegistry(official_connectors={"LINKEDIN": connector}),
+        "apps.growth.publishing.get_social_provider_runtime",
+        lambda: SimpleNamespace(
+            connector_registry=ConnectorRegistry(
+                official_connectors={"LINKEDIN": connector}
+            )
+        ),
     )
 
     batch = create_publish_batch(
@@ -222,7 +229,8 @@ def test_official_account_uses_registry_and_never_calls_fake(monkeypatch, db):
     assert connector.requests[0].idempotency_key == "official-linkedin-1:LINKEDIN"
 
 
-def test_official_connector_configuration_failure_does_not_fall_back_to_fake(monkeypatch, db):
+@pytest.mark.django_db(transaction=True)
+def test_official_connector_configuration_failure_does_not_fall_back_to_fake(monkeypatch):
     organization = Organization.objects.create(name="Unconfigured", slug="official-unconfigured")
     user = get_user_model().objects.create_user(username="unconfigured-owner")
     platform = Platform.objects.create(code="TIKTOK", name="TikTok")
@@ -259,7 +267,7 @@ def test_official_connector_configuration_failure_does_not_fall_back_to_fake(mon
     assert item.status == GrowthPublishItem.Status.FAILED
     assert item.last_error == {
         "code": "CONFIGURATION_REQUIRED",
-        "message": "Official publishing connector is not configured.",
+        "message": "Connector configuration is required.",
         "retryable": False,
         "retry_after_seconds": None,
     }

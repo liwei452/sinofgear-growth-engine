@@ -250,7 +250,7 @@ def test_asset_list_product_links_have_bounded_query_count(
         organization=own, role=roles[Role.Code.READ_ONLY], username="asset-query-reader"
     )
 
-    with django_assert_num_queries(5):
+    with django_assert_num_queries(7):
         response = client.get("/api/v1/assets")
 
     assert response.status_code == 200

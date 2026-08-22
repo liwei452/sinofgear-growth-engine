@@ -19,6 +19,11 @@ def _migrate(target):
     return executor.loader.project_state(target).apps
 
 
+def _restore_latest():
+    executor = MigrationExecutor(connection)
+    executor.migrate(executor.loader.graph.leaf_nodes())
+
+
 def _create_task(apps, context, *, status, key, submission_id=""):
     PublishTask = apps.get_model("publishing", "PublishTask")
     return PublishTask.objects.create(
@@ -58,7 +63,7 @@ def _cleanup_and_restore(task_ids):
     PublishTask = old_apps.get_model("publishing", "PublishTask")
     PublishAttempt.objects.filter(task_id__in=task_ids).delete()
     PublishTask.objects.filter(id__in=task_ids).delete()
-    _migrate(MIGRATE_TO)
+    _restore_latest()
 
 
 @pytest.mark.django_db(transaction=True)

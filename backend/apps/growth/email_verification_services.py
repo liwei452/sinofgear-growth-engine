@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -16,6 +17,7 @@ from apps.common.tenant_tasks import dispatch_task_on_commit
 
 from .email_verification import (
     LocalVerificationResult,
+    VERIFIER_VERSION,
     VerificationHistory,
     VerificationStatus,
     get_local_verifier,
@@ -62,7 +64,7 @@ def request_email_verification(
     *,
     organization_id: uuid.UUID,
     email: object,
-    idempotency_key: str,
+    idempotency_key: str | None,
     contact_id: uuid.UUID | None = None,
     candidate_id: uuid.UUID | None = None,
     contact_name: str = "",
@@ -71,8 +73,10 @@ def request_email_verification(
     dispatch: bool = True,
 ) -> tuple[EmailVerificationRun, bool]:
     organization_id = _native_uuid(organization_id, "organization_id")
-    if type(idempotency_key) is not str or not idempotency_key.strip():
-        raise ValidationError("idempotency_key is required.")
+    if idempotency_key is not None and (
+        type(idempotency_key) is not str or not idempotency_key.strip()
+    ):
+        raise ValidationError("idempotency_key must be a non-empty string when provided.")
     if type(high_value) is not bool:
         raise ValidationError("high_value must be a boolean.")
     normalized = normalize_email(email)
@@ -95,14 +99,45 @@ def request_email_verification(
             ).first()
             if candidate is None:
                 raise ValidationError("Verification parent is unavailable.")
-        safe_snapshot = {
-            "contact_name": (contact_name or (contact.full_name if contact else "")).strip(),
-            "corporate_domain": corporate_domain.strip().lower().rstrip("."),
-            "high_value": high_value,
+        effective_contact_name = (
+            contact_name or (contact.full_name if contact else "")
+        ).strip()
+        effective_corporate_domain = corporate_domain.strip().lower().rstrip(".")
+        history = _verification_history(organization_id, normalized)
+        history_snapshot = {
+            "replied": history.replied,
+            "bounced": history.bounced,
+            "sent_count": history.sent_count,
+            "source_fingerprint": history.source_fingerprint,
         }
+        request_context = {
+            "email": normalized,
+            "contact_id": str(contact.id) if contact else None,
+            "candidate_id": str(candidate.id) if candidate else None,
+            "contact_name": effective_contact_name,
+            "corporate_domain": effective_corporate_domain,
+            "high_value": high_value,
+            "history": history_snapshot,
+            "verifier_version": VERIFIER_VERSION,
+        }
+        request_fingerprint = hashlib.sha256(
+            json.dumps(request_context, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        safe_snapshot = {
+            "contact_name": effective_contact_name,
+            "corporate_domain": effective_corporate_domain,
+            "high_value": high_value,
+            "history": history_snapshot,
+            "request_fingerprint": request_fingerprint,
+        }
+        effective_idempotency_key = (
+            idempotency_key.strip()
+            if idempotency_key is not None
+            else f"email-verify:v2:{request_fingerprint}"
+        )
         run, created = EmailVerificationRun.objects.get_or_create(
             organization_id=organization_id,
-            idempotency_key=idempotency_key.strip(),
+            idempotency_key=effective_idempotency_key,
             defaults={
                 "contact": contact,
                 "candidate": candidate,
@@ -110,12 +145,15 @@ def request_email_verification(
                 "email_fingerprint": fingerprint,
                 "domain": domain,
                 "request_snapshot": safe_snapshot,
+                "verifier_version": VERIFIER_VERSION,
             },
         )
         if not created and (
             run.normalized_email != normalized
             or run.contact_id != (contact.id if contact else None)
             or run.candidate_id != (candidate.id if candidate else None)
+            or run.request_snapshot != safe_snapshot
+            or run.verifier_version != VERIFIER_VERSION
         ):
             raise ValidationError("Idempotency key is already bound to another request.")
         if created and dispatch:
@@ -140,6 +178,22 @@ def _verification_history(organization_id: uuid.UUID, email: str) -> Verificatio
             OutreachMessage.Status.BOUNCED,
         ]
     ).first()
+    sent_messages = messages.filter(status=OutreachMessage.Status.SENT)
+    sent_count = sent_messages.count()
+    latest_sent = sent_messages.first()
+    fingerprint_material = {
+        "latest_decisive_id": str(latest_decisive.id) if latest_decisive else None,
+        "latest_decisive_status": latest_decisive.status if latest_decisive else None,
+        "latest_decisive_updated_at": (
+            latest_decisive.updated_at.isoformat() if latest_decisive else None
+        ),
+        "latest_sent_id": str(latest_sent.id) if latest_sent else None,
+        "latest_sent_updated_at": latest_sent.updated_at.isoformat() if latest_sent else None,
+        "sent_count": sent_count,
+    }
+    source_fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_material, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     return VerificationHistory(
         replied=bool(
             latest_decisive and latest_decisive.status == OutreachMessage.Status.REPLIED
@@ -147,7 +201,8 @@ def _verification_history(organization_id: uuid.UUID, email: str) -> Verificatio
         bounced=bool(
             latest_decisive and latest_decisive.status == OutreachMessage.Status.BOUNCED
         ),
-        sent_count=messages.filter(status=OutreachMessage.Status.SENT).count(),
+        sent_count=sent_count,
+        source_fingerprint=source_fingerprint,
     )
 
 
@@ -162,9 +217,7 @@ def _prepare_email_verification(
         if run is None:
             raise ValidationError("Verification run is unavailable.")
         if run.state == EmailVerificationRun.State.RUNNING:
-            claim_timeout = int(
-                getattr(settings, "EMAIL_VERIFICATION_CLAIM_TIMEOUT_SECONDS", 120)
-            )
+            claim_timeout = _claim_timeout_seconds()
             claim_fresh_after = timezone.now() - timedelta(seconds=claim_timeout)
             if run.started_at and run.started_at >= claim_fresh_after:
                 return run, None
@@ -192,6 +245,25 @@ def _prepare_email_verification(
             ]
         )
         snapshot = run.request_snapshot or {}
+        history_snapshot = snapshot.get("history")
+        if isinstance(history_snapshot, dict):
+            history = VerificationHistory(
+                replied=history_snapshot.get("replied") is True,
+                bounced=history_snapshot.get("bounced") is True,
+                sent_count=(
+                    history_snapshot.get("sent_count")
+                    if type(history_snapshot.get("sent_count")) is int
+                    and history_snapshot.get("sent_count") >= 0
+                    else 0
+                ),
+                source_fingerprint=(
+                    history_snapshot.get("source_fingerprint")
+                    if type(history_snapshot.get("source_fingerprint")) is str
+                    else ""
+                ),
+            )
+        else:
+            history = _verification_history(organization_id, run.normalized_email)
         prepared = PreparedEmailVerification(
             run_id=run.id,
             claim_token=claim_token,
@@ -199,7 +271,7 @@ def _prepare_email_verification(
             contact_name=str(snapshot.get("contact_name") or ""),
             corporate_domain=str(snapshot.get("corporate_domain") or ""),
             high_value=snapshot.get("high_value") is True,
-            history=_verification_history(organization_id, run.normalized_email),
+            history=history,
         )
         return run, prepared
 
@@ -210,6 +282,13 @@ def _provider_is_needed(result: LocalVerificationResult, *, high_value: bool) ->
         or result.catch_all
         or result.status in {VerificationStatus.RISKY, VerificationStatus.UNKNOWN}
     )
+
+
+def _claim_timeout_seconds() -> int:
+    value = getattr(settings, "EMAIL_VERIFICATION_CLAIM_TIMEOUT_SECONDS", 120)
+    if type(value) is not int or not 30 <= value <= 3600:
+        raise EmailVerificationExecutionError("claim_timeout_invalid")
+    return value
 
 
 def _finalize_email_verification(
@@ -351,12 +430,15 @@ def verify_email_for_tenant(
     contact_name: str = "",
     corporate_domain: str = "",
     high_value: bool = False,
+    force_refresh: bool = False,
     local_verifier: LocalVerifierLike | None = None,
 ) -> dict:
+    if type(force_refresh) is not bool:
+        raise ValidationError("force_refresh must be a boolean.")
     normalized = normalize_email(email)
-    fingerprint = hashlib.sha256(normalized.encode()).hexdigest()
-    subject = candidate_id or contact_id or "address"
-    idempotency_key = f"email-verify:{subject}:{fingerprint}"
+    idempotency_key = None
+    if force_refresh:
+        idempotency_key = f"email-verify:refresh:{uuid.uuid4()}"
     run, _ = request_email_verification(
         organization_id=organization_id,
         email=normalized,

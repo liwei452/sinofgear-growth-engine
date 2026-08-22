@@ -18,6 +18,7 @@ from apps.growth.email_verification_services import (
     pause_email_verification,
     request_email_verification,
     resume_email_verification,
+    verify_email_for_tenant,
 )
 from apps.growth.models import (
     Contact,
@@ -206,6 +207,88 @@ def test_invalid_local_result_is_idempotent():
     assert second_created is False
     assert second.id == first.id
     assert result.result_status == EmailVerificationRun.ResultStatus.INVALID
+
+
+def test_automatic_idempotency_tracks_scoring_inputs_history_and_refresh():
+    organization = Organization.objects.create(
+        name="Context Idempotency",
+        slug="email-context-idempotency",
+    )
+    account = TargetAccount.objects.create(
+        organization=organization,
+        name="Acme",
+        country="US",
+    )
+
+    first = verify_email_for_tenant(
+        organization_id=organization.id,
+        email="buyer@example.com",
+        contact_name="Amy Lee",
+        corporate_domain="example.com",
+        high_value=False,
+        local_verifier=RecordingVerifier(),
+    )
+    same = verify_email_for_tenant(
+        organization_id=organization.id,
+        email="buyer@example.com",
+        contact_name="Amy Lee",
+        corporate_domain="example.com",
+        high_value=False,
+        local_verifier=RecordingVerifier(),
+    )
+    changed_input = verify_email_for_tenant(
+        organization_id=organization.id,
+        email="buyer@example.com",
+        contact_name="Amy Lee",
+        corporate_domain="other.example",
+        high_value=True,
+        local_verifier=RecordingVerifier(),
+    )
+    OutreachMessage.objects.create(
+        organization=organization,
+        account=account,
+        provider="smtp",
+        status=OutreachMessage.Status.REPLIED,
+        payload={"email": "buyer@example.com"},
+    )
+    changed_history = verify_email_for_tenant(
+        organization_id=organization.id,
+        email="buyer@example.com",
+        contact_name="Amy Lee",
+        corporate_domain="other.example",
+        high_value=True,
+        local_verifier=RecordingVerifier(),
+    )
+    OutreachMessage.objects.create(
+        organization=organization,
+        account=account,
+        provider="smtp",
+        status=OutreachMessage.Status.REPLIED,
+        payload={"email": "buyer@example.com"},
+    )
+    newer_same_history_result = verify_email_for_tenant(
+        organization_id=organization.id,
+        email="buyer@example.com",
+        contact_name="Amy Lee",
+        corporate_domain="other.example",
+        high_value=True,
+        local_verifier=RecordingVerifier(),
+    )
+    refreshed = verify_email_for_tenant(
+        organization_id=organization.id,
+        email="buyer@example.com",
+        contact_name="Amy Lee",
+        corporate_domain="other.example",
+        high_value=True,
+        force_refresh=True,
+        local_verifier=RecordingVerifier(),
+    )
+
+    assert same["verification_id"] == first["verification_id"]
+    assert changed_input["verification_id"] != first["verification_id"]
+    assert changed_history["verification_id"] != changed_input["verification_id"]
+    assert newer_same_history_result["verification_id"] != changed_history["verification_id"]
+    assert refreshed["verification_id"] != newer_same_history_result["verification_id"]
 
 
 def test_risky_result_only_marks_future_provider_review_in_a1():
@@ -402,3 +485,60 @@ def test_stale_running_claim_is_reclaimed_without_old_result_overwrite():
     assert result.state == EmailVerificationRun.State.SUCCEEDED
     assert result.attempt_count == 2
     assert result.claim_token is None
+
+
+@pytest.mark.parametrize("claim_timeout", [29, 3601])
+def test_claim_timeout_rejects_values_outside_safe_bounds(claim_timeout):
+    organization = Organization.objects.create(
+        name=f"Invalid Claim {claim_timeout}",
+        slug=f"email-invalid-claim-{claim_timeout}",
+    )
+    run, _ = request_email_verification(
+        organization_id=organization.id,
+        email="buyer@example.com",
+        idempotency_key=f"invalid-claim-{claim_timeout}",
+        dispatch=False,
+    )
+
+    with override_settings(EMAIL_VERIFICATION_CLAIM_TIMEOUT_SECONDS=claim_timeout):
+        EmailVerificationRun.objects.filter(id=run.id).update(
+            state=EmailVerificationRun.State.RUNNING,
+            claim_token=uuid.uuid4(),
+            started_at=timezone.now(),
+        )
+        with pytest.raises(EmailVerificationExecutionError, match="claim_timeout_invalid"):
+            execute_email_verification(
+                organization_id=organization.id,
+                run_id=run.id,
+                local_verifier=RecordingVerifier(),
+            )
+
+
+@pytest.mark.parametrize("claim_timeout", [30, 3600])
+def test_claim_timeout_accepts_inclusive_safe_bounds(claim_timeout):
+    organization = Organization.objects.create(
+        name=f"Valid Claim {claim_timeout}",
+        slug=f"email-valid-claim-{claim_timeout}",
+    )
+    run, _ = request_email_verification(
+        organization_id=organization.id,
+        email="buyer@example.com",
+        idempotency_key=f"valid-claim-{claim_timeout}",
+        dispatch=False,
+    )
+    verifier = RecordingVerifier()
+
+    with override_settings(EMAIL_VERIFICATION_CLAIM_TIMEOUT_SECONDS=claim_timeout):
+        EmailVerificationRun.objects.filter(id=run.id).update(
+            state=EmailVerificationRun.State.RUNNING,
+            claim_token=uuid.uuid4(),
+            started_at=timezone.now(),
+        )
+        result = execute_email_verification(
+            organization_id=organization.id,
+            run_id=run.id,
+            local_verifier=verifier,
+        )
+
+    assert result.state == EmailVerificationRun.State.RUNNING
+    assert verifier.calls == []

@@ -46,6 +46,7 @@ DISPOSABLE_DOMAINS = frozenset(
         "yopmail.com",
     }
 )
+IPV4_SHARED_SPACE = ipaddress.ip_network("100.64.0.0/10")
 
 
 def _bounded_float(value: object, *, name: str, minimum: float, maximum: float) -> float:
@@ -98,6 +99,7 @@ class VerificationHistory:
     replied: bool = False
     bounced: bool = False
     sent_count: int = 0
+    source_fingerprint: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +127,7 @@ class LocalVerificationResult:
     reason_codes: tuple[str, ...]
     evidence: tuple[VerificationEvidence, ...]
     verifier_version: str = VERIFIER_VERSION
-    catch_all: bool = False
+    catch_all: bool | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -283,7 +285,7 @@ class BasicSMTPProbe:
             parsed_addresses = tuple(ipaddress.ip_address(address) for address in addresses)
         except ValueError:
             return SMTPAssessment(disposition=SMTPDisposition.BLOCKED)
-        if any(not address.is_global for address in parsed_addresses):
+        if any(not self._is_safe_public_target(address) for address in parsed_addresses):
             return SMTPAssessment(disposition=SMTPDisposition.BLOCKED)
         target_ip = str(sorted(parsed_addresses, key=lambda address: (address.version, int(address)))[0])
         for attempt in range(self.retries + 1):
@@ -320,16 +322,36 @@ class BasicSMTPProbe:
             smtp.rset()
             smtp.mail("")
             catch_all_code, _ = smtp.rcpt(random_email)
+            if catch_all_code in {250, 251}:
+                catch_all = True
+            elif catch_all_code >= 500:
+                catch_all = False
+            else:
+                catch_all = None
             return SMTPAssessment(
                 disposition=SMTPDisposition.ACCEPTED,
                 response_code=response_code,
-                catch_all=catch_all_code in {250, 251},
+                catch_all=catch_all,
             )
         finally:
             try:
                 smtp.quit()
             except (OSError, smtplib.SMTPException):
                 smtp.close()
+
+    @staticmethod
+    def _is_safe_public_target(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+        if isinstance(address, ipaddress.IPv4Address) and address in IPV4_SHARED_SPACE:
+            return False
+        return bool(
+            address.is_global
+            and not address.is_multicast
+            and not address.is_unspecified
+            and not address.is_reserved
+            and not address.is_loopback
+            and not address.is_link_local
+            and not address.is_private
+        )
 
 
 class CacheDomainLimiter:
@@ -496,7 +518,11 @@ class LocalVerifier:
             smtp_status = VerificationStatus.UNKNOWN
             deliverability = 25
             smtp_reason = "SMTP_TARGET_BLOCKED"
-        elif smtp.catch_all:
+        elif smtp.disposition == SMTPDisposition.ACCEPTED and smtp.catch_all is None:
+            smtp_status = VerificationStatus.UNKNOWN
+            deliverability = 50
+            smtp_reason = "CATCH_ALL_UNKNOWN"
+        elif smtp.catch_all is True:
             smtp_status = VerificationStatus.RISKY
             deliverability = 60
             smtp_reason = "CATCH_ALL"
@@ -530,12 +556,17 @@ class LocalVerifier:
                 )
             )
         elif history.replied:
-            deliverability = max(deliverability, 95)
             reasons.append("HISTORICAL_REPLY")
             evidence.append(
                 self._evidence("HISTORY", "OUTREACH_MESSAGE", "PASS", "HISTORICAL_REPLY")
             )
-            status = VerificationStatus.RISKY if smtp.catch_all or disposable else VerificationStatus.VALID
+            if smtp_status != VerificationStatus.INVALID:
+                deliverability = max(deliverability, 95)
+                status = (
+                    VerificationStatus.RISKY
+                    if smtp.catch_all is True or disposable
+                    else VerificationStatus.VALID
+                )
         elif history.sent_count:
             deliverability = min(90, deliverability + 5)
             reasons.append("HISTORICAL_SEND_ACCEPTED")
@@ -549,7 +580,7 @@ class LocalVerifier:
             quality,
             evidence,
             reasons,
-            catch_all=bool(smtp.catch_all),
+            catch_all=smtp.catch_all,
         )
 
     @staticmethod
@@ -578,7 +609,7 @@ class LocalVerifier:
         evidence: list[VerificationEvidence],
         reasons: list[str] | None = None,
         *,
-        catch_all: bool = False,
+        catch_all: bool | None = None,
     ) -> LocalVerificationResult:
         reason_codes = tuple(dict.fromkeys(reasons or [evidence[-1].reason_code]))
         return LocalVerificationResult(

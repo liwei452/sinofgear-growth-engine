@@ -37,28 +37,6 @@ def _runtime_parameters():
     return parameters
 
 
-@pytest.fixture(scope="session", autouse=True)
-def grant_runtime_email_verification_access(django_db_setup, django_db_blocker):
-    runtime_role = os.environ.get("RLS_TEST_RUNTIME_ROLE", "sinofgear_app")
-    with django_db_blocker.unblock(), connection.cursor() as cursor:
-        role = sql.Identifier(runtime_role)
-        for table in (
-            "growth_emailverificationrun",
-            "growth_emailverificationevidence",
-        ):
-            cursor.execute(
-                sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {} TO {}").format(
-                    sql.Identifier(table), role
-                )
-            )
-        cursor.execute(
-            sql.SQL(
-                "REVOKE UPDATE, DELETE ON TABLE "
-                "growth_emailverificationevidence FROM {}"
-            ).format(role)
-        )
-
-
 @pytest.fixture
 def runtime_connection():
     with psycopg.connect(**_runtime_parameters(), autocommit=True) as runtime:
@@ -96,6 +74,25 @@ def test_runtime_role_enforces_email_verification_tenant_and_append_only_boundar
     other = Organization.objects.create(name="Email RLS B", slug=f"email-rls-b-{uuid.uuid4()}")
     own_run = _run(own, "own")
     other_run = _run(other, "other")
+    own_account = TargetAccount.objects.create(
+        organization=own,
+        name="Own account",
+        country="US",
+    )
+    own_contact = Contact.objects.create(
+        organization=own,
+        account=own_account,
+        full_name="Own buyer",
+    )
+    own_candidate = DiscoveryCandidate.objects.create(
+        organization=own,
+        company_name="Own candidate",
+        country="US",
+        import_format="CSV",
+        source_governance={},
+        raw_record={},
+        record_hash="a" * 64,
+    )
     other_account = TargetAccount.objects.create(
         organization=other,
         name="Other account",
@@ -127,6 +124,25 @@ def test_runtime_role_enforces_email_verification_tenant_and_append_only_boundar
         evidence={"mx_count": 1},
     )
 
+    for table in (
+        "growth_emailverificationrun",
+        "growth_emailverificationevidence",
+    ):
+        assert runtime_connection.execute(
+            "SELECT has_table_privilege(current_user, %s, 'SELECT')",
+            (table,),
+        ).fetchone() == (True,)
+        assert runtime_connection.execute(
+            "SELECT has_table_privilege(current_user, %s, 'INSERT')",
+            (table,),
+        ).fetchone() == (True,)
+    for privilege in ("UPDATE", "DELETE"):
+        assert runtime_connection.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'growth_emailverificationevidence', %s)",
+            (privilege,),
+        ).fetchone() == (False,)
+
     assert runtime_connection.execute(
         "SELECT count(*) FROM growth_emailverificationrun"
     ).fetchone() == (0,)
@@ -146,6 +162,41 @@ def test_runtime_role_enforces_email_verification_tenant_and_append_only_boundar
             "UPDATE growth_emailverificationrun SET state = 'PAUSED' WHERE id = %s",
             (other_run.id,),
         ).rowcount == 0
+        same_tenant_run_id = uuid.uuid4()
+        runtime_connection.execute(
+            "INSERT INTO growth_emailverificationrun "
+            "(id, organization_id, created_at, updated_at, normalized_email, "
+            "email_fingerprint, domain, idempotency_key, state, reason_codes, "
+            "verifier_version, result_source, requires_provider_review, "
+            "request_snapshot, safe_error_code, attempt_count, contact_id, candidate_id) "
+            "VALUES (%s, %s, now(), now(), 'same@example.com', %s, 'example.com', "
+            "'same-parent-insert', 'PENDING', '[]', 'local-email-v1', 'LOCAL', false, "
+            "'{}', '', 0, %s, %s)",
+            (
+                same_tenant_run_id,
+                own.id,
+                "s" * 64,
+                own_contact.id,
+                own_candidate.id,
+            ),
+        )
+        assert runtime_connection.execute(
+            "SELECT id FROM growth_emailverificationrun WHERE id = %s",
+            (same_tenant_run_id,),
+        ).fetchone() == (same_tenant_run_id,)
+        same_tenant_evidence_id = uuid.uuid4()
+        runtime_connection.execute(
+            "INSERT INTO growth_emailverificationevidence "
+            "(id, organization_id, created_at, updated_at, sequence, check_type, "
+            "source, source_version, outcome, reason_code, evidence, observed_at, run_id) "
+            "VALUES (%s, %s, now(), now(), 1, 'MX', 'DNS', 'local-email-v1', "
+            "'PASS', 'MX_FOUND', '{}', now(), %s)",
+            (same_tenant_evidence_id, own.id, same_tenant_run_id),
+        )
+        assert runtime_connection.execute(
+            "SELECT id FROM growth_emailverificationevidence WHERE id = %s",
+            (same_tenant_evidence_id,),
+        ).fetchone() == (same_tenant_evidence_id,)
 
     with pytest.raises(psycopg.errors.InsufficientPrivilege), _tenant(
         runtime_connection, own.id
@@ -173,6 +224,33 @@ def test_runtime_role_enforces_email_verification_tenant_and_append_only_boundar
             "'PASS', 'MX_FOUND', '{}', now(), %s)",
             (uuid.uuid4(), own.id, other_run.id),
         )
+
+    for field_name, parent_id in (
+        ("contact_id", other_contact.id),
+        ("candidate_id", other_candidate.id),
+    ):
+        with pytest.raises(psycopg.errors.InsufficientPrivilege), _tenant(
+            runtime_connection, own.id
+        ):
+            runtime_connection.execute(
+                sql.SQL(
+                    "INSERT INTO growth_emailverificationrun "
+                    "(id, organization_id, created_at, updated_at, normalized_email, "
+                    "email_fingerprint, domain, idempotency_key, state, reason_codes, "
+                    "verifier_version, result_source, requires_provider_review, "
+                    "request_snapshot, safe_error_code, attempt_count, {}) "
+                    "VALUES (%s, %s, now(), now(), 'cross-parent@example.com', %s, "
+                    "'example.com', %s, 'PENDING', '[]', 'local-email-v1', 'LOCAL', "
+                    "false, '{}', '', 0, %s)"
+                ).format(sql.Identifier(field_name)),
+                (
+                    uuid.uuid4(),
+                    own.id,
+                    "p" * 64,
+                    f"cross-parent-{field_name}",
+                    parent_id,
+                ),
+            )
 
     for field_name, parent_id in (
         ("contact_id", other_contact.id),

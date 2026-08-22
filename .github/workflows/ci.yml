@@ -75,12 +75,17 @@ jobs:
           CREATE DATABASE sinofgear_rls_test OWNER sinofgear_owner;
           SQL
       - name: Apply migrations as owner
-        run: python manage.py migrate --noinput
+        run: |
+          python manage.py migrate --noinput
+          RLS_TEST_OWNER_DSN=postgresql://sinofgear_owner:owner-test@127.0.0.1:5432/sinofgear_rls_test \
+            python manage.py migrate --noinput
       - name: Finalize runtime grants
         working-directory: .
         env:
           PGPASSWORD: postgres
-        run: psql -h 127.0.0.1 -U postgres -d sinofgear_rls -f infrastructure/postgres/bootstrap_rls_roles.sql
+        run: |
+          psql -h 127.0.0.1 -U postgres -d sinofgear_rls -f infrastructure/postgres/bootstrap_rls_roles.sql
+          psql -h 127.0.0.1 -U postgres -d sinofgear_rls_test -f infrastructure/postgres/bootstrap_rls_roles.sql
       - name: Audit installed policy contracts
         run: python manage.py audit_rls_coverage --database default
       - name: Run runtime-role RLS acceptance tests

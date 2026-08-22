@@ -4,7 +4,7 @@
 
 Every verification uses short tenant transactions around preparation and finalization. DNS, SMTP, and shared-cache acquisition execute after preparation commits and before finalization begins. SMTP probing never issues `DATA` and therefore never sends a message. A1 does not execute a third-party verification Provider.
 
-MX A/AAAA records are resolved with bounded DNS lifetimes before SMTP. Every returned address must be globally routable, and the probe connects to a validated pinned IP rather than resolving the hostname again. Private, loopback, link-local, special-use, invalid, empty, and mixed public/private answers are fail-closed without opening an SMTP socket.
+MX A/AAAA records are resolved with bounded DNS lifetimes before SMTP. Every returned address must be globally routable, and the probe connects to a validated pinned IP rather than resolving the hostname again. Private, loopback, link-local, multicast, shared, reserved, unspecified, special-use, invalid, empty, and mixed safe/unsafe answers are fail-closed without opening an SMTP socket.
 
 Celery payloads contain only `organization_id` and `verification_id` UUID strings. Workers must use the `sinofgear_app` runtime database role. They must not infer an organization from a verification ID.
 
@@ -17,7 +17,7 @@ Celery payloads contain only `organization_id` and `verification_id` UUID string
 | `EMAIL_VERIFICATION_SMTP_TIMEOUT_SECONDS` | 5 | SMTP connect/read timeout |
 | `EMAIL_VERIFICATION_SMTP_RETRIES` | 1 | Additional bounded SMTP attempt |
 | `EMAIL_VERIFICATION_DOMAIN_LOCK_SECONDS` | 10 | Shared hashed-domain exclusion interval |
-| `EMAIL_VERIFICATION_CLAIM_TIMEOUT_SECONDS` | 120 | Reclaim abandoned RUNNING work while stale workers remain fenced by claim token |
+| `EMAIL_VERIFICATION_CLAIM_TIMEOUT_SECONDS` | 120 | Reclaim abandoned RUNNING work; must be an integer from 30 through 3600 seconds while stale workers remain fenced by claim token |
 | `CACHE_URL` | unset locally | Shared production Redis cache used for domain exclusion |
 
 Production Web and Celery processes must share Redis. The cache key contains only a SHA-256 digest of the domain. A local-memory cache is used by tests only and does not provide cross-worker throttling.
@@ -26,7 +26,11 @@ Production Web and Celery processes must share Redis. The cache key contains onl
 
 Evidence records store check type, safe outcome, reason code, source/version, timing, MX count, and numeric SMTP response code. They do not store SMTP banners, response text, transcripts, credentials, tokens, Provider payloads, or raw exceptions. Logs and task failures use stable safe error codes and must not include the address. Instance, QuerySet, RLS Policy, and runtime table privileges independently reject Evidence mutation or deletion.
 
-`VALID` requires strong historical evidence such as a reply for the exact normalized mailbox. SMTP acceptance alone is `LIKELY_VALID`; catch-all is `RISKY`; role mailboxes affect contact quality but are not invalid. An unclassified historical bounce is a risk signal rather than definitive INVALID because the current feedback model does not distinguish hard and soft bounces. No local-screening percentage is promised before real production data is calibrated.
+`VALID` requires strong historical evidence such as a reply for the exact normalized mailbox. SMTP acceptance alone is `LIKELY_VALID`; confirmed catch-all is `RISKY`; an uncertain random-recipient response is `UNKNOWN`; role mailboxes affect contact quality but are not invalid. Only an explicit 5xx rejection of the random recipient proves non-catch-all. A current explicit rejection of the real recipient takes precedence over historical reply evidence. An unclassified historical bounce is a risk signal rather than definitive INVALID because the current feedback model does not distinguish hard and soft bounces. No local-screening percentage is promised before real production data is calibrated.
+
+## Idempotency and refresh
+
+Automatic verification identity is derived from the normalized mailbox, optional Contact/Candidate identity, effective contact-name pattern input, corporate domain, high-value flag, verifier version, and a fingerprint of the exact-mailbox history used for scoring. Repeating the same frozen context reuses its Run; changing any scoring input, upgrading the verifier, or receiving a new decisive/sent history record creates a new Run. Internal callers may request an explicit `force_refresh=True` to create a fresh auditable Run even when the context is unchanged.
 
 ## Third-party boundary
 

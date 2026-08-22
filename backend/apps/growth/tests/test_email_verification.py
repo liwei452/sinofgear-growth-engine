@@ -206,6 +206,23 @@ def test_catch_all_never_becomes_valid_even_with_positive_history():
     assert result.status == VerificationStatus.RISKY
 
 
+def test_historical_reply_cannot_override_current_recipient_rejection():
+    result = verifier(
+        smtp=SMTPAssessment(
+            disposition=SMTPDisposition.REJECTED,
+            response_code=550,
+        )
+    ).verify(
+        "buyer@example.com",
+        history=VerificationHistory(replied=True),
+    )
+
+    assert result.status == VerificationStatus.INVALID
+    assert result.deliverability_score == 5
+    assert "SMTP_RECIPIENT_REJECTED" in result.reason_codes
+    assert "HISTORICAL_REPLY" in result.reason_codes
+
+
 def test_corporate_domain_and_name_pattern_are_scored_separately():
     matched = verifier().verify(
         "amy.lee@example.com",
@@ -284,12 +301,62 @@ def test_smtp_probe_checks_recipient_and_random_catch_all_without_sending_data(m
     assert not any(call[0] in {"data", "sendmail"} for call in boundary.calls)
 
 
+@pytest.mark.parametrize("catch_all_code", [421, 450, 451, 252, 354])
+def test_smtp_probe_keeps_uncertain_catch_all_response_unknown(
+    monkeypatch,
+    catch_all_code,
+):
+    class SMTPBoundary:
+        def __init__(self, timeout):
+            del timeout
+            self.responses = [(250, b"accepted"), (catch_all_code, b"uncertain")]
+
+        def connect(self, host, port):
+            del host, port
+
+        def ehlo_or_helo_if_needed(self):
+            return None
+
+        def mail(self, sender):
+            del sender
+
+        def rcpt(self, recipient):
+            del recipient
+            return self.responses.pop(0)
+
+        def rset(self):
+            return None
+
+        def quit(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("apps.growth.email_verification.smtplib.SMTP", SMTPBoundary)
+
+    assessment = BasicSMTPProbe(
+        timeout=1,
+        retries=0,
+        address_resolver=FakeMXAddressResolver(("1.1.1.1",)),
+    ).probe(email="buyer@example.com", mx_host="mx.example.com")
+    result = verifier(smtp=assessment).verify("buyer@example.com")
+
+    assert assessment.catch_all is None
+    assert result.status == VerificationStatus.UNKNOWN
+    assert "CATCH_ALL_UNKNOWN" in result.reason_codes
+
+
 @pytest.mark.parametrize(
     "addresses",
     [
         ("127.0.0.1",),
         ("::1",),
         ("169.254.10.20",),
+        ("224.0.0.1",),
+        ("239.255.255.250",),
+        ("ff02::1",),
+        ("ff0e::1",),
         ("1.1.1.1", "10.0.0.1"),
     ],
 )

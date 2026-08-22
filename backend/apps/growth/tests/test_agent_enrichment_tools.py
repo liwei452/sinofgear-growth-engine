@@ -338,6 +338,61 @@ def test_send_email_tool_uses_contact_email_not_placeholder(organization, monkey
     assert calls[0]["email"] == "buyer@example.com"
 
 
+def test_send_email_tool_uses_draft_from_frozen_outreach_context(organization, monkeypatch):
+    from apps.growth.agent import acquisition as acq
+
+    candidate = SimpleNamespace(id="candidate-snapshot")
+    frozen_draft = SimpleNamespace(id="draft-frozen", english_draft="Frozen draft")
+    newer_draft = SimpleNamespace(id="draft-newer", english_draft="Newer draft")
+
+    class Drafts:
+        def filter(self, **filters):
+            selected = (
+                frozen_draft
+                if filters.get("knowledge_context_snapshot_id") == "snapshot-frozen"
+                else newer_draft
+            )
+            return SimpleNamespace(
+                order_by=lambda *args, **kwargs: SimpleNamespace(first=lambda: selected)
+            )
+
+    account = SimpleNamespace(
+        id="account-snapshot",
+        outreach_drafts=Drafts(),
+        outreach_messages=SimpleNamespace(
+            filter=lambda **kwargs: SimpleNamespace(exists=lambda: False)
+        ),
+    )
+    monkeypatch.setattr(acq, "_candidate", lambda org, args: candidate)
+    monkeypatch.setattr(acq, "_account_for_candidate", lambda org, candidate: account)
+    monkeypatch.setattr(
+        acq,
+        "_contact_email_for_candidate",
+        lambda candidate, organization_id: "buyer@example.com",
+    )
+    monkeypatch.setattr(
+        acq,
+        "record_sent",
+        lambda **kwargs: SimpleNamespace(
+            id="message-1",
+            provider_message_id="m1",
+            provider="mock",
+            status="SENT",
+        ),
+    )
+
+    tools = ToolRegistry(
+        acq.build_proactive_acquisition_tools(
+            organization,
+            outreach_context=SimpleNamespace(snapshot_id="snapshot-frozen"),
+        )
+    )
+    result = tools.get("send_email").func({"candidate_id": "candidate-snapshot"})
+
+    assert result.ok is True
+    assert result.output["draft_id"] == "draft-frozen"
+
+
 def test_send_email_tool_fails_without_contact_email(organization, monkeypatch):
     from apps.growth.agent import acquisition as acq
 

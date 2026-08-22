@@ -337,7 +337,7 @@ def _contact_email_for_candidate(candidate, organization_id) -> str | None:
     return None
 
 
-def _send_tool(organization) -> Tool:
+def _send_tool(organization, outreach_context=None) -> Tool:
     organization_id = organization.id
 
     def func(args: dict[str, Any]) -> ToolResult:
@@ -348,9 +348,12 @@ def _send_tool(organization) -> Tool:
             account = _account_for_candidate(organization_id, candidate.id)
             if account is None:
                 return ToolResult(ok=False, error="account not resolved yet.")
-            draft = account.outreach_drafts.filter(
-                organization_id=organization_id,
-            ).order_by("-created_at", "-id").first()
+            draft_filters = {"organization_id": organization_id}
+            if outreach_context is not None:
+                draft_filters["knowledge_context_snapshot_id"] = outreach_context.snapshot_id
+            draft = account.outreach_drafts.filter(**draft_filters).order_by(
+                "-created_at", "-id"
+            ).first()
             if draft is None:
                 return ToolResult(ok=False, error="no outreach draft to send.")
             cooldown_cutoff = timezone.now() - timedelta(days=OUTREACH_COOLDOWN_DAYS)
@@ -413,7 +416,7 @@ def build_proactive_acquisition_tools(
         _judge_tool(organization, lead_context),
         _add_to_follow_up_tool(organization),
         _draft_tool(organization, outreach_context),
-        _send_tool(organization),
+        _send_tool(organization, outreach_context),
     ]
 
 

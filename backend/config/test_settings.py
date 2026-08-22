@@ -7,7 +7,8 @@ from .settings import *  # noqa: F403
 SECRET_KEY = "test-only-secret-key-material-with-more-than-32-bytes"
 CACHES = {
     "default": {
-        "BACKEND": "django.core.cache.backends.dummy.DummyCache",
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "email-verification-tests",
     }
 }
 DATABASES = {

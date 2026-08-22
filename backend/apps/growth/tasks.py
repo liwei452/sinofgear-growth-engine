@@ -1,6 +1,8 @@
 from celery import shared_task
+from uuid import UUID
 
 from apps.common.tenant_tasks import (
+    TenantTaskError,
     TenantWorkResult,
     parse_tenant_organization_id,
     require_tenant_object,
@@ -15,6 +17,32 @@ from .discovery import run_due_discovery_profiles
 from .maps_discovery import run_due_maps_configs
 from .agent.acquisition import run_proactive_acquisition, run_proactive_acquisition_day
 from .models import GrowthPublishItem
+
+
+def _parse_verification_id(value):
+    if type(value) is not str or not value or value != value.strip():
+        raise TenantTaskError("verification_id must be a valid UUID string.")
+    try:
+        return UUID(value)
+    except ValueError as exc:
+        raise TenantTaskError("verification_id must be a valid UUID string.") from exc
+
+
+@shared_task
+def run_email_verification(organization_id, verification_id):
+    from .email_verification_services import execute_email_verification
+
+    tenant_id = parse_tenant_organization_id(organization_id)
+    run_id = _parse_verification_id(verification_id)
+    result = execute_email_verification(
+        organization_id=tenant_id,
+        run_id=run_id,
+    )
+    return {
+        "verification_id": str(result.id),
+        "state": result.state,
+        "result_status": result.result_status,
+    }
 
 
 @shared_task

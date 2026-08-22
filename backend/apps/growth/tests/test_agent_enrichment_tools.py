@@ -108,7 +108,7 @@ def test_website_enrich_tool_skips_candidate_without_website(organization):
 
 
 def test_verify_contacts_tool_verifies_snapshot_emails(organization, monkeypatch):
-    candidate = _candidate(organization, "")
+    candidate = _candidate(organization, "https://abc.example/about")
     CandidateEnrichmentSnapshot.objects.create(
         organization=organization,
         candidate=candidate,
@@ -120,9 +120,11 @@ def test_verify_contacts_tool_verifies_snapshot_emails(organization, monkeypatch
         uncertainties=[],
         evidence_envelope={},
     )
+    verification_calls = []
     monkeypatch.setattr(
-        "apps.growth.agent.acquisition.verify_email",
-        lambda email: {"email": email, "status": "DOMAIN_RESOLVES"},
+        "apps.growth.agent.acquisition.verify_email_for_tenant",
+        lambda **kwargs: verification_calls.append(kwargs)
+        or {"email": kwargs["email"], "status": "LIKELY_VALID"},
     )
     tools = ToolRegistry(build_proactive_acquisition_tools(organization))
     planner = DeterministicPlanner(
@@ -140,7 +142,15 @@ def test_verify_contacts_tool_verifies_snapshot_emails(organization, monkeypatch
 
     assert result.status == "completed"
     assert result.steps[0].output["emails"] == ["sales@abc.example"]
-    assert result.steps[0].output["verifications"][0]["status"] == "DOMAIN_RESOLVES"
+    assert result.steps[0].output["verifications"][0]["status"] == "LIKELY_VALID"
+    assert verification_calls == [
+        {
+            "organization_id": organization.id,
+            "candidate_id": candidate.id,
+            "email": "sales@abc.example",
+            "corporate_domain": "abc.example",
+        }
+    ]
 
 
 def test_discover_maps_tool_creates_candidates(organization):
@@ -225,8 +235,8 @@ def test_proactive_acquisition_website_path_end_to_end(organization, monkeypatch
         }
     )
     monkeypatch.setattr(
-        "apps.growth.agent.acquisition.verify_email",
-        lambda email: {"email": email, "status": "DOMAIN_RESOLVES"},
+        "apps.growth.agent.acquisition.verify_email_for_tenant",
+        lambda **kwargs: {"email": kwargs["email"], "status": "LIKELY_VALID"},
     )
 
     first = run_proactive_acquisition(

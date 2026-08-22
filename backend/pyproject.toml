@@ -19,7 +19,8 @@ dependencies = [
   "jsonschema>=4.23,<5",
   "pypdf>=6.14,<6.15",
   "cryptography>=45,<46",
-  "httpx>=0.28,<0.29"
+  "httpx>=0.28,<0.29",
+  "dnspython>=2.7,<3"
 ]
 
 [project.optional-dependencies]

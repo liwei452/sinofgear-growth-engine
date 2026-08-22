@@ -101,6 +101,13 @@ RLS2A_TABLES = frozenset(
     }
 )
 
+EARLY_RLS_TABLES = frozenset(
+    {
+        "growth_emailverificationrun",
+        "growth_emailverificationevidence",
+    }
+)
+
 
 def _direct(
     model_label: str,
@@ -548,6 +555,22 @@ RLS_MANIFEST = (
         "growth_contact",
         RLSPhase.RLS_2C,
         contains_customer_content=True,
+    ),
+    _direct(
+        "growth.EmailVerificationRun",
+        "growth_emailverificationrun",
+        RLSPhase.RLS_2C,
+        contains_customer_content=True,
+        contains_audit_data=True,
+        background_task_access=True,
+    ),
+    _direct(
+        "growth.EmailVerificationEvidence",
+        "growth_emailverificationevidence",
+        RLSPhase.RLS_2C,
+        contains_customer_content=True,
+        contains_audit_data=True,
+        background_task_access=True,
     ),
     _direct(
         "growth.CustomerServiceTurn",

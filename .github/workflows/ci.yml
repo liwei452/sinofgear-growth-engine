@@ -88,6 +88,7 @@ jobs:
           python -m pytest
           apps/knowledge/tests/test_postgres_rls.py
           apps/common/tests/test_postgres_rls_phase2a.py
+          apps/growth/tests/test_postgres_email_verification_rls.py
           --reuse-db -q
 
   frontend:

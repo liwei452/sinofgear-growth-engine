@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 from django.utils import timezone
 from apps.common.tenancy import tenant_atomic
@@ -20,7 +21,7 @@ from .persistent import continue_agent_run
 from .execution import resolve_agent_execution, resolve_run_execution
 from .planner import DeterministicPlanner, Plan
 from .tools import Tool, ToolRegistry, ToolResult
-from ..email_verification import verify_email
+from ..email_verification_services import verify_email_for_tenant
 from ..enrichment import add_candidate_to_follow_up, prepare_candidate_enrichment
 from ..lead_judgment import judge_candidate_for_tenant
 from ..maps_discovery import (
@@ -198,7 +199,16 @@ def _verify_contacts_tool(organization) -> Tool:
                     label = str(path.get("label") or "")
                     if "@" in label:
                         emails.append(label)
-        verifications = [verify_email(email) for email in emails]
+            corporate_domain = (urlparse(candidate.website).hostname or "").lower()
+        verifications = [
+            verify_email_for_tenant(
+                organization_id=organization_id,
+                candidate_id=candidate.id,
+                email=email,
+                corporate_domain=corporate_domain,
+            )
+            for email in emails
+        ]
         return ToolResult(
             ok=True,
             output={"emails": emails, "verifications": verifications},

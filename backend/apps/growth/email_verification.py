@@ -1,46 +1,498 @@
+from __future__ import annotations
+
+import hashlib
 import re
+import smtplib
 import socket
+import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Protocol
 
 from django.conf import settings
+from django.core.cache import cache
 from django.utils.module_loading import import_string
 
 
-EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+EMAIL_RE = re.compile(
+    r"^(?=.{3,320}$)[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"[A-Za-z]{2,63}$"
+)
+VERIFIER_VERSION = "local-email-v1"
+ROLE_LOCAL_PARTS = frozenset(
+    {
+        "admin",
+        "billing",
+        "contact",
+        "enquiries",
+        "hello",
+        "info",
+        "office",
+        "orders",
+        "procurement",
+        "sales",
+        "support",
+    }
+)
+DISPOSABLE_DOMAINS = frozenset(
+    {
+        "10minutemail.com",
+        "guerrillamail.com",
+        "mailinator.com",
+        "temp-mail.org",
+        "yopmail.com",
+    }
+)
+
+
+class VerificationStatus(StrEnum):
+    VALID = "VALID"
+    LIKELY_VALID = "LIKELY_VALID"
+    RISKY = "RISKY"
+    UNKNOWN = "UNKNOWN"
+    INVALID = "INVALID"
+
+
+class SMTPDisposition(StrEnum):
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+    TEMPORARY = "TEMPORARY"
+    AMBIGUOUS = "AMBIGUOUS"
+    TIMEOUT = "TIMEOUT"
+
+
+@dataclass(frozen=True, slots=True)
+class DnsAssessment:
+    domain_exists: bool
+    mx_hosts: tuple[str, ...] = ()
+    null_mx: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SMTPAssessment:
+    disposition: SMTPDisposition
+    response_code: int | None = None
+    catch_all: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationHistory:
+    replied: bool = False
+    bounced: bool = False
+    sent_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationEvidence:
+    check_type: str
+    source: str
+    source_version: str
+    outcome: str
+    reason_code: str
+    observed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    details: dict = field(default_factory=dict)
+
+    def as_dict(self) -> dict:
+        result = asdict(self)
+        result["observed_at"] = self.observed_at.isoformat()
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class LocalVerificationResult:
+    email: str
+    status: VerificationStatus
+    deliverability_score: int
+    contact_quality_score: int
+    reason_codes: tuple[str, ...]
+    evidence: tuple[VerificationEvidence, ...]
+    verifier_version: str = VERIFIER_VERSION
+    catch_all: bool = False
+
+    def as_dict(self) -> dict:
+        return {
+            "email": self.email,
+            "status": self.status.value,
+            "deliverability_score": self.deliverability_score,
+            "contact_quality_score": self.contact_quality_score,
+            "reason_codes": list(self.reason_codes),
+            "evidence": [item.as_dict() for item in self.evidence],
+            "verifier_version": self.verifier_version,
+            "catch_all": self.catch_all,
+        }
+
+
+class DnsResolver(Protocol):
+    def resolve(self, domain: str) -> DnsAssessment: ...
+
+
+class SMTPProbe(Protocol):
+    def probe(self, *, email: str, mx_host: str) -> SMTPAssessment: ...
+
+
+class DomainLimiter(Protocol):
+    def acquire(self, domain: str) -> bool: ...
 
 
 class EmailVerificationProvider(Protocol):
     def verify(self, email: str) -> dict: ...
 
 
-class BasicEmailVerificationProvider:
-    def verify(self, email: str) -> dict:
-        normalized = email.strip().lower()
-        if not EMAIL_RE.match(normalized):
-            return {
-                "email": normalized,
-                "status": "INVALID_SYNTAX",
-                "domain_resolves": False,
-            }
-        domain = normalized.rsplit("@", 1)[1]
+class SystemDnsResolver:
+    def __init__(self, *, timeout: float | None = None, lifetime: float | None = None):
+        self.timeout = timeout or float(
+            getattr(settings, "EMAIL_VERIFICATION_DNS_TIMEOUT_SECONDS", 3.0)
+        )
+        self.lifetime = lifetime or float(
+            getattr(settings, "EMAIL_VERIFICATION_DNS_LIFETIME_SECONDS", 5.0)
+        )
+
+    def resolve(self, domain: str) -> DnsAssessment:
+        import dns.exception
+        import dns.resolver
+
+        resolver = dns.resolver.Resolver(configure=True)
+        resolver.timeout = self.timeout
+        resolver.lifetime = self.lifetime
         try:
-            socket.gethostbyname(domain)
-            domain_resolves = True
-        except (socket.gaierror, OSError):
-            domain_resolves = False
-        return {
-            "email": normalized,
-            "status": "DOMAIN_RESOLVES" if domain_resolves else "DOMAIN_UNRESOLVABLE",
-            "domain_resolves": domain_resolves,
-        }
+            answers = resolver.resolve(domain, "MX")
+        except dns.resolver.NXDOMAIN:
+            return DnsAssessment(domain_exists=False)
+        except dns.resolver.NoAnswer:
+            return DnsAssessment(domain_exists=True)
+        except (dns.exception.Timeout, dns.resolver.NoNameservers, OSError):
+            raise TimeoutError("DNS lookup unavailable.") from None
+        records = tuple(
+            sorted(
+                (int(answer.preference), str(answer.exchange).rstrip(".").lower())
+                for answer in answers
+            )
+        )
+        null_mx = any(preference == 0 and not host for preference, host in records)
+        return DnsAssessment(
+            domain_exists=True,
+            mx_hosts=tuple(host for _, host in records if host),
+            null_mx=null_mx,
+        )
 
 
-def get_verification_provider() -> EmailVerificationProvider:
+class BasicSMTPProbe:
+    def __init__(self, *, timeout: float | None = None, retries: int | None = None):
+        self.timeout = timeout or float(
+            getattr(settings, "EMAIL_VERIFICATION_SMTP_TIMEOUT_SECONDS", 5.0)
+        )
+        self.retries = (
+            int(getattr(settings, "EMAIL_VERIFICATION_SMTP_RETRIES", 1))
+            if retries is None
+            else retries
+        )
+
+    def probe(self, *, email: str, mx_host: str) -> SMTPAssessment:
+        for attempt in range(self.retries + 1):
+            try:
+                return self._probe_once(email=email, mx_host=mx_host)
+            except (TimeoutError, socket.timeout, OSError, smtplib.SMTPException):
+                if attempt == self.retries:
+                    return SMTPAssessment(disposition=SMTPDisposition.TIMEOUT)
+        return SMTPAssessment(disposition=SMTPDisposition.TIMEOUT)
+
+    def _probe_once(self, *, email: str, mx_host: str) -> SMTPAssessment:
+        smtp = smtplib.SMTP(timeout=self.timeout)
+        try:
+            smtp.connect(mx_host, 25)
+            smtp.ehlo_or_helo_if_needed()
+            smtp.mail("")
+            response_code, _ = smtp.rcpt(email)
+            if 400 <= response_code < 500:
+                return SMTPAssessment(
+                    disposition=SMTPDisposition.TEMPORARY,
+                    response_code=response_code,
+                )
+            if response_code >= 500:
+                return SMTPAssessment(
+                    disposition=SMTPDisposition.REJECTED,
+                    response_code=response_code,
+                )
+            if response_code not in {250, 251}:
+                return SMTPAssessment(
+                    disposition=SMTPDisposition.AMBIGUOUS,
+                    response_code=response_code,
+                )
+            random_email = f"ev-{uuid.uuid4().hex}@{email.rsplit('@', 1)[1]}"
+            smtp.rset()
+            smtp.mail("")
+            catch_all_code, _ = smtp.rcpt(random_email)
+            return SMTPAssessment(
+                disposition=SMTPDisposition.ACCEPTED,
+                response_code=response_code,
+                catch_all=catch_all_code in {250, 251},
+            )
+        finally:
+            try:
+                smtp.quit()
+            except (OSError, smtplib.SMTPException):
+                smtp.close()
+
+
+class CacheDomainLimiter:
+    def __init__(self, *, ttl_seconds: int | None = None):
+        self.ttl_seconds = ttl_seconds or int(
+            getattr(settings, "EMAIL_VERIFICATION_DOMAIN_LOCK_SECONDS", 10)
+        )
+
+    def acquire(self, domain: str) -> bool:
+        key = f"email-verification:domain:{hashlib.sha256(domain.encode()).hexdigest()}"
+        return bool(cache.add(key, "1", timeout=self.ttl_seconds))
+
+
+def _normalize_email(value: object) -> str:
+    if type(value) is not str:
+        return ""
+    return value.strip().lower()
+
+
+def _name_patterns(name: str) -> set[str]:
+    parts = [part for part in re.findall(r"[a-z0-9]+", name.casefold()) if part]
+    if len(parts) < 2:
+        return set(parts)
+    first, last = parts[0], parts[-1]
+    return {
+        first,
+        last,
+        f"{first}.{last}",
+        f"{first}{last}",
+        f"{first[0]}{last}",
+        f"{first}{last[0]}",
+    }
+
+
+class LocalVerifier:
+    def __init__(
+        self,
+        *,
+        resolver: DnsResolver,
+        smtp_probe: SMTPProbe,
+        domain_limiter: DomainLimiter,
+    ) -> None:
+        self.resolver = resolver
+        self.smtp_probe = smtp_probe
+        self.domain_limiter = domain_limiter
+
+    def verify(
+        self,
+        email: object,
+        *,
+        contact_name: str = "",
+        corporate_domain: str = "",
+        history: VerificationHistory | None = None,
+    ) -> LocalVerificationResult:
+        normalized = _normalize_email(email)
+        history = history or VerificationHistory()
+        if not EMAIL_RE.fullmatch(normalized):
+            evidence = self._evidence("FORMAT", "LOCAL_RULE", "INVALID", "INVALID_FORMAT")
+            return self._result(normalized, VerificationStatus.INVALID, 0, 0, [evidence])
+
+        local_part, domain = normalized.rsplit("@", 1)
+        reasons: list[str] = []
+        evidence: list[VerificationEvidence] = [
+            self._evidence("FORMAT", "LOCAL_RULE", "PASS", "FORMAT_VALID")
+        ]
+        quality = 70
+        role_mailbox = local_part in ROLE_LOCAL_PARTS
+        disposable = domain in DISPOSABLE_DOMAINS
+        if role_mailbox:
+            reasons.append("ROLE_MAILBOX")
+            quality -= 35
+            evidence.append(self._evidence("MAILBOX", "LOCAL_RULE", "RISK", "ROLE_MAILBOX"))
+        if disposable:
+            reasons.append("DISPOSABLE_DOMAIN")
+            quality -= 40
+            evidence.append(
+                self._evidence("DOMAIN", "BUILTIN_DISPOSABLE_V1", "RISK", "DISPOSABLE_DOMAIN")
+            )
+        corporate = corporate_domain.strip().lower().rstrip(".")
+        if corporate and domain != corporate:
+            reasons.append("CORPORATE_DOMAIN_MISMATCH")
+            quality -= 20
+        if contact_name:
+            if local_part in _name_patterns(contact_name):
+                reasons.append("NAME_PATTERN_MATCH")
+                quality += 15
+            elif not role_mailbox:
+                reasons.append("NAME_PATTERN_MISMATCH")
+                quality -= 15
+
+        try:
+            dns_result = self.resolver.resolve(domain)
+        except TimeoutError:
+            evidence.append(self._evidence("DNS", "DNS", "UNKNOWN", "DNS_TIMEOUT"))
+            return self._result(
+                normalized,
+                VerificationStatus.UNKNOWN,
+                25,
+                quality,
+                evidence,
+                reasons + ["DNS_TIMEOUT"],
+            )
+        if not dns_result.domain_exists:
+            evidence.append(self._evidence("DNS", "DNS", "FAIL", "DOMAIN_NOT_FOUND"))
+            return self._result(
+                normalized, VerificationStatus.INVALID, 0, quality, evidence, reasons + ["DOMAIN_NOT_FOUND"]
+            )
+        if dns_result.null_mx:
+            evidence.append(self._evidence("MX", "DNS", "FAIL", "NULL_MX"))
+            return self._result(
+                normalized, VerificationStatus.INVALID, 0, quality, evidence, reasons + ["NULL_MX"]
+            )
+        if not dns_result.mx_hosts:
+            evidence.append(self._evidence("MX", "DNS", "FAIL", "NO_MX"))
+            return self._result(
+                normalized, VerificationStatus.INVALID, 5, quality, evidence, reasons + ["NO_MX"]
+            )
+        evidence.append(
+            self._evidence(
+                "MX",
+                "DNS",
+                "PASS",
+                "MX_FOUND",
+                {"mx_count": len(dns_result.mx_hosts)},
+            )
+        )
+
+        if not self.domain_limiter.acquire(domain):
+            evidence.append(
+                self._evidence("THROTTLE", "SHARED_CACHE", "DEFER", "DOMAIN_RATE_LIMITED")
+            )
+            return self._result(
+                normalized,
+                VerificationStatus.UNKNOWN,
+                35,
+                quality,
+                evidence,
+                reasons + ["DOMAIN_RATE_LIMITED"],
+            )
+
+        smtp = self.smtp_probe.probe(email=normalized, mx_host=dns_result.mx_hosts[0])
+        if smtp.disposition == SMTPDisposition.REJECTED:
+            smtp_status = VerificationStatus.INVALID
+            deliverability = 5
+            smtp_reason = "SMTP_RECIPIENT_REJECTED"
+        elif smtp.disposition == SMTPDisposition.TIMEOUT:
+            smtp_status = VerificationStatus.UNKNOWN
+            deliverability = 40
+            smtp_reason = "SMTP_TIMEOUT"
+        elif smtp.disposition == SMTPDisposition.TEMPORARY:
+            smtp_status = VerificationStatus.UNKNOWN
+            deliverability = 45
+            smtp_reason = "SMTP_GREYLISTED"
+        elif smtp.disposition == SMTPDisposition.AMBIGUOUS:
+            smtp_status = VerificationStatus.UNKNOWN
+            deliverability = 45
+            smtp_reason = "SMTP_AMBIGUOUS"
+        elif smtp.catch_all:
+            smtp_status = VerificationStatus.RISKY
+            deliverability = 60
+            smtp_reason = "CATCH_ALL"
+        else:
+            smtp_status = VerificationStatus.LIKELY_VALID
+            deliverability = 75
+            smtp_reason = "SMTP_ACCEPTED_NOT_PROOF"
+        evidence.append(
+            self._evidence(
+                "SMTP",
+                "SMTP_RCPT",
+                smtp.disposition.value,
+                smtp_reason,
+                {"response_code": smtp.response_code},
+            )
+        )
+        reasons.append(smtp_reason)
+
+        status = smtp_status
+        if history.bounced:
+            status = VerificationStatus.INVALID
+            deliverability = 0
+            reasons.append("HISTORICAL_BOUNCE")
+            evidence.append(
+                self._evidence("HISTORY", "OUTREACH_MESSAGE", "FAIL", "HISTORICAL_BOUNCE")
+            )
+        elif history.replied:
+            deliverability = max(deliverability, 95)
+            reasons.append("HISTORICAL_REPLY")
+            evidence.append(
+                self._evidence("HISTORY", "OUTREACH_MESSAGE", "PASS", "HISTORICAL_REPLY")
+            )
+            status = VerificationStatus.RISKY if smtp.catch_all or disposable else VerificationStatus.VALID
+        elif history.sent_count:
+            deliverability = min(90, deliverability + 5)
+            reasons.append("HISTORICAL_SEND_ACCEPTED")
+
+        if disposable and status not in {VerificationStatus.INVALID, VerificationStatus.UNKNOWN}:
+            status = VerificationStatus.RISKY
+        return self._result(
+            normalized,
+            status,
+            deliverability,
+            quality,
+            evidence,
+            reasons,
+            catch_all=bool(smtp.catch_all),
+        )
+
+    @staticmethod
+    def _evidence(
+        check_type: str,
+        source: str,
+        outcome: str,
+        reason_code: str,
+        details: dict | None = None,
+    ) -> VerificationEvidence:
+        return VerificationEvidence(
+            check_type=check_type,
+            source=source,
+            source_version=VERIFIER_VERSION,
+            outcome=outcome,
+            reason_code=reason_code,
+            details=details or {},
+        )
+
+    @staticmethod
+    def _result(
+        email: str,
+        status: VerificationStatus,
+        deliverability: int,
+        quality: int,
+        evidence: list[VerificationEvidence],
+        reasons: list[str] | None = None,
+        *,
+        catch_all: bool = False,
+    ) -> LocalVerificationResult:
+        reason_codes = tuple(dict.fromkeys(reasons or [evidence[-1].reason_code]))
+        return LocalVerificationResult(
+            email=email,
+            status=status,
+            deliverability_score=max(0, min(100, deliverability)),
+            contact_quality_score=max(0, min(100, quality)),
+            reason_codes=reason_codes,
+            evidence=tuple(evidence),
+            catch_all=catch_all,
+        )
+
+
+def get_local_verifier() -> LocalVerifier:
+    return LocalVerifier(
+        resolver=SystemDnsResolver(),
+        smtp_probe=BasicSMTPProbe(),
+        domain_limiter=CacheDomainLimiter(),
+    )
+
+
+def get_verification_provider() -> EmailVerificationProvider | None:
     factory_path = getattr(settings, "EMAIL_VERIFICATION_PROVIDER_FACTORY", "")
-    if factory_path:
-        return import_string(factory_path)()
-    return BasicEmailVerificationProvider()
+    return import_string(factory_path)() if factory_path else None
 
 
 def verify_email(email: str) -> dict:
-    return get_verification_provider().verify(email)
+    return get_local_verifier().verify(email).as_dict()

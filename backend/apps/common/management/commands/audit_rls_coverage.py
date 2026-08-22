@@ -7,6 +7,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from apps.common.rls_manifest import (
     RLS_MANIFEST,
+    EARLY_RLS_TABLES,
     RLS1_TABLES,
     RLS2A_TABLES,
     RLSManifestError,
@@ -51,7 +52,7 @@ class Command(BaseCommand):
         if connection.vendor != "postgresql":
             raise CommandError("Database RLS audit requires PostgreSQL.")
 
-        expected = RLS1_TABLES | RLS2A_TABLES
+        expected = RLS1_TABLES | RLS2A_TABLES | EARLY_RLS_TABLES
         with connection.cursor() as cursor:
             cursor.execute(
                 "SELECT relname, relrowsecurity, relforcerowsecurity "
@@ -161,7 +162,7 @@ def _normalize_policy_expression(expression: str | None) -> str | None:
     if expression is None:
         return None
     normalized = expression.lower().replace("::text", "")
-    for table in RLS1_TABLES | RLS2A_TABLES:
+    for table in RLS1_TABLES | RLS2A_TABLES | EARLY_RLS_TABLES:
         normalized = normalized.replace(f"{table}.", "")
     return re.sub(r"[\s()]", "", normalized)
 
@@ -231,4 +232,8 @@ def _expected_policy_contracts():
             "jobs_jobattempt",
             f"rls_jobs_jobattempt_parent_{command.lower()}",
         )] = (command, using, check)
+    growth = import_module(
+        "apps.growth.migrations.0050_email_verification_pipeline"
+    )
+    contracts.update(growth.POLICY_CONTRACTS)
     return contracts

@@ -400,14 +400,17 @@ def _claim_scan_text_fields(cleaned):
         code = variant.get("platform_code", "UNKNOWN")
         for name in ("title", "body", "cta"):
             fields.append((f"platform:{code}:{name}", variant.get(name, "")))
+        for index, hashtag in enumerate(variant.get("hashtags", []), start=1):
+            fields.append((f"platform:{code}:hashtag:{index}", hashtag))
         if code == "TIKTOK":
             for name in ("script", "voiceover", "subtitles"):
                 fields.append((f"platform:TIKTOK:{name}", variant.get(name, "")))
             for index, shot in enumerate(variant.get("shot_list", []), start=1):
-                fields.append((
-                    f"platform:TIKTOK:shot:{index}:on_screen_text",
-                    shot.get("on_screen_text", "") if isinstance(shot, dict) else "",
-                ))
+                if isinstance(shot, dict):
+                    for name in ("scene", "visual", "on_screen_text"):
+                        fields.append(
+                            (f"platform:TIKTOK:shot:{index}:{name}", shot.get(name, ""))
+                        )
     return fields
 
 

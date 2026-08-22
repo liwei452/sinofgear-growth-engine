@@ -166,6 +166,29 @@ def test_generated_output_rejects_prohibited_claims_in_platform_copy():
         payloads.validate_generated_content_output(output, snapshot)
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda output: output["platform_variants"][0].update(
+            hashtags=["guaranteed zero wear"]
+        ),
+        lambda output: output["platform_variants"][3]["shot_list"][0].update(
+            visual="Show guaranteed zero wear on the product badge"
+        ),
+    ],
+)
+def test_generated_output_rejects_prohibited_claims_in_all_platform_fields(mutation):
+    snapshot = {
+        **_snapshot(),
+        "prohibited_claims": ["guaranteed zero wear"],
+    }
+    output = _output()
+    mutation(output)
+
+    with pytest.raises(ValueError, match="prohibited claim"):
+        payloads.validate_generated_content_output(output, snapshot)
+
+
 def test_generated_output_rejects_numeric_claim_without_verified_fact():
     snapshot = {
         **_snapshot(),

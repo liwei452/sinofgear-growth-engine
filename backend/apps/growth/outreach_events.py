@@ -35,6 +35,7 @@ _UUID_PATTERN = re.compile(
 def record_sent(
     *, account, draft, email: str, organization_id=None
 ) -> OutreachMessage:
+    normalized_email = email.strip().lower()
     context_id = organization_id
     def context():
         return (
@@ -80,7 +81,7 @@ def record_sent(
                 context=context_view,
             )
     result = get_delivery_provider().send(
-        email=email,
+        email=normalized_email,
         subject=EMAIL_SUBJECT,
         body=body,
     )
@@ -104,7 +105,7 @@ def record_sent(
             provider=result.get("provider", "unknown"),
             provider_message_id=message_id,
             status=OutreachMessage.Status.SENT if sent else OutreachMessage.Status.FAILED,
-            payload=result,
+            payload={**result, "email": normalized_email},
             sent_at=timezone.now() if sent else None,
         )
         if not sent:
@@ -113,7 +114,11 @@ def record_sent(
                 event_type=EVENT_EMAIL_FAILED,
                 entity_type="account",
                 entity_id=account.id,
-                payload={"message_id": str(message.id), "provider": message.provider, "email": email},
+                payload={
+                    "message_id": str(message.id),
+                    "provider": message.provider,
+                    "email": normalized_email,
+                },
                 idempotency_key=f"email.failed:{message.id}",
             )
             return message
@@ -128,7 +133,11 @@ def record_sent(
             event_type=EVENT_EMAIL_SENT,
             entity_type="account",
             entity_id=account.id,
-            payload={"message_id": str(message.id), "provider": message.provider, "email": email},
+            payload={
+                "message_id": str(message.id),
+                "provider": message.provider,
+                "email": normalized_email,
+            },
             idempotency_key=f"email.sent:{message.id}",
         )
         return message

@@ -24,9 +24,12 @@ from apps.growth.models import (
     Contact,
     DiscoveryCandidate,
     EmailVerificationRun,
+    FollowUp,
+    OutreachDraft,
     OutreachMessage,
     TargetAccount,
 )
+from apps.growth.outreach_events import record_bounce, record_reply, record_sent
 from apps.identity.models import Organization
 
 
@@ -73,6 +76,15 @@ class RecordingVerifier:
         if self.callback:
             self.callback()
         return self.result
+
+
+class _ConnectedDeliveryProvider:
+    def send(self, *, email, subject, body):
+        return {
+            "provider": "smtp",
+            "message_id": f"sent-to-{email}",
+            "status": "SENT",
+        }
 
 
 def test_prepare_and_finalize_use_tenant_transactions_but_network_does_not():
@@ -132,6 +144,75 @@ def test_history_bounce_is_frozen_in_prepare_and_changes_local_result():
     )
 
     assert verifier.calls[0]["kwargs"]["history"].bounced is True
+
+
+@pytest.mark.parametrize(
+    ("record_outcome", "expected_replied", "expected_bounced"),
+    [
+        (record_reply, True, False),
+        (record_bounce, False, True),
+    ],
+)
+def test_real_delivery_event_chain_contributes_normalized_mailbox_history(
+    monkeypatch,
+    record_outcome,
+    expected_replied,
+    expected_bounced,
+):
+    from apps.growth import outreach_events
+
+    organization = Organization.objects.create(
+        name=f"Delivery history {record_outcome.__name__}",
+        slug=f"delivery-history-{record_outcome.__name__}",
+    )
+    account = TargetAccount.objects.create(
+        organization=organization,
+        name="Acme",
+        country="US",
+    )
+    draft = OutreachDraft.objects.create(
+        organization=organization,
+        account=account,
+        english_draft="Hello team",
+        chinese_explanation="test",
+    )
+    FollowUp.objects.create(organization=organization, account=account)
+    monkeypatch.setattr(
+        outreach_events,
+        "email_delivery_readiness",
+        lambda: "CONNECTED",
+    )
+    monkeypatch.setattr(
+        outreach_events,
+        "get_delivery_provider",
+        _ConnectedDeliveryProvider,
+    )
+
+    message = record_sent(
+        account=account,
+        draft=draft,
+        email=" Buyer@Example.com ",
+    )
+    record_outcome(account=account)
+    message.refresh_from_db()
+    run, _ = request_email_verification(
+        organization_id=organization.id,
+        email="buyer@example.com",
+        idempotency_key=f"real-history-{record_outcome.__name__}",
+        dispatch=False,
+    )
+    verifier = RecordingVerifier()
+
+    execute_email_verification(
+        organization_id=organization.id,
+        run_id=run.id,
+        local_verifier=verifier,
+    )
+
+    history = verifier.calls[0]["kwargs"]["history"]
+    assert message.payload["email"] == "buyer@example.com"
+    assert history.replied is expected_replied
+    assert history.bounced is expected_bounced
 
 
 def test_history_is_bound_to_the_exact_mailbox_not_every_message_on_account():

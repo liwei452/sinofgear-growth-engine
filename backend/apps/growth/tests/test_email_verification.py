@@ -357,6 +357,8 @@ def test_smtp_probe_keeps_uncertain_catch_all_response_unknown(
         ("239.255.255.250",),
         ("ff02::1",),
         ("ff0e::1",),
+        ("fec0::1",),
+        ("feff:ffff::1",),
         ("1.1.1.1", "10.0.0.1"),
     ],
 )

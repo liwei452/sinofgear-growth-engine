@@ -350,6 +350,10 @@ class BasicSMTPProbe:
             and not address.is_reserved
             and not address.is_loopback
             and not address.is_link_local
+            and (
+                not isinstance(address, ipaddress.IPv6Address)
+                or not address.is_site_local
+            )
             and not address.is_private
         )
 

@@ -17,6 +17,7 @@ from apps.campaigns.services import (
     build_content_generation_input,
     mark_content_brief_ready,
     update_content_brief,
+    validate_snapshot_bound_brief,
 )
 from apps.content.tasks import generate_master_content_job
 from apps.content.models import MasterContent
@@ -290,8 +291,45 @@ def run_content_creation_agent(
     asset_ids: list[str] | None = None,
     approvals=None,
 ) -> Any:
+    brief = _brief(organization, brief_id)
+    if brief is None:
+        raise ValidationError("brief_id not found.")
+    snapshot_id = getattr(brief, "knowledge_context_snapshot_id", None)
+    binding = validate_snapshot_bound_brief(brief)
+    platform_ids = [platform_id]
+    if binding is not None:
+        values = {}
+        product_id = binding["primary_product_id"]
+        platform_ids = [
+            str(item)
+            for item in Platform.objects.filter(
+                code__in=binding["platform_codes"]
+            )
+            .order_by("code")
+            .values_list("id", flat=True)
+        ]
     if not asset_ids:
-        asset_ids = _auto_match_assets(organization, platform_id)
+        asset_ids = list(
+            dict.fromkeys(
+                asset_id
+                for selected_platform_id in platform_ids
+                for asset_id in _auto_match_assets(
+                    organization, selected_platform_id
+                )
+            )
+        )
+    if binding is not None:
+        asset_ids = list(
+            dict.fromkeys(
+                [
+                    str(item)
+                    for item in brief.asset_links.order_by("asset_id").values_list(
+                        "asset_id", flat=True
+                    )
+                ]
+                + list(asset_ids or [])
+            )
+        )
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
         idempotency_key=f"content-creation:{brief_id}",
@@ -304,13 +342,17 @@ def run_content_creation_agent(
                 "actor_id": actor_id,
                 "values": values,
                 "product_id": product_id,
-                "platform_id": platform_id,
+                "platform_id": platform_ids[0] if platform_ids else "",
+                "platform_ids": platform_ids,
                 "asset_ids": asset_ids or [],
             },
             "created_by_id": _user_id(actor_id),
+            "knowledge_context_snapshot_id": snapshot_id,
             "max_steps": 10,
         },
     )
+    if run.knowledge_context_snapshot_id != snapshot_id:
+        raise ValidationError("agent run knowledge context does not match the brief.")
     tools = ToolRegistry(build_content_creation_tools(organization, actor_id))
     planner = DeterministicPlanner(
         [
@@ -321,7 +363,7 @@ def run_content_creation_agent(
                     "brief_id": brief_id,
                     "values": values,
                     "product_ids": [product_id],
-                    "platform_ids": [platform_id],
+                    "platform_ids": platform_ids,
                     "asset_ids": asset_ids or [],
                 },
             ),
@@ -335,6 +377,10 @@ def run_content_creation_agent(
 def run_platform_variants_agent(
     *, organization, master_id: str, actor_id: str, approvals=None,
 ) -> Any:
+    master = _get_master(organization, master_id)
+    if master is None:
+        raise ValidationError("master_id not found.")
+    snapshot_id = getattr(master, "knowledge_context_snapshot_id", None)
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
         idempotency_key=f"platform-variants:{master_id}",
@@ -344,9 +390,12 @@ def run_platform_variants_agent(
             "execution_mode": AgentRun.ExecutionMode.AUTOMATION,
             "resume_args": {"master_id": master_id, "actor_id": actor_id},
             "created_by_id": _user_id(actor_id),
+            "knowledge_context_snapshot_id": snapshot_id,
             "max_steps": 5,
         },
     )
+    if run.knowledge_context_snapshot_id != snapshot_id:
+        raise ValidationError("agent run knowledge context does not match the master.")
     tools = ToolRegistry(build_platform_variants_tools(organization, actor_id))
     planner = DeterministicPlanner(
         [

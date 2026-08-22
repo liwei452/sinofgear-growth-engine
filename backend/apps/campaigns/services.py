@@ -10,6 +10,7 @@ from django.utils import timezone
 from apps.assets.models import AssetProductLink, MaterialAsset, ProductEvidenceFact
 from apps.catalog.models import Product, ProductConceptLink
 from apps.catalog.services import ProductSnapshot, _snapshot_from_locked_product
+from apps.knowledge.agent_context import AgentContextPurpose, load_agent_context
 from apps.knowledge.graph import acquire_knowledge_graph_lock
 from apps.knowledge.models import (
     KnowledgeConcept,
@@ -41,6 +42,115 @@ def _unique_ids(values, field: str) -> tuple[UUID, ...]:
     return items
 
 
+def derive_snapshot_bound_brief(agent_context) -> dict[str, object]:
+    """Derive every immutable Mission Brief field from one frozen context DTO."""
+
+    context = agent_context.to_dict()
+    mission = context["mission"]
+    product = context["product"]
+    icp = context["icp_profiles"][0]
+    seller = context["seller"]
+    page = context["website_pages"][0]
+    primary_cta = page.get("primary_cta") or {}
+
+    def claim_text(claim):
+        value = claim.get("value")
+        if isinstance(value, dict) and value.get("text"):
+            return str(value["text"]).strip()
+        return str(value).strip()
+
+    selling_points = [
+        text
+        for text in (claim_text(claim) for claim in seller["public_claims"])
+        if text
+    ]
+    advantages = [
+        str(item).strip()
+        for item in (
+            list(product.get("manufacturing_capabilities") or [])
+            + list(product.get("inspection_capabilities") or [])
+        )
+        if str(item).strip()
+    ]
+    keywords = list(page.get("seo_keywords") or []) + list(
+        mission.get("target_industries") or []
+    )
+    return {
+        "values": {
+            "target_country": (mission.get("target_countries") or [""])[0],
+            "customer_type": (
+                icp.get("company_types") or [icp.get("name", "")]
+            )[0],
+            "content_objective": mission.get("objective", ""),
+            "language": (
+                icp.get("languages")
+                or [seller["company_profile"].get("default_language", "")]
+            )[0],
+            "cta": primary_cta.get("label") or "",
+            "landing_page_url": primary_cta.get("url") or page.get(
+                "canonical_url", ""
+            ),
+            "prohibited_claims": list(seller.get("prohibited_claims") or []),
+            "selling_points": selling_points,
+            "advantages": advantages,
+            "keywords": list(
+                dict.fromkeys(str(item) for item in keywords if str(item).strip())
+            ),
+        },
+        "primary_product_id": str(product["id"]),
+        "platform_codes": tuple(
+            code for code in (mission.get("allowed_channels") or []) if code != "EMAIL"
+        ),
+        "industries": tuple(mission.get("target_industries") or []),
+        "attribution_code": mission.get("attribution_code", ""),
+    }
+
+
+def _snapshot_binding_for_brief(brief: ContentBrief) -> dict[str, object] | None:
+    if brief.knowledge_context_snapshot_id is None:
+        return None
+    snapshot = brief.knowledge_context_snapshot
+    context = load_agent_context(
+        organization=brief.organization,
+        mission=snapshot.mission,
+        snapshot_id=snapshot.id,
+    )
+    return derive_snapshot_bound_brief(
+        context.for_purpose(AgentContextPurpose.CONTENT_STRATEGY)
+    )
+
+
+def validate_snapshot_bound_brief(brief: ContentBrief) -> dict[str, object] | None:
+    """Fail closed when a persisted Brief drifts from its frozen Snapshot."""
+
+    binding = _snapshot_binding_for_brief(brief)
+    if binding is None:
+        return None
+    expected_values = binding["values"]
+    mismatched_fields = [
+        field
+        for field, expected in expected_values.items()
+        if getattr(brief, field) != expected
+    ]
+    product_ids = {
+        str(item)
+        for item in brief.product_links.values_list("product_id", flat=True)
+    }
+    platform_codes = {
+        str(item)
+        for item in brief.platform_links.values_list("platform__code", flat=True)
+    }
+    if (
+        mismatched_fields
+        or product_ids != {binding["primary_product_id"]}
+        or platform_codes != set(binding["platform_codes"])
+    ):
+        raise ValidationError(
+            "Content brief does not match its frozen knowledge context."
+        )
+    return binding
+
+
 @transaction.atomic
 def create_campaign(*, organization, values, product_ids=()) -> Campaign:
     product_ids = _unique_ids(product_ids, "product_ids")
@@ -65,6 +175,7 @@ def create_content_brief(
     asset_ids,
     platform_ids,
     concept_links,
+    knowledge_context_snapshot=None,
 ) -> ContentBrief:
     campaign = Campaign.objects.select_for_update().get(
         pk=campaign.pk, organization=organization
@@ -72,6 +183,29 @@ def create_content_brief(
     product_ids = _unique_ids(product_ids, "product_ids")
     asset_ids = _unique_ids(asset_ids, "asset_ids")
     platform_ids = _unique_ids(platform_ids, "platform_ids")
+    if knowledge_context_snapshot is not None:
+        if knowledge_context_snapshot.organization_id != organization.id:
+            raise ValidationError("Knowledge context is not visible to this organization.")
+        context = load_agent_context(
+            organization=organization,
+            mission=knowledge_context_snapshot.mission,
+            snapshot_id=knowledge_context_snapshot.id,
+        )
+        binding = derive_snapshot_bound_brief(
+            context.for_purpose(AgentContextPurpose.CONTENT_STRATEGY)
+        )
+        selected_platform_codes = set(
+            Platform.objects.filter(id__in=platform_ids).values_list("code", flat=True)
+        )
+        if (
+            values != binding["values"]
+            or {str(item) for item in product_ids}
+            != {binding["primary_product_id"]}
+            or selected_platform_codes != set(binding["platform_codes"])
+        ):
+            raise ValidationError(
+                "Content brief inputs do not match the frozen knowledge context."
+            )
     specs = tuple(concept_links)
     keys = tuple((item["role"], item["concept_id"]) for item in specs)
     if len(keys) != len(set(keys)):
@@ -80,6 +214,7 @@ def create_content_brief(
         organization=organization,
         campaign=campaign,
         created_by=creator,
+        knowledge_context_snapshot=knowledge_context_snapshot,
         **values,
     )
     ContentBriefProduct.objects.bulk_create(
@@ -167,6 +302,15 @@ def update_content_brief(
     unknown = set(values) - BRIEF_MUTABLE_FIELDS
     if unknown:
         raise ValidationError({name: ["Unknown field."] for name in sorted(unknown)})
+    binding = validate_snapshot_bound_brief(brief)
+    if binding is not None:
+        expected_values = binding["values"]
+        if any(expected_values.get(field) != value for field, value in values.items()):
+            raise ValidationError(
+                "Snapshot-bound fields cannot override the frozen knowledge context."
+            )
+        # Equal caller values are a no-op; the Snapshot remains the sole source.
+        values = {}
 
     current_products = tuple(
         brief.product_links.select_for_update().order_by("product_id").values_list(
@@ -209,6 +353,30 @@ def update_content_brief(
         )
         if len(desired_concepts) != len(set(desired_concepts)):
             raise ValidationError({"concept_links": ["Duplicate role/concept pairs are not allowed."]})
+    if binding is not None:
+        desired_platform_codes = set(
+            Platform.objects.filter(id__in=desired_platforms).values_list(
+                "code", flat=True
+            )
+        )
+        if {str(item) for item in desired_products} != {
+            binding["primary_product_id"]
+        }:
+            raise ValidationError(
+                "Snapshot-bound products cannot override the frozen knowledge context."
+            )
+        if desired_platform_codes != set(binding["platform_codes"]):
+            raise ValidationError(
+                "Snapshot-bound channels cannot override the frozen knowledge context."
+            )
+        if desired_concepts != current_concepts:
+            raise ValidationError(
+                "Snapshot-bound content creation may only supplement eligible assets."
+            )
+        if not set(current_assets).issubset(desired_assets):
+            raise ValidationError(
+                "Snapshot-bound content creation cannot remove frozen Brief assets."
+            )
 
     scalar_changed = any(getattr(brief, key) != value for key, value in values.items())
     relation_changed = (
@@ -332,6 +500,7 @@ def mark_content_brief_ready(brief_id: UUID, *, reviewer) -> ContentBrief:
         if link.concept_id in concepts:
             link.concept = concepts[link.concept_id]
         link.full_clean()
+    validate_snapshot_bound_brief(brief)
     errors = _ready_errors(brief)
     if errors:
         raise ValidationError(errors)
@@ -362,6 +531,7 @@ def revise_content_brief(brief_id: UUID, *, creator) -> ContentBrief:
         previous_version=source,
         version=source.version + 1,
         created_by=creator,
+        knowledge_context_snapshot=source.knowledge_context_snapshot,
         **values,
     )
     with revision_writes():
@@ -446,6 +616,8 @@ class ContentGenerationInput:
     target_platforms: tuple[PlatformSnapshot, ...]
     ontology_snapshot: OntologySnapshot
     verified_product_facts: tuple[VerifiedProductFactSnapshot, ...]
+    knowledge_provenance: dict[str, object] | None
+    agent_context: dict[str, object] | None
     generated_at: datetime
 
     def to_dict(self) -> dict[str, object]:
@@ -527,9 +699,21 @@ def build_content_generation_input(brief_id: UUID) -> ContentGenerationInput:
     )
     if brief.status != ContentBrief.Status.READY:
         raise ValidationError({"status": ["Only READY briefs can be used for generation."]})
+    validate_snapshot_bound_brief(brief)
     errors = _ready_errors(brief)
     if errors:
         raise ValidationError(errors)
+    knowledge_provenance = None
+    agent_context = None
+    if brief.knowledge_context_snapshot_id is not None:
+        snapshot = brief.knowledge_context_snapshot
+        context = load_agent_context(
+            organization=brief.organization,
+            mission=snapshot.mission,
+            snapshot_id=snapshot.id,
+        )
+        knowledge_provenance = dict(context.provenance)
+        agent_context = context.for_purpose(AgentContextPurpose.MASTER_CONTENT).to_dict()
 
     campaign = Campaign.objects.select_for_update(of=("self",)).get(pk=brief.campaign_id)
     if campaign.organization_id != brief.organization_id:
@@ -726,5 +910,7 @@ def build_content_generation_input(brief_id: UUID) -> ContentGenerationInput:
         target_platforms=platform_snapshots,
         ontology_snapshot=ontology,
         verified_product_facts=verified_product_facts,
+        knowledge_provenance=knowledge_provenance,
+        agent_context=agent_context,
         generated_at=timezone.now(),
     )

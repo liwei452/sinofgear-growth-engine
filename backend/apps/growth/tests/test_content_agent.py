@@ -214,6 +214,16 @@ def _mission_with_channels(organization, creator, channels):
         manufacturing_capabilities=["Hobbing"],
         inspection_capabilities=["CMM"],
     )
+    if any(channel != "EMAIL" for channel in channels):
+        from apps.knowledge.tests.test_agent_context import _verified_page
+        from apps.knowledge.tests.test_knowledge_context_snapshot import (
+            make_approved_icp,
+            make_approved_profile,
+        )
+
+        make_approved_profile(organization, creator)
+        make_approved_icp(organization, creator, product)
+        _verified_page(organization, creator, product)
     return GrowthMission.objects.create(
         organization=organization,
         title="Platform mission",

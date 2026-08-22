@@ -12,10 +12,35 @@ from apps.common.tenant_tasks import (
 from apps.common.tenancy import tenant_atomic
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
+from apps.knowledge.agent_context import AgentContextPurpose, load_agent_context
 
 from .models import ContentRecommendation, MasterContent
 from .recommendations import finalize_recommendation_result
 from .services import finalize_master_result, finalize_platform_variants
+
+
+def _platform_variant_job_input(master: MasterContent, actor) -> dict:
+    payload = {"master_id": str(master.id), "actor_id": actor.id}
+    if master.knowledge_context_snapshot_id is None:
+        return payload
+    snapshot = master.knowledge_context_snapshot
+    context = load_agent_context(
+        organization=master.organization,
+        mission=snapshot.mission,
+        snapshot_id=snapshot.id,
+    )
+    provenance = dict(context.provenance)
+    if master.provenance.get("knowledge_context") != provenance:
+        raise ValueError("Master knowledge context provenance is inconsistent.")
+    payload.update(
+        {
+            "knowledge_provenance": provenance,
+            "agent_context": context.for_purpose(
+                AgentContextPurpose.PLATFORM_VARIANT
+            ).to_dict(),
+        }
+    )
+    return payload
 
 
 @shared_task
@@ -45,7 +70,13 @@ def generate_master_content_job(organization_id, job_id, prompt_version_id):
                 child = JobService.create(
                     organization=job.organization,
                     job_type=Job.Type.CONTENT_PLATFORM_VARIANTS,
-                    input_snapshot={"master_id": master_id, "actor_id": actor.id},
+                    input_snapshot=_platform_variant_job_input(
+                        MasterContent.objects.select_related(
+                            "organization",
+                            "knowledge_context_snapshot__mission",
+                        ).get(pk=master_id, organization=job.organization),
+                        actor,
+                    ),
                     idempotency_key=f"platform-variants:{master_id}",
                     created_by=actor,
                 )
@@ -79,11 +110,25 @@ def generate_platform_variants_job(organization_id, job_id):
                 actor, _ = get_user_model().objects.get_or_create(
                     username="system-auto-approve"
                 )
+            expected = _platform_variant_job_input(master, actor)
+            if any(
+                snapshot.get(key) != expected.get(key)
+                for key in (
+                    "master_id",
+                    "knowledge_provenance",
+                    "agent_context",
+                )
+            ):
+                raise ValueError("Platform Job knowledge context is inconsistent.")
             created = finalize_platform_variants(master, actor)
             result_reference = {
                 "type": "platform_variants",
                 "platform_content_ids": [str(content.id) for content in created],
             }
+            if expected.get("knowledge_provenance") is not None:
+                result_reference["knowledge_provenance"] = expected[
+                    "knowledge_provenance"
+                ]
             JobService.succeed(
                 job_id,
                 claim_token=claimed.claim_token,

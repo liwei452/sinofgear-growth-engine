@@ -14,6 +14,9 @@ from apps.common.security import normalize_persisted_error, scrub_secrets
 from apps.common.tenancy import tenant_atomic
 from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService
+from apps.knowledge.agent_context import AgentContextPurpose, load_agent_context
+from apps.knowledge.models import KnowledgeContextSnapshot
+from apps.knowledge.snapshot_models import canonical_json
 from apps.ai.provider_config import PRICE_TABLE_VERSION, resolve_product_ai
 from apps.ai.services import (
     AIBudgetExceeded,
@@ -66,6 +69,49 @@ def _validate_generation_input(snapshot: dict, *, organization_id) -> None:
         raise GenerationPreflightError(
             "generation_input_organization_mismatch",
             "Frozen generation input does not belong to the job organization.",
+        )
+    provenance = snapshot.get("knowledge_provenance")
+    agent_context = snapshot.get("agent_context")
+    if provenance is None and agent_context is None:
+        return
+    if not isinstance(provenance, dict) or not isinstance(agent_context, dict):
+        raise GenerationPreflightError(
+            "invalid_knowledge_context",
+            "Frozen generation knowledge context is incomplete.",
+        )
+    try:
+        frozen = KnowledgeContextSnapshot.objects.select_related(
+            "organization", "mission"
+        ).get(
+            pk=provenance.get("knowledge_context_snapshot_id"),
+            organization_id=organization_id,
+        )
+        context = load_agent_context(
+            organization=frozen.organization,
+            mission=frozen.mission,
+            snapshot_id=frozen.id,
+        )
+        expected_context = context.for_purpose(
+            AgentContextPurpose.MASTER_CONTENT
+        ).to_dict()
+    except Exception as exc:
+        raise GenerationPreflightError(
+            "invalid_knowledge_context",
+            "Frozen generation knowledge context is unavailable or corrupt.",
+        ) from exc
+    selected_products = {
+        str(row.get("product_id"))
+        for row in snapshot.get("products", [])
+        if isinstance(row, dict)
+    }
+    if (
+        provenance != dict(context.provenance)
+        or canonical_json(agent_context) != canonical_json(expected_context)
+        or str(frozen.primary_product_id) not in selected_products
+    ):
+        raise GenerationPreflightError(
+            "invalid_knowledge_context",
+            "Frozen generation knowledge context does not match the Job input.",
         )
 
 

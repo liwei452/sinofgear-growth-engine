@@ -14,6 +14,7 @@ NUMERIC_CLAIM_PATTERN = re.compile(
     r"\d+(?:[.,]\d+)?\s*(?:mm|cm|µm|um|micron|microns|%|°|hrc|hrb|kw|rpm|kg|ton|teeth?|modules?)\b",
     re.IGNORECASE,
 )
+HTTPS_URL_PATTERN = re.compile(r"https://[^\s<>\"']+", re.IGNORECASE)
 COMMON_V2_TEXT_LIMITS = {
     **TEXT_LIMITS,
     "language": 16,
@@ -300,6 +301,12 @@ def validate_generated_content_output(payload, snapshot):
         str(row.get("fact_id")) for row in snapshot.get("verified_product_facts", [])
         if row.get("fact_id")
     }
+    seller = snapshot.get("agent_context", {}).get("seller", {})
+    allowed_facts.update(
+        str(row.get("fact_id"))
+        for row in seller.get("public_claims", [])
+        if isinstance(row, dict) and row.get("fact_id")
+    )
     if not cleaned["evidence_fact_ids"]:
         raise ValueError("Generated evidence references must contain at least one fact.")
     if not set(cleaned["evidence_fact_ids"]) <= allowed_facts:
@@ -332,6 +339,37 @@ def validate_generated_content_output(payload, snapshot):
         ):
             raise ValueError("TikTok language metadata must match the publication language.")
     _assert_no_prohibited_claims(cleaned, snapshot)
+    _assert_urls_verified(cleaned, snapshot)
+    _assert_numeric_claims_grounded(cleaned, snapshot)
+    _ensure_json_limit(cleaned)
+    return cleaned
+
+
+def validate_snapshot_bound_platform_output(payload, snapshot, *, platform_code):
+    """Revalidate an editable platform revision against its frozen Job snapshot."""
+
+    cleaned = _validate_platform_v2(payload, platform_code=platform_code)
+    if cleaned["language"] != snapshot.get("language"):
+        raise ValueError("Generated platform language does not match the brief language.")
+    allowed_facts = {
+        str(row.get("fact_id"))
+        for row in snapshot.get("verified_product_facts", [])
+        if isinstance(row, dict) and row.get("fact_id")
+    }
+    seller = snapshot.get("agent_context", {}).get("seller", {})
+    allowed_facts.update(
+        str(row.get("fact_id"))
+        for row in seller.get("public_claims", [])
+        if isinstance(row, dict) and row.get("fact_id")
+    )
+    if not cleaned["evidence_fact_ids"] or not set(
+        cleaned["evidence_fact_ids"]
+    ) <= allowed_facts:
+        raise ValueError("Generated evidence references contain an unknown fact.")
+    if cleaned["landing_page_url"] != snapshot.get("landing_page_url"):
+        raise ValueError("Generated landing page does not match the frozen brief.")
+    _assert_no_prohibited_claims(cleaned, snapshot)
+    _assert_urls_verified(cleaned, snapshot)
     _assert_numeric_claims_grounded(cleaned, snapshot)
     _ensure_json_limit(cleaned)
     return cleaned
@@ -355,21 +393,33 @@ def _ensure_json_limit(cleaned):
         raise ValueError("Content payload exceeds the total JSON byte limit.")
 
 
+def _platform_claim_scan_text_fields(variant):
+    code = variant.get("platform_code", "UNKNOWN")
+    fields = [
+        (f"platform:{code}:{name}", variant.get(name, ""))
+        for name in ("title", "body", "cta")
+    ]
+    for index, hashtag in enumerate(variant.get("hashtags", []), start=1):
+        fields.append((f"platform:{code}:hashtag:{index}", hashtag))
+    if code == "TIKTOK":
+        for name in ("script", "voiceover", "subtitles"):
+            fields.append((f"platform:TIKTOK:{name}", variant.get(name, "")))
+        for index, shot in enumerate(variant.get("shot_list", []), start=1):
+            if isinstance(shot, dict):
+                for name in ("scene", "visual", "on_screen_text"):
+                    fields.append(
+                        (f"platform:TIKTOK:shot:{index}:{name}", shot.get(name, ""))
+                    )
+    return fields
+
+
 def _claim_scan_text_fields(cleaned):
     """Return every user-facing text field as ``(label, text)`` pairs."""
+    if cleaned.get("platform_code"):
+        return _platform_claim_scan_text_fields(cleaned)
     fields = [(name, cleaned[name]) for name in ("title", "body", "cta")]
     for variant in cleaned.get("platform_variants", []):
-        code = variant.get("platform_code", "UNKNOWN")
-        for name in ("title", "body", "cta"):
-            fields.append((f"platform:{code}:{name}", variant.get(name, "")))
-        if code == "TIKTOK":
-            for name in ("script", "voiceover", "subtitles"):
-                fields.append((f"platform:TIKTOK:{name}", variant.get(name, "")))
-            for index, shot in enumerate(variant.get("shot_list", []), start=1):
-                fields.append((
-                    f"platform:TIKTOK:shot:{index}:on_screen_text",
-                    shot.get("on_screen_text", "") if isinstance(shot, dict) else "",
-                ))
+        fields.extend(_platform_claim_scan_text_fields(variant))
     return fields
 
 
@@ -386,6 +436,29 @@ def _assert_no_prohibited_claims(cleaned, snapshot):
         for claim in prohibited:
             if claim in folded:
                 raise ValueError(f"Generated content contains a prohibited claim in {label}.")
+
+
+def _verified_urls(snapshot):
+    urls = {str(snapshot.get("landing_page_url") or "").strip()}
+    for page in snapshot.get("agent_context", {}).get("website_pages", []):
+        if not isinstance(page, dict):
+            continue
+        urls.add(str(page.get("canonical_url") or "").strip())
+        cta = page.get("primary_cta")
+        if isinstance(cta, dict):
+            urls.add(str(cta.get("url") or "").strip())
+    return {url for url in urls if url}
+
+
+def _assert_urls_verified(cleaned, snapshot):
+    allowed = _verified_urls(snapshot)
+    for label, text in _claim_scan_text_fields(cleaned):
+        for match in HTTPS_URL_PATTERN.finditer(text):
+            url = match.group(0).rstrip(".,;:!?)]}")
+            if url not in allowed:
+                raise ValueError(
+                    f"Generated content contains an unverified URL in {label}."
+                )
 
 
 def _grounding_fact_values(snapshot):

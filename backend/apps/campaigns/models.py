@@ -179,6 +179,13 @@ class ContentBrief(OrganizationScopedModel):
         ARCHIVED = "ARCHIVED", "Archived"
 
     campaign = models.ForeignKey(Campaign, on_delete=models.PROTECT, related_name="briefs")
+    knowledge_context_snapshot = models.ForeignKey(
+        "knowledge.KnowledgeContextSnapshot",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="content_briefs",
+    )
     previous_version = models.ForeignKey(
         "self", on_delete=models.PROTECT, null=True, blank=True, related_name="revisions"
     )

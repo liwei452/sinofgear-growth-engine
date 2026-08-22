@@ -206,6 +206,13 @@ class MasterContent(ProtectedContentModel):
         ARCHIVED = "ARCHIVED", "Archived"
 
     brief = models.ForeignKey("campaigns.ContentBrief", on_delete=models.PROTECT, related_name="master_contents")
+    knowledge_context_snapshot = models.ForeignKey(
+        "knowledge.KnowledgeContextSnapshot",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="master_contents",
+    )
     brief_version = models.PositiveIntegerField()
     generation_job = models.ForeignKey("jobs.Job", on_delete=models.PROTECT, related_name="master_contents")
     ai_run = models.ForeignKey("ai.AIRun", on_delete=models.PROTECT, related_name="master_contents")
@@ -245,6 +252,13 @@ class PlatformContent(ProtectedContentModel):
         ARCHIVED = "ARCHIVED", "Archived"
 
     master_content = models.ForeignKey(MasterContent, on_delete=models.PROTECT, related_name="platform_contents")
+    knowledge_context_snapshot = models.ForeignKey(
+        "knowledge.KnowledgeContextSnapshot",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="platform_contents",
+    )
     master_version = models.PositiveIntegerField()
     platform = models.ForeignKey("platforms.Platform", on_delete=models.PROTECT, related_name="content_versions")
     lineage_id = models.UUIDField(default=uuid.uuid4, editable=False)

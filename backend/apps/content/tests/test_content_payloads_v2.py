@@ -166,6 +166,29 @@ def test_generated_output_rejects_prohibited_claims_in_platform_copy():
         payloads.validate_generated_content_output(output, snapshot)
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda output: output["platform_variants"][0].update(
+            hashtags=["guaranteed zero wear"]
+        ),
+        lambda output: output["platform_variants"][3]["shot_list"][0].update(
+            visual="Show guaranteed zero wear on the product badge"
+        ),
+    ],
+)
+def test_generated_output_rejects_prohibited_claims_in_all_platform_fields(mutation):
+    snapshot = {
+        **_snapshot(),
+        "prohibited_claims": ["guaranteed zero wear"],
+    }
+    output = _output()
+    mutation(output)
+
+    with pytest.raises(ValueError, match="prohibited claim"):
+        payloads.validate_generated_content_output(output, snapshot)
+
+
 def test_generated_output_rejects_numeric_claim_without_verified_fact():
     snapshot = {
         **_snapshot(),
@@ -201,3 +224,118 @@ def test_numeric_grounding_does_not_match_substring_of_larger_number():
 
     with pytest.raises(ValueError, match="numeric claim"):
         payloads.validate_generated_content_output(output, snapshot)
+
+
+@pytest.mark.parametrize(
+    ("fact_id", "accepted"),
+    [("public-company-fact", True), ("internal-company-fact", False)],
+)
+def test_external_evidence_accepts_only_snapshot_public_claim_ids(fact_id, accepted):
+    snapshot = {
+        **_snapshot(),
+        "agent_context": {
+            "seller": {
+                "public_claims": [{"fact_id": "public-company-fact"}],
+            }
+        },
+    }
+    output = _output()
+    output["evidence_fact_ids"] = [fact_id]
+    for variant in output["platform_variants"]:
+        variant["evidence_fact_ids"] = [fact_id]
+
+    if accepted:
+        assert payloads.validate_generated_content_output(output, snapshot)
+    else:
+        with pytest.raises(ValueError, match="unknown fact"):
+            payloads.validate_generated_content_output(output, snapshot)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda output: output.update(title="Review https://attacker.example/offer"),
+        lambda output: output["platform_variants"][0].update(
+            cta="Review https://attacker.example/offer"
+        ),
+    ],
+)
+def test_generated_output_rejects_unverified_urls_in_any_outbound_text(mutate):
+    output = _output()
+    mutate(output)
+
+    with pytest.raises(ValueError, match="verified URL"):
+        payloads.validate_generated_content_output(output, _snapshot())
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda variant: variant.update(evidence_fact_ids=["unknown"]), "unknown fact"),
+        (
+            lambda variant: variant.update(title="Guaranteed zero wear"),
+            "prohibited claim",
+        ),
+        (
+            lambda variant: variant.update(body="See https://attacker.example/offer"),
+            "verified URL",
+        ),
+    ],
+)
+def test_snapshot_bound_platform_revision_revalidates_all_external_fields(
+    mutation, message
+):
+    snapshot = {**_snapshot(), "prohibited_claims": ["guaranteed zero wear"]}
+    variant = {"schema_version": 2, **_variant("LINKEDIN", "LinkedIn Indonesia body")}
+    mutation(variant)
+
+    with pytest.raises(ValueError, match=message):
+        payloads.validate_snapshot_bound_platform_output(
+            variant,
+            snapshot,
+            platform_code="LINKEDIN",
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "hashtags",
+        "script",
+        "voiceover",
+        "subtitles",
+        "scene",
+        "visual",
+        "on_screen_text",
+    ],
+)
+@pytest.mark.parametrize(
+    ("unsafe_text", "message"),
+    [
+        ("Guaranteed zero wear", "prohibited claim"),
+        ("Review https://attacker.example/offer", "verified URL"),
+        ("Guaranteed operation at 200 rpm", "numeric claim"),
+    ],
+)
+def test_snapshot_bound_tiktok_revision_scans_every_standalone_platform_field(
+    field, unsafe_text, message
+):
+    snapshot = {
+        **_snapshot(),
+        "prohibited_claims": ["guaranteed zero wear"],
+        "verified_product_facts": [{"fact_id": "fact-1", "value": "18 teeth"}],
+    }
+    variant = {"schema_version": 2, **_variant("TIKTOK", "TikTok Indonesia body")}
+    if field == "hashtags":
+        variant[field] = [unsafe_text]
+    elif field in {"scene", "visual", "on_screen_text"}:
+        variant["shot_list"][0][field] = unsafe_text
+    else:
+        variant[field] = unsafe_text
+
+    with pytest.raises(ValueError, match=message):
+        payloads.validate_snapshot_bound_platform_output(
+            variant,
+            snapshot,
+            platform_code="TIKTOK",
+        )

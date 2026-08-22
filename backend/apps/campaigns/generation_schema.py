@@ -156,6 +156,26 @@ ONTOLOGY_SNAPSHOT_SCHEMA = object_schema(
     ["organization_id", "concept_versions", "relation_versions", "evidence_references", "generated_at"],
 )
 
+KNOWLEDGE_PROVENANCE_SCHEMA = {
+    "oneOf": [
+        {"type": "null"},
+        object_schema(
+            {
+                "knowledge_context_snapshot_id": UUID,
+                "payload_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "schema_version": NON_EMPTY_STRING,
+                "builder_version": NON_EMPTY_STRING,
+            },
+            [
+                "knowledge_context_snapshot_id",
+                "payload_hash",
+                "schema_version",
+                "builder_version",
+            ],
+        ),
+    ]
+}
+
 CONTENT_GENERATION_INPUT_SCHEMA = object_schema(
     {
         "schema_version": {"const": CONTENT_GENERATION_INPUT_SCHEMA_VERSION},
@@ -179,6 +199,8 @@ CONTENT_GENERATION_INPUT_SCHEMA = object_schema(
         "target_platforms": {"type": "array", "items": PLATFORM_SCHEMA, "minItems": 1},
         "ontology_snapshot": ONTOLOGY_SNAPSHOT_SCHEMA,
         "verified_product_facts": {"type": "array", "items": VERIFIED_PRODUCT_FACT_SCHEMA},
+        "knowledge_provenance": KNOWLEDGE_PROVENANCE_SCHEMA,
+        "agent_context": {"type": ["object", "null"]},
         "generated_at": {"type": "string", "format": "date-time"},
     },
     [

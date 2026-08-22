@@ -251,6 +251,13 @@ class OutreachDraft(OrganizationOwnedModel):
         APPROVED = "APPROVED", "Approved"
 
     account = models.ForeignKey(TargetAccount, on_delete=models.PROTECT, related_name="outreach_drafts")
+    knowledge_context_snapshot = models.ForeignKey(
+        "knowledge.KnowledgeContextSnapshot",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="outreach_drafts",
+    )
     english_draft = models.TextField()
     chinese_explanation = models.TextField()
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
@@ -940,6 +947,13 @@ class AgentRun(OrganizationOwnedModel):
         REJECTED = "REJECTED", "Rejected"
 
     idempotency_key = models.CharField(max_length=128)
+    knowledge_context_snapshot = models.ForeignKey(
+        "knowledge.KnowledgeContextSnapshot",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="agent_runs",
+    )
     goal = models.CharField(max_length=500)
     agent_type = models.CharField(max_length=32, blank=True)
     execution_mode = models.CharField(

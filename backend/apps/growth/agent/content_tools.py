@@ -9,8 +9,19 @@ from django.db.models import Count
 from django.utils import timezone
 
 from apps.campaigns.models import Campaign
-from apps.campaigns.services import create_campaign, create_content_brief
+from apps.campaigns.services import (
+    create_campaign,
+    create_content_brief,
+    derive_snapshot_bound_brief,
+)
 from apps.identity.models import Membership
+from apps.knowledge.agent_context import (
+    AgentContextPurpose,
+    KnowledgeContextError,
+    load_agent_context,
+    load_or_build_agent_context,
+)
+from apps.knowledge.models import KnowledgeContextSnapshot
 from apps.platforms.models import Platform
 
 from .persistent import continue_agent_run
@@ -31,20 +42,16 @@ def _mission_entity_ids(mission_id, entity_type):
     )
 
 
-def _mission_context(organization, mission_id):
-    if not mission_id:
+def _mission_context(agent_context):
+    if agent_context is None:
         return {}
-    mission = GrowthMission.objects.filter(
-        organization=organization, id=mission_id
-    ).first()
-    if mission is None:
-        return {}
+    binding = derive_snapshot_bound_brief(agent_context)
     return {
-        "target_country": (mission.target_countries or [""])[0],
-        "product_ids": [str(mission.primary_product_id)] if mission.primary_product_id else [],
-        "channels": [c for c in (mission.allowed_channels or []) if c != "EMAIL"],
-        "industries": mission.target_industries or [],
-        "attribution_code": mission.attribution_code,
+        **binding["values"],
+        "product_ids": [binding["primary_product_id"]],
+        "channels": list(binding["platform_codes"]),
+        "industries": list(binding["industries"]),
+        "attribution_code": binding["attribution_code"],
     }
 
 
@@ -83,25 +90,59 @@ def propose_content_opportunities(signals: dict[str, Any]) -> list[dict[str, Any
     industries = signals.get("top_industries") or []
     needs = signals.get("recent_need_slugs") or []
     industry = industries[0]["industry"] if industries else "industrial machinery"
-    need = needs[0] if needs else "gear and transmission selection"
+    need = needs[0] if needs else "supplier selection"
     return [
         {
-            "topic": f"How to Select Gear Material for {industry.title()}",
+            "topic": f"How to Evaluate Suppliers for {industry.title()}",
             "reasons": [
                 f"{signals.get('accepted_candidate_count', 0)} accepted candidates in scope",
                 f"{signals.get('high_intent_candidate_count', 0)} high-intent website visitors",
                 f"recent RFQs mention {need}",
             ],
             "platforms": ["LinkedIn", "Website"],
-            "target": "Build engineering capability trust and invite drawings",
+            "target": "Build supplier capability trust and invite a technical review",
         }
     ]
 
 
-def _analyze_tool(organization, mission_id: str | None = None) -> Tool:
+def propose_snapshot_content_opportunities(
+    agent_context, signals: dict[str, Any]
+) -> list[dict[str, Any]]:
+    context = agent_context.to_dict()
+    product = context["product"]
+    mission = context["mission"]
+    icp = context["icp_profiles"][0]
+    product_name = product.get("name_en") or product.get("name_zh") or "Product"
+    industries = mission.get("target_industries") or icp.get("target_industries") or []
+    industry = industries[0] if industries else "target industry"
+    objective = mission.get("objective") or "Build qualified buyer interest"
+    customer = (icp.get("company_types") or [icp.get("name") or "target buyers"])[0]
+    return [
+        {
+            "topic": f"{product_name} for {industry}: {objective}",
+            "reasons": [
+                f"Primary product: {product_name}",
+                f"ICP customer type: {customer}",
+                f"Mission target industry: {industry}",
+                f"Mission objective: {objective}",
+                f"{signals.get('accepted_candidate_count', 0)} accepted candidates in scope",
+            ],
+            "platforms": list(mission.get("allowed_channels") or []),
+            "target": objective,
+        }
+    ]
+
+
+def _analyze_tool(
+    organization, mission_id: str | None = None, agent_context=None
+) -> Tool:
     def func(args: dict[str, Any]) -> ToolResult:
         signals = content_opportunity_signals(organization, mission_id=mission_id)
-        proposals = propose_content_opportunities(signals)
+        proposals = (
+            propose_snapshot_content_opportunities(agent_context, signals)
+            if agent_context is not None
+            else propose_content_opportunities(signals)
+        )
         return ToolResult(ok=True, output={"signals": signals, "proposals": proposals})
 
     return Tool(
@@ -124,7 +165,12 @@ def _get_or_create_campaign(organization, name: str) -> Campaign:
     )
 
 
-def _create_brief_tool(organization, creator_id: str, mission_id: str | None = None) -> Tool:
+def _create_brief_tool(
+    organization,
+    creator_id: str,
+    mission_id: str | None = None,
+    agent_context=None,
+) -> Tool:
     def func(args: dict[str, Any]) -> ToolResult:
         creator = get_user_model().objects.filter(id=creator_id).first()
         if creator is None:
@@ -132,7 +178,7 @@ def _create_brief_tool(organization, creator_id: str, mission_id: str | None = N
         if not Membership.objects.filter(user=creator, organization=organization).exists():
             return ToolResult(ok=False, error="creator is not a member of this organization.")
 
-        mission_context = _mission_context(organization, mission_id)
+        mission_context = _mission_context(agent_context)
         platform_codes = [
             code for code in mission_context.get("channels", []) if code
         ]
@@ -156,8 +202,12 @@ def _create_brief_tool(organization, creator_id: str, mission_id: str | None = N
             )
         platform_ids = tuple(platform.id for platform in platforms)
         signals = content_opportunity_signals(organization, mission_id=mission_id)
-        proposals = propose_content_opportunities(signals)
-        proposal = proposals[0] if proposals else {"topic": "Gear selection", "reasons": []}
+        proposals = (
+            propose_snapshot_content_opportunities(agent_context, signals)
+            if agent_context is not None
+            else propose_content_opportunities(signals)
+        )
+        proposal = proposals[0] if proposals else {"topic": "Supplier evaluation", "reasons": []}
         top_industry = (signals.get("top_industries") or [{}])[0].get("industry", "")
         keywords = list(signals.get("recent_need_slugs", []))
         keywords.extend(mission_context.get("industries", []))
@@ -165,12 +215,29 @@ def _create_brief_tool(organization, creator_id: str, mission_id: str | None = N
             organization,
             f"Content Strategy: {mission_id}" if mission_id else "Content Strategy",
         )
-        brief = create_content_brief(
-            organization=organization,
-            campaign=campaign,
-            creator=creator,
-            values={
-                "target_country": args.get("target_country", mission_context.get("target_country", "")),
+        if mission_id:
+            values = {
+                key: mission_context[key]
+                for key in (
+                    "target_country",
+                    "customer_type",
+                    "content_objective",
+                    "cta",
+                    "landing_page_url",
+                    "language",
+                    "prohibited_claims",
+                    "selling_points",
+                    "advantages",
+                    "keywords",
+                )
+            }
+            snapshot = KnowledgeContextSnapshot.objects.get(
+                pk=agent_context.snapshot_id,
+                organization=organization,
+            )
+        else:
+            values = {
+                "target_country": args.get("target_country", ""),
                 "customer_type": args.get("customer_type", top_industry),
                 "content_objective": f"{proposal['topic']}. " + " ".join(proposal["reasons"]),
                 "cta": args.get("cta", "Upload drawings"),
@@ -180,11 +247,18 @@ def _create_brief_tool(organization, creator_id: str, mission_id: str | None = N
                 "selling_points": args.get("selling_points", []),
                 "advantages": args.get("advantages", []),
                 "keywords": args.get("keywords", keywords),
-            },
+            }
+            snapshot = None
+        brief = create_content_brief(
+            organization=organization,
+            campaign=campaign,
+            creator=creator,
+            values=values,
             product_ids=tuple(mission_context.get("product_ids", ())),
             asset_ids=(),
             platform_ids=platform_ids,
             concept_links=(),
+            knowledge_context_snapshot=snapshot,
         )
         return ToolResult(
             ok=True,
@@ -206,11 +280,27 @@ def _create_brief_tool(organization, creator_id: str, mission_id: str | None = N
 
 
 def build_content_strategy_tools(
-    organization, creator_id: str | None = None, mission_id: str | None = None
+    organization,
+    creator_id: str | None = None,
+    mission_id: str | None = None,
+    agent_context=None,
 ) -> list[Tool]:
-    tools = [_analyze_tool(organization, mission_id=mission_id)]
+    tools = [
+        _analyze_tool(
+            organization,
+            mission_id=mission_id,
+            agent_context=agent_context,
+        )
+    ]
     if creator_id:
-        tools.append(_create_brief_tool(organization, creator_id, mission_id=mission_id))
+        tools.append(
+            _create_brief_tool(
+                organization,
+                creator_id,
+                mission_id=mission_id,
+                agent_context=agent_context,
+            )
+        )
     return tools
 
 
@@ -222,6 +312,46 @@ def run_content_strategy_agent(
         creator_id_value = int(creator_id) if creator_id else None
     except (TypeError, ValueError):
         creator_id_value = None
+    root_context = None
+    strategy_context = None
+    idempotency_key = (
+        f"content-strategy:{organization.id}:{mission_id}"
+        if mission_id
+        else f"content-strategy:{organization.id}:{timezone.now().date()}"
+    )
+    existing_run = AgentRun.objects.filter(
+        organization=organization,
+        idempotency_key=idempotency_key,
+    ).first()
+    if mission_id:
+        mission = GrowthMission.objects.select_related("primary_product").get(
+            organization=organization,
+            id=mission_id,
+        )
+        has_social_channels = bool(
+            [code for code in mission.allowed_channels if code != "EMAIL"]
+        )
+        if existing_run is not None and existing_run.knowledge_context_snapshot_id:
+            root_context = load_agent_context(
+                organization=organization,
+                mission=mission,
+                snapshot_id=existing_run.knowledge_context_snapshot_id,
+            )
+        elif existing_run is not None and has_social_channels:
+            raise KnowledgeContextError(
+                "KNOWLEDGE_CONTEXT_REQUIRED",
+                "Mission AgentRun has no frozen knowledge context.",
+            )
+        elif existing_run is None and has_social_channels:
+            root_context = load_or_build_agent_context(
+                organization=organization,
+                mission=mission,
+                actor=mission.created_by,
+            )
+        if root_context is not None:
+            strategy_context = root_context.for_purpose(
+                AgentContextPurpose.CONTENT_STRATEGY
+            )
     actions = [
         Plan(
             reasoning="analyze content opportunities",
@@ -239,11 +369,6 @@ def run_content_strategy_agent(
         fallback=fallback,
         allow_llm=True,
     )
-    idempotency_key = (
-        f"content-strategy:{organization.id}:{mission_id}"
-        if mission_id
-        else f"content-strategy:{organization.id}:{timezone.now().date()}"
-    )
     run, _ = AgentRun.objects.get_or_create(
         organization=organization,
         idempotency_key=idempotency_key,
@@ -254,12 +379,25 @@ def run_content_strategy_agent(
             "planner_provider": proposed_execution.provider,
             "planner_model": proposed_execution.model,
             "resume_args": {"creator_id": creator_id, "mission_id": mission_id},
+            "knowledge_context_snapshot_id": (
+                root_context.snapshot_id if root_context is not None else None
+            ),
             "created_by_id": creator_id_value,
             "max_steps": 5,
         },
     )
+    if root_context is not None and run.knowledge_context_snapshot_id != root_context.snapshot_id:
+        raise KnowledgeContextError(
+            "KNOWLEDGE_CONTEXT_MISMATCH",
+            "Content strategy run is bound to a different knowledge context.",
+        )
     tools = ToolRegistry(
-        build_content_strategy_tools(organization, creator_id=creator_id, mission_id=mission_id)
+        build_content_strategy_tools(
+            organization,
+            creator_id=creator_id,
+            mission_id=mission_id,
+            agent_context=strategy_context,
+        )
     )
     execution = resolve_run_execution(run=run, fallback=fallback, allow_llm=True)
     return continue_agent_run(

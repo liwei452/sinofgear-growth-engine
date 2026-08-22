@@ -64,6 +64,27 @@ def test_connect_success(admin_client, buffer_api):
     assert "credential_reference" not in body
 
 
+@pytest.mark.django_db(transaction=True)
+def test_http_buffer_probe_runs_outside_the_request_transaction(
+    admin_client, buffer_api,
+):
+    client, _user = admin_client
+    _token_store, connector = buffer_api
+    connector.probe_result = probe_ok()
+
+    def assert_network_boundary(_request):
+        assert db_connection.in_atomic_block is False
+
+    connector.on_probe = assert_network_boundary
+    response = client.post(
+        API,
+        {"api_key": "sk-boundary", "organization_id": "org-1"},
+        format="json",
+    )
+
+    assert response.status_code == 201
+
+
 @pytest.mark.parametrize(
     ("external_id", "expected"),
     [

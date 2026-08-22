@@ -104,6 +104,35 @@ def test_probe_updates_only_safe_health_metadata(lifecycle_account) -> None:
     assert "fixture-access" not in repr(result)
 
 
+@pytest.mark.django_db(transaction=True)
+def test_probe_and_revoke_provider_calls_run_outside_transactions(
+    lifecycle_account,
+) -> None:
+    _organization, actor, _credential, account = lifecycle_account
+
+    class BoundaryAdapter(Adapter):
+        def probe(self, token, external_id):
+            assert connection.in_atomic_block is False
+            return super().probe(token, external_id)
+
+        def revoke(self, token):
+            assert connection.in_atomic_block is False
+            return super().revoke(token)
+
+    adapter = BoundaryAdapter()
+    store = TokenStore()
+    probe_social_account(
+        account=account, adapter=adapter, token_store=store, actor=actor
+    )
+    disconnect_social_account(
+        account=account,
+        adapter=adapter,
+        token_store=store,
+        actor=actor,
+        confirmed=True,
+    )
+
+
 @pytest.mark.django_db
 def test_refresh_due_is_locked_idempotent_and_rotates_refresh_token(lifecycle_account) -> None:
     organization, _actor, credential, account = lifecycle_account

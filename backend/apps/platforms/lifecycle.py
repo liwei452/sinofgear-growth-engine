@@ -39,28 +39,66 @@ def _official(account: SocialAccount) -> bool:
     return account.connector_metadata.get("connection_kind") == "official_oauth"
 
 
-@transaction.atomic
 def probe_social_account(*, account, adapter, token_store, actor):
     del actor
-    locked = SocialAccount.objects.select_for_update().select_related("credential").get(pk=account.pk)
-    if not _official(locked) or locked.credential is None:
-        raise ProviderLifecycleError("CONFIGURATION_REQUIRED")
-    try:
-        token = token_store.resolve(locked.credential.secret_reference)
-        adapter.probe(token, locked.external_id)
-    except ProviderLifecycleError as error:
-        locked.connection_state = (
-            SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED
-            if error.code == "INVALID_GRANT"
-            else SocialAccount.ConnectionState.PROVIDER_UNAVAILABLE
+    organization_id = account.organization_id
+    with tenant_atomic(organization_id):
+        locked = SocialAccount.objects.select_for_update().select_related("credential").get(
+            pk=account.pk,
+            organization_id=organization_id,
         )
-        locked.lifecycle_error_code = error.code
-        locked.save(update_fields=["connection_state", "lifecycle_error_code", "updated_at"])
-        raise
-    locked.connection_state = SocialAccount.ConnectionState.CONNECTED
-    locked.last_probe_at = timezone.now()
-    locked.lifecycle_error_code = ""
-    locked.save(update_fields=["connection_state", "last_probe_at", "lifecycle_error_code", "updated_at"])
+        if not _official(locked) or locked.credential is None:
+            raise ProviderLifecycleError("CONFIGURATION_REQUIRED")
+        snapshot = (
+            locked.updated_at,
+            locked.credential_id,
+            locked.credential.secret_reference,
+            locked.credential.updated_at,
+            locked.external_id,
+        )
+    try:
+        token = token_store.resolve(snapshot[2])
+        adapter.probe(token, snapshot[4])
+    except ProviderLifecycleError as error:
+        outcome = error
+    except ConnectorConfigurationRequired:
+        outcome = ProviderLifecycleError("CONFIGURATION_REQUIRED")
+    else:
+        outcome = None
+    with tenant_atomic(organization_id):
+        locked = SocialAccount.objects.select_for_update().select_related("credential").get(
+            pk=account.pk,
+            organization_id=organization_id,
+        )
+        if (
+            locked.updated_at != snapshot[0]
+            or locked.credential_id != snapshot[1]
+            or locked.credential is None
+            or locked.credential.secret_reference != snapshot[2]
+            or locked.credential.updated_at != snapshot[3]
+        ):
+            raise ProviderLifecycleError("PROVIDER_UNAVAILABLE")
+        if outcome is not None:
+            locked.connection_state = (
+                SocialAccount.ConnectionState.REAUTHORIZATION_REQUIRED
+                if outcome.code == "INVALID_GRANT"
+                else SocialAccount.ConnectionState.PROVIDER_UNAVAILABLE
+            )
+            locked.lifecycle_error_code = outcome.code
+            locked.save(
+                update_fields=["connection_state", "lifecycle_error_code", "updated_at"]
+            )
+        else:
+            locked.connection_state = SocialAccount.ConnectionState.CONNECTED
+            locked.last_probe_at = timezone.now()
+            locked.lifecycle_error_code = ""
+            locked.save(
+                update_fields=[
+                    "connection_state", "last_probe_at", "lifecycle_error_code", "updated_at",
+                ]
+            )
+    if outcome is not None:
+        raise outcome
     return locked
 
 
@@ -302,28 +340,55 @@ def refresh_due_credentials(
     return counters
 
 
-@transaction.atomic
 def disconnect_social_account(*, account, adapter, token_store, actor, confirmed: bool):
     del actor
     if not confirmed:
         raise ValueError("DISCONNECT_CONFIRMATION_REQUIRED")
-    locked = SocialAccount.objects.select_for_update().select_related("credential").get(pk=account.pk)
+    organization_id = account.organization_id
+    with tenant_atomic(organization_id):
+        locked = SocialAccount.objects.select_for_update().select_related("credential").get(
+            pk=account.pk,
+            organization_id=organization_id,
+        )
+        snapshot = (
+            locked.updated_at,
+            locked.credential_id,
+            locked.credential.secret_reference if locked.credential is not None else "",
+            locked.credential.updated_at if locked.credential is not None else None,
+        )
     error_code = ""
-    if locked.credential is not None:
+    if snapshot[1] is not None:
         try:
-            token = token_store.resolve(locked.credential.secret_reference)
+            token = token_store.resolve(snapshot[2])
             adapter.revoke(token)
         except (ProviderLifecycleError, ConnectorConfigurationRequired) as error:
             error_code = getattr(error, "code", "PROVIDER_UNAVAILABLE")
         try:
-            token_store.delete(locked.credential.secret_reference)
+            token_store.delete(snapshot[2])
         except ConnectorConfigurationRequired:
             error_code = error_code or "CONFIGURATION_REQUIRED"
-    locked.status = SocialAccount.Status.INACTIVE
-    locked.connection_state = SocialAccount.ConnectionState.DISCONNECTED
-    locked.disconnected_at = timezone.now()
-    locked.lifecycle_error_code = error_code
-    locked.save(update_fields=[
-        "status", "connection_state", "disconnected_at", "lifecycle_error_code", "updated_at",
-    ])
+    with tenant_atomic(organization_id):
+        locked = SocialAccount.objects.select_for_update().select_related("credential").get(
+            pk=account.pk,
+            organization_id=organization_id,
+        )
+        if (
+            locked.updated_at != snapshot[0]
+            or locked.credential_id != snapshot[1]
+            or (
+                locked.credential is not None
+                and (
+                    locked.credential.secret_reference != snapshot[2]
+                    or locked.credential.updated_at != snapshot[3]
+                )
+            )
+        ):
+            raise ProviderLifecycleError("PROVIDER_UNAVAILABLE")
+        locked.status = SocialAccount.Status.INACTIVE
+        locked.connection_state = SocialAccount.ConnectionState.DISCONNECTED
+        locked.disconnected_at = timezone.now()
+        locked.lifecycle_error_code = error_code
+        locked.save(update_fields=[
+            "status", "connection_state", "disconnected_at", "lifecycle_error_code", "updated_at",
+        ])
     return locked

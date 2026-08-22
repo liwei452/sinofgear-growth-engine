@@ -10,6 +10,31 @@ from apps.ai.models import PromptVersion, ai_audit_writes
 migration = import_module("apps.ai.migrations.0007_asset_understanding_prompt_catalog")
 
 
+class _NonOwnerCursor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def execute(self, _sql):
+        return None
+
+    def fetchone(self):
+        return (False,)
+
+
+class _NonOwnerSchemaEditor:
+    class _Connection:
+        vendor = "postgresql"
+
+        @staticmethod
+        def cursor():
+            return _NonOwnerCursor()
+
+    connection = _Connection()
+
+
 @pytest.mark.django_db
 def test_asset_prompt_seed_has_the_frozen_system_contract():
     prompt = PromptVersion.objects.get(
@@ -50,3 +75,16 @@ def test_asset_prompt_seed_rejects_a_conflicting_entry(monkeypatch):
     with pytest.raises(RuntimeError, match="conflicts with the system contract"):
         migration.seed_asset_understanding_prompt(apps, None)
     assert PromptVersion.objects.get(purpose=purpose).template == "conflict"
+
+
+@pytest.mark.django_db
+def test_asset_prompt_seed_fails_before_writing_when_migration_role_is_not_owner(
+    monkeypatch,
+):
+    purpose = f"MIGRATION_{uuid4().hex}"
+    monkeypatch.setattr(migration, "PURPOSE", purpose)
+
+    with pytest.raises(RuntimeError, match="migration owner"):
+        migration.seed_asset_understanding_prompt(apps, _NonOwnerSchemaEditor())
+
+    assert PromptVersion.objects.filter(purpose=purpose).count() == 0

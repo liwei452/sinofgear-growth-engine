@@ -5,7 +5,10 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import connection
+from django.db import transaction
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
@@ -56,6 +59,17 @@ def grant_runtime_access(django_db_setup, django_db_blocker):
         cursor.execute(
             sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {}")
             .format(role)
+        )
+        cursor.execute(
+            sql.SQL(
+                "REVOKE INSERT, UPDATE, DELETE ON TABLE django_migrations FROM {}"
+            ).format(role)
+        )
+        cursor.execute(
+            sql.SQL(
+                "REVOKE UPDATE, DELETE ON TABLE "
+                "knowledge_knowledgecontextsnapshot FROM {}"
+            ).format(role)
         )
         cursor.execute(
             sql.SQL("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {}")
@@ -139,6 +153,47 @@ def test_phase2a_policy_shapes_and_runtime_role(runtime_connection):
         "WHERE c.relname = ANY(%s) AND r.rolname = current_user",
         (list(RLS2A_TABLES),),
     ).fetchone() == (0,)
+
+
+def test_runtime_cannot_record_migrations_or_mutate_frozen_snapshots(
+    runtime_connection,
+):
+    assert runtime_connection.execute(
+        "SELECT has_table_privilege(current_user, 'django_migrations', "
+        "'INSERT,UPDATE,DELETE')"
+    ).fetchone() == (False,)
+    assert runtime_connection.execute(
+        "SELECT has_table_privilege(current_user, "
+        "'knowledge_knowledgecontextsnapshot', 'UPDATE,DELETE')"
+    ).fetchone() == (False,)
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        runtime_connection.execute(
+            "UPDATE knowledge_knowledgecontextsnapshot "
+            "SET builder_version = builder_version WHERE false"
+        )
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        runtime_connection.execute(
+            "DELETE FROM knowledge_knowledgecontextsnapshot WHERE false"
+        )
+
+    class RuntimeMigrationConnection:
+        vendor = "postgresql"
+
+        @staticmethod
+        def cursor():
+            return runtime_connection.cursor()
+
+    class RuntimeSchemaEditor:
+        connection = RuntimeMigrationConnection()
+
+    prompt_migration = import_module(
+        "apps.ai.migrations.0007_asset_understanding_prompt_catalog"
+    )
+    prompt_count = PromptVersion.objects.count()
+    with pytest.raises(RuntimeError, match="migration owner"):
+        prompt_migration.seed_asset_understanding_prompt(None, RuntimeSchemaEditor())
+    assert PromptVersion.objects.count() == prompt_count
 
 
 def test_direct_and_global_tables_fail_closed_and_isolate_tenants(
@@ -254,3 +309,28 @@ def test_phase2a_migration_functions_round_trip_without_changing_prompt_data():
             module.enable_rls(None, schema_editor)
     prompt.refresh_from_db()
     assert (prompt.id, prompt.template, prompt.output_schema) == before
+
+
+@pytest.mark.parametrize(
+    ("table", "policy", "alteration"),
+    [
+        (
+            "knowledge_companyfact",
+            "rls_companyfact_all",
+            "USING (true) WITH CHECK (true)",
+        ),
+        (
+            "ai_organizationaiproviderconfig",
+            "rls_ai_organizationaiproviderconfig_tenant_all",
+            "USING (true) WITH CHECK (true)",
+        ),
+    ],
+)
+def test_database_audit_rejects_weakened_rls1_and_rls2a_policy_predicates(
+    table, policy, alteration,
+):
+    with transaction.atomic(), connection.cursor() as cursor:
+        cursor.execute(f'ALTER POLICY "{policy}" ON "{table}" {alteration}')
+        with pytest.raises(CommandError, match="policy contract mismatch"):
+            call_command("audit_rls_coverage", database="default")
+        transaction.set_rollback(True)

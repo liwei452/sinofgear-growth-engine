@@ -3,8 +3,8 @@ from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 
 
-LATEST_MIGRATIONS = {
-    ("growth", "0049_agent_context_provenance"),
+CURRENT_LEAF_MIGRATIONS = {
+    ("growth", "0050_email_verification_pipeline"),
     ("campaigns", "0004_contentbrief_knowledge_context_snapshot"),
     ("content", "0006_content_knowledge_context_snapshot"),
 }
@@ -71,8 +71,8 @@ def test_agent_context_migrations_reverse_and_reapply_without_losing_rows(
         "content.PlatformContent": platform_content.id,
     }
     latest = _latest_targets()
-    assert LATEST_MIGRATIONS <= set(latest)
-    previous = [target for target in latest if target not in LATEST_MIGRATIONS]
+    assert CURRENT_LEAF_MIGRATIONS <= set(latest)
+    previous = [target for target in latest if target not in CURRENT_LEAF_MIGRATIONS]
     previous.extend(sorted(PREVIOUS_MIGRATIONS))
 
     try:

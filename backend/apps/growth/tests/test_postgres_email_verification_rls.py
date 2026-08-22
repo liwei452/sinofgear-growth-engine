@@ -241,7 +241,7 @@ def test_runtime_role_enforces_email_verification_tenant_and_append_only_boundar
                     "request_snapshot, safe_error_code, attempt_count, {}) "
                     "VALUES (%s, %s, now(), now(), 'cross-parent@example.com', %s, "
                     "'example.com', %s, 'PENDING', '[]', 'local-email-v1', 'LOCAL', "
-                    "'', false, '{}', '', 0, %s)"
+                    "'', false, '{{}}', '', 0, %s)"
                 ).format(sql.Identifier(field_name)),
                 (
                     uuid.uuid4(),

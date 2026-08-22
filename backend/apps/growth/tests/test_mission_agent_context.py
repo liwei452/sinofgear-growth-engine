@@ -21,6 +21,12 @@ from apps.knowledge.tests.test_knowledge_context_snapshot import (
 
 
 def _mission_sources():
+    from apps.knowledge.models import KnowledgeGraphLock
+
+    KnowledgeGraphLock.objects.get_or_create(
+        id=1,
+        defaults={"name": "is_a_graph"},
+    )
     organization = Organization.objects.create(name="Mission seller", slug="mission-seller")
     other = Organization.objects.create(name="Other", slug="mission-other")
     organization, _, actor, product, mission, profile, _ = make_context_sources(
@@ -211,7 +217,9 @@ def test_mission_content_strategy_derives_brief_from_same_snapshot(monkeypatch):
     from apps.content.services import (
         ContentStateError,
         create_generated_master,
+        create_master_revision,
         create_platform_content,
+        create_platform_revision,
     )
     from apps.jobs.models import Job
     from apps.jobs.services import JobService
@@ -304,6 +312,15 @@ def test_mission_content_strategy_derives_brief_from_same_snapshot(monkeypatch):
     )
     platform = Platform.objects.get(code="LINKEDIN")
     variant = create_platform_content(master, platform=platform, actor=actor)
+
+    invalid_master = deepcopy(master.payload)
+    invalid_master["title"] = "Do not claim unverified certifications"
+    with pytest.raises(ContentStateError, match="prohibited claim"):
+        create_master_revision(master, actor=actor, payload=invalid_master)
+    invalid_variant = deepcopy(variant.payload)
+    invalid_variant["cta"] = "Review https://attacker.example/offer"
+    with pytest.raises(ContentStateError, match="verified URL"):
+        create_platform_revision(variant, actor=actor, payload=invalid_variant)
 
     assert master.knowledge_context_snapshot_id == brief.knowledge_context_snapshot_id
     assert variant.knowledge_context_snapshot_id == master.knowledge_context_snapshot_id

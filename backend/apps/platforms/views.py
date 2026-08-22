@@ -1,6 +1,7 @@
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from django.conf import settings
+from django.db import transaction
 from django.http import Http404, HttpResponseRedirect
 from drf_spectacular.utils import extend_schema
 from drf_spectacular.types import OpenApiTypes
@@ -11,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.identity.permissions import CanManageCredentials, CanReadMemberships, CanReadPublishing
+from apps.common.tenancy import tenant_atomic
 from integrations.platforms.authorization import (
     AuthorizationCompletion,
     ProviderAuthorizationError,
@@ -81,6 +83,40 @@ buffer_token_store = _social_runtime.token_store
 
 def buffer_connector_factory():
     return build_buffer_connector(buffer_token_store)
+
+
+class ProviderNetworkAPIView(APIView):
+    # Authentication/tenant discovery is short; provider I/O is non-atomic.
+
+    @transaction.non_atomic_requests
+    def dispatch(self, request, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+        request = self.initialize_request(request, *args, **kwargs)
+        self.request = request
+        self.headers = self.default_response_headers
+        try:
+            with transaction.atomic():
+                try:
+                    self.initial(request, *args, **kwargs)
+                except Exception as error:
+                    response = self.handle_exception(error)
+                    self.response = self.finalize_response(
+                        request, response, *args, **kwargs
+                    )
+                    return self.response
+            if request.method.lower() in self.http_method_names:
+                handler = getattr(
+                    self, request.method.lower(), self.http_method_not_allowed
+                )
+            else:
+                handler = self.http_method_not_allowed
+            response = handler(request, *args, **kwargs)
+        except Exception as error:
+            with transaction.atomic():
+                response = self.handle_exception(error)
+        self.response = self.finalize_response(request, response, *args, **kwargs)
+        return self.response
 
 
 def _account(organization, account_id):
@@ -167,12 +203,13 @@ def _lifecycle_error(error: Exception) -> Response:
 
 
 @extend_schema(tags=["SocialAccounts"])
-class SocialAccountProbeView(APIView):
+class SocialAccountProbeView(ProviderNetworkAPIView):
     permission_classes = [CanManageCredentials]
 
     @extend_schema(responses={200: SocialAccountLifecycleSerializer})
     def post(self, request: Request, account_id) -> Response:
-        account = _account(request.organization, account_id)
+        with tenant_atomic(request.organization.id):
+            account = _account(request.organization, account_id)
         try:
             adapter = lifecycle_registry.resolve(account.platform.code)
             account = probe_social_account(
@@ -209,7 +246,7 @@ class _UnavailableLifecycleAdapter:
 
 
 @extend_schema(tags=["SocialAccounts"])
-class SocialAccountDisconnectView(APIView):
+class SocialAccountDisconnectView(ProviderNetworkAPIView):
     permission_classes = [CanManageCredentials]
 
     @extend_schema(
@@ -224,7 +261,8 @@ class SocialAccountDisconnectView(APIView):
                 "code": "DISCONNECT_CONFIRMATION_REQUIRED",
                 "message": "请明确确认后再断开连接。",
             }, status=status.HTTP_400_BAD_REQUEST)
-        account = _account(request.organization, account_id)
+        with tenant_atomic(request.organization.id):
+            account = _account(request.organization, account_id)
         try:
             adapter = lifecycle_registry.resolve(account.platform.code)
         except ProviderLifecycleError:
@@ -398,12 +436,13 @@ def _safe_callback_redirect(return_path: str, **values: str) -> str:
 
 
 @extend_schema(tags=["PlatformConnections"])
-class PlatformAuthorizationCallbackView(APIView):
+class PlatformAuthorizationCallbackView(ProviderNetworkAPIView):
     permission_classes = [CanManageCredentials]
 
     @extend_schema(responses={302: None})
     def get(self, request: Request, platform_code: str):
-        platform = _platform_or_404(platform_code)
+        with tenant_atomic(request.organization.id):
+            platform = _platform_or_404(platform_code)
         serializer = PlatformAuthorizationCallbackSerializer(data=request.query_params)
         serializer.is_valid(raise_exception=True)
         provider_key = "META" if platform_code in {"FACEBOOK", "INSTAGRAM"} else platform_code
@@ -414,11 +453,12 @@ class PlatformAuthorizationCallbackView(APIView):
                 "message": "官方账号连接尚未配置。",
             }, status=status.HTTP_409_CONFLICT)
         try:
-            attempt = consume_authorization_attempt(
-                raw_state=serializer.validated_data["state"],
-                actor=request.user,
-                platform_code=platform_code,
-            )
+            with tenant_atomic(request.organization.id):
+                attempt = consume_authorization_attempt(
+                    raw_state=serializer.validated_data["state"],
+                    actor=request.user,
+                    platform_code=platform_code,
+                )
         except AuthorizationAttemptInvalid:
             return Response({
                 "code": "AUTHORIZATION_REJECTED",
@@ -447,23 +487,24 @@ class PlatformAuthorizationCallbackView(APIView):
                 ),
             )
             try:
-                session = create_connection_session(
-                    organization=request.organization,
-                    actor=request.user,
-                    platform=platform,
-                    secret_reference=bundle_reference,
-                    credential_expires_at=bundle.primary.expires_at,
-                    candidates=[ConnectionCandidate(
-                        candidate_id=item.candidate_id,
-                        external_id=item.external_id,
-                        display_name=item.display_name,
-                        channel=item.channel,
-                        capabilities=item.capabilities,
-                        publication_mode=item.publication_mode,
-                        discovered_at=item.discovered_at,
-                    ) for item in managed_accounts],
-                    granted_capabilities=list(granted_capabilities),
-                )
+                with tenant_atomic(request.organization.id):
+                    session = create_connection_session(
+                        organization=request.organization,
+                        actor=request.user,
+                        platform=platform,
+                        secret_reference=bundle_reference,
+                        credential_expires_at=bundle.primary.expires_at,
+                        candidates=[ConnectionCandidate(
+                            candidate_id=item.candidate_id,
+                            external_id=item.external_id,
+                            display_name=item.display_name,
+                            channel=item.channel,
+                            capabilities=item.capabilities,
+                            publication_mode=item.publication_mode,
+                            discovered_at=item.discovered_at,
+                        ) for item in managed_accounts],
+                        granted_capabilities=list(granted_capabilities),
+                    )
             except Exception:
                 connection_token_store.delete(bundle_reference)
                 raise
@@ -530,7 +571,7 @@ class AccountConnectionSessionView(APIView):
 
 
 @extend_schema(tags=["PlatformConnections"])
-class AccountConnectionConfirmationView(APIView):
+class AccountConnectionConfirmationView(ProviderNetworkAPIView):
     permission_classes = [CanManageCredentials]
 
     @extend_schema(
@@ -540,7 +581,8 @@ class AccountConnectionConfirmationView(APIView):
     def post(self, request: Request, session_id):
         serializer = AccountConnectionConfirmationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        session = _session_or_404(request, session_id)
+        with tenant_atomic(request.organization.id):
+            session = _session_or_404(request, session_id)
         candidate_id = str(serializer.validated_data["candidate_id"])
         candidate = next((
             item for item in session.candidates
@@ -559,11 +601,12 @@ class AccountConnectionConfirmationView(APIView):
                     session.secret_reference, candidate_id,
                 )
                 did_bind = True
-            account = confirm_connection_session(
-                session=session,
-                candidate_id=candidate_id,
-                credential_reference=bound_reference,
-            )
+            with tenant_atomic(request.organization.id):
+                account = confirm_connection_session(
+                    session=session,
+                    candidate_id=candidate_id,
+                    credential_reference=bound_reference,
+                )
         except (ConnectorConfigurationRequired, ConnectionSessionInvalid) as error:
             if did_bind:
                 connection_token_store.delete(bound_reference)
@@ -571,10 +614,11 @@ class AccountConnectionConfirmationView(APIView):
                 "code": getattr(error, "code", str(error)),
                 "message": "账号连接暂时无法完成，请重新连接。",
             }, status=status.HTTP_409_CONFLICT)
-        summary = connection_summary(
-            organization=request.organization,
-            platform_code=account.platform.code,
-        )
+        with tenant_atomic(request.organization.id):
+            summary = connection_summary(
+                organization=request.organization,
+                platform_code=account.platform.code,
+            )
         return Response({
             "platform": account.platform.code,
             "status": summary.status,
@@ -603,7 +647,7 @@ _BUFFER_ERROR_RESPONSES = {
 
 
 @extend_schema(tags=["BufferProviderConnection"])
-class BufferProviderConnectionView(APIView):
+class BufferProviderConnectionView(ProviderNetworkAPIView):
     permission_classes = [IsAuthenticated, CanAdministerBuffer]
 
     @extend_schema(responses={200: BufferProviderConnectionReadSerializer, **_BUFFER_ERROR_RESPONSES})
@@ -612,7 +656,9 @@ class BufferProviderConnectionView(APIView):
             connection = get_buffer_connection(request.organization)
         except BufferConnectionError as error:
             return _buffer_error_response(error)
-        return Response(BufferProviderConnectionReadSerializer(connection).data)
+        with tenant_atomic(request.organization.id):
+            data = BufferProviderConnectionReadSerializer(connection).data
+        return Response(data)
 
     @extend_schema(
         request=BufferProviderConnectionCreateSerializer,
@@ -632,10 +678,9 @@ class BufferProviderConnectionView(APIView):
             )
         except BufferConnectionError as error:
             return _buffer_error_response(error)
-        return Response(
-            BufferProviderConnectionReadSerializer(connection).data,
-            status=status.HTTP_201_CREATED,
-        )
+        with tenant_atomic(request.organization.id):
+            data = BufferProviderConnectionReadSerializer(connection).data
+        return Response(data, status=status.HTTP_201_CREATED)
 
     @extend_schema(
         request=BufferProviderConnectionRotateSerializer,
@@ -654,11 +699,13 @@ class BufferProviderConnectionView(APIView):
             )
         except BufferConnectionError as error:
             return _buffer_error_response(error)
-        return Response(BufferProviderConnectionReadSerializer(connection).data)
+        with tenant_atomic(request.organization.id):
+            data = BufferProviderConnectionReadSerializer(connection).data
+        return Response(data)
 
 
 @extend_schema(tags=["BufferProviderConnection"])
-class BufferProviderConnectionProbeView(APIView):
+class BufferProviderConnectionProbeView(ProviderNetworkAPIView):
     permission_classes = [IsAuthenticated, CanAdministerBuffer]
 
     @extend_schema(
@@ -674,11 +721,13 @@ class BufferProviderConnectionProbeView(APIView):
             )
         except BufferConnectionError as error:
             return _buffer_error_response(error)
-        return Response(BufferProviderConnectionReadSerializer(connection).data)
+        with tenant_atomic(request.organization.id):
+            data = BufferProviderConnectionReadSerializer(connection).data
+        return Response(data)
 
 
 @extend_schema(tags=["BufferProviderConnection"])
-class BufferProviderConnectionSyncView(APIView):
+class BufferProviderConnectionSyncView(ProviderNetworkAPIView):
     permission_classes = [IsAuthenticated, CanAdministerBuffer]
 
     @extend_schema(
@@ -712,7 +761,7 @@ class BufferProviderConnectionSyncView(APIView):
 
 
 @extend_schema(tags=["BufferProviderConnection"])
-class BufferProviderConnectionDisconnectView(APIView):
+class BufferProviderConnectionDisconnectView(ProviderNetworkAPIView):
     permission_classes = [IsAuthenticated, CanAdministerBuffer]
 
     @extend_schema(
@@ -735,4 +784,6 @@ class BufferProviderConnectionDisconnectView(APIView):
             )
         except BufferConnectionError as error:
             return _buffer_error_response(error)
-        return Response(BufferProviderConnectionReadSerializer(connection).data)
+        with tenant_atomic(request.organization.id):
+            data = BufferProviderConnectionReadSerializer(connection).data
+        return Response(data)

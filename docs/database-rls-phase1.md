@@ -10,10 +10,10 @@
 | Bypass RLS | yes | no |
 | Owns application objects | yes in production | never |
 | DDL | yes | no |
-| Application DML | migration/repair only | granted on application tables and sequences |
+| Application DML | migration/repair only | application tables and sequences, except migration history and frozen Snapshot mutation |
 | May `SET ROLE sinofgear_owner` | n/a | no membership; deployment verification must prove failure |
 
-`infrastructure/postgres/bootstrap_rls_roles.sql` is idempotent and contains no password. Run it as a database administrator. It transfers existing tables, partitions, sequences, and the public schema to the migration owner, then establishes runtime and default privileges. Existing development credentials may remain the owner, but production Web and Celery processes must use the separate runtime role.
+`infrastructure/postgres/bootstrap_rls_roles.sql` is idempotent and contains no password. Run it as a database administrator. It transfers existing tables, partitions, sequences, and the public schema to the migration owner, then establishes runtime privileges. Runtime keeps SELECT on `django_migrations` but is explicitly denied INSERT/UPDATE/DELETE. It keeps SELECT/INSERT on `knowledge_knowledgecontextsnapshot` but is denied UPDATE/DELETE. These revokes occur after the broad current-table grant on every bootstrap run. New owner-created tables receive SELECT only until the required post-migration bootstrap grants their application DML. Existing development credentials may remain the owner, but production Web and Celery processes must use the separate runtime role.
 
 ## Knowledge table ownership
 
@@ -57,7 +57,7 @@ Policy names are stable: `rls_<table-without-knowledge-prefix>_<operation>`. Mig
 
 ## Tenant context entry points
 
-- Django config enables `ATOMIC_REQUESTS`. After authentication, `HasOrganizationPermission` resolves Active Membership from the Identity control plane and calls `set_local_tenant(request.organization.id)`. Client headers, query parameters, and bodies are not read for this purpose.
+- Django config enables `ATOMIC_REQUESTS` for ordinary database-only APIs. Provider-network APIs opt out at dispatch: authentication and Active Membership run in one short transaction, Provider I/O runs without a database transaction, and every prepare/finalize ORM phase opens its own `tenant_atomic`. Client headers, query parameters, and bodies are not read as the tenant source.
 - `tenant_atomic(UUID)` is the only service/task transaction entry. It issues PostgreSQL `set_config('app.current_organization_id', ..., true)`, rejects non-native UUIDs and nested tenant changes, and always resets its in-process guard. PostgreSQL clears the GUC on commit or rollback.
 - `KnowledgeContextBuilder` and Company Profile, Company Fact, ICP, Website Page review/revision services enter `tenant_atomic` before tenant queries. Their organization comes from the already supplied/locked domain boundary, never from an untrusted request field.
 - Knowledge has no Celery task in RLS-1. Future Knowledge tasks must accept a trusted native organization UUID and enter `tenant_atomic` before their first Knowledge query.
@@ -88,9 +88,9 @@ Run `apps/knowledge/tests/test_postgres_rls.py` with `DJANGO_SETTINGS_MODULE=con
 
 1. Stop Web, Celery workers, and Celery beat.
 2. As a database administrator, create/configure `sinofgear_owner` and `sinofgear_app`, provision their passwords outside source control, ensure application objects are owned by the migration owner, and run `bootstrap_rls_roles.sql` in the target database.
-3. Connect as `sinofgear_owner`, apply Django migrations including `knowledge.0007`, then rerun `bootstrap_rls_roles.sql` so the function EXECUTE grant is narrowed to runtime.
+3. Connect as `sinofgear_owner`, apply Django migrations including `knowledge.0007`, then rerun `bootstrap_rls_roles.sql`. The second run grants DML on newly created application tables, reapplies the migration-recorder and Snapshot revokes, and narrows helper-function EXECUTE to runtime.
 4. Change Web, worker, and beat `DATABASE_URL` secrets to `sinofgear_app`. Keep migration jobs on the owner URL.
-5. Start processes and run the PostgreSQL cross-tenant suite. Verify current role is `NOINHERIT/NOBYPASSRLS`, `SET ROLE sinofgear_owner` fails, RLS cannot be disabled, missing context returns no Knowledge rows, and tenant A cannot read or write tenant B.
+5. Before starting processes, run `audit_rls_coverage --database` and the PostgreSQL runtime-role suite. It must prove current role is `NOINHERIT/NOBYPASSRLS`, `SET ROLE sinofgear_owner` fails, RLS cannot be disabled, runtime cannot record migrations or UPDATE/DELETE frozen Snapshots, missing context returns no Knowledge rows, and tenant A cannot read or write tenant B.
 6. If verification fails, stop application processes before rollback. Restore the owner runtime URL only as a temporary recovery measure, reverse `knowledge.0007`, diagnose grants/context entry, and do not claim RLS active. Reapply the migration and runtime role only after the cross-tenant suite passes.
 
 ## Deferred to RLS-2

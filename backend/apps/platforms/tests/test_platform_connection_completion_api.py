@@ -3,6 +3,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.test import override_settings
 from rest_framework.test import APIClient
 
@@ -33,8 +34,11 @@ def authenticated_client(*, organization: Organization, username: str):
 class FixtureAuthorizationAdapter:
     def __init__(self, account: ManagedPublishingAccount):
         self.account = account
+        self.require_non_atomic = False
 
     def complete(self, request):
+        if self.require_non_atomic:
+            assert connection.in_atomic_block is False
         token = OAuthTokenSet(
             access_token="fixture-provider-token",
             expires_at=datetime.now(UTC) + timedelta(hours=1),
@@ -88,16 +92,46 @@ def completion_context(monkeypatch):
         discovered_at=datetime.now(UTC),
     )
     token_store = FixtureTokenStore()
+    adapter = FixtureAuthorizationAdapter(account)
     monkeypatch.setattr(
         platform_views,
         "authorization_registry",
-        AuthorizationAdapterRegistry({"META": FixtureAuthorizationAdapter(account)}),
+        AuthorizationAdapterRegistry({"META": adapter}),
         raising=False,
     )
     monkeypatch.setattr(
         platform_views, "connection_token_store", token_store, raising=False,
     )
-    return organization, platform, client, actor, account, token_store
+    return organization, platform, client, actor, account, token_store, adapter
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(SOCIAL_PROVIDER_CONFIG={
+    "META": {
+        "enabled": True,
+        "redirect_uri": "https://growth.example.com/api/v1/platform-connections/FACEBOOK/callback",
+    },
+})
+def test_oauth_completion_provider_call_runs_outside_the_request_transaction(
+    completion_context,
+) -> None:
+    organization, platform, client, actor, _account, _token_store, adapter = (
+        completion_context
+    )
+    adapter.require_non_atomic = True
+    started = create_authorization_attempt(
+        organization=organization,
+        actor=actor,
+        platform=platform,
+        return_path="/promotion",
+    )
+
+    response = client.get(
+        "/api/v1/platform-connections/FACEBOOK/callback",
+        {"code": "fixture-code", "state": started.raw_state},
+    )
+
+    assert response.status_code == 302
 
 
 @pytest.mark.django_db
@@ -110,7 +144,7 @@ def completion_context(monkeypatch):
 def test_callback_creates_safe_selection_session_then_explicit_confirmation_connects_without_publishing(
     completion_context,
 ) -> None:
-    organization, platform, client, actor, account, _token_store = completion_context
+    organization, platform, client, actor, account, _token_store, _adapter = completion_context
     started = create_authorization_attempt(
         organization=organization,
         actor=actor,
@@ -197,7 +231,7 @@ def test_callback_creates_safe_selection_session_then_explicit_confirmation_conn
     },
 })
 def test_callback_state_and_selection_session_are_actor_and_tenant_bound(completion_context) -> None:
-    organization, platform, client, actor, _account, _token_store = completion_context
+    organization, platform, client, actor, _account, _token_store, _adapter = completion_context
     other_organization = Organization.objects.create(name="Other", slug="completion-api-other")
     other_client, _other_actor = authenticated_client(
         organization=other_organization, username="completion-other-admin",

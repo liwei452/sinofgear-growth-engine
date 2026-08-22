@@ -263,7 +263,7 @@ No email-provider or social-provider webhook endpoint was found at this baseline
 | `audit_duplicate_publish_tasks` | Cross-tenant PublishTask audit with no organization argument | Currently requires owner visibility; replace with control-plane organization enumeration and per-tenant read-only audit before RLS-2B. |
 | `reclaim_orphan_buffer_credentials` | Optional control-plane organization resolution, otherwise stable Organization enumeration | Each organization is processed in an independent tenant transaction with organization-filtered candidate and reference rechecks. |
 | `rotate_social_oauth_keys` | Optional control-plane organization resolution, otherwise stable Organization enumeration | Dry-run counts and bounded rotation batches execute independently per tenant; output contains counts only. |
-| `audit_rls_coverage` | Apps-registry metadata by default; `--database [alias]` inspects PostgreSQL catalogs | Default mode is safe anywhere. Database mode verifies forced RLS, Policy shapes, helper execution, and owner/runtime separation without reading business rows. |
+| `audit_rls_coverage` | Apps-registry metadata by default; `--database [alias]` inspects PostgreSQL catalogs | Default mode is safe anywhere. Database mode verifies all RLS-1/RLS-2A Policy names, PUBLIC role scope, commands, normalized `qual`/`with_check`, forced RLS, helper execution, and owner/runtime separation without reading business rows. |
 
 ## Blocking findings and next phases
 
@@ -305,9 +305,11 @@ Production rollout requires a maintenance window because `ALTER TABLE` takes dat
 2. Stop Web and workers.
 3. As the DBA/owner, run `infrastructure/postgres/bootstrap_rls_roles.sql`.
 4. Run migrations with the owner connection.
-5. Run the bootstrap script again so the runtime role receives grants on new objects.
+5. Run the bootstrap script again so runtime receives grants on new application objects and the explicit `django_migrations` and frozen-Snapshot revokes are reapplied after the broad grant.
 6. Configure Web and Celery with the `sinofgear_app` runtime connection, never the owner URL.
 7. Start workers, then Beat, then Web.
-8. Run `python manage.py audit_rls_coverage --database` and the cross-tenant smoke checks for AI Job, Asset/Catalog, Platform/Buffer administration, and Job/JobAttempt.
+8. Run `python manage.py audit_rls_coverage --database` and the PostgreSQL runtime-role suite. The gate must include migration-recorder denial, Snapshot UPDATE/DELETE denial, exact RLS-1/RLS-2A Policy contracts, and cross-tenant checks for AI Job, Asset/Catalog, Platform/Buffer administration, and Job/JobAttempt.
+
+The Asset Prompt Catalog data migration performs an owner preflight before reading or writing Prompt rows. Running migrations with `sinofgear_app` therefore fails before any Prompt catalog mutation, and runtime cannot record the migration because its `django_migrations` write privileges are revoked. Web/Celery must remain stopped until the post-migration bootstrap and PostgreSQL gate both succeed.
 
 Rollback also requires stopping Web, workers, and Beat. The owner reverses the six RLS migrations to their immediately preceding leaves. Reverse operations drop only the Policies owned by these migrations, then set `NO FORCE ROW LEVEL SECURITY` and `DISABLE ROW LEVEL SECURITY` on the 21 Phase 2A tables. They do not delete tenant data, the seeded Prompt, or Knowledge's `app_current_organization_id()` helper. Recheck roles and connection URLs before restoring services.

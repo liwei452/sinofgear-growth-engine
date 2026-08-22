@@ -132,7 +132,11 @@ def test_proactive_acquisition_runs_end_to_end_with_approval(organization, monke
     from apps.growth.agent import acquisition as acq
     from apps.growth import outreach_events
 
-    monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
+    monkeypatch.setattr(
+        acq,
+        "_contact_email_for_candidate",
+        lambda candidate, organization_id: "buyer@example.com",
+    )
 
     class ConnectedProvider:
         def send(self, *, email, subject, body):
@@ -195,7 +199,11 @@ def test_proactive_acquisition_day_delivers_review_queue_and_is_idempotent(organ
     from apps.growth.agent import acquisition as acq
     from apps.growth import outreach_events
 
-    monkeypatch.setattr(acq, "_contact_email_for_candidate", lambda candidate: "buyer@example.com")
+    monkeypatch.setattr(
+        acq,
+        "_contact_email_for_candidate",
+        lambda candidate, organization_id: "buyer@example.com",
+    )
 
     class ConnectedProvider:
         def send(self, *, email, subject, body):

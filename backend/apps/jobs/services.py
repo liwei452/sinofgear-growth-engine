@@ -172,11 +172,15 @@ class JobService:
 
     @staticmethod
     @transaction.atomic
-    def reap_stale_jobs(*, now=None) -> int:
+    def reap_stale_jobs(*, organization_id, now=None) -> int:
         now = now or timezone.now()
         stale = list(
             Job.objects.select_for_update(skip_locked=True)
-            .filter(status=Job.Status.RUNNING, lease_expires_at__lt=now)
+            .filter(
+                organization_id=organization_id,
+                status=Job.Status.RUNNING,
+                lease_expires_at__lt=now,
+            )
         )
         for job in stale:
             token = job.claim_token

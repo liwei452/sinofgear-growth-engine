@@ -1,4 +1,5 @@
 import hashlib
+from contextlib import nullcontext
 from datetime import timedelta
 
 from django.db import transaction
@@ -8,6 +9,7 @@ from django.utils import timezone
 from integrations.secrets import decrypt_secret
 from integrations.sources.base import SourceAdapterError, maps_governance_for
 from integrations.sources.google_places import GooglePlacesSource, MapsQuery
+from apps.common.tenancy import tenant_atomic
 
 from .models import DiscoveryCandidate, GoogleMapsDiscoveryConfig
 from .grading import grade_candidate
@@ -29,8 +31,22 @@ class MapsDiscoveryMissingKey(RuntimeError):
     pass
 
 
-def run_maps_discovery(config_id, *, trigger, source_factory=None) -> dict:
-    api_key, quota, cities, keywords = _prepared(config_id)
+def run_maps_discovery(
+    config_id,
+    *,
+    trigger,
+    source_factory=None,
+    organization_id=None,
+) -> dict:
+    with (
+        tenant_atomic(organization_id)
+        if organization_id is not None
+        else nullcontext()
+    ):
+        api_key, quota, cities, keywords = _prepared(
+            config_id,
+            organization_id=organization_id,
+        )
     source = source_factory(api_key) if source_factory else GooglePlacesSource(api_key=api_key)
 
     places = []
@@ -59,37 +75,68 @@ def run_maps_discovery(config_id, *, trigger, source_factory=None) -> dict:
             if reached_quota:
                 break
     except SourceAdapterError as error:
-        _record_failure(config_id, error.code)
+        with (
+            tenant_atomic(organization_id)
+            if organization_id is not None
+            else nullcontext()
+        ):
+            _record_failure(
+                config_id,
+                error.code,
+                organization_id=organization_id,
+            )
         raise
 
-    return _ingest_places(
-        config_id=config_id,
-        places=places,
-        fetched=fetched,
-        skipped=skipped,
-        trigger=trigger,
-    )
+    with (
+        tenant_atomic(organization_id)
+        if organization_id is not None
+        else nullcontext()
+    ):
+        return _ingest_places(
+            config_id=config_id,
+            places=places,
+            fetched=fetched,
+            skipped=skipped,
+            trigger=trigger,
+            organization_id=organization_id,
+        )
 
 
 @transaction.atomic
-def _prepared(config_id):
-    config = GoogleMapsDiscoveryConfig.objects.select_for_update().get(pk=config_id)
+def _prepared(config_id, *, organization_id=None):
+    configs = GoogleMapsDiscoveryConfig.objects.select_for_update()
+    if organization_id is not None:
+        configs = configs.filter(organization_id=organization_id)
+    config = configs.get(pk=config_id)
     if not config.enabled:
         raise MapsDiscoveryNotEnabled("Google Maps discovery is disabled.")
     if not config.api_key_ciphertext:
-        _record_failure(config_id, "API_KEY_NOT_CONFIGURED")
+        _record_failure(
+            config_id,
+            "API_KEY_NOT_CONFIGURED",
+            organization_id=organization_id,
+        )
         raise MapsDiscoveryMissingKey("Google Maps API key is not configured.")
     try:
         api_key = decrypt_secret(config.api_key_ciphertext)
     except ValueError:
-        _record_failure(config_id, "API_KEY_DECRYPT_FAILED")
+        _record_failure(
+            config_id,
+            "API_KEY_DECRYPT_FAILED",
+            organization_id=organization_id,
+        )
         raise
     return api_key, max(1, config.daily_quota), _normalize_cities(config.cities), _normalize_keywords(config.keywords)
 
 
 @transaction.atomic
-def _ingest_places(*, config_id, places, fetched, skipped, trigger) -> dict:
-    config = GoogleMapsDiscoveryConfig.objects.select_for_update().get(pk=config_id)
+def _ingest_places(
+    *, config_id, places, fetched, skipped, trigger, organization_id=None
+) -> dict:
+    configs = GoogleMapsDiscoveryConfig.objects.select_for_update()
+    if organization_id is not None:
+        configs = configs.filter(organization_id=organization_id)
+    config = configs.get(pk=config_id)
     created = 0
     duplicates = 0
     for place, is_demo in places:
@@ -141,8 +188,11 @@ def _ingest_places(*, config_id, places, fetched, skipped, trigger) -> dict:
 
 
 @transaction.atomic
-def _record_failure(config_id, error_code):
-    config = GoogleMapsDiscoveryConfig.objects.select_for_update().get(pk=config_id)
+def _record_failure(config_id, error_code, *, organization_id=None):
+    configs = GoogleMapsDiscoveryConfig.objects.select_for_update()
+    if organization_id is not None:
+        configs = configs.filter(organization_id=organization_id)
+    config = configs.get(pk=config_id)
     now = timezone.now()
     failures = min(config.consecutive_failures + 1, 10)
     backoff_hours = min(2 ** (failures - 1), 24)
@@ -154,14 +204,18 @@ def _record_failure(config_id, error_code):
     ])
 
 
-def run_due_maps_configs(*, limit=25, source_factory=None) -> dict:
+def run_due_maps_configs(*, organization_id, limit=25, source_factory=None) -> dict:
     now = timezone.now()
-    config_ids = list(
-        GoogleMapsDiscoveryConfig.objects.filter(enabled=True)
-        .filter(Q(next_run_at__isnull=True) | Q(next_run_at__lte=now))
-        .order_by("next_run_at", "id")
-        .values_list("id", flat=True)[:limit]
-    )
+    with tenant_atomic(organization_id):
+        config_ids = list(
+            GoogleMapsDiscoveryConfig.objects.filter(
+                organization_id=organization_id,
+                enabled=True,
+            )
+            .filter(Q(next_run_at__isnull=True) | Q(next_run_at__lte=now))
+            .order_by("next_run_at", "id")
+            .values_list("id", flat=True)[:limit]
+        )
     result = {"scanned": len(config_ids), "succeeded": 0, "failed": 0}
     for config_id in config_ids:
         try:
@@ -169,6 +223,7 @@ def run_due_maps_configs(*, limit=25, source_factory=None) -> dict:
                 config_id,
                 trigger="SCHEDULED",
                 source_factory=source_factory,
+                organization_id=organization_id,
             )
         except (SourceAdapterError, MapsDiscoveryNotEnabled, MapsDiscoveryMissingKey, ValueError):
             result["failed"] += 1

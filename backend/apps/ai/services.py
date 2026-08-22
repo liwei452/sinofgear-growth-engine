@@ -6,6 +6,7 @@ from django.utils import timezone
 from jsonschema import Draft202012Validator
 
 from apps.common.security import scrub_secrets
+from apps.common.tenancy import tenant_atomic
 from apps.identity.models import Organization
 
 from .models import AIRun, OrganizationAIProviderConfig, PromptVersion, ai_audit_writes
@@ -21,28 +22,36 @@ AI_PLANNER_OUTPUT_TOKEN_ESTIMATE = 512
 
 
 class BudgetedAIProvider:
-    def __init__(self, *, organization, model: str, provider):
+    def __init__(self, *, organization=None, organization_id=None, model: str, provider):
+        if organization is None and organization_id is None:
+            raise TypeError("organization or organization_id is required")
         self._organization = organization
+        self._organization_id = organization_id or organization.id
         self._model = model
         self._provider = provider
 
     def generate(self, *, prompt: str, schema: dict) -> dict:
         input_estimate = max(1, (len(prompt) + 3) // 4)
-        reserved_micros = reserve_ai_cost(
-            self._organization,
-            model=self._model,
-            input_tokens=input_estimate,
-            output_tokens=AI_PLANNER_OUTPUT_TOKEN_ESTIMATE,
-        )
+        with tenant_atomic(self._organization_id):
+            organization = self._organization or Organization.objects.get(
+                pk=self._organization_id
+            )
+            reserved_micros = reserve_ai_cost(
+                organization,
+                model=self._model,
+                input_tokens=input_estimate,
+                output_tokens=AI_PLANNER_OUTPUT_TOKEN_ESTIMATE,
+            )
         try:
             return self._provider.generate(prompt=prompt, schema=schema)
         finally:
-            settle_ai_cost(
-                self._organization,
-                reserved_micros=reserved_micros,
-                model=self._model,
-                usage=getattr(self._provider, "last_usage", None),
-            )
+            with tenant_atomic(self._organization_id):
+                settle_ai_cost(
+                    organization,
+                    reserved_micros=reserved_micros,
+                    model=self._model,
+                    usage=getattr(self._provider, "last_usage", None),
+                )
 
 
 def estimate_deepseek_cost_micros(

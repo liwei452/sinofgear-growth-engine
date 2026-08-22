@@ -125,7 +125,7 @@ class ContentRecommendationListCreateView(APIView):
                 created_by=request.user,
             )
             transaction.on_commit(lambda: generate_content_recommendations_job.delay(
-                str(job.id), str(prompt.id)
+                str(job.organization_id), str(job.id), str(prompt.id)
             ))
             existing_job = job
         return Response({
@@ -544,6 +544,8 @@ class GenerateMasterView(APIView):
             created_by=request.user,
         )
         transaction.on_commit(
-            lambda: generate_master_content_job.delay(str(job.id), str(prompt.id))
+            lambda: generate_master_content_job.delay(
+                str(job.organization_id), str(job.id), str(prompt.id)
+            )
         )
         return _generation_job_response(job, runtime)

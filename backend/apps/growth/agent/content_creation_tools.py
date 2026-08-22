@@ -212,7 +212,9 @@ def _trigger_tool(organization, actor_id: str) -> Tool:
                 created_by=actor,
             )
             transaction.on_commit(
-                lambda: generate_master_content_job.delay(str(job.id), str(prompt.id))
+                lambda: generate_master_content_job.delay(
+                    str(job.organization_id), str(job.id), str(prompt.id)
+                )
             )
         return ToolResult(ok=True, output={"job_id": str(job.id), "status": job.status})
 

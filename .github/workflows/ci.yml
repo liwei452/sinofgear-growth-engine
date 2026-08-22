@@ -30,6 +30,66 @@ jobs:
       - name: Validate OpenAPI schema
         run: python manage.py spectacular --settings=config.test_settings --validate
 
+  postgres-rls:
+    name: PostgreSQL runtime-role RLS
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: sinofgear_rls
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sinofgear_rls"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DJANGO_SECRET_KEY: test-only-secret-key-material-with-more-than-32-bytes
+      RLS_TEST_OWNER_DSN: postgresql://sinofgear_owner:owner-test@127.0.0.1:5432/sinofgear_rls
+      RLS_TEST_RUNTIME_DSN: postgresql://sinofgear_app:runtime-test@127.0.0.1:5432/sinofgear_rls
+      RLS_TEST_DATABASE_NAME: sinofgear_rls_test
+      DJANGO_SETTINGS_MODULE: config.postgres_rls_test_settings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install ".[dev]"
+      - name: Bootstrap owner and runtime roles
+        working-directory: .
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -d sinofgear_rls -f infrastructure/postgres/bootstrap_rls_roles.sql
+          psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER ROLE sinofgear_owner PASSWORD 'owner-test';
+          ALTER ROLE sinofgear_app PASSWORD 'runtime-test';
+          CREATE DATABASE sinofgear_rls_test OWNER sinofgear_owner;
+          SQL
+      - name: Apply migrations as owner
+        run: python manage.py migrate --noinput
+      - name: Finalize runtime grants
+        working-directory: .
+        env:
+          PGPASSWORD: postgres
+        run: psql -h 127.0.0.1 -U postgres -d sinofgear_rls -f infrastructure/postgres/bootstrap_rls_roles.sql
+      - name: Audit installed policy contracts
+        run: python manage.py audit_rls_coverage --database default
+      - name: Run runtime-role RLS acceptance tests
+        run: >-
+          python -m pytest
+          apps/knowledge/tests/test_postgres_rls.py
+          apps/common/tests/test_postgres_rls_phase2a.py
+          --reuse-db -q
+
   frontend:
     name: Frontend checks
     runs-on: ubuntu-latest

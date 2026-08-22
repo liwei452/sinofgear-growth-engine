@@ -1,5 +1,7 @@
 import json
 import logging
+from contextlib import nullcontext
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
@@ -9,6 +11,7 @@ from jsonschema.validators import validator_for
 
 from apps.campaigns.generation_schema import generation_input_errors
 from apps.common.security import normalize_persisted_error, scrub_secrets
+from apps.common.tenancy import tenant_atomic
 from apps.jobs.models import Job
 from apps.jobs.services import JobConflictError, JobService
 from apps.ai.provider_config import PRICE_TABLE_VERSION, resolve_product_ai
@@ -128,11 +131,36 @@ def _render_job_prompt(template: str, snapshot: dict, *, job_type: str) -> str:
     return _render_prompt(template, snapshot)
 
 
+RETURNABLE_RUN_STATUSES = frozenset({
+    AIRun.Status.RUNNING,
+    AIRun.Status.SUCCEEDED,
+    AIRun.Status.FAILED,
+    AIRun.Status.CANCELED,
+})
+
+
+def _validate_existing_run(
+    run: AIRun, *, job: Job, prompt: PromptVersion
+) -> AIRun:
+    if (
+        run.job_id != job.id
+        or run.job_attempt != job.attempt
+        or run.status not in RETURNABLE_RUN_STATUSES
+    ):
+        raise JobConflictError("Existing AI run does not match the current job attempt.")
+    if run.prompt_version_id != prompt.id:
+        raise GenerationPreflightError(
+            "prompt_run_mismatch",
+            "Requested prompt does not match the existing AI run.",
+        )
+    return run
+
+
 @transaction.atomic
 def _create_run(*, job: Job, prompt: PromptVersion, provider: str, model: str | None = None) -> AIRun:
     existing = AIRun.objects.filter(job=job, job_attempt=job.attempt).first()
     if existing:
-        return existing
+        return _validate_existing_run(existing, job=job, prompt=prompt)
     with ai_audit_writes():
         try:
             return AIRun.objects.create(
@@ -147,7 +175,8 @@ def _create_run(*, job: Job, prompt: PromptVersion, provider: str, model: str | 
                 started_at=timezone.now(),
             )
         except IntegrityError:
-            return AIRun.objects.get(job=job, job_attempt=job.attempt)
+            existing = AIRun.objects.get(job=job, job_attempt=job.attempt)
+            return _validate_existing_run(existing, job=job, prompt=prompt)
 
 
 @transaction.atomic
@@ -291,23 +320,33 @@ def _record_canceled_run(run: AIRun) -> AIRun:
     return run
 
 
-def execute_generation_job(
-    job_id, *, prompt_version_id, provider_code: str | None = None,
-    provider_model: str | None = None,
-    worker_id="ai-worker", result_writer=None,
-) -> AIRun:
-    job = Job.objects.get(pk=job_id)
-    existing = AIRun.objects.filter(job_id=job_id).order_by("-job_attempt").first()
-    if (
-        existing
-        and existing.job_attempt == job.attempt
-        and existing.status in {
-            AIRun.Status.RUNNING, AIRun.Status.SUCCEEDED,
-            AIRun.Status.FAILED, AIRun.Status.CANCELED,
-        }
-    ):
-        return existing
+@dataclass(frozen=True)
+class _PreparedGeneration:
+    run_id: object
+    job_id: object
+    claim_token: object = field(repr=False)
+    provider: object = field(repr=False)
+    rendered_prompt: str = field(repr=False)
+    output_schema: dict = field(repr=False)
+    output_validator: object = field(repr=False)
+    provider_name: str
+    resolved_model: str
+    cost_reserved_micros: int
 
+
+def _prepare_generation_job(
+    job_id,
+    *,
+    prompt_version_id,
+    provider_code,
+    provider_model,
+    worker_id,
+    organization_id=None,
+) -> AIRun | _PreparedGeneration:
+    jobs = Job.objects.all()
+    if organization_id is not None:
+        jobs = jobs.filter(organization_id=organization_id)
+    job = jobs.get(pk=job_id)
     try:
         prompt = PromptVersion.objects.get(
             pk=prompt_version_id, status=PromptVersion.Status.PUBLISHED
@@ -322,6 +361,9 @@ def execute_generation_job(
             "prompt_purpose_mismatch",
             "Prompt purpose is not compatible with the job type.",
         )
+    existing = AIRun.objects.filter(job_id=job_id, job_attempt=job.attempt).first()
+    if existing:
+        return _validate_existing_run(existing, job=job, prompt=prompt)
     if provider_code is None:
         runtime = resolve_product_ai(job.organization)
         provider_name = runtime.provider_code
@@ -364,10 +406,15 @@ def execute_generation_job(
 
     claimed = JobService.claim(worker_id=worker_id, job_id=job_id)
     if claimed is None:
-        existing = AIRun.objects.filter(job_id=job_id).order_by("-job_attempt").first()
+        current_job = jobs.get(pk=job_id)
+        existing = AIRun.objects.filter(
+            job_id=job_id, job_attempt=current_job.attempt
+        ).first()
         if existing:
-            return existing
-        raise JobConflictError(f"Job in status {job.status} cannot be claimed.")
+            return _validate_existing_run(existing, job=current_job, prompt=prompt)
+        raise JobConflictError(
+            f"Job in status {current_job.status} cannot be claimed."
+        )
     token = claimed.claim_token
     try:
         reserve_ai_budget(claimed.organization)
@@ -426,17 +473,57 @@ def execute_generation_job(
             charge_on_unknown=False,
         )
         return run
+    return _PreparedGeneration(
+        run_id=run.id,
+        job_id=claimed.id,
+        claim_token=token,
+        provider=provider,
+        rendered_prompt=rendered,
+        output_schema=scrub_secrets(prompt.output_schema),
+        output_validator=output_validator,
+        provider_name=provider_name,
+        resolved_model=resolved_model,
+        cost_reserved_micros=cost_reserved_micros,
+    )
+
+
+def execute_generation_job(
+    job_id, *, prompt_version_id, provider_code: str | None = None,
+    provider_model: str | None = None,
+    worker_id="ai-worker", result_writer=None, organization_id=None,
+) -> AIRun:
+    with (
+        tenant_atomic(organization_id)
+        if organization_id is not None
+        else nullcontext()
+    ):
+        prepared = _prepare_generation_job(
+            job_id,
+            prompt_version_id=prompt_version_id,
+            provider_code=provider_code,
+            provider_model=provider_model,
+            worker_id=worker_id,
+            organization_id=organization_id,
+        )
+    if isinstance(prepared, AIRun):
+        return prepared
+
     usage = None
     try:
-        output = scrub_secrets(provider.generate(prompt=rendered, schema=prompt.output_schema))
+        output = scrub_secrets(
+            prepared.provider.generate(
+                prompt=prepared.rendered_prompt,
+                schema=prepared.output_schema,
+            )
+        )
         if not isinstance(output, dict):
             raise GenerationError("invalid_provider_output", "Provider output must be an object.")
         encoded = json.dumps(output, sort_keys=True, separators=(",", ":")).encode()
         if len(encoded) > MAX_OUTPUT_BYTES:
             raise GenerationError("output_too_large", "Provider output exceeds the size limit.")
-        output_validator.validate(output)
-        usage = getattr(provider, "last_usage", None)
-        provider_metadata = {"provider_code": provider_name}
+        prepared.output_validator.validate(output)
+        usage = getattr(prepared.provider, "last_usage", None)
+        provider_metadata = {"provider_code": prepared.provider_name}
         if isinstance(usage, dict):
             provider_metadata["usage"] = scrub_secrets(usage)
     except GenerationError as exc:
@@ -451,30 +538,40 @@ def execute_generation_job(
         error = {"code": "provider_error", "message": "AI provider generation failed."}
     else:
         try:
-            return _record_success(
-                run.id,
-                job_id=claimed.id,
-                claim_token=token,
-                output=output,
-                result_writer=result_writer,
-                provider_metadata=provider_metadata,
-                cost_reserved_micros=cost_reserved_micros,
-                cost_model=resolved_model,
-                usage=usage,
-            )
+            with (
+                tenant_atomic(organization_id)
+                if organization_id is not None
+                else nullcontext()
+            ):
+                return _record_success(
+                    prepared.run_id,
+                    job_id=prepared.job_id,
+                    claim_token=prepared.claim_token,
+                    output=output,
+                    result_writer=result_writer,
+                    provider_metadata=provider_metadata,
+                    cost_reserved_micros=prepared.cost_reserved_micros,
+                    cost_model=prepared.resolved_model,
+                    usage=usage,
+                )
         except Exception:
             logger.exception("Generated content could not be finalized.")
             error = {
                 "code": "content_finalize_failed",
                 "message": "Generated content could not be finalized.",
             }
-    usage = getattr(provider, "last_usage", usage)
-    return _record_failure(
-        run.id,
-        job_id=claimed.id,
-        claim_token=token,
-        error=error,
-        cost_reserved_micros=cost_reserved_micros,
-        cost_model=resolved_model,
-        usage=usage,
-    )
+    usage = getattr(prepared.provider, "last_usage", usage)
+    with (
+        tenant_atomic(organization_id)
+        if organization_id is not None
+        else nullcontext()
+    ):
+        return _record_failure(
+            prepared.run_id,
+            job_id=prepared.job_id,
+            claim_token=prepared.claim_token,
+            error=error,
+            cost_reserved_micros=prepared.cost_reserved_micros,
+            cost_model=prepared.resolved_model,
+            usage=usage,
+        )

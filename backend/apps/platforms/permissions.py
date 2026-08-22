@@ -1,5 +1,6 @@
 from rest_framework.permissions import BasePermission
 
+from apps.common.tenancy import set_local_tenant
 from apps.identity.models import Membership, Role
 from apps.identity.permissions import PermissionCode
 from apps.identity.services import get_active_membership
@@ -26,4 +27,5 @@ class CanAdministerBuffer(BasePermission):
         if allowed:
             request.membership = membership
             request.organization = membership.organization
+            set_local_tenant(membership.organization_id)
         return allowed

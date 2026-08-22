@@ -86,7 +86,10 @@ def test_sync_publish_item_from_task_marks_success(db, monkeypatch):
     )
     monkeypatch.setattr(gp, "_refresh_batch_status", lambda batch: batch)
 
-    result = gp.sync_publish_item_from_task(task_id="task-1")
+    result = gp.sync_publish_item_from_task(
+        task_id="task-1",
+        organization_id="organization-1",
+    )
 
     assert result is item
     assert item.status == "SUCCEEDED"
@@ -149,7 +152,10 @@ def test_sync_publish_item_from_task_marks_canceled(db, monkeypatch):
     )
     monkeypatch.setattr(gp, "_refresh_batch_status", lambda batch: batch)
 
-    result = gp.sync_publish_item_from_task(task_id="task-1")
+    result = gp.sync_publish_item_from_task(
+        task_id="task-1",
+        organization_id="organization-1",
+    )
 
     assert result is item
     assert item.status == "FAILED"

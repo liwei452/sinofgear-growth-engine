@@ -4,6 +4,7 @@ import http.client
 import ipaddress
 import json
 import socket
+from copy import copy
 from dataclasses import dataclass
 from json import JSONDecodeError
 from urllib.error import HTTPError, URLError
@@ -64,6 +65,37 @@ class SocialProviderRuntime:
             code for code, value in self.readiness.items() if value.authorization_ready
         )
         return f"SocialProviderRuntime(authorization_ready={ready!r})"
+
+
+class _PreloadedTokenStore:
+    def __init__(self, reference, token):
+        self._reference = reference
+        self._token = token
+
+    def resolve(self, reference):
+        if reference != self._reference:
+            raise ValueError("Credential reference changed after provider preparation.")
+        return self._token
+
+    def __repr__(self):
+        return "_PreloadedTokenStore(token=[REDACTED])"
+
+
+def preload_connector_token(runtime, connector, credential_reference):
+    """Clone a connector with one transaction-resolved, in-memory token."""
+
+    if not hasattr(runtime, "token_store"):
+        return connector
+    token = runtime.token_store.resolve(credential_reference)
+    prepared = copy(connector)
+    token_store = _PreloadedTokenStore(credential_reference, token)
+    if hasattr(prepared, "_token_store"):
+        prepared._token_store = token_store
+    elif hasattr(prepared, "token_store"):
+        prepared.token_store = token_store
+    else:
+        return connector
+    return prepared
 
 
 class UrllibPlatformTransport:

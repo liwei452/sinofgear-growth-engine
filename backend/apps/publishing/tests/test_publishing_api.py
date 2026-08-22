@@ -154,7 +154,12 @@ def test_operator_can_run_one_scheduled_task_now_but_reader_cannot(
         actor=context["actor"],
     )
     dispatched = []
-    monkeypatch.setattr("apps.publishing.tasks.run_publish_task.delay", dispatched.append)
+    monkeypatch.setattr(
+        "apps.publishing.tasks.run_publish_task.delay",
+        lambda organization_id, task_id: dispatched.append(
+            (organization_id, task_id)
+        ),
+    )
     reader = _client(context["organization"], Role.Code.READ_ONLY, suffix="run-reader")
     operator = _client(context["organization"], Role.Code.OPERATOR, suffix="run-operator")
 
@@ -168,7 +173,7 @@ def test_operator_can_run_one_scheduled_task_now_but_reader_cannot(
 
     assert response.status_code == 200
     assert response.json()["status"] == PublishTask.Status.QUEUED
-    assert dispatched == [str(task.id)]
+    assert dispatched == [(str(task.organization_id), str(task.id))]
     assert operator.post(
         f"/api/v1/publish-tasks/{task.id}/run", {}, format="json"
     ).status_code == 409

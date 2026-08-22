@@ -1,5 +1,6 @@
 import hashlib
 import json
+from dataclasses import dataclass, field
 from uuid import UUID
 
 from django.db import transaction
@@ -11,6 +12,8 @@ from apps.publishing.services import PublishingConflict, create_publish_task
 from integrations.platforms.base import ConnectorConfigurationRequired, OfficialPublishRequest
 from integrations.platforms.registry import ConnectorRegistry
 from integrations.platforms.runtime import get_social_provider_runtime
+from integrations.platforms.runtime import preload_connector_token
+from apps.common.tenancy import tenant_atomic
 
 from .models import ChannelPackage, GrowthPublishBatch, GrowthPublishItem
 
@@ -157,12 +160,12 @@ def _refresh_batch_status(batch: GrowthPublishBatch) -> GrowthPublishBatch:
     return batch
 
 
-def _execute_item(item_id) -> None:
+def _execute_item(item_id, *, organization_id) -> None:
     with transaction.atomic():
         item = GrowthPublishItem.objects.select_for_update().select_related(
             "batch", "channel_package", "social_account__credential",
             "social_account__platform",
-        ).get(pk=item_id)
+        ).get(pk=item_id, organization_id=organization_id)
         if item.status not in {GrowthPublishItem.Status.QUEUED, GrowthPublishItem.Status.FAILED}:
             return
         item.status = GrowthPublishItem.Status.RUNNING
@@ -229,6 +232,164 @@ def _execute_item(item_id) -> None:
         item.save(update_fields=[
             "status", "external_post_id", "external_post_url", "last_error", "updated_at",
         ])
+
+
+@dataclass(frozen=True, repr=False)
+class _GrowthPublishCall:
+    item_id: object
+    organization_id: object
+    attempt_number: int
+    connector: object = field(repr=False)
+    request: object = field(repr=False)
+
+
+def _prepare_growth_publish_call(item_id, *, organization_id):
+    item = GrowthPublishItem.objects.select_for_update().select_related(
+        "batch",
+        "channel_package",
+        "social_account__credential",
+        "social_account__platform",
+    ).get(pk=item_id, organization_id=organization_id)
+    if item.status not in {
+        GrowthPublishItem.Status.QUEUED,
+        GrowthPublishItem.Status.FAILED,
+    }:
+        return None
+    item.status = GrowthPublishItem.Status.RUNNING
+    item.attempt_number += 1
+    item.last_error = None
+    item.save(update_fields=["status", "attempt_number", "last_error", "updated_at"])
+    account = item.social_account
+    metadata = (
+        account.connector_metadata
+        if isinstance(account.connector_metadata, dict)
+        else {}
+    )
+    connection_kind = metadata.get("connection_kind")
+    if not connection_kind and metadata.get("fixture") == "phase-a-e2e":
+        connection_kind = "demo_fake"
+    if connection_kind == "demo_fake":
+        item.status = GrowthPublishItem.Status.SKIPPED
+        item.last_error = {
+            "code": "DEMO_ONLY_NO_EXTERNAL_PUBLISH",
+            "message": "Demo/Fake connectors cannot create formal external posts.",
+            "retryable": False,
+            "retry_after_seconds": None,
+        }
+        item.save(update_fields=["status", "last_error", "updated_at"])
+        return None
+    credential_reference = account.credential.secret_reference
+    try:
+        runtime = get_social_provider_runtime()
+        connector = runtime.connector_registry.resolve(account)
+        connector = preload_connector_token(
+            runtime,
+            connector,
+            credential_reference,
+        )
+    except ConnectorConfigurationRequired:
+        connector = None
+    consent = item.payload_snapshot.get("consent", {})
+    if not isinstance(consent, dict):
+        consent = {}
+    request = OfficialPublishRequest(
+        channel=item.channel,
+        account_external_id=account.external_id,
+        credential_reference=credential_reference,
+        payload=item.payload_snapshot,
+        idempotency_key=f"{item.batch.idempotency_key}:{item.channel}",
+        consent=consent,
+    )
+    return _GrowthPublishCall(
+        item_id=item.id,
+        organization_id=item.organization_id,
+        attempt_number=item.attempt_number,
+        connector=connector,
+        request=request,
+    )
+
+
+def execute_growth_publish_item_phased(item_id, *, organization_id):
+    with tenant_atomic(organization_id):
+        call = _prepare_growth_publish_call(
+            item_id,
+            organization_id=organization_id,
+        )
+    if call is None:
+        return None
+    if call.connector is None:
+        result = {
+            "succeeded": False,
+            "external_id": "",
+            "external_url": "",
+            "error_code": "CONFIGURATION_REQUIRED",
+            "error_message": "Connector configuration is required.",
+            "retryable": False,
+            "retry_after_seconds": None,
+        }
+    else:
+        try:
+            receipt = call.connector.publish(call.request)
+        except ConnectorConfigurationRequired as error:
+            result = {
+                "succeeded": False,
+                "external_id": "",
+                "external_url": "",
+                "error_code": "CONFIGURATION_REQUIRED",
+                "error_message": str(error),
+                "retryable": False,
+                "retry_after_seconds": None,
+            }
+        except Exception:
+            result = {
+                "succeeded": False,
+                "external_id": "",
+                "external_url": "",
+                "error_code": "PROVIDER_ERROR",
+                "error_message": "Provider publish failed.",
+                "retryable": False,
+                "retry_after_seconds": None,
+            }
+        else:
+            result = {
+                "succeeded": receipt.succeeded,
+                "external_id": receipt.external_id,
+                "external_url": receipt.external_url,
+                "error_code": receipt.error_code,
+                "error_message": receipt.error_message,
+                "retryable": receipt.retryable,
+                "retry_after_seconds": receipt.retry_after_seconds,
+            }
+    with tenant_atomic(organization_id):
+        item = GrowthPublishItem.objects.select_for_update().get(
+            pk=item_id,
+            organization_id=organization_id,
+            status=GrowthPublishItem.Status.RUNNING,
+        )
+        if call is not None and item.attempt_number != call.attempt_number:
+            raise PublishBatchConflict("Publish item changed during provider call.")
+        if result["succeeded"]:
+            item.status = GrowthPublishItem.Status.SUCCEEDED
+            item.external_post_id = result["external_id"]
+            item.external_post_url = result["external_url"]
+        else:
+            item.status = GrowthPublishItem.Status.FAILED
+            item.last_error = {
+                "code": result["error_code"],
+                "message": result["error_message"],
+                "retryable": result["retryable"],
+                "retry_after_seconds": result["retry_after_seconds"],
+            }
+        item.save(
+            update_fields=[
+                "status",
+                "external_post_id",
+                "external_post_url",
+                "last_error",
+                "updated_at",
+            ]
+        )
+    return None
 
 
 def create_publish_batch(
@@ -323,16 +484,22 @@ def create_publish_batch(
                 else:
                     queued_ids.append(item.id)
 
+    from apps.common.tenant_tasks import dispatch_task_on_commit
     from .tasks import execute_growth_publish_item
 
     for item_id in queued_ids:
-        execute_growth_publish_item.delay(item_id)
+        dispatch_task_on_commit(
+            execute_growth_publish_item,
+            str(batch.organization_id),
+            str(item_id),
+        )
     batch.refresh_from_db()
     return _refresh_batch_status(batch)
 
 
 def retry_failed_items(*, batch: GrowthPublishBatch, actor) -> GrowthPublishBatch:
     del actor
+    from apps.common.tenant_tasks import dispatch_task_on_commit
     from .tasks import execute_growth_publish_item
 
     failed_ids = list(batch.items.filter(
@@ -340,19 +507,27 @@ def retry_failed_items(*, batch: GrowthPublishBatch, actor) -> GrowthPublishBatc
         last_error__retryable=True,
     ).values_list("id", flat=True))
     for item_id in failed_ids:
-        execute_growth_publish_item.delay(item_id)
+        dispatch_task_on_commit(
+            execute_growth_publish_item,
+            str(batch.organization_id),
+            str(item_id),
+        )
     batch.refresh_from_db()
     return _refresh_batch_status(batch)
 
 
 @transaction.atomic
-def sync_publish_item_from_task(*, task_id):
+def sync_publish_item_from_task(*, task_id, organization_id):
     item = GrowthPublishItem.objects.select_for_update().filter(
-        publish_task_id=task_id
+        organization_id=organization_id,
+        publish_task_id=task_id,
     ).first()
     if item is None:
         return None
-    task = PublishTask.objects.filter(id=task_id).first()
+    task = PublishTask.objects.filter(
+        id=task_id,
+        organization_id=organization_id,
+    ).first()
     if task is None:
         return item
     if task.status == PublishTask.Status.SUCCEEDED:

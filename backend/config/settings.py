@@ -16,6 +16,7 @@ def database_from_url(database_url: str) -> dict[str, object]:
             "PASSWORD": unquote(parsed.password or ""),
             "HOST": parsed.hostname or "",
             "PORT": str(parsed.port or 5432),
+            "ATOMIC_REQUESTS": True,
         }
     raise ValueError("DATABASE_URL must use a PostgreSQL URL (postgresql://)")
 

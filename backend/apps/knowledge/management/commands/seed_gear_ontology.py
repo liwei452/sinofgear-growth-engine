@@ -1,5 +1,5 @@
-from django.core.management.base import BaseCommand
-from django.db import transaction
+from django.core.management.base import BaseCommand, CommandError
+from django.db import connection, transaction
 
 from apps.knowledge.models import (
     KnowledgeAlias,
@@ -65,10 +65,27 @@ RELATIONS = (
 
 
 class Command(BaseCommand):
-    help = "Seed the bounded approved Gear Manufacturing Ontology."
+    help = "Seed the bounded approved Gear Manufacturing Ontology (owner role only)."
+
+    @staticmethod
+    def _require_owner_connection() -> None:
+        if connection.vendor == "sqlite":
+            return
+        if connection.vendor != "postgresql":
+            raise CommandError("SYSTEM knowledge seeding requires PostgreSQL or SQLite preview mode.")
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user"
+            )
+            privileged = cursor.fetchone()
+        if privileged != (True,):
+            raise CommandError(
+                "SYSTEM knowledge seeding requires the migration/owner database role."
+            )
 
     @transaction.atomic
     def handle(self, *args, **options) -> None:
+        self._require_owner_connection()
         KnowledgeGraphLock.objects.update_or_create(
             id=1, defaults={"name": "is_a_graph"}
         )

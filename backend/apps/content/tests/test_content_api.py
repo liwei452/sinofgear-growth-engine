@@ -299,10 +299,12 @@ def test_generation_does_not_reschedule_completed_idempotent_job(
     content_provenance, monkeypatch,
 ):
     organization, _actor, brief, _fixture_job, _run = content_provenance
-    dispatched: list[tuple[str, str]] = []
+    dispatched: list[tuple[str, str, str]] = []
     monkeypatch.setattr(
         "apps.content.views.generate_master_content_job.delay",
-        lambda job_id, prompt_id: dispatched.append((job_id, prompt_id)),
+        lambda organization_id, job_id, prompt_id: dispatched.append(
+            (organization_id, job_id, prompt_id)
+        ),
     )
     client = _client(organization, Role.Code.ADMINISTRATOR)
 

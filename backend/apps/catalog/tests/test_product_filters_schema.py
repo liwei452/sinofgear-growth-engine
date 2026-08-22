@@ -109,7 +109,7 @@ def test_product_link_serialization_has_bounded_query_counts(
     ]
     path = f"/api/v1/products/{product_ids[0]}" if detail else "/api/v1/products"
 
-    with django_assert_num_queries(5):
+    with django_assert_num_queries(7):
         response = client.get(path)
 
     assert response.status_code == 200

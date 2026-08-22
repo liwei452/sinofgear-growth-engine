@@ -1,6 +1,7 @@
 from io import BytesIO
 
 import pytest
+from django.db import connection
 from django.test import override_settings
 from django.contrib.auth import get_user_model
 from pypdf import PdfWriter
@@ -9,12 +10,31 @@ from pypdf.generic import DictionaryObject, NameObject, StreamObject
 from apps.assets.models import ProductEvidenceFact
 from apps.assets.services import upload_asset
 from apps.assets.understanding import review_fact, start_understanding
-from apps.ai.models import AIRun
+from apps.ai.models import AIRun, PromptVersion
+from apps.ai.prompt_catalog import PromptCatalogEntryMissing
+from apps.ai.services import PromptVersionService
+from apps.assets.ai_extraction import FACT_RESULT_SCHEMA
 from apps.ai.provider_config import ProductAIRuntime
 from apps.jobs.models import Job
 
 from .conftest import make_product, png_bytes
 from .test_asset_upload import ChunkOnlyUpload
+
+
+@pytest.fixture(autouse=True)
+def asset_prompt_contract():
+    if not PromptVersion.objects.filter(
+        purpose="ASSET_UNDERSTAND", code="asset-understand-evidence-v1"
+    ).exists():
+        PromptVersionService.create(
+            purpose="ASSET_UNDERSTAND",
+            code="asset-understand-evidence-v1",
+            provider="system",
+            model="provider-agnostic",
+            template="Extract only literal product facts with exact page and excerpt evidence.",
+            output_schema=FACT_RESULT_SCHEMA,
+            status=PromptVersion.Status.PUBLISHED,
+        )
 
 
 def labeled_pdf() -> bytes:
@@ -56,7 +76,7 @@ def _upload(organization, creator, content: bytes, *, mime: str, kind: str, file
     )
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_pdf_understanding_persists_literal_evidence_and_high_risk_facts(organizations) -> None:
     own, _ = organizations
     actor = get_user_model().objects.create_user(username="understand-pdf")
@@ -77,9 +97,13 @@ def test_pdf_understanding_persists_literal_evidence_and_high_risk_facts(organiz
     assert facts["accuracy"].risk_level == ProductEvidenceFact.RiskLevel.HIGH
     assert facts["lead_time"].risk_level == ProductEvidenceFact.RiskLevel.HIGH
     assert all(fact.ai_run_id for fact in result.facts)
+    run = AIRun.objects.get(job=result.job)
+    assert run.prompt_version.code == "asset-understand-evidence-v1"
+    assert run.prompt_version.provider == "system"
+    assert run.prompt_version.model == "provider-agnostic"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_image_understanding_is_partial_and_does_not_invent_visual_facts(organizations) -> None:
     own, _ = organizations
     actor = get_user_model().objects.create_user(username="understand-image")
@@ -101,6 +125,7 @@ class DeepSeekFactProvider:
         self.calls = 0
 
     def generate(self, *, prompt: str, schema: dict) -> dict:
+        assert connection.in_atomic_block is False
         self.calls += 1
         assert "UNTRUSTED DOCUMENT EVIDENCE" in prompt
         assert schema["required"] == ["facts"]
@@ -129,7 +154,7 @@ def _deepseek_runtime(provider) -> ProductAIRuntime:
     )
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @override_settings(PRODUCT_AI_PROVIDER="deepseek", PRODUCT_AI_MODEL="deepseek-chat")
 def test_deepseek_pdf_understanding_persists_real_evidence_without_secret(
     organizations, monkeypatch,
@@ -158,8 +183,47 @@ def test_deepseek_pdf_understanding_persists_real_evidence_without_secret(
     run = AIRun.objects.get(job=result.job)
     assert run.provider == "deepseek"
     assert run.model == "deepseek-chat"
+    assert run.prompt_version.code == "asset-understand-evidence-v1"
+    assert run.prompt_version.provider == "system"
+    assert run.prompt_version.model == "provider-agnostic"
     persisted = str(result.job.input_snapshot) + str(run.input_snapshot) + str(run.output_json)
     assert "secret-never-persist" not in persisted
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(PRODUCT_AI_PROVIDER="deepseek", PRODUCT_AI_MODEL="deepseek-chat")
+def test_missing_asset_prompt_fails_before_provider_call(organizations, monkeypatch) -> None:
+    own, _ = organizations
+    actor = get_user_model().objects.create_user(username="understand-missing-prompt")
+    asset = _upload(
+        own, actor, labeled_pdf(), mime="application/pdf", kind="DOCUMENT", filename="missing.pdf"
+    )
+    product = make_product(own, name="Missing prompt gear")
+    provider = DeepSeekFactProvider()
+    monkeypatch.setattr(
+        "apps.assets.understanding.resolve_product_ai",
+        lambda org: _deepseek_runtime(provider),
+    )
+    monkeypatch.setattr(
+        "apps.assets.understanding.resolve_published_prompt",
+        lambda **kwargs: (_ for _ in ()).throw(
+            PromptCatalogEntryMissing(
+                purpose="ASSET_UNDERSTAND", prompt_code="asset-understand-evidence-v1"
+            )
+        ),
+    )
+    before = PromptVersion.objects.count()
+
+    with pytest.raises(PromptCatalogEntryMissing):
+        start_understanding(
+            asset=asset,
+            product=product,
+            actor=actor,
+            external_text_consent=True,
+        )
+
+    assert provider.calls == 0
+    assert PromptVersion.objects.count() == before
 
 
 @pytest.mark.django_db
@@ -196,7 +260,7 @@ def test_deepseek_mode_requires_explicit_text_consent(organizations, monkeypatch
     assert not Job.objects.filter(type=Job.Type.ASSET_UNDERSTAND).exists()
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_real_provider_job_does_not_reuse_fake_understanding(organizations, monkeypatch) -> None:
     own, _ = organizations
     actor = get_user_model().objects.create_user(username="understand-provider-split")
@@ -220,7 +284,7 @@ def test_real_provider_job_does_not_reuse_fake_understanding(organizations, monk
     assert real_result.provider_label == "DeepSeek 官方 API"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @override_settings(PRODUCT_AI_PROVIDER="deepseek", PRODUCT_AI_MODEL="deepseek-chat")
 def test_repeated_real_understanding_is_idempotent(organizations, monkeypatch) -> None:
     own, _ = organizations
@@ -245,9 +309,13 @@ def test_repeated_real_understanding_is_idempotent(organizations, monkeypatch) -
 
     assert second.job.id == first.job.id
     assert provider.calls == 1
+    assert PromptVersion.objects.filter(
+        purpose="ASSET_UNDERSTAND",
+        code="asset-understand-evidence-v1",
+    ).count() == 1
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_approved_fact_becomes_verified_without_mutating_product(organizations) -> None:
     own, _ = organizations
     actor = get_user_model().objects.create_user(username="review-fact")

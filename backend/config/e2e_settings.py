@@ -28,6 +28,7 @@ DATABASES = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": str(database_path),
         "OPTIONS": {"timeout": 20},
+        "ATOMIC_REQUESTS": True,
     }
 }
 OBJECT_STORAGE_BACKEND = "filesystem"

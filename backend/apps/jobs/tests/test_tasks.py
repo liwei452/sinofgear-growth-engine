@@ -1,6 +1,8 @@
 from uuid import uuid4
+from types import SimpleNamespace
 
 import pytest
+from django.db import connection
 
 from apps.ai.models import AIRun, PromptVersion
 from apps.ai.services import PromptVersionService
@@ -8,10 +10,11 @@ from apps.identity.models import Organization
 from apps.jobs.models import Job
 from apps.jobs.services import JobService
 from apps.jobs.tasks import execute_ai_job
+from integrations.ai.providers import FakeAIProvider
 
 
 @pytest.mark.django_db(transaction=True)
-def test_celery_wrapper_delegates_to_real_orchestration():
+def test_celery_wrapper_delegates_to_real_orchestration(monkeypatch):
     organization = Organization.objects.create(name="Task Org", slug="task-org")
     product_id = uuid4()
     prompt = PromptVersionService.create(
@@ -83,7 +86,24 @@ def test_celery_wrapper_delegates_to_real_orchestration():
         },
     )
 
-    result = execute_ai_job.delay(str(job.id), str(prompt.id)).get()
+    class OutsideTransactionProvider(FakeAIProvider):
+        def generate(self, *, prompt, schema):
+            assert connection.in_atomic_block is False
+            return super().generate(prompt=prompt, schema=schema)
+
+    monkeypatch.setattr(
+        "apps.ai.orchestration.resolve_product_ai",
+        lambda organization: SimpleNamespace(
+            provider_code="fake",
+            model="fake-v1",
+            provider=OutsideTransactionProvider(),
+            mode="DEMO",
+        ),
+    )
+
+    result = execute_ai_job.delay(
+        str(organization.id), str(job.id), str(prompt.id)
+    ).get()
 
     assert result["status"] == AIRun.Status.SUCCEEDED
     assert AIRun.objects.filter(job=job).count() == 1

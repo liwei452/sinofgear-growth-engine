@@ -321,6 +321,15 @@ def test_mission_content_strategy_derives_brief_from_same_snapshot(monkeypatch):
     invalid_variant["cta"] = "Review https://attacker.example/offer"
     with pytest.raises(ContentStateError, match="verified URL"):
         create_platform_revision(variant, actor=actor, payload=invalid_variant)
+    invalid_hashtag_variant = deepcopy(variant.payload)
+    invalid_hashtag_variant["hashtags"] = ["Do not claim unverified certifications"]
+    with pytest.raises(ContentStateError, match="prohibited claim"):
+        create_platform_revision(
+            variant,
+            actor=actor,
+            payload=invalid_hashtag_variant,
+        )
+    assert not type(variant).objects.filter(previous_version=variant).exists()
 
     assert master.knowledge_context_snapshot_id == brief.knowledge_context_snapshot_id
     assert variant.knowledge_context_snapshot_id == master.knowledge_context_snapshot_id

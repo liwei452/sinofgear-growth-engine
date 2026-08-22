@@ -295,3 +295,47 @@ def test_snapshot_bound_platform_revision_revalidates_all_external_fields(
             snapshot,
             platform_code="LINKEDIN",
         )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "hashtags",
+        "script",
+        "voiceover",
+        "subtitles",
+        "scene",
+        "visual",
+        "on_screen_text",
+    ],
+)
+@pytest.mark.parametrize(
+    ("unsafe_text", "message"),
+    [
+        ("Guaranteed zero wear", "prohibited claim"),
+        ("Review https://attacker.example/offer", "verified URL"),
+        ("Guaranteed operation at 200 rpm", "numeric claim"),
+    ],
+)
+def test_snapshot_bound_tiktok_revision_scans_every_standalone_platform_field(
+    field, unsafe_text, message
+):
+    snapshot = {
+        **_snapshot(),
+        "prohibited_claims": ["guaranteed zero wear"],
+        "verified_product_facts": [{"fact_id": "fact-1", "value": "18 teeth"}],
+    }
+    variant = {"schema_version": 2, **_variant("TIKTOK", "TikTok Indonesia body")}
+    if field == "hashtags":
+        variant[field] = [unsafe_text]
+    elif field in {"scene", "visual", "on_screen_text"}:
+        variant["shot_list"][0][field] = unsafe_text
+    else:
+        variant[field] = unsafe_text
+
+    with pytest.raises(ValueError, match=message):
+        payloads.validate_snapshot_bound_platform_output(
+            variant,
+            snapshot,
+            platform_code="TIKTOK",
+        )

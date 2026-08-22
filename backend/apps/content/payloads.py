@@ -393,24 +393,33 @@ def _ensure_json_limit(cleaned):
         raise ValueError("Content payload exceeds the total JSON byte limit.")
 
 
+def _platform_claim_scan_text_fields(variant):
+    code = variant.get("platform_code", "UNKNOWN")
+    fields = [
+        (f"platform:{code}:{name}", variant.get(name, ""))
+        for name in ("title", "body", "cta")
+    ]
+    for index, hashtag in enumerate(variant.get("hashtags", []), start=1):
+        fields.append((f"platform:{code}:hashtag:{index}", hashtag))
+    if code == "TIKTOK":
+        for name in ("script", "voiceover", "subtitles"):
+            fields.append((f"platform:TIKTOK:{name}", variant.get(name, "")))
+        for index, shot in enumerate(variant.get("shot_list", []), start=1):
+            if isinstance(shot, dict):
+                for name in ("scene", "visual", "on_screen_text"):
+                    fields.append(
+                        (f"platform:TIKTOK:shot:{index}:{name}", shot.get(name, ""))
+                    )
+    return fields
+
+
 def _claim_scan_text_fields(cleaned):
     """Return every user-facing text field as ``(label, text)`` pairs."""
+    if cleaned.get("platform_code"):
+        return _platform_claim_scan_text_fields(cleaned)
     fields = [(name, cleaned[name]) for name in ("title", "body", "cta")]
     for variant in cleaned.get("platform_variants", []):
-        code = variant.get("platform_code", "UNKNOWN")
-        for name in ("title", "body", "cta"):
-            fields.append((f"platform:{code}:{name}", variant.get(name, "")))
-        for index, hashtag in enumerate(variant.get("hashtags", []), start=1):
-            fields.append((f"platform:{code}:hashtag:{index}", hashtag))
-        if code == "TIKTOK":
-            for name in ("script", "voiceover", "subtitles"):
-                fields.append((f"platform:TIKTOK:{name}", variant.get(name, "")))
-            for index, shot in enumerate(variant.get("shot_list", []), start=1):
-                if isinstance(shot, dict):
-                    for name in ("scene", "visual", "on_screen_text"):
-                        fields.append(
-                            (f"platform:TIKTOK:shot:{index}:{name}", shot.get(name, ""))
-                        )
+        fields.extend(_platform_claim_scan_text_fields(variant))
     return fields
 
 

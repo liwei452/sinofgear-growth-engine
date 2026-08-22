@@ -16,7 +16,11 @@ def organization(db):
 
 
 class _ConnectedProvider:
+    def __init__(self):
+        self.calls = []
+
     def send(self, *, email, subject, body):
+        self.calls.append({"email": email, "subject": subject, "body": body})
         return {"provider": "smtp", "message_id": "smtp-real-id", "status": "SENT"}
 
 
@@ -44,10 +48,16 @@ def _account_and_draft(organization):
 
 
 def test_send_reply_bounce_unsubscribe_state_machine(organization, monkeypatch):
-    _patch_connected(monkeypatch, _ConnectedProvider())
+    provider = _ConnectedProvider()
+    _patch_connected(monkeypatch, provider)
     account, draft = _account_and_draft(organization)
     message = record_sent(account=account, draft=draft, email="a@example.com")
     assert message.status == OutreachMessage.Status.SENT
+    assert provider.calls[0] == {
+        "email": "a@example.com",
+        "subject": "Technical capability review",
+        "body": "Hello team",
+    }
     assert FollowUp.objects.get(account=account).stage == "EMAIL_1_SENT"
 
     record_reply(account=account)

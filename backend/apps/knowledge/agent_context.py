@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+import re
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -37,6 +38,24 @@ _FORBIDDEN_KEYS = frozenset(
         "token",
     }
 )
+_OUTBOUND_TEXT_KEYS = frozenset(
+    {
+        "body",
+        "cta",
+        "cta_label",
+        "draft",
+        "headline",
+        "hook",
+        "on_screen_text",
+        "script",
+        "subject",
+        "subtitles",
+        "title",
+        "voiceover",
+    }
+)
+_OUTBOUND_URL_KEYS = frozenset({"cta_url", "landing_page_url"})
+_HTTPS_URL_PATTERN = re.compile(r"https://[^\s<>\"']+", re.IGNORECASE)
 
 
 class AgentContextPurpose(StrEnum):
@@ -77,6 +96,30 @@ def _thaw(value: Any) -> Any:
 
 def _normalized_text(value: object) -> str:
     return " ".join(str(value or "").casefold().split())
+
+
+def _outbound_strings(value: object) -> tuple[str, ...]:
+    strings: list[str] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if str(key) in _OUTBOUND_TEXT_KEYS | _OUTBOUND_URL_KEYS and isinstance(
+                item, str
+            ):
+                strings.append(item)
+            elif isinstance(item, (Mapping, list, tuple)):
+                strings.extend(_outbound_strings(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            strings.extend(_outbound_strings(item))
+    return tuple(strings)
+
+
+def _embedded_https_urls(strings: tuple[str, ...]) -> frozenset[str]:
+    return frozenset(
+        match.group(0).rstrip(".,;:!?)]}")
+        for value in strings
+        for match in _HTTPS_URL_PATTERN.finditer(value)
+    )
 
 
 def _has_forbidden_key(value: object) -> bool:
@@ -353,20 +396,21 @@ def validate_external_output(
             "Lead-judgment context is not an external publication context.",
         )
     cited_ids = output.get("cited_fact_ids", [])
-    if not isinstance(cited_ids, (list, tuple)) or any(
+    if not isinstance(cited_ids, (list, tuple)) or not cited_ids or any(
         str(item) not in context.public_fact_ids for item in cited_ids
     ):
         raise KnowledgeContextError(
             "PUBLIC_CLAIM_BLOCKED",
             "External output cites a fact that is not publicly eligible.",
         )
-    landing_page_url = str(output.get("landing_page_url") or "").strip()
-    if landing_page_url and landing_page_url not in context.verified_urls:
+    outward_strings = _outbound_strings(output)
+    supplied_urls = _embedded_https_urls(outward_strings)
+    if any(url not in context.verified_urls for url in supplied_urls):
         raise KnowledgeContextError(
             "VERIFIED_LANDING_PAGE_REQUIRED",
             "External output uses an unverified landing page.",
         )
-    text = _normalized_text(output.get("draft") or output.get("body") or "")
+    text = _normalized_text("\n".join(outward_strings))
     if any(
         normalized and normalized in text
         for normalized in map(_normalized_text, context.prohibited_claims)

@@ -14,6 +14,7 @@ NUMERIC_CLAIM_PATTERN = re.compile(
     r"\d+(?:[.,]\d+)?\s*(?:mm|cm|µm|um|micron|microns|%|°|hrc|hrb|kw|rpm|kg|ton|teeth?|modules?)\b",
     re.IGNORECASE,
 )
+HTTPS_URL_PATTERN = re.compile(r"https://[^\s<>\"']+", re.IGNORECASE)
 COMMON_V2_TEXT_LIMITS = {
     **TEXT_LIMITS,
     "language": 16,
@@ -338,6 +339,37 @@ def validate_generated_content_output(payload, snapshot):
         ):
             raise ValueError("TikTok language metadata must match the publication language.")
     _assert_no_prohibited_claims(cleaned, snapshot)
+    _assert_urls_verified(cleaned, snapshot)
+    _assert_numeric_claims_grounded(cleaned, snapshot)
+    _ensure_json_limit(cleaned)
+    return cleaned
+
+
+def validate_snapshot_bound_platform_output(payload, snapshot, *, platform_code):
+    """Revalidate an editable platform revision against its frozen Job snapshot."""
+
+    cleaned = _validate_platform_v2(payload, platform_code=platform_code)
+    if cleaned["language"] != snapshot.get("language"):
+        raise ValueError("Generated platform language does not match the brief language.")
+    allowed_facts = {
+        str(row.get("fact_id"))
+        for row in snapshot.get("verified_product_facts", [])
+        if isinstance(row, dict) and row.get("fact_id")
+    }
+    seller = snapshot.get("agent_context", {}).get("seller", {})
+    allowed_facts.update(
+        str(row.get("fact_id"))
+        for row in seller.get("public_claims", [])
+        if isinstance(row, dict) and row.get("fact_id")
+    )
+    if not cleaned["evidence_fact_ids"] or not set(
+        cleaned["evidence_fact_ids"]
+    ) <= allowed_facts:
+        raise ValueError("Generated evidence references contain an unknown fact.")
+    if cleaned["landing_page_url"] != snapshot.get("landing_page_url"):
+        raise ValueError("Generated landing page does not match the frozen brief.")
+    _assert_no_prohibited_claims(cleaned, snapshot)
+    _assert_urls_verified(cleaned, snapshot)
     _assert_numeric_claims_grounded(cleaned, snapshot)
     _ensure_json_limit(cleaned)
     return cleaned
@@ -392,6 +424,29 @@ def _assert_no_prohibited_claims(cleaned, snapshot):
         for claim in prohibited:
             if claim in folded:
                 raise ValueError(f"Generated content contains a prohibited claim in {label}.")
+
+
+def _verified_urls(snapshot):
+    urls = {str(snapshot.get("landing_page_url") or "").strip()}
+    for page in snapshot.get("agent_context", {}).get("website_pages", []):
+        if not isinstance(page, dict):
+            continue
+        urls.add(str(page.get("canonical_url") or "").strip())
+        cta = page.get("primary_cta")
+        if isinstance(cta, dict):
+            urls.add(str(cta.get("url") or "").strip())
+    return {url for url in urls if url}
+
+
+def _assert_urls_verified(cleaned, snapshot):
+    allowed = _verified_urls(snapshot)
+    for label, text in _claim_scan_text_fields(cleaned):
+        for match in HTTPS_URL_PATTERN.finditer(text):
+            url = match.group(0).rstrip(".,;:!?)]}")
+            if url not in allowed:
+                raise ValueError(
+                    f"Generated content contains an unverified URL in {label}."
+                )
 
 
 def _grounding_fact_values(snapshot):

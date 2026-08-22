@@ -15,6 +15,7 @@ from .payloads import (
     platform_variant_payload,
     validate_content_payload,
     validate_generated_content_output,
+    validate_snapshot_bound_platform_output,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,10 +76,35 @@ def _previous_is_exact(content, fields):
     )
 
 
+def _validate_snapshot_bound_content(content, payload):
+    if content.knowledge_context_snapshot_id is None:
+        return payload
+    if isinstance(content, MasterContent):
+        snapshot = content.generation_job.input_snapshot
+    else:
+        snapshot = content.master_content.generation_job.input_snapshot
+    provenance = snapshot.get("knowledge_provenance")
+    if not isinstance(provenance, dict) or provenance.get(
+        "knowledge_context_snapshot_id"
+    ) != str(content.knowledge_context_snapshot_id):
+        raise ContentStateError("Frozen content knowledge provenance is inconsistent.")
+    try:
+        if isinstance(content, MasterContent):
+            return validate_generated_content_output(payload, snapshot)
+        return validate_snapshot_bound_platform_output(
+            payload,
+            snapshot,
+            platform_code=content.platform.code,
+        )
+    except ValueError as exc:
+        raise ContentStateError(str(exc)) from exc
+
+
 def content_is_consistent(content):
     try:
         if isinstance(content, MasterContent):
             payload = validate_content_payload(content.payload)
+            _validate_snapshot_bound_content(content, payload)
             job = content.generation_job
             run = content.ai_run
             return (
@@ -112,6 +138,7 @@ def content_is_consistent(content):
         payload = validate_content_payload(
             content.payload, platform_code=content.platform.code
         )
+        _validate_snapshot_bound_content(content, payload)
         selected = getattr(content, "_selected_platform", None)
         if selected is None:
             selected = content.master_content.brief.platform_links.filter(
@@ -346,6 +373,7 @@ def create_master_revision(source, *, actor, payload):
     ).exists():
         raise ContentStateError("Content lineage cannot branch or revise archived content.")
     cleaned = _validated_payload(payload)
+    _validate_snapshot_bound_content(source, cleaned)
     if cleaned == source.payload:
         raise ContentStateError("Content revision must change the payload.")
     with content_writes():
@@ -406,6 +434,7 @@ def create_platform_content(master, *, platform, actor=None):
         knowledge_context_snapshot=master.knowledge_context_snapshot,
     )
     payload = _validated_platform_payload(payload, platform.code)
+    _validate_snapshot_bound_content(provenance_source, payload)
     with content_writes():
         platform_content = PlatformContent.objects.create(
             id=content_id,
@@ -445,6 +474,7 @@ def create_platform_revision(source, *, actor, payload):
     ).exists():
         raise ContentStateError("Content lineage cannot branch or revise archived content.")
     cleaned = _validated_platform_payload(payload, source.platform.code)
+    _validate_snapshot_bound_content(source, cleaned)
     if cleaned == source.payload:
         raise ContentStateError("Content revision must change the payload.")
     with content_writes():

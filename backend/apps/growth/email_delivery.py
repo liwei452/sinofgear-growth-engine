@@ -35,7 +35,7 @@ class SMTPEmailDeliveryProvider:
             or None
         )
         sent = send_mail(
-            subject=subject or "SinofGear",
+            subject=subject,
             message=body,
             from_email=from_email,
             recipient_list=[email],

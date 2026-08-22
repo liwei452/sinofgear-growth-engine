@@ -215,3 +215,64 @@ def test_outreach_requires_verified_landing_page_and_validates_external_output(o
             context=outreach,
         ),
     )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("field", ["title", "hook", "cta", "subject"])
+def test_external_output_scans_every_outbound_text_field(organizations, field):
+    organization, _, actor, product, mission, profile, _ = make_context_sources(
+        organizations
+    )
+    public = make_fact(profile, actor, key="quality", value={"text": "Verified quality"})
+    bind_public_evidence(public, actor)
+    page = _verified_page(organization, actor, product)
+    snapshot = build_mission_context(
+        organization=organization, mission=mission, actor=actor
+    )
+    context = load_agent_context(
+        organization=organization, mission=mission, snapshot_id=snapshot.id
+    ).for_purpose(AgentContextPurpose.OUTREACH)
+    valid = {
+        "draft": "A short technical review may be useful.",
+        "cited_fact_ids": [str(public.id)],
+        "landing_page_url": page.primary_cta_url,
+    }
+
+    _assert_code(
+        "PUBLIC_CLAIM_BLOCKED",
+        lambda: validate_external_output(
+            {**valid, field: "Do not claim unverified certifications"},
+            context=context,
+        ),
+    )
+    _assert_code(
+        "VERIFIED_LANDING_PAGE_REQUIRED",
+        lambda: validate_external_output(
+            {**valid, field: "Review https://attacker.example/offer"},
+            context=context,
+        ),
+    )
+
+
+@pytest.mark.django_db
+def test_external_output_requires_at_least_one_public_fact_citation(organizations):
+    organization, _, actor, product, mission, _, _ = make_context_sources(organizations)
+    page = _verified_page(organization, actor, product)
+    snapshot = build_mission_context(
+        organization=organization, mission=mission, actor=actor
+    )
+    context = load_agent_context(
+        organization=organization, mission=mission, snapshot_id=snapshot.id
+    ).for_purpose(AgentContextPurpose.OUTREACH)
+
+    _assert_code(
+        "PUBLIC_CLAIM_BLOCKED",
+        lambda: validate_external_output(
+            {
+                "draft": "A short technical review may be useful.",
+                "cited_fact_ids": [],
+                "landing_page_url": page.primary_cta_url,
+            },
+            context=context,
+        ),
+    )

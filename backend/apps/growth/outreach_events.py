@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from django.db import transaction
 from django.utils import timezone
 from apps.common.tenancy import tenant_atomic
@@ -21,6 +23,13 @@ from .growth_events import (
 )
 from .models import FollowUp, OutreachMessage
 from .outreach_stages import transition_stage
+
+
+EMAIL_SUBJECT = "Technical capability review"
+_UUID_PATTERN = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
+    r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b"
+)
 
 
 def record_sent(
@@ -47,9 +56,32 @@ def record_sent(
         if email_delivery_readiness() != "CONNECTED":
             raise EmailDeliveryUnavailable("Email delivery is not connected.")
         body = locked_draft.english_draft if locked_draft else ""
+        if locked_draft and locked_draft.knowledge_context_snapshot_id:
+            from apps.knowledge.agent_context import (
+                AgentContextPurpose,
+                load_agent_context,
+                validate_external_output,
+            )
+
+            snapshot = locked_draft.knowledge_context_snapshot
+            context_view = load_agent_context(
+                organization=locked_account.organization,
+                mission=snapshot.mission,
+                snapshot_id=snapshot.id,
+            ).for_purpose(AgentContextPurpose.OUTREACH)
+            validate_external_output(
+                {
+                    "subject": EMAIL_SUBJECT,
+                    "draft": body,
+                    "cited_fact_ids": _UUID_PATTERN.findall(
+                        locked_draft.chinese_explanation
+                    ),
+                },
+                context=context_view,
+            )
     result = get_delivery_provider().send(
         email=email,
-        subject="",
+        subject=EMAIL_SUBJECT,
         body=body,
     )
     with context():

@@ -226,3 +226,49 @@ def test_external_evidence_accepts_only_snapshot_public_claim_ids(fact_id, accep
     else:
         with pytest.raises(ValueError, match="unknown fact"):
             payloads.validate_generated_content_output(output, snapshot)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda output: output.update(title="Review https://attacker.example/offer"),
+        lambda output: output["platform_variants"][0].update(
+            cta="Review https://attacker.example/offer"
+        ),
+    ],
+)
+def test_generated_output_rejects_unverified_urls_in_any_outbound_text(mutate):
+    output = _output()
+    mutate(output)
+
+    with pytest.raises(ValueError, match="verified URL"):
+        payloads.validate_generated_content_output(output, _snapshot())
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda variant: variant.update(evidence_fact_ids=["unknown"]), "unknown fact"),
+        (
+            lambda variant: variant.update(title="Guaranteed zero wear"),
+            "prohibited claim",
+        ),
+        (
+            lambda variant: variant.update(body="See https://attacker.example/offer"),
+            "verified URL",
+        ),
+    ],
+)
+def test_snapshot_bound_platform_revision_revalidates_all_external_fields(
+    mutation, message
+):
+    snapshot = {**_snapshot(), "prohibited_claims": ["guaranteed zero wear"]}
+    variant = {"schema_version": 2, **_variant("LINKEDIN", "LinkedIn Indonesia body")}
+    mutation(variant)
+
+    with pytest.raises(ValueError, match=message):
+        payloads.validate_snapshot_bound_platform_output(
+            variant,
+            snapshot,
+            platform_code="LINKEDIN",
+        )

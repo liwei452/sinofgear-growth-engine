@@ -167,10 +167,10 @@ def test_runtime_role_enforces_email_verification_tenant_and_append_only_boundar
             "INSERT INTO growth_emailverificationrun "
             "(id, organization_id, created_at, updated_at, normalized_email, "
             "email_fingerprint, domain, idempotency_key, state, reason_codes, "
-            "verifier_version, result_source, requires_provider_review, "
+            "verifier_version, result_source, result_status, requires_provider_review, "
             "request_snapshot, safe_error_code, attempt_count, contact_id, candidate_id) "
             "VALUES (%s, %s, now(), now(), 'same@example.com', %s, 'example.com', "
-            "'same-parent-insert', 'PENDING', '[]', 'local-email-v1', 'LOCAL', false, "
+            "'same-parent-insert', 'PENDING', '[]', 'local-email-v1', 'LOCAL', '', false, "
             "'{}', '', 0, %s, %s)",
             (
                 same_tenant_run_id,
@@ -205,10 +205,10 @@ def test_runtime_role_enforces_email_verification_tenant_and_append_only_boundar
             "INSERT INTO growth_emailverificationrun "
             "(id, organization_id, created_at, updated_at, normalized_email, "
             "email_fingerprint, domain, idempotency_key, state, reason_codes, "
-            "verifier_version, result_source, requires_provider_review, "
+            "verifier_version, result_source, result_status, requires_provider_review, "
             "request_snapshot, safe_error_code, attempt_count) "
             "VALUES (%s, %s, now(), now(), 'x@example.com', %s, 'example.com', "
-            "'cross-insert', 'PENDING', '[]', 'local-email-v1', 'LOCAL', false, "
+            "'cross-insert', 'PENDING', '[]', 'local-email-v1', 'LOCAL', '', false, "
             "'{}', '', 0)",
             (uuid.uuid4(), other.id, "c" * 64),
         )
@@ -237,11 +237,11 @@ def test_runtime_role_enforces_email_verification_tenant_and_append_only_boundar
                     "INSERT INTO growth_emailverificationrun "
                     "(id, organization_id, created_at, updated_at, normalized_email, "
                     "email_fingerprint, domain, idempotency_key, state, reason_codes, "
-                    "verifier_version, result_source, requires_provider_review, "
+                    "verifier_version, result_source, result_status, requires_provider_review, "
                     "request_snapshot, safe_error_code, attempt_count, {}) "
                     "VALUES (%s, %s, now(), now(), 'cross-parent@example.com', %s, "
                     "'example.com', %s, 'PENDING', '[]', 'local-email-v1', 'LOCAL', "
-                    "false, '{}', '', 0, %s)"
+                    "'', false, '{}', '', 0, %s)"
                 ).format(sql.Identifier(field_name)),
                 (
                     uuid.uuid4(),

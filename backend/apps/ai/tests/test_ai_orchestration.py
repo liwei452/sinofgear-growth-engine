@@ -14,7 +14,7 @@ from apps.ai.orchestration import (
 from apps.ai.services import PromptVersionService, scrub_secrets
 from apps.content.payloads import CONTENT_OUTPUT_SCHEMA_V2
 from apps.identity.models import Organization
-from apps.jobs.models import Job
+from apps.jobs.models import Job, job_service_writes
 from apps.jobs.services import JobService
 from integrations.ai.providers import FakeAIProvider, provider_registry
 from integrations.secrets import encrypt_secret
@@ -512,6 +512,89 @@ def test_duplicate_delivery_revalidates_and_matches_the_requested_prompt(
     with pytest.raises(GenerationPreflightError) as mismatch_error:
         execute_generation_job(job.id, prompt_version_id=different_prompt.id)
     assert mismatch_error.value.code == "prompt_run_mismatch"
+
+
+@pytest.mark.django_db
+def test_claim_race_rejects_run_created_with_a_different_prompt(
+    organization, frozen_input, prompt, monkeypatch
+):
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+    competing_prompt = PromptVersionService.create(
+        purpose="CONTENT_GENERATE",
+        code="competing-content",
+        provider="fake",
+        model="fake-v1",
+        template=prompt.template,
+        output_schema=prompt.output_schema,
+        status=PromptVersion.Status.PUBLISHED,
+    )
+
+    def lose_claim_race(**_kwargs):
+        with ai_audit_writes():
+            AIRun.objects.create(
+                organization=organization,
+                job=job,
+                job_attempt=job.attempt,
+                prompt_version=competing_prompt,
+                provider="fake",
+                model="fake-v1",
+                input_snapshot=deepcopy(frozen_input),
+                status=AIRun.Status.RUNNING,
+                started_at=timezone.now(),
+            )
+        return None
+
+    monkeypatch.setattr(JobService, "claim", lose_claim_race)
+
+    with pytest.raises(GenerationPreflightError) as mismatch_error:
+        execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert mismatch_error.value.code == "prompt_run_mismatch"
+
+
+@pytest.mark.django_db
+def test_claim_race_uses_the_current_job_attempt(
+    organization, frozen_input, prompt, monkeypatch
+):
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+    raced_runs = []
+
+    def lose_claim(**_kwargs):
+        with job_service_writes():
+            Job.objects.filter(pk=job.id).update(
+                attempt=job.attempt + 1,
+                status=Job.Status.RUNNING,
+            )
+        with ai_audit_writes():
+            raced_runs.append(
+                AIRun.objects.create(
+                    organization=organization,
+                    job=job,
+                    job_attempt=job.attempt + 1,
+                    prompt_version=prompt,
+                    provider="fake",
+                    model="fake-v1",
+                    input_snapshot=deepcopy(frozen_input),
+                    status=AIRun.Status.RUNNING,
+                    started_at=timezone.now(),
+                )
+            )
+        return None
+
+    monkeypatch.setattr(JobService, "claim", lose_claim)
+
+    returned_run = execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    assert returned_run.id == raced_runs[0].id
+    assert returned_run.job_attempt == 2
 
 
 @pytest.mark.django_db

@@ -131,11 +131,36 @@ def _render_job_prompt(template: str, snapshot: dict, *, job_type: str) -> str:
     return _render_prompt(template, snapshot)
 
 
+RETURNABLE_RUN_STATUSES = frozenset({
+    AIRun.Status.RUNNING,
+    AIRun.Status.SUCCEEDED,
+    AIRun.Status.FAILED,
+    AIRun.Status.CANCELED,
+})
+
+
+def _validate_existing_run(
+    run: AIRun, *, job: Job, prompt: PromptVersion
+) -> AIRun:
+    if (
+        run.job_id != job.id
+        or run.job_attempt != job.attempt
+        or run.status not in RETURNABLE_RUN_STATUSES
+    ):
+        raise JobConflictError("Existing AI run does not match the current job attempt.")
+    if run.prompt_version_id != prompt.id:
+        raise GenerationPreflightError(
+            "prompt_run_mismatch",
+            "Requested prompt does not match the existing AI run.",
+        )
+    return run
+
+
 @transaction.atomic
 def _create_run(*, job: Job, prompt: PromptVersion, provider: str, model: str | None = None) -> AIRun:
     existing = AIRun.objects.filter(job=job, job_attempt=job.attempt).first()
     if existing:
-        return existing
+        return _validate_existing_run(existing, job=job, prompt=prompt)
     with ai_audit_writes():
         try:
             return AIRun.objects.create(
@@ -150,7 +175,8 @@ def _create_run(*, job: Job, prompt: PromptVersion, provider: str, model: str | 
                 started_at=timezone.now(),
             )
         except IntegrityError:
-            return AIRun.objects.get(job=job, job_attempt=job.attempt)
+            existing = AIRun.objects.get(job=job, job_attempt=job.attempt)
+            return _validate_existing_run(existing, job=job, prompt=prompt)
 
 
 @transaction.atomic
@@ -335,21 +361,9 @@ def _prepare_generation_job(
             "prompt_purpose_mismatch",
             "Prompt purpose is not compatible with the job type.",
         )
-    existing = AIRun.objects.filter(job_id=job_id).order_by("-job_attempt").first()
-    if (
-        existing
-        and existing.job_attempt == job.attempt
-        and existing.status in {
-            AIRun.Status.RUNNING, AIRun.Status.SUCCEEDED,
-            AIRun.Status.FAILED, AIRun.Status.CANCELED,
-        }
-    ):
-        if existing.prompt_version_id != prompt.id:
-            raise GenerationPreflightError(
-                "prompt_run_mismatch",
-                "Requested prompt does not match the existing AI run.",
-            )
-        return existing
+    existing = AIRun.objects.filter(job_id=job_id, job_attempt=job.attempt).first()
+    if existing:
+        return _validate_existing_run(existing, job=job, prompt=prompt)
     if provider_code is None:
         runtime = resolve_product_ai(job.organization)
         provider_name = runtime.provider_code
@@ -392,10 +406,15 @@ def _prepare_generation_job(
 
     claimed = JobService.claim(worker_id=worker_id, job_id=job_id)
     if claimed is None:
-        existing = AIRun.objects.filter(job_id=job_id).order_by("-job_attempt").first()
+        current_job = jobs.get(pk=job_id)
+        existing = AIRun.objects.filter(
+            job_id=job_id, job_attempt=current_job.attempt
+        ).first()
         if existing:
-            return existing
-        raise JobConflictError(f"Job in status {job.status} cannot be claimed.")
+            return _validate_existing_run(existing, job=current_job, prompt=prompt)
+        raise JobConflictError(
+            f"Job in status {current_job.status} cannot be claimed."
+        )
     token = claimed.claim_token
     try:
         reserve_ai_budget(claimed.organization)

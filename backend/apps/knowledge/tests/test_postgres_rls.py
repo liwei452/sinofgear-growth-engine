@@ -7,7 +7,6 @@ import pytest
 from django.db import connection
 from django.utils import timezone
 from psycopg.conninfo import conninfo_to_dict
-from psycopg import sql
 
 from apps.common.tenancy import TenantContextError, tenant_atomic
 from apps.knowledge.context_builder import build_mission_context
@@ -60,28 +59,6 @@ def _runtime_parameters() -> dict[str, object]:
         pytest.fail("RLS_TEST_RUNTIME_DSN is required for PostgreSQL RLS tests.")
     parameters["dbname"] = connection.settings_dict["NAME"]
     return parameters
-
-
-@pytest.fixture(autouse=True, scope="session")
-def grant_runtime_test_database_access(django_db_setup, django_db_blocker):
-    runtime_role = os.environ.get("RLS_TEST_RUNTIME_ROLE", "sinofgear_app")
-    if connection.vendor != "postgresql":
-        pytest.fail("PostgreSQL RLS tests require a real PostgreSQL database.")
-    with django_db_blocker.unblock(), connection.cursor() as cursor:
-        role_identifier = sql.Identifier(runtime_role)
-        cursor.execute(
-            sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(role_identifier)
-        )
-        cursor.execute(
-            sql.SQL(
-                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {}"
-            ).format(role_identifier)
-        )
-        cursor.execute(
-            sql.SQL(
-                "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {}"
-            ).format(role_identifier)
-        )
 
 
 @pytest.fixture

@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -339,3 +340,207 @@ def test_mission_content_strategy_derives_brief_from_same_snapshot(monkeypatch):
         agent_type="platform_variants",
     )
     assert variant_agent_run.knowledge_context_snapshot_id == master.knowledge_context_snapshot_id
+
+
+def _snapshot_bound_brief():
+    from apps.campaigns.models import ContentBrief
+    from apps.platforms.models import Platform
+
+    organization, actor, mission, _, page = _mission_sources()
+    Membership.objects.create(
+        user=actor,
+        organization=organization,
+        role=Role.objects.create_operator(),
+    )
+    platform = Platform.objects.create(code="LINKEDIN", name="LinkedIn")
+    mission.allowed_channels = ["LINKEDIN"]
+    mission.save(update_fields=["allowed_channels", "updated_at"])
+    first = run_content_strategy_agent(
+        organization=organization,
+        creator_id=str(actor.id),
+        mission_id=str(mission.id),
+    )
+    result = run_content_strategy_agent(
+        organization=organization,
+        creator_id=str(actor.id),
+        mission_id=str(mission.id),
+        approvals={first.pending_approval.approval_token},
+    )
+    assert result.status == "completed", result.terminal_reason
+    return (
+        organization,
+        actor,
+        mission,
+        page,
+        platform,
+        ContentBrief.objects.get(organization=organization),
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"landing_page_url": "https://attacker.example/override"},
+        {"prohibited_claims": []},
+    ],
+)
+def test_snapshot_bound_brief_rejects_frozen_field_changes_without_mutation(values):
+    from django.core.exceptions import ValidationError
+
+    from apps.campaigns.models import ContentBrief
+    from apps.campaigns.services import (
+        build_content_generation_input,
+        mark_content_brief_ready,
+        update_content_brief,
+    )
+
+    _, _, _, page, _, brief = _snapshot_bound_brief()
+    original_version = brief.version
+
+    with pytest.raises(ValidationError, match="frozen knowledge context"):
+        update_content_brief(brief.id, values=values)
+
+    brief.refresh_from_db()
+    assert brief.landing_page_url == page.primary_cta_url
+    assert brief.prohibited_claims == ["Do not claim unverified certifications"]
+    assert brief.version == original_version
+
+    ContentBrief.objects.filter(pk=brief.pk).update(**values)
+    with pytest.raises(ValidationError, match="frozen knowledge context"):
+        mark_content_brief_ready(brief.id, reviewer=brief.created_by)
+
+    ContentBrief.objects.filter(pk=brief.pk).update(
+        landing_page_url=page.primary_cta_url,
+        prohibited_claims=["Do not claim unverified certifications"],
+    )
+    ready = mark_content_brief_ready(brief.id, reviewer=brief.created_by)
+    with connection.cursor() as cursor:
+        if "prohibited_claims" in values:
+            cursor.execute(
+                "UPDATE campaigns_contentbrief SET prohibited_claims = %s WHERE id = %s",
+                [json.dumps(values["prohibited_claims"]), brief.id.hex],
+            )
+        else:
+            cursor.execute(
+                "UPDATE campaigns_contentbrief SET landing_page_url = %s WHERE id = %s",
+                [values["landing_page_url"], brief.id.hex],
+            )
+    with pytest.raises(ValidationError, match="frozen knowledge context"):
+        build_content_generation_input(ready.id)
+
+
+@pytest.mark.django_db
+def test_content_creation_and_resume_cannot_override_snapshot_bound_brief():
+    from apps.catalog.models import Product
+    from apps.growth.agent.content_creation_tools import run_content_creation_agent
+    from apps.platforms.models import Platform
+
+    organization, actor, mission, page, platform, brief = _snapshot_bound_brief()
+    other_product = Product.objects.create(
+        organization=organization,
+        name_en="Unrelated Pump",
+        module_min=1,
+        module_max=2,
+        tooth_count_min=10,
+        tooth_count_max=20,
+        pressure_angle=20,
+        moq=1,
+        status=Product.Status.ACTIVE,
+        manufacturing_capabilities=["Casting"],
+        inspection_capabilities=["Pressure test"],
+    )
+    other_platform = Platform.objects.create(code="FACEBOOK", name="Facebook")
+    malicious_values = {
+        "target_country": "US",
+        "customer_type": "Unrelated buyer",
+        "content_objective": "Override objective",
+        "cta": "Click now",
+        "landing_page_url": "https://attacker.example/override",
+        "language": "fr",
+        "prohibited_claims": [],
+        "selling_points": ["Invented claim"],
+        "advantages": ["Invented advantage"],
+        "keywords": ["override"],
+    }
+
+    first = run_content_creation_agent(
+        organization=organization,
+        brief_id=str(brief.id),
+        actor_id=str(actor.id),
+        values=malicious_values,
+        product_id=str(other_product.id),
+        platform_id=str(other_platform.id),
+    )
+    second = run_content_creation_agent(
+        organization=organization,
+        brief_id=str(brief.id),
+        actor_id=str(actor.id),
+        values={**malicious_values, "landing_page_url": "https://second.example/"},
+        product_id=str(other_product.id),
+        platform_id=str(other_platform.id),
+        approvals={first.pending_approval.approval_token},
+    )
+    final = run_content_creation_agent(
+        organization=organization,
+        brief_id=str(brief.id),
+        actor_id=str(actor.id),
+        values=malicious_values,
+        product_id=str(other_product.id),
+        platform_id=str(other_platform.id),
+        approvals={
+            first.pending_approval.approval_token,
+            second.pending_approval.approval_token,
+        },
+    )
+
+    assert final.status == "waiting_approval"
+    brief.refresh_from_db()
+    assert brief.status == brief.Status.READY
+    assert brief.target_country == "DE"
+    assert brief.landing_page_url == page.primary_cta_url
+    assert brief.prohibited_claims == ["Do not claim unverified certifications"]
+    assert list(brief.product_links.values_list("product_id", flat=True)) == [
+        mission.primary_product_id
+    ]
+    assert list(brief.platform_links.values_list("platform_id", flat=True)) == [
+        platform.id
+    ]
+    run = AgentRun.objects.get(
+        organization=organization,
+        idempotency_key=f"content-creation:{brief.id}",
+    )
+    assert run.resume_args["values"] == {}
+    assert run.resume_args["product_id"] == str(mission.primary_product_id)
+    assert run.resume_args["platform_ids"] == [str(platform.id)]
+
+
+@pytest.mark.django_db
+def test_non_gear_mission_content_strategy_uses_frozen_product_context():
+    organization, actor, mission, _, _ = _mission_sources()
+    mission.primary_product.name_en = "Industrial Pump"
+    mission.primary_product.save(update_fields=["name_en", "updated_at"])
+    mission.objective = "Explain lifecycle cost reduction"
+    mission.target_industries = ["Water treatment"]
+    mission.allowed_channels = ["LINKEDIN"]
+    mission.save(
+        update_fields=[
+            "objective",
+            "target_industries",
+            "allowed_channels",
+            "updated_at",
+        ]
+    )
+
+    result = run_content_strategy_agent(
+        organization=organization,
+        creator_id=str(actor.id),
+        mission_id=str(mission.id),
+    )
+
+    proposal = result.steps[0].output["proposals"][0]
+    rendered = str(proposal).casefold()
+    assert "industrial pump" in rendered
+    assert "water treatment" in rendered
+    assert "explain lifecycle cost reduction" in rendered
+    assert "gear" not in rendered

@@ -9,7 +9,11 @@ from django.db.models import Count
 from django.utils import timezone
 
 from apps.campaigns.models import Campaign
-from apps.campaigns.services import create_campaign, create_content_brief
+from apps.campaigns.services import (
+    create_campaign,
+    create_content_brief,
+    derive_snapshot_bound_brief,
+)
 from apps.identity.models import Membership
 from apps.knowledge.agent_context import (
     AgentContextPurpose,
@@ -41,49 +45,13 @@ def _mission_entity_ids(mission_id, entity_type):
 def _mission_context(agent_context):
     if agent_context is None:
         return {}
-    context = agent_context.to_dict()
-    mission = context["mission"]
-    product = context["product"]
-    icp = context["icp_profiles"][0]
-    seller = context["seller"]
-    page = context["website_pages"][0]
-    primary_cta = page.get("primary_cta") or {}
-
-    def claim_text(claim):
-        value = claim.get("value")
-        if isinstance(value, dict) and value.get("text"):
-            return str(value["text"]).strip()
-        return str(value).strip()
-
-    selling_points = [
-        text for text in (claim_text(claim) for claim in seller["public_claims"]) if text
-    ]
-    advantages = [
-        str(item).strip()
-        for item in (
-            list(product.get("manufacturing_capabilities") or [])
-            + list(product.get("inspection_capabilities") or [])
-        )
-        if str(item).strip()
-    ]
-    keywords = list(page.get("seo_keywords") or []) + list(
-        mission.get("target_industries") or []
-    )
+    binding = derive_snapshot_bound_brief(agent_context)
     return {
-        "target_country": (mission.get("target_countries") or [""])[0],
-        "customer_type": (icp.get("company_types") or [icp.get("name", "")])[0],
-        "content_objective": mission.get("objective", ""),
-        "language": (icp.get("languages") or [seller["company_profile"].get("default_language", "")])[0],
-        "cta": primary_cta.get("label") or "",
-        "landing_page_url": primary_cta.get("url") or page.get("canonical_url", ""),
-        "prohibited_claims": list(seller.get("prohibited_claims") or []),
-        "selling_points": selling_points,
-        "advantages": advantages,
-        "keywords": list(dict.fromkeys(str(item) for item in keywords if str(item).strip())),
-        "product_ids": [str(product["id"])],
-        "channels": [c for c in (mission.get("allowed_channels") or []) if c != "EMAIL"],
-        "industries": mission.get("target_industries") or [],
-        "attribution_code": mission.get("attribution_code", ""),
+        **binding["values"],
+        "product_ids": [binding["primary_product_id"]],
+        "channels": list(binding["platform_codes"]),
+        "industries": list(binding["industries"]),
+        "attribution_code": binding["attribution_code"],
     }
 
 
@@ -122,25 +90,59 @@ def propose_content_opportunities(signals: dict[str, Any]) -> list[dict[str, Any
     industries = signals.get("top_industries") or []
     needs = signals.get("recent_need_slugs") or []
     industry = industries[0]["industry"] if industries else "industrial machinery"
-    need = needs[0] if needs else "gear and transmission selection"
+    need = needs[0] if needs else "supplier selection"
     return [
         {
-            "topic": f"How to Select Gear Material for {industry.title()}",
+            "topic": f"How to Evaluate Suppliers for {industry.title()}",
             "reasons": [
                 f"{signals.get('accepted_candidate_count', 0)} accepted candidates in scope",
                 f"{signals.get('high_intent_candidate_count', 0)} high-intent website visitors",
                 f"recent RFQs mention {need}",
             ],
             "platforms": ["LinkedIn", "Website"],
-            "target": "Build engineering capability trust and invite drawings",
+            "target": "Build supplier capability trust and invite a technical review",
         }
     ]
 
 
-def _analyze_tool(organization, mission_id: str | None = None) -> Tool:
+def propose_snapshot_content_opportunities(
+    agent_context, signals: dict[str, Any]
+) -> list[dict[str, Any]]:
+    context = agent_context.to_dict()
+    product = context["product"]
+    mission = context["mission"]
+    icp = context["icp_profiles"][0]
+    product_name = product.get("name_en") or product.get("name_zh") or "Product"
+    industries = mission.get("target_industries") or icp.get("target_industries") or []
+    industry = industries[0] if industries else "target industry"
+    objective = mission.get("objective") or "Build qualified buyer interest"
+    customer = (icp.get("company_types") or [icp.get("name") or "target buyers"])[0]
+    return [
+        {
+            "topic": f"{product_name} for {industry}: {objective}",
+            "reasons": [
+                f"Primary product: {product_name}",
+                f"ICP customer type: {customer}",
+                f"Mission target industry: {industry}",
+                f"Mission objective: {objective}",
+                f"{signals.get('accepted_candidate_count', 0)} accepted candidates in scope",
+            ],
+            "platforms": list(mission.get("allowed_channels") or []),
+            "target": objective,
+        }
+    ]
+
+
+def _analyze_tool(
+    organization, mission_id: str | None = None, agent_context=None
+) -> Tool:
     def func(args: dict[str, Any]) -> ToolResult:
         signals = content_opportunity_signals(organization, mission_id=mission_id)
-        proposals = propose_content_opportunities(signals)
+        proposals = (
+            propose_snapshot_content_opportunities(agent_context, signals)
+            if agent_context is not None
+            else propose_content_opportunities(signals)
+        )
         return ToolResult(ok=True, output={"signals": signals, "proposals": proposals})
 
     return Tool(
@@ -200,8 +202,12 @@ def _create_brief_tool(
             )
         platform_ids = tuple(platform.id for platform in platforms)
         signals = content_opportunity_signals(organization, mission_id=mission_id)
-        proposals = propose_content_opportunities(signals)
-        proposal = proposals[0] if proposals else {"topic": "Gear selection", "reasons": []}
+        proposals = (
+            propose_snapshot_content_opportunities(agent_context, signals)
+            if agent_context is not None
+            else propose_content_opportunities(signals)
+        )
+        proposal = proposals[0] if proposals else {"topic": "Supplier evaluation", "reasons": []}
         top_industry = (signals.get("top_industries") or [{}])[0].get("industry", "")
         keywords = list(signals.get("recent_need_slugs", []))
         keywords.extend(mission_context.get("industries", []))
@@ -279,7 +285,13 @@ def build_content_strategy_tools(
     mission_id: str | None = None,
     agent_context=None,
 ) -> list[Tool]:
-    tools = [_analyze_tool(organization, mission_id=mission_id)]
+    tools = [
+        _analyze_tool(
+            organization,
+            mission_id=mission_id,
+            agent_context=agent_context,
+        )
+    ]
     if creator_id:
         tools.append(
             _create_brief_tool(

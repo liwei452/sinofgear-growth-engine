@@ -486,6 +486,35 @@ def test_duplicate_delivery_does_not_create_second_successful_run(
 
 
 @pytest.mark.django_db
+def test_duplicate_delivery_revalidates_and_matches_the_requested_prompt(
+    organization, frozen_input, prompt
+):
+    job = JobService.create(
+        organization=organization,
+        job_type=Job.Type.CONTENT_GENERATE,
+        input_snapshot=frozen_input,
+    )
+    execute_generation_job(job.id, prompt_version_id=prompt.id)
+
+    with pytest.raises(GenerationPreflightError) as missing_error:
+        execute_generation_job(job.id, prompt_version_id=uuid4())
+    assert missing_error.value.code == "prompt_not_available"
+
+    different_prompt = PromptVersionService.create(
+        purpose="CONTENT_GENERATE",
+        code="alternate-content",
+        provider="fake",
+        model="fake-v1",
+        template=prompt.template,
+        output_schema=prompt.output_schema,
+        status=PromptVersion.Status.PUBLISHED,
+    )
+    with pytest.raises(GenerationPreflightError) as mismatch_error:
+        execute_generation_job(job.id, prompt_version_id=different_prompt.id)
+    assert mismatch_error.value.code == "prompt_run_mismatch"
+
+
+@pytest.mark.django_db
 def test_result_writer_commits_before_job_success(organization, frozen_input, prompt):
     job = JobService.create(
         organization=organization, job_type=Job.Type.CONTENT_GENERATE,

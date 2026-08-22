@@ -321,17 +321,6 @@ def _prepare_generation_job(
     if organization_id is not None:
         jobs = jobs.filter(organization_id=organization_id)
     job = jobs.get(pk=job_id)
-    existing = AIRun.objects.filter(job_id=job_id).order_by("-job_attempt").first()
-    if (
-        existing
-        and existing.job_attempt == job.attempt
-        and existing.status in {
-            AIRun.Status.RUNNING, AIRun.Status.SUCCEEDED,
-            AIRun.Status.FAILED, AIRun.Status.CANCELED,
-        }
-    ):
-        return existing
-
     try:
         prompt = PromptVersion.objects.get(
             pk=prompt_version_id, status=PromptVersion.Status.PUBLISHED
@@ -346,6 +335,21 @@ def _prepare_generation_job(
             "prompt_purpose_mismatch",
             "Prompt purpose is not compatible with the job type.",
         )
+    existing = AIRun.objects.filter(job_id=job_id).order_by("-job_attempt").first()
+    if (
+        existing
+        and existing.job_attempt == job.attempt
+        and existing.status in {
+            AIRun.Status.RUNNING, AIRun.Status.SUCCEEDED,
+            AIRun.Status.FAILED, AIRun.Status.CANCELED,
+        }
+    ):
+        if existing.prompt_version_id != prompt.id:
+            raise GenerationPreflightError(
+                "prompt_run_mismatch",
+                "Requested prompt does not match the existing AI run.",
+            )
+        return existing
     if provider_code is None:
         runtime = resolve_product_ai(job.organization)
         provider_name = runtime.provider_code
